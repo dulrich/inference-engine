@@ -1,0 +1,67 @@
+# inference-engine-onnx — model registry for the GLiNER2-family CPU sidecar.
+#
+# This file is bind-mounted read-only at /app/models.yaml by the compose service — it is NEVER
+# baked into the image (the Dockerfile does not COPY it), so a model can be added without a
+# rebuild. Registry edits apply on container restart, not on save. Same convention as
+# llama/config.yaml next door, for the same reason.
+#
+# ── Aliases are the API surface — APPEND ONLY, never rename or delete ──────────────────────────
+#
+# An alias rename does not error anywhere; it silently forks consumer state. Treat this list the
+# way a public API's field names are treated. Add new aliases freely; never repurpose one.
+#
+# ── Consumer registry — who stores which alias, and where ──────────────────────────────────────
+#
+#   alias             consumer            stored where
+#   gliner2-base      news-ingestion      Postgres `PRIMARY KEY (event_id, model)` in the
+#                                         crisis24_enrich schema. NOTE the wire alias and the
+#                                         stored id DIFFER on purpose: the wire alias is
+#                                         `gliner2-base`, the stored id stays
+#                                         `fastino/gliner2-base-v1` (enrich's `model_id` property),
+#                                         because 19k rows already carry it. Changing either
+#                                         one forks the store.
+#   gliner2-pii       (prospective)       eval-harness / news-ingestion PII sprints — append the
+#                                         row here when the first consumer lands.
+#
+# ── Adding a family member is a config append plus a weights fetch. No code. ───────────────────
+#
+# Every member of `fastino/gliner2-family` is the same architecture (DebertaV2 encoder + span
+# head + count head), which is exactly what makes that true — one runtime serves all of them.
+# The steps:
+#
+#   1. Export the checkpoint on a host with torch (NOT in this image — it has no torch):
+#        python onnx/tools/export_gliner2.py \
+#          --model fastino/<repo> --out /srv/models/fastino/<repo>-onnx
+#      The exporter's parity gate compares its own ONNX output against the torch library and
+#      exits non-zero if they disagree. Do not ship an export that skipped it (`--no-verify`).
+#   2. Append a block below. `path` is the container-side path under the read-only /models mount.
+#   3. Restart the container (configs are mounted, not baked) and run onnx/smoke-extract.sh.
+#
+# ── Residency ─────────────────────────────────────────────────────────────────────────────────
+#
+# `preload: true` (the default) loads the model before the listener opens, so no request ever
+# eats a cold load. Nothing is ever unloaded: unlike the GPU tier next door, this tier's scarce
+# resource is cold-load latency, not memory. Set `preload: false` only for a model that is rare
+# enough that the first caller can afford the load — it is then resident forever after.
+# The compose healthcheck's start_period must cover the sum of the preloaded models' loads.
+
+models:
+  gliner2-base:
+    name: "GLiNER2 base v1 (English, DeBERTa-v3-base)"
+    source_model: fastino/gliner2-base-v1
+    path: /models/fastino/gliner2-base-v1-onnx
+    preload: true
+    notes: >-
+      Launch consumer: news-ingestion `enrich` (entity extraction + severity/event_type
+      zero-shot classification over crisis24 rows). Counting layer count_lstm_v2.
+
+  gliner2-pii:
+    name: "GLiNER2 privacy filter, PII multilingual (mDeBERTa-v3-base)"
+    source_model: fastino/gliner2-privacy-filter-PII-multi
+    path: /models/fastino/gliner2-privacy-filter-PII-multi-onnx
+    preload: true
+    notes: >-
+      Multilingual PII entity extraction. Different encoder (mdeberta, 250k vocab) and a
+      different counting layer (count_lstm) from gliner2-base — configured at launch precisely
+      because serving both proves the registry generalises across the family, not just across
+      one checkpoint's twins.

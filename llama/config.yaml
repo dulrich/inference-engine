@@ -24,11 +24,20 @@
 #                                         backend entry (optional validated backend)
 #   nemotron-4b       obsidian-crucible   vault data.json provider modelId (chat)
 #                     seven-afterlives    same as gemma-4-12b
+#   bge-small         news-ingestion      Postgres `PRIMARY KEY (event_id, model)` in the
+#                                         `crisis24_enrich` schema. The wire alias and the
+#                                         stored id DIFFER on purpose: `bge-small` on the wire,
+#                                         `BAAI/bge-small-en-v1.5` in the PK (enrich's `model_id`
+#                                         property, which must keep returning the in-process
+#                                         value — 19k rows carry it). Its embedding space is
+#                                         engine-agnostic by fleet measurement (esi-fr-2026-07-25:
+#                                         engine/build/precision are retrieval-irrelevant), which
+#                                         is what makes serving these vectors from llama.cpp
+#                                         instead of sentence-transformers safe — enrich has no
+#                                         embedding-space guard of its own.
 #
-# Prospective (append the row when the consumer lands): news-ingestion stores model ids in
-# Postgres `PRIMARY KEY (event_id, model)` (`crisis24_enrich` schema) — its wire alias may
-# differ from the stored id (`bge-small` on the wire, `BAAI/bge-small-en-v1.5` in the PK), and
-# the stored id must never change.
+# The onnx tier next door keeps its own registry with the same rules and the same header:
+# `onnx/models.yaml` (aliases `gliner2-base`, `gliner2-pii`).
 #
 # One base-URL note: Crucible vaults store http://127.0.0.1:4806/v1 — 4806 is the permanent
 # compatibility alias of the canonical 4811 publish; both map to this router's one listener.
@@ -96,6 +105,26 @@ models:
     ttl: 1800
     checkEndpoint: /health
 
+  # Appended 2026-07-26 for news-ingestion (WP-3 of plans/inference-engine-launch.md): the
+  # embedding half of its enrichment pipeline, today an in-process sentence-transformers
+  # `BAAI/bge-small-en-v1.5`. 384 dimensions, English, and small enough (67 MB at f16) that
+  # quantising it would trade measurable retrieval quality for nothing that matters — hence f16
+  # rather than the Q8_0 used for the reranker, whose weights are 30x larger.
+  # The GGUF is CompendiumLabs' conversion, the same publisher as bge-m3 above, so the /models
+  # layout stays consistent: /models/<publisher>/<repo>/<file>.
+  # `--embeddings` and no `--pooling`, for the reason in the macro comment above: the GGUF
+  # metadata already carries this model's CLS pooling and `--embeddings` implies it.
+  bge-small-en-v1.5-f16:
+    name: "BGE small en v1.5 embedding (f16, 384d)"
+    aliases:
+      - bge-small
+    cmd: |
+      ${llama_server_common}
+      -m /models/CompendiumLabs/bge-small-en-v1.5-gguf/bge-small-en-v1.5-f16.gguf
+      --embeddings
+    ttl: 1800
+    checkEndpoint: /health
+
   # ── Chat models — see the VRAM fit math in the `chat` group comment below before adding a
   # third entry. `--jinja` makes llama-server render each model's own embedded Jinja chat
   # template (GGUF `tokenizer.chat_template`, present on both files below) via minja instead of
@@ -138,6 +167,11 @@ groups:
     members:
       - bge-m3-f16
       - bge-reranker-v2-m3-Q8_0
+      # bge-small joins `retrieval` rather than getting its own group: at 67 MB of weights it
+      # cannot meaningfully contend for VRAM with anything, and it is used by a different
+      # consumer than bge-m3 — so the two must be free to be resident at once, which is exactly
+      # what swap:false/exclusive:false gives. It still unloads on its own ttl.
+      - bge-small-en-v1.5-f16
 
   # Chat models are large enough that they cannot safely coexist with each other, or necessarily
   # with the retrieval pair, under this GPU's VRAM — swap: true unloads the group's previous

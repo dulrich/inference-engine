@@ -1,0 +1,72 @@
+# PROPOSED compose block for inference-engine-onnx — NOT WIRED ANYWHERE.
+#
+# This snippet is the work package's deliverable for the fleet composition; the orchestrator
+# pastes it into `fleet-tools/compose.fleet.yml` (beside `inference-engine-llama`) at
+# landing, adds the 4812 row to `fleet-tools/SERVICES.md`, and recreates. Nothing in this
+# repo reads this file.
+#
+# Landing prerequisites (the container needs NO network at runtime, so these must exist first):
+#   1. The exported ONNX artifacts under the shared model tree — see onnx/README.md. Both
+#      configured models are already exported on this host:
+#        /srv/models/fastino/gliner2-base-v1-onnx                  (805 MB)
+#        /srv/models/fastino/gliner2-privacy-filter-PII-multi-onnx (1.2 GB)
+#   2. `docker compose build inference-engine-onnx`.
+#   3. `onnx/smoke-extract.sh` green against 127.0.0.1:4812.
+
+  # 4812: the fleet's CPU inference tier — an always-resident GLiNER2-family sidecar serving
+  # entity extraction + zero-shot classification for the encoder+span-head models llama.cpp
+  # cannot host. Launch consumer: news-ingestion `enrich` (crisis24 feature materialisation,
+  # Postgres `PRIMARY KEY (event_id, model)`); the PII/guardrails variants have upcoming
+  # eval-harness / news-ingestion sprints and are added by appending to models.yaml, never by
+  # code. Deliberately CPU-only: no /dev/dri, no group_add, no GPU execution provider — this
+  # tier exists so the GPU stays free for inference-engine-llama.
+  # Unauthenticated like every other service here, so loopback-only.
+  inference-engine-onnx:
+    build:
+      context: onnx
+    image: inference-engine-onnx:ort1.28-py312
+    container_name: inference-engine-onnx
+    labels:
+      com.fleet-tools.display-name: "Inference Engine (onnx)"
+    restart: unless-stopped
+    # 4g for the CONFIGURED SET of two models. Measured peak RSS with gliner2-base +
+    # gliner2-pii resident and an 8-way concurrent batch in flight: 2.86 GiB (VmHWM). The
+    # weights are fp32 ONNX (736 MB + 1111 MB of encoder alone) and every preloaded model
+    # stays resident for the life of the container by design, so this cap scales with the
+    # registry: adding a third family member costs another ~1.0-1.4 GiB and this number must
+    # be raised in the same change as the models.yaml append.
+    mem_limit: 4g
+    ports:
+      - "127.0.0.1:4812:4812"
+    environment:
+      ONNX_PORT: 4812
+      ONNX_HOST: 0.0.0.0
+      # Measured, not guessed — see the table in the Dockerfile. Unset means "one thread per
+      # core", which is 2.5x slower here.
+      ONNX_INTRA_OP_THREADS: 8
+    volumes:
+      # The registry is mounted read-only, never baked: adding a model is a config append plus
+      # a container restart, exactly like llama/config.yaml next door. NOTE the absolute source
+      # path — if this repo ever moves, Docker does not error on the stale path, it silently
+      # creates an empty DIRECTORY there and mounts that, and the service comes up looking
+      # healthy while serving nothing (root AGENTS.md quirk). entrypoint.sh fails loudly on a
+      # missing registry file for exactly that reason.
+      - onnx/models.yaml:/app/models.yaml:ro
+      # Same shared model tree the llama tier mounts for GGUFs, same <publisher>/<repo> layout,
+      # read-only. The ONNX exports live beside the GGUFs as <publisher>/<repo>-onnx.
+      - ${CRUCIBLE_GGUF_DIR:-/srv/models}:/models:ro
+    healthcheck:
+      # Probes the BODY, not the status code: `ok` is false while any preloaded model failed to
+      # load, and a service that answers 200 with nothing loaded is the exact failure this
+      # fleet keeps rediscovering. curl is not in this image (it is a python:slim base), so the
+      # probe is stdlib python.
+      test: ["CMD", "python", "-c", "import json,sys,urllib.request; sys.exit(0 if json.load(urllib.request.urlopen('http://localhost:4812/health', timeout=5)).get('ok') else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Preload is the residency policy: both models load BEFORE the listener opens, so no
+      # request ever pays a cold load. Measured loads are 1.5s + 2.0s from a warm page cache;
+      # 60s covers a cold page cache on ~2 GB of weights (first start after a reboot) with
+      # room for a third model. Too short a start_period would restart-loop a service that is
+      # merely still loading.
+      start_period: 60s

@@ -3,8 +3,8 @@
 Local model-serving fleet for `<code-root>` consumers. Two loopback-only services:
 
 - **`inference-engine-llama`** (`llama/`) — llama-swap router over llama.cpp/Vulkan on the GPU.
-  Embeddings, reranking, chat, vision. Canonical port **4811**; **4806** is a permanent
-  compatibility alias (Crucible vaults store it). See `llama/README.md` for the build, the
+  Embeddings, reranking, chat, vision. Port **4811** (the transitional 4806 publish was
+  retired 2026-07-27). See `llama/README.md` for the build, the
   model/alias table, and the smoke test.
 - **`inference-engine-onnx`** (`onnx/`) — always-resident CPU sidecar serving the
   `fastino/gliner2-family` entity/classification models that llama.cpp cannot. Port **4812**.

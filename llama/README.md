@@ -1,7 +1,9 @@
 # crucible-inference — llama.cpp on Vulkan + llama-swap
 
 One always-on GPU inference router serving Crucible's embedding and reranking backends (and,
-eventually, chat models) from a single container on **127.0.0.1:4806**.
+eventually, chat models) from a single container on **127.0.0.1:4811** (host publish; the
+container listens on :4806 internally — the transitional 4806 host publish was retired
+2026-07-27).
 
 This replaces the old shape — two separate `llama-server` containers, each behind its own
 systemd socket that started/stopped the container on demand — with **one router process**
@@ -102,8 +104,8 @@ file itself for the full annotated shape; the essentials:
 ## Smoke testing
 
 ```bash
-llama/smoke-inference.sh                       # default target :4806
-llama/smoke-inference.sh --url http://127.0.0.1:4806
+llama/smoke-inference.sh                       # default target :4811
+llama/smoke-inference.sh --url http://127.0.0.1:4811
 llama/smoke-inference.sh --wait-ttl            # also proves ttl-unload (~30 min sleep)
 ```
 
@@ -224,7 +226,8 @@ that file. `docker build` fails closed on a mismatch (`sha256sum -c -`).
 
 **Cutover complete (2026-07-26).** `crucible-inference` is the live and only inference path:
 the compose service runs always-on in `fleet-tools/compose.fleet.yml`, Crucible's two
-retrieval provider entries point at `127.0.0.1:4806`, and the smoke test plus the
+retrieval provider entries pointed at `127.0.0.1:4806` (repointed to `4811` on 2026-07-27,
+when the transitional 4806 publish was retired), and the smoke test plus the
 chat-evicts-retrieval interleave (two evict→reload cycles, byte-identical embeddings after each
 reload, no amdgpu errors) passed against the real service before anything was retired. That
 interleave test used gemma-4-12B as a throwaway chat member to prove the eviction mechanics —
@@ -236,7 +239,7 @@ earlier in this file); this authoring pass did not start the container, load eit
 touch the live service — the orchestrator reloads `crucible-inference` and runs
 `smoke-inference.sh`'s new chat-completion checks against it separately. Once that passes,
 adding a plugin-side chat provider entry (`openai-compatible`, base URL
-`http://127.0.0.1:4806/v1`, model id `gemma-4-12b` or `nemotron-4b`) is a Crucible settings
+`http://127.0.0.1:4811/v1`, model id `gemma-4-12b` or `nemotron-4b`) is a Crucible settings
 change, not a code change.
 
 Retired in the same cutover, all recoverable from git history if ever needed:

@@ -40,8 +40,9 @@
 # The onnx tier next door keeps its own registry with the same rules and the same header:
 # `onnx/models.yaml` (aliases `gliner2-base`, `gliner2-pii`).
 #
-# One base-URL note: Crucible vaults store http://127.0.0.1:4806/v1 — 4806 is the permanent
-# compatibility alias of the canonical 4811 publish; both map to this router's one listener.
+# One base-URL note: consumers reach this router at http://127.0.0.1:4811 (Crucible vaults
+# store http://127.0.0.1:4811/v1). The transitional 4806 host publish was retired 2026-07-27;
+# :4806 survives only as the container-internal listen port.
 #
 # One always-on router replaces the old per-model systemd socket-activation apparatus entirely:
 # llama-swap already does spawn-on-first-request plus `ttl`-based unload, so there's no separate

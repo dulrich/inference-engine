@@ -102,9 +102,9 @@ file itself for the full annotated shape; the essentials:
 ## Smoke testing
 
 ```bash
-docker/llamacpp-vulkan/smoke-inference.sh                       # default target :4806
-docker/llamacpp-vulkan/smoke-inference.sh --url http://127.0.0.1:4806
-docker/llamacpp-vulkan/smoke-inference.sh --wait-ttl            # also proves ttl-unload (~30 min sleep)
+llama/smoke-inference.sh                       # default target :4806
+llama/smoke-inference.sh --url http://127.0.0.1:4806
+llama/smoke-inference.sh --wait-ttl            # also proves ttl-unload (~30 min sleep)
 ```
 
 Requires `curl` and `jq` on the host running it; runs entirely against the already-running
@@ -200,7 +200,7 @@ process that launches it is new.
 
 ```bash
 docker build --build-arg LLAMA_CPP_TAG=bXXXXX -t crucible-llamacpp-vulkan:bXXXXX-swap243 \
-  docker/llamacpp-vulkan
+  llama
 ```
 
 Bump `LLAMA_CPP_TAG` deliberately and re-run the agreement harness afterwards. A llama.cpp
@@ -212,7 +212,7 @@ writing — the llama-swap addition is not a reason to bump it.
 
 ```bash
 docker build --build-arg LLAMA_SWAP_TAG=vNNN --build-arg LLAMA_SWAP_SHA256=<sha256> \
-  -t crucible-llamacpp-vulkan:b10121-swapNNN docker/llamacpp-vulkan
+  -t crucible-llamacpp-vulkan:b10121-swapNNN llama
 ```
 
 Pinned to ≥v242 (the release that fixed a TTL-unload deadlock) by tag *and* checksum. Get the

@@ -6,7 +6,7 @@
 # or otherwise touch any container.
 #
 # Usage:
-#   docker/llamacpp-vulkan/smoke-inference.sh [--url http://127.0.0.1:4806] [--wait-ttl]
+#   llama/smoke-inference.sh [--url http://127.0.0.1:4806] [--wait-ttl]
 #
 # --wait-ttl is opt-in and slow on purpose: the retrieval group's ttl is 1800s (30 minutes), so
 # proving unload-on-ttl for real means sleeping through it. Without the flag, that check is
@@ -87,6 +87,24 @@ if [ -n "$embed_len" ]; then
 	pass "/v1/embeddings returned a numeric vector of length $embed_len"
 else
 	bad "/v1/embeddings did not return a well-formed numeric vector. Response: $embed_json"
+fi
+
+# ── 3b. /v1/embeddings (model bge-small, 384d) ──────────────────────────────────────────────
+# Appended 2026-07-27 with the bge-small alias (news-ingestion's embedding model). The length
+# is asserted exactly: 384 is this model's dimension, and a wrong-model routing would most
+# likely show up as a 1024-length bge-m3 vector answering under the wrong alias.
+note "checking POST /v1/embeddings (model=bge-small) ..."
+small_json=$(curl -s --max-time 60 "$URL/v1/embeddings" \
+	-H 'Content-Type: application/json' \
+	-d '{"model":"bge-small","input":"crucible smoke test embedding"}') || small_json=""
+small_len=$(echo "$small_json" | jq -r '
+	(.data[0].embedding // empty)
+	| if type == "array" and length > 0 and (all(.[]; type == "number")) then length else empty end
+' 2>/dev/null)
+if [ "$small_len" = "384" ]; then
+	pass "/v1/embeddings (bge-small) returned a numeric vector of length 384"
+else
+	bad "/v1/embeddings (bge-small) did not return a 384-length numeric vector. Got length: '${small_len:-none}'. Response: $small_json"
 fi
 
 # ── 4. /rerank (model bge-reranker-v2, 3 docs) ──────────────────────────────────────────────

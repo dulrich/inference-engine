@@ -17,9 +17,10 @@
 #                                         crisis24_enrich schema. NOTE the wire alias and the
 #                                         stored id DIFFER on purpose: the wire alias is
 #                                         `gliner2-base`, the stored id stays
-#                                         `fastino/gliner2-base-v1` (enrich's `model_id` property),
-#                                         because 19k rows already carry it. Changing either
-#                                         one forks the store.
+#                                         `gliner2-base-v1` (enrich's `model_id` property —
+#                                         `_short_id` drops the HF org prefix from
+#                                         `fastino/gliner2-base-v1`), because 19k rows already
+#                                         carry it. Changing either one forks the store.
 #   gliner2-pii       (prospective)       eval-harness / news-ingestion PII sprints — append the
 #                                         row here when the first consumer lands.
 #

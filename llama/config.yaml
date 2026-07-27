@@ -133,6 +133,12 @@ models:
   # a hardcoded built-in template — required for gemma4's reasoning-style template, which is
   # also why a chat completion needs `max_tokens >= 128`: the model spends its early completion
   # tokens on `reasoning_content` before it emits `content` (see smoke-inference.sh).
+  # `--mmproj` (added 2026-07-27, obsidian-crucible plans/image-descriptions-search.md) loads the
+  # multimodal projector beside the weights, enabling vision (image content parts on
+  # /v1/chat/completions) on the same alias — no new alias, no consumer change. The BF16 mmproj
+  # is 167 MiB of extra VRAM, noise against the fit math below. Vision requests from Crucible
+  # carry `reasoning_effort: "none"`, a correctness requirement: without it the model spends the
+  # completion budget on reasoning_content and returns empty `content`.
   gemma-4-12B-it-Q4_K_M:
     name: "Gemma 4 12B it (Q4_K_M)"
     aliases:
@@ -140,6 +146,7 @@ models:
     cmd: |
       ${llama_server_chat_common}
       -m /models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf
+      --mmproj /models/lmstudio-community/gemma-4-12B-it-GGUF/mmproj-gemma-4-12B-it-BF16.gguf
       -c 32768
       --jinja
     ttl: 1800

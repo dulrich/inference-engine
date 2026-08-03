@@ -63,6 +63,19 @@ bad() {
 	fail=1
 }
 
+# Per-run temp dir: isolates concurrent runs (no shared /tmp paths) and is removed on exit
+# regardless of how the script exits. SMOKE_TMPDIR is unset until this line runs, so the trap
+# must tolerate that under `set -u` if the script dies before it gets here.
+SMOKE_TMPDIR=""
+cleanup() {
+	[ -n "$SMOKE_TMPDIR" ] && rm -rf "$SMOKE_TMPDIR"
+}
+trap cleanup EXIT
+SMOKE_TMPDIR=$(mktemp -d) || {
+	echo "[smoke] FATAL: mktemp -d failed." >&2
+	exit 2
+}
+
 # The crisis24-shaped schema news-ingestion actually sends: 7 described entity labels plus two
 # single-label classifications. Kept here as the smoke's fixture because a schema nobody sends
 # proves nothing — but note the labels are the CLIENT's, supplied per request; the service
@@ -165,11 +178,11 @@ done
 note "checking POST /v1/extract with an unknown alias fails fast with 4xx ..."
 start_ts=$(date +%s)
 unknown_body=$(jq -n --argjson s "$SCHEMA" '{model: "definitely-not-a-real-alias", texts: ["hello"], schema: $s}')
-unknown_out=$(curl -s -o /tmp/onnx-smoke-unknown.json -w '%{http_code}' --max-time 10 \
+unknown_out=$(curl -s -o "$SMOKE_TMPDIR/onnx-smoke-unknown.json" -w '%{http_code}' --max-time 10 \
 	"$URL/v1/extract" -H 'Content-Type: application/json' -d "$unknown_body")
 curl_rc=$?
 elapsed=$(($(date +%s) - start_ts))
-unknown_json=$(cat /tmp/onnx-smoke-unknown.json 2>/dev/null)
+unknown_json=$(cat "$SMOKE_TMPDIR/onnx-smoke-unknown.json" 2>/dev/null)
 err_code=$(echo "$unknown_json" | jq -r '.error.code // empty' 2>/dev/null)
 has_results=$(echo "$unknown_json" | jq -r 'has("results")' 2>/dev/null)
 if [ "$curl_rc" -ne 0 ]; then
@@ -189,9 +202,9 @@ fi
 # ── 5. NEGATIVE: an unsupported schema shape must be a 400, not a wrong answer ──────────────
 note "checking POST /v1/extract with an unsupported schema key is rejected ..."
 rel_body=$(jq -n '{model: "'"${MODELS%% *}"'", texts: ["hello"], schema: {relations: ["employed_by"]}}')
-rel_out=$(curl -s -o /tmp/onnx-smoke-rel.json -w '%{http_code}' --max-time 10 \
+rel_out=$(curl -s -o "$SMOKE_TMPDIR/onnx-smoke-rel.json" -w '%{http_code}' --max-time 10 \
 	"$URL/v1/extract" -H 'Content-Type: application/json' -d "$rel_body")
-rel_json=$(cat /tmp/onnx-smoke-rel.json 2>/dev/null)
+rel_json=$(cat "$SMOKE_TMPDIR/onnx-smoke-rel.json" 2>/dev/null)
 rel_code=$(echo "$rel_json" | jq -r '.error.code // empty' 2>/dev/null)
 if [ "$rel_code" = "bad_schema" ] && echo "$rel_out" | grep -qE '^4[0-9][0-9]$'; then
 	pass "unsupported schema key -> $rel_out error.code=bad_schema"
@@ -199,7 +212,32 @@ else
 	bad "unsupported schema key returned $rel_out / error.code='${rel_code:-absent}' (expected 4xx bad_schema). Response: $rel_json"
 fi
 
-# ── 6. Batch throughput (slow, opt-in) ──────────────────────────────────────────────────────
+# ── 6. NEGATIVE: a malformed cls_threshold must be a 400 with a body, not a dropped connection ─
+# Before the WP-R1 fix, {"cls_threshold": null} made the server drop the connection with NO HTTP
+# response at all (curl succeeds, body empty) instead of answering with an error. A wrong status
+# is not the regression this guards against — an empty/absent reply is, so this asserts all three
+# of: 4xx status, error.code == bad_schema, and a response was actually received (curl's exit
+# code is 0 and the body is non-empty).
+note "checking POST /v1/extract with a malformed cls_threshold gets a real 400 response (not a dropped connection) ..."
+cls_body=$(jq -n '{model: "'"${MODELS%% *}"'", texts: ["hello"], schema: {entities: {"person": "people"}, classifications: [{"name": "severity", "labels": ["Info", "Critical"], "cls_threshold": null}]}}')
+cls_out=$(curl -s -o "$SMOKE_TMPDIR/onnx-smoke-cls.json" -w '%{http_code}' --max-time 10 \
+	"$URL/v1/extract" -H 'Content-Type: application/json' -d "$cls_body")
+cls_curl_rc=$?
+cls_json=$(cat "$SMOKE_TMPDIR/onnx-smoke-cls.json" 2>/dev/null)
+cls_code=$(echo "$cls_json" | jq -r '.error.code // empty' 2>/dev/null)
+if [ "$cls_curl_rc" -ne 0 ]; then
+	bad "malformed cls_threshold request failed at the transport level (curl rc=$cls_curl_rc) — this IS the old dropped-connection regression"
+elif [ -z "$cls_json" ]; then
+	bad "malformed cls_threshold request returned an EMPTY body (status reported: $cls_out) — this IS the old dropped-connection regression, just with a status code attached"
+elif ! echo "$cls_out" | grep -qE '^4[0-9][0-9]$'; then
+	bad "malformed cls_threshold request returned $cls_out (expected 4xx). Response: $cls_json"
+elif [ "$cls_code" != "bad_schema" ]; then
+	bad "malformed cls_threshold request returned $cls_out but error.code was '${cls_code:-absent}' (expected 'bad_schema'). Response: $cls_json"
+else
+	pass "malformed cls_threshold -> $cls_out error.code=bad_schema, with a real response body (no dropped connection)"
+fi
+
+# ── 7. Batch throughput (slow, opt-in) ──────────────────────────────────────────────────────
 if [ "$SLOW" -eq 1 ]; then
 	first_model="${MODELS%% *}"
 	note "measuring throughput on a 32-text batch (model=$first_model) ..."

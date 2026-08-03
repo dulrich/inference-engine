@@ -50,13 +50,30 @@ bad() {
 	fail=1
 }
 
+# Per-run temp dir: isolates concurrent runs (no shared /tmp paths) and is removed on exit
+# regardless of how the script exits. SMOKE_TMPDIR is unset until this line runs, so the trap must
+# tolerate that under `set -u` if the script dies before it gets here.
+SMOKE_TMPDIR=""
+cleanup() {
+	[ -n "$SMOKE_TMPDIR" ] && rm -rf "$SMOKE_TMPDIR"
+}
+trap cleanup EXIT
+SMOKE_TMPDIR=$(mktemp -d) || {
+	echo "[smoke] FATAL: mktemp -d failed." >&2
+	exit 2
+}
+
 # ── 1. /health ───────────────────────────────────────────────────────────────────────────────
+# llama-swap's /health is not JSON: it is a text/plain 200 whose body is the literal "OK". Probe
+# the body per AGENTS.md:62 ("probe by response body, never status code") rather than trusting
+# the status alone — status is kept as an additional condition, not the sole one.
 note "checking GET /health ..."
-health_code=$(curl -s -o /tmp/crucible-smoke-health.json -w '%{http_code}' --max-time 10 "$URL/health") || health_code="000"
-if [ "$health_code" = "200" ]; then
-	pass "/health returned 200"
+health_code=$(curl -s -o "$SMOKE_TMPDIR/crucible-smoke-health.json" -w '%{http_code}' --max-time 10 "$URL/health") || health_code="000"
+health_body=$(cat "$SMOKE_TMPDIR/crucible-smoke-health.json" 2>/dev/null)
+if [ "$health_code" = "200" ] && [ "$health_body" = "OK" ]; then
+	pass "/health returned 200 with body 'OK'"
 else
-	bad "/health returned $health_code (expected 200)"
+	bad "/health returned $health_code with body '$health_body' (expected 200 and body 'OK')"
 fi
 
 # ── 2. /v1/models lists both aliases ────────────────────────────────────────────────────────

@@ -193,7 +193,8 @@ class ModelRegistry:
 
         This is the residency decision made concrete: a request must never be the thing that
         discovers a model is cold. The compose healthcheck's `start_period` has to cover the
-        sum of these loads — see `compose-block.yml`.
+        sum of these loads — see the `inference-engine-onnx` service block in
+        `fleet-tools/compose.fleet.yml`.
         """
         for entry in self._entries.values():
             if not entry.preload:

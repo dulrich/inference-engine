@@ -20,7 +20,6 @@ one is a **config append plus a weights fetch — no code**.
 | `server/` | The service. `app.py` (routes), `registry.py` (aliases + residency), `runtime.py` (the torch-free GLiNER2 inference path). |
 | `tools/export_gliner2.py` | Host-side ONNX exporter **with a torch-parity gate**. Never shipped in the image. |
 | `smoke-extract.sh` | Host-run smoke test. Shape assertions, body probes, one negative check. |
-| `compose-block.yml` | The proposed `compose.fleet.yml` service block. A snippet — not wired. |
 
 ## API
 

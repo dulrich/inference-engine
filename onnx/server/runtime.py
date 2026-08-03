@@ -51,6 +51,19 @@ import numpy as np
 import onnxruntime as ort
 from tokenizers import Tokenizer
 
+from .schema import (
+    ClassificationSpec,
+    EntitySpec,
+    SchemaError,
+    Spec,
+    compile_schema,
+    struct_tokens,
+)
+
+# Re-exported unchanged from `schema.py`, which owns them now that `struct_tokens` lives there.
+# `SchemaError` in particular is re-exported because `app.py` imports it from this module.
+from .schema import DESC_TOKEN, E_TOKEN, L_TOKEN, P_TOKEN  # noqa: F401
+
 # Verbatim from gliner2/processor.py::WhitespaceTokenSplitter. Do not "tidy" it: the word
 # boundaries it produces are the model's span units, and the character offsets it yields index
 # the ORIGINAL (non-lowercased) text, which is how extracted spans keep their original casing.
@@ -65,26 +78,18 @@ WORD_PATTERN = re.compile(
 
 SEP_STRUCT = "[SEP_STRUCT]"
 SEP_TEXT = "[SEP_TEXT]"
-P_TOKEN = "[P]"
-E_TOKEN = "[E]"
-L_TOKEN = "[L]"
-DESC_TOKEN = "[DESCRIPTION]"
 
 # The subset of special tokens whose positions become schema embeddings (mirrors
 # SchemaTransformer._special_ids: [P] [C] [E] [R] [L] — NOT the separators).
 EMBEDDING_SPECIALS = ("[P]", "[C]", "[E]", "[R]", "[L]")
 
 
-class SchemaError(ValueError):
-    """A request schema this runtime cannot serve (bad shape, or relations/structures)."""
-
-
 @dataclass(frozen=True)
 class PreparedSchema:
-    """A validated, compiled schema: normalized struct descriptors + their prompt token lists."""
+    """A validated, compiled schema: typed struct specs + their prompt token lists."""
 
-    structs: list[dict[str, Any]]
-    tokens: list[list[str]]
+    structs: tuple[Spec, ...]
+    tokens: tuple[list[str], ...]
 
 
 class Gliner2OnnxRuntime:
@@ -167,78 +172,9 @@ class Gliner2OnnxRuntime:
         return words, starts, ends
 
     # ── schema -> prompt ────────────────────────────────────────────────────────────────────
-
-    def _structs(self, schema: dict[str, Any]) -> list[dict[str, Any]]:
-        """Normalize a request schema into ordered struct descriptors.
-
-        Order is the library's: entities first, then classifications in the order supplied
-        (`processor.py::_infer_from_json`). Getting this order wrong changes the prompt and
-        therefore every logit, silently.
-        """
-        for unsupported in ("relations", "structures", "json_structures"):
-            if schema.get(unsupported):
-                raise SchemaError(
-                    f"schema key '{unsupported}' is not supported by this service — "
-                    "only 'entities' and 'classifications' are served"
-                )
-
-        structs: list[dict[str, Any]] = []
-
-        entities = schema.get("entities")
-        if entities:
-            if isinstance(entities, list):
-                fields = [str(e) for e in entities]
-                descs: dict[str, str] = {}
-            elif isinstance(entities, dict):
-                fields = [str(k) for k in entities]
-                # A string value is a description — including an empty one, exactly as
-                # Schema._parse_entity_input treats it.
-                descs = {str(k): str(v) for k, v in entities.items() if isinstance(v, str)}
-            else:
-                raise SchemaError("schema.entities must be a list of labels or a {label: description} object")
-            if not fields:
-                raise SchemaError("schema.entities is empty")
-            structs.append({"kind": "entities", "name": "entities", "parent": "entities",
-                            "fields": fields, "descs": descs, "child": E_TOKEN})
-
-        for raw in schema.get("classifications") or []:
-            if not isinstance(raw, dict):
-                raise SchemaError("each schema.classifications entry must be an object")
-            name = raw.get("name") or raw.get("task")
-            labels = raw.get("labels")
-            if not name or not isinstance(labels, list) or not labels:
-                raise SchemaError("each classification needs a non-empty 'name' and 'labels' list")
-            descs = raw.get("descriptions") or raw.get("label_descriptions") or {}
-            if not isinstance(descs, dict):
-                raise SchemaError(f"classification '{name}': descriptions must be an object")
-            structs.append({
-                "kind": "classification",
-                "name": str(name),
-                "parent": str(name),
-                "fields": [str(x) for x in labels],
-                "descs": {str(k): str(v) for k, v in descs.items()},
-                "child": L_TOKEN,
-                "multi_label": bool(raw.get("multi_label", False)),
-                "cls_threshold": float(raw.get("cls_threshold", raw.get("threshold", 0.5))),
-            })
-
-        if not structs:
-            raise SchemaError("schema must contain 'entities' and/or 'classifications'")
-        return structs
-
-    @staticmethod
-    def _struct_tokens(struct: dict[str, Any]) -> list[str]:
-        """`processor.py::_transform_schema` for the inference (is_training=False) path."""
-        prompt = struct["parent"]
-        descs = {k: v for k, v in struct["descs"].items() if k in struct["fields"]}
-        if descs:
-            for label, desc in descs.items():
-                prompt += f" {DESC_TOKEN} {label}: {desc}"
-        tokens = ["(", P_TOKEN, prompt, "("]
-        for field in struct["fields"]:
-            tokens.extend([struct["child"], field])
-        tokens.extend([")", ")"])
-        return tokens
+    #
+    # Validation and prompt-token assembly live in `schema.py` (pure, stdlib-only, unit-tested).
+    # This class only consumes the resulting specs.
 
     def _format_input(
         self, struct_token_lists: list[list[str]], words: list[str]
@@ -278,8 +214,8 @@ class Gliner2OnnxRuntime:
     def build_input_ids(self, text: str, schema: dict[str, Any]) -> list[int]:
         """The prompt this runtime would encode. Used by the export-time parity gate."""
         words, _, _ = self.split_words(self.normalize_text(text))
-        structs = self._structs(schema)
-        ids, _, _ = self._format_input([self._struct_tokens(s) for s in structs], words)
+        specs = compile_schema(schema)
+        ids, _, _ = self._format_input([struct_tokens(s) for s in specs], words)
         return ids
 
     # ── inference ───────────────────────────────────────────────────────────────────────────
@@ -292,8 +228,8 @@ class Gliner2OnnxRuntime:
         and that a malformed schema fails before any model runs. Callers cache the result
         per (alias, schema-hash) — see `app.py`.
         """
-        structs = self._structs(schema)
-        return PreparedSchema(structs=structs, tokens=[self._struct_tokens(s) for s in structs])
+        specs = compile_schema(schema)
+        return PreparedSchema(structs=specs, tokens=tuple(struct_tokens(s) for s in specs))
 
     def extract(
         self,
@@ -310,13 +246,13 @@ class Gliner2OnnxRuntime:
     def _extract_one(
         self,
         text: str,
-        structs: list[dict[str, Any]],
-        struct_tokens: list[list[str]],
+        structs: tuple[Spec, ...],
+        token_lists: tuple[list[str], ...],
         threshold: float,
     ) -> dict[str, Any]:
         text = self.normalize_text(text)
         words, start_map, end_map = self.split_words(text)
-        input_ids, word_positions, special_positions = self._format_input(struct_tokens, words)
+        input_ids, word_positions, special_positions = self._format_input(token_lists, words)
 
         ids = np.asarray([input_ids], dtype=np.int64)
         mask = np.ones_like(ids)
@@ -329,17 +265,17 @@ class Gliner2OnnxRuntime:
         )
 
         span_rep = None
-        if token_embs.shape[0] > 0 and any(s["kind"] == "entities" for s in structs):
+        if token_embs.shape[0] > 0 and any(isinstance(s, EntitySpec) for s in structs):
             span_rep = self._span_rep(token_embs)
 
         results: dict[str, Any] = {}
-        for struct, positions in zip(structs, special_positions):
+        for spec, positions in zip(structs, special_positions):
             embs = hidden[np.asarray(positions, dtype=np.int64)]
-            if struct["kind"] == "classification":
-                results[struct["name"]] = self._classify(struct, embs)
+            if isinstance(spec, ClassificationSpec):
+                results[spec.name] = self._classify(spec, embs)
             else:
                 results["entities"] = self._entities(
-                    struct, embs, span_rep, words, text, start_map, end_map, threshold
+                    spec, embs, span_rep, words, text, start_map, end_map, threshold
                 )
         return results
 
@@ -362,16 +298,16 @@ class Gliner2OnnxRuntime:
         )[0]
         return out[0]
 
-    def _classify(self, struct: dict[str, Any], embs: np.ndarray) -> Any:
+    def _classify(self, spec: ClassificationSpec, embs: np.ndarray) -> Any:
         label_embs = embs[1:]
         logits = self.classifier.run(None, {"embs": label_embs.astype(np.float32)})[0].reshape(-1)
-        labels = struct["fields"]
-        if struct["multi_label"]:
+        labels = spec.fields
+        if spec.multi_label:
             probs = _sigmoid(logits)
             chosen = [
                 {"label": labels[i], "confidence": float(probs[i])}
                 for i in range(len(labels))
-                if float(probs[i]) >= struct["cls_threshold"]
+                if float(probs[i]) >= spec.cls_threshold
             ]
             if not chosen:
                 best = int(np.argmax(probs))
@@ -383,7 +319,7 @@ class Gliner2OnnxRuntime:
 
     def _entities(
         self,
-        struct: dict[str, Any],
+        spec: EntitySpec,
         embs: np.ndarray,
         span_rep: np.ndarray | None,
         words: list[str],
@@ -392,7 +328,7 @@ class Gliner2OnnxRuntime:
         end_map: list[int],
         threshold: float,
     ) -> dict[str, list[dict[str, Any]]]:
-        names = struct["fields"]
+        names = spec.fields
         # The count head is a GATE here, not a slot selector: gliner2 returns no entities at all
         # when the predicted count is 0, and the entity decode only ever reads slot 0.
         count_logits = self.count_pred.run(None, {"embs": embs[0:1].astype(np.float32)})[0]

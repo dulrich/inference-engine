@@ -29,6 +29,48 @@ class UnknownModelError(KeyError):
     """A request named an alias the registry does not define."""
 
 
+def _typename(value: object) -> str:
+    return "null" if value is None else type(value).__name__
+
+
+def _require_str(
+    config_path: Path,
+    alias: str,
+    cfg: dict[str, Any],
+    key: str,
+    *,
+    default: str = "",
+    required: bool = False,
+) -> str:
+    """A string config value, or `default` when the key is absent. Never a coercion."""
+    if key not in cfg:
+        if required:
+            raise RegistryError(f"{config_path}: model '{alias}' has no '{key}'")
+        return default
+    value = cfg[key]
+    if not isinstance(value, str) or (required and not value):
+        raise RegistryError(
+            f"{config_path}: model '{alias}': '{key}' must be a "
+            f"{'non-empty ' if required else ''}string, got {_typename(value)}"
+        )
+    return value
+
+
+def _require_bool(
+    config_path: Path, alias: str, cfg: dict[str, Any], key: str, *, default: bool
+) -> bool:
+    """A real YAML boolean. A quoted `"false"` is a config error, not `True`."""
+    if key not in cfg:
+        return default
+    value = cfg[key]
+    if not isinstance(value, bool):
+        raise RegistryError(
+            f"{config_path}: model '{alias}': '{key}' must be true or false, "
+            f"got {_typename(value)}"
+        )
+    return value
+
+
 @dataclass
 class ModelEntry:
     alias: str
@@ -112,18 +154,24 @@ class ModelRegistry:
 
         entries: dict[str, ModelEntry] = {}
         for alias, cfg in raw_models.items():
+            # Validate, never coerce. `str()`/`bool()` around config values is how `path: true`
+            # becomes `Path("True")` and surfaces much later as a missing directory, and how a
+            # quoted `preload: "false"` silently preloads (`bool("false")` is True). A config
+            # mistake must read as a config error, here, at load.
+            if not isinstance(alias, str) or not alias:
+                raise RegistryError(
+                    f"{config_path}: model alias {alias!r} must be a non-empty string"
+                )
             if not isinstance(cfg, dict):
                 raise RegistryError(f"{config_path}: model '{alias}' must be a mapping")
-            model_path = cfg.get("path")
-            if not model_path:
-                raise RegistryError(f"{config_path}: model '{alias}' has no 'path'")
-            entries[str(alias)] = ModelEntry(
-                alias=str(alias),
-                name=str(cfg.get("name", alias)),
-                source_model=str(cfg.get("source_model", "")),
-                path=Path(str(model_path)),
-                preload=bool(cfg.get("preload", True)),
-                notes=str(cfg.get("notes", "")),
+            model_path = _require_str(config_path, alias, cfg, "path", required=True)
+            entries[alias] = ModelEntry(
+                alias=alias,
+                name=_require_str(config_path, alias, cfg, "name", default=alias),
+                source_model=_require_str(config_path, alias, cfg, "source_model", default=""),
+                path=Path(model_path),
+                preload=_require_bool(config_path, alias, cfg, "preload", default=True),
+                notes=_require_str(config_path, alias, cfg, "notes", default=""),
             )
         return cls(entries, intra_op_threads=intra_op_threads)
 

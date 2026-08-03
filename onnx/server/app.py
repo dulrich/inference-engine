@@ -230,6 +230,14 @@ class ExtractHandler(BaseHTTPRequestHandler):
         except SchemaError as exc:
             self._error(400, "bad_schema", str(exc))
             return
+        except Exception as exc:
+            # Belt and braces. `compile_schema` is strict enough that this should be
+            # unreachable, but an exception escaping do_POST is not a 500 — with
+            # `protocol_version = "HTTP/1.1"` and no bytes written yet, `socketserver` drops the
+            # connection and the client gets NO response at all. That must be impossible.
+            _log("schema compilation failed:", traceback.format_exc())
+            self._error(500, "schema_failed", f"{type(exc).__name__}: {exc}")
+            return
 
         try:
             results = runtime.extract(texts, prepared, float(threshold))

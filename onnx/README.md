@@ -69,6 +69,43 @@ Notes:
   plausible-looking wrong answer — see [AGENTS.md](AGENTS.md) for why.
 - Schemas are compiled and cached per `(alias, schema-hash)`; label **order** is part of the
   prompt, so two orderings are two schemas.
+- **The schema is validated, never coerced.** A wrong-typed field is a `400 bad_schema` naming
+  the offending key — it is never silently converted. This matters because the coercions it
+  replaced produced confident wrong answers instead of errors: `"multi_label": "false"` became
+  `True` (non-empty string), `"cls_threshold": true` became `1.0` (`bool` is an `int`), and a
+  non-string description was `str()`-rendered straight into the prompt. So: `multi_label` must
+  be a real boolean; `cls_threshold`/`threshold` must be a finite number and **not** a boolean;
+  labels, names and descriptions must be strings.
+
+### Errors
+
+Every error is the same envelope, and a malformed schema always produces one — an unparseable
+request can never yield a dropped connection or a partial result:
+
+```jsonc
+{"error": {"code": "bad_schema", "message": "classification 'severity': 'cls_threshold' must be a number, got null"}}
+```
+
+| Code | Status | Cause |
+| --- | --- | --- |
+| `bad_schema` | 400 | Malformed schema, or a non-empty unsupported key (`relations`, `structures`, `json_structures`). |
+| `bad_texts` | 400 | `texts` absent, empty, or not an array of strings. |
+| `bad_threshold` | 400 | Top-level `threshold` is not a number. |
+| `missing_model` | 400 | No `model` in the request. |
+| `bad_json` / `bad_request` | 400 | Body is not valid JSON / not a JSON object, is empty, or `Content-Length` is unparseable. |
+| `payload_too_large` | 413 | Body over the server's `MAX_BODY_BYTES`. |
+| `unknown_model` | 404 | Alias not in the registry. Never falls back to a default — see [AGENTS.md](AGENTS.md). |
+| `not_found` | 404 | No such route. |
+| `model_unavailable` | 503 | Alias is registered but its model failed to load. |
+| `schema_failed` / `extract_failed` | 500 | Unexpected server-side failure. `schema_failed` should be unreachable — it exists so a validation bug can never become a dropped connection. |
+
+Two deliberate asymmetries, both pinned by tests in `tests/test_schema.py`:
+
+- `"entities": []` and `{}` mean "none requested" and are accepted; `"entities": null` is a
+  `400`. Same for `classifications`: `[]` is fine, `null` is an error. Omitting the key entirely
+  is always fine — a schema just needs at least one of the two.
+- `"relations": []` stays a silently-ignored no-op rather than a `400`, since an empty list
+  requests nothing. A *non-empty* `relations` is rejected.
 
 ### `GET /health`
 

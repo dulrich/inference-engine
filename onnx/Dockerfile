@@ -93,5 +93,8 @@ ENV PYTHONUNBUFFERED=1 \
 
 EXPOSE 4812
 
+RUN groupadd -g 1001 app && useradd -m -u 1001 -g app app
+USER app
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["python", "-m", "server.app"]

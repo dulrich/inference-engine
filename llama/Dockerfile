@@ -136,6 +136,9 @@ VOLUME ["/models"]
 # point directory exists.
 RUN mkdir -p /app
 
+RUN groupadd -g 1001 app && useradd -m -u 1001 -g app app
+USER app
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 # Dual-use default: the router is the new normal, but the image still runs a bare

@@ -68,6 +68,7 @@ bad() {
 # must tolerate that under `set -u` if the script dies before it gets here.
 SMOKE_TMPDIR=""
 cleanup() {
+	# shellcheck disable=SC2317  # reachable via `trap cleanup EXIT` below, not dead code
 	[ -n "$SMOKE_TMPDIR" ] && rm -rf "$SMOKE_TMPDIR"
 }
 trap cleanup EXIT

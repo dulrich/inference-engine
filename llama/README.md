@@ -129,6 +129,51 @@ omitted.
 
 Exits non-zero on any failed check.
 
+## Deep health check
+
+`smoke-inference.sh` is a point-in-time check you run by hand. `deep-health-check.sh` is a
+narrower, guardrail-shaped sibling meant to run unattended and repeatedly, to catch what the
+compose healthcheck structurally cannot: a total serving outage behind a green router.
+
+The split exists because one probe cannot both detect an outage promptly and exercise a cold
+model load. The compose healthcheck (`compose.fleet.yml`) hits llama-swap's own `/health` every
+30s — fast enough to be a useful "is the router up" signal, but llama-swap is a static Go
+binary, so it kept answering `OK` for ~30 hours in August 2026 while every `llama-server` child
+was dead at dynamic-link time (the ABI trap, above). `/health` proves the router process is up;
+it has never proved a model can spawn and serve, and now says so in its own comment. A 30s
+probe also *cannot* be turned into a spawn test: `bge-small-en-v1.5-f16` has `ttl: 1800` in
+`config.yaml`, so any interval under 1800s keeps resetting the idle timer and the model never
+actually unloads — the probe would only ever observe an already-warm process.
+
+`deep-health-check.sh` is the other half: it `POST`s `/v1/embeddings` for `bge-small` (the
+cheapest model in the retrieval group) and asserts the response **body** — `data[0].embedding`
+must be an array of exactly 384 finite numbers — never a status code, for the same reason
+`smoke-inference.sh` does: LM Studio answers unknown endpoints with HTTP 200 and an error body,
+and a status-code check would have reported the August outage as healthy the entire time. It
+tolerates one transient failure before declaring FAIL, because the `chat` group's
+`exclusive: true` can legitimately evict `bge-small` mid-probe.
+
+```bash
+llama/deep-health-check.sh                                   # default target :4811, model bge-small
+llama/deep-health-check.sh --url http://127.0.0.1:4811 --model bge-small
+```
+
+**Scheduling is deliberately not wired up yet.** The recommended line, once cron scheduling is
+approved, is:
+
+```
+17 * * * * mkdir -p $HOME/.local/state/inference-engine && llama/deep-health-check.sh >>$HOME/.local/state/inference-engine/deep-health-check.log 2>&1
+```
+
+Hourly — the interval must exceed the 1800s `ttl` above so every run is a genuine cold spawn.
+It logs under `$HOME/.local/state` rather than `/var/log`, which is root-owned on this box: a
+user crontab redirecting into an unwritable directory fails *before* the script runs, which
+would leave this guardrail silently dead — the same shape of bug it exists to detect.
+**This line is not currently installed anywhere** (no crontab entry, no systemd timer, no
+compose sidecar). Until it is, the outage-detection gap the August incident exposed is still
+open: `deep-health-check.sh` only runs when a human runs it by hand. That gap being
+undocumented is how the last one lasted 30 hours — it is documented here on purpose.
+
 ## The llvmpipe trap
 
 This is the failure mode `entrypoint.sh`'s GPU assertion exists for, and it is worth

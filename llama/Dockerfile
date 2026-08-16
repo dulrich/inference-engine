@@ -5,7 +5,8 @@
 #
 # As of the llama-swap addition this image is dual-use, and that is deliberate — it is mid
 # migration from "one model, one process, one systemd socket" to "one always-on multi-model
-# router" (see README.md). `ENTRYPOINT` still only proves the GPU is real; whatever command you
+# router" (see README.md). `ENTRYPOINT` proves the GPU is real and that `llama-server` can link
+# (see entrypoint.sh — both assertions belong to the container, not to a command); whatever you
 # pass after that (`llama-swap -config ... -listen ...` — the image's `CMD` default — or a bare
 # `llama-server -m ... --embeddings ...` for the old single-model shape) is exec'd unchanged.
 #
@@ -34,17 +35,23 @@
 # recorded for the ROCm attempt, and it is why entrypoint.sh asserts the selected device rather
 # than trusting that the GPU was picked.
 #
-# The cost of sid is that it moves. The Mesa version is therefore pinned in the compose
-# healthcheck's expectations rather than here, and `docker compose build --no-cache` is the way
-# to pick up a Mesa fix.
+# The cost of sid is that it moves, and nothing pins the Mesa version — not here, and not in the
+# compose healthcheck (an earlier version of this comment claimed the latter; it was never true).
+# What guards the Mesa side is the runtime assertion in entrypoint.sh, which refuses to start on
+# a software rasteriser, so a regression shows up as a stopped container rather than a slow one.
+# `docker compose build --no-cache` is the way to pick up a Mesa fix.
+#
+# The same movement is what makes the libc6 pin in the runtime stage necessary — read that
+# comment before editing any apt line in this file.
 
 # ── Build stage ──────────────────────────────────────────────────────────────────────────────
 FROM debian:sid-slim AS build
 
 # Pinned to a release tag, not master: an inference server that silently changes its wire format
 # under a rebuild is exactly what the embedding-space work exists to make impossible elsewhere.
-# Bump deliberately, and re-run the agreement harness (scripts/embedding-agreement.mjs) when you
-# do — a llama.cpp change to pooling or normalisation would move every vector this serves.
+# Bump deliberately, and re-run the agreement harness when you do — a llama.cpp change to pooling
+# or normalisation would move every vector this serves. That harness lives in the consumer that
+# owns the embedding space, not here: `obsidian-crucible/scripts/embedding-agreement.mjs`.
 ARG LLAMA_CPP_TAG=b10121
 
 # `glslc` alone is not enough: ggml's vulkan-shaders-gen resolves SPIRV-Headers through CMake's
@@ -56,6 +63,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake git ca-certificates \
       libvulkan-dev glslc spirv-headers spirv-tools \
     && rm -rf /var/lib/apt/lists/*
+
+# Record the glibc this stage actually resolved, for the runtime stage to pin itself to.
+#
+# `build-essential` pulls in `libc6-dev`, which upgrades `libc6` itself to whatever sid holds on
+# build day — so this stage routinely ends up on a newer glibc than a stage that never installs a
+# toolchain. Everything built below links against that newer glibc. The single quotes around the
+# dpkg-query format are load-bearing: the builder does not expand variables in RUN, but the shell
+# does, and `${Version}` unquoted would expand to the empty string and write an empty marker.
+RUN dpkg-query -W -f='${Version}' libc6 > /libc6.version
 
 WORKDIR /src
 RUN git clone --depth 1 --branch "${LLAMA_CPP_TAG}" https://github.com/ggml-org/llama.cpp.git .
@@ -111,10 +127,37 @@ RUN curl -fsSL -o llama-swap.tar.gz \
 # ── Runtime stage ────────────────────────────────────────────────────────────────────────────
 FROM debian:sid-slim
 
+# ── The libc6 pin, and why this COPY sits ABOVE the apt line instead of with its siblings ────
+#
+# This COPY looks misplaced. It is not, and moving it down re-arms a 30-hour outage (2026-08).
+#
+# All three stages start FROM the same rolling `debian:sid-slim`, but the build stage's
+# `build-essential` upgrades its `libc6` and the list below never mentions `libc6` at all — so
+# the runtime stage sits on the base layer's older glibc, and the `COPY --from=build` of the
+# binaries a few lines down lands newer-glibc objects on an older loader. Every `llama-server`
+# then dies before `main()` with "version `GLIBC_x.yz' not found". `llama-swap` is a static Go
+# binary, so the router survives, keeps answering `/health` with `OK`, and the container reports
+# `(healthy)` while returning 500 to every request routed through it.
+#
+# Adding a bare `libc6` to the list below does NOT fix this. BuildKit schedules stages as a
+# dependency graph, and the runtime stage has no edge to the build stage until its first
+# `COPY --from=build` — so the two apt transactions are free to run as parallel vertices against
+# different snapshots of a moving index. THIS COPY IS THE EDGE. Placing it above the apt line is
+# what forces the builder to finish the build stage first; pinning to the exact recorded version
+# is what makes the outcome deterministic rather than merely likely.
+#
+# If that version is not installable the build fails loudly. That is the design — a hard failure
+# at build time is the cheap version of this bug. Do not "fix" such a failure by loosening the
+# pin; rebuild with --no-cache so both stages resolve against one index.
+COPY --from=build /libc6.version /usr/local/share/llama-abi/libc6.version
+
 # mesa-vulkan-drivers is RADV itself; vulkan-tools provides `vulkaninfo`, which entrypoint.sh
 # uses to prove a discrete GPU was found before the server is allowed to start. Keeping
 # vulkan-tools in the runtime image is deliberate: the assertion is worth more than the ~15MB.
+# The marker is kept in the final image rather than deleted, so the pin can be verified from a
+# running container (`dpkg-query -W libc6` must equal it) and entrypoint.sh can cite it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+      "libc6=$(cat /usr/local/share/llama-abi/libc6.version)" \
       libvulkan1 mesa-vulkan-drivers vulkan-tools libgomp1 curl \
     && rm -rf /var/lib/apt/lists/*
 

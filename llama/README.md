@@ -27,8 +27,9 @@ is the difference between a button people avoid and one they press without think
 
 ```
 Dockerfile          multi-stage build: llama.cpp b10121 (Vulkan) + llama-swap v243, debian:sid-slim
-entrypoint.sh       refuses to start on a software rasteriser (see "The llvmpipe trap"); dual-use
-                    exec tail — runs whatever command it's given (llama-swap or a bare llama-server)
+entrypoint.sh       refuses to start on a software rasteriser (see "The llvmpipe trap") or on a
+                    glibc-skewed image (see "The ABI trap"); dual-use exec tail — runs whatever
+                    command it's given (llama-swap or a bare llama-server)
 config.yaml         llama-swap router config: models, aliases, ttl, groups — bind-mounted, not baked in
 smoke-inference.sh  host-run smoke test against a running router (see "Smoke testing" below)
 ```
@@ -42,8 +43,10 @@ mounts, `/dev/dri` passthrough, `mem_limit`) lives in the fleet repo,
 
 ## Dual-use image, on purpose
 
-`entrypoint.sh` only proves the GPU is real (the assertion below); everything after that is
-`exec "$@"` — whatever command the container is given, unchanged. Two supported shapes:
+`entrypoint.sh` proves two things about the *container* — that the GPU is real, and that
+`llama-server` can dynamically link — and nothing about the command; everything after that is
+`exec "$@"` — whatever the container is given, unchanged. Both assertions therefore apply to
+both shapes below, including the bare-`llama-server` one. Two supported shapes:
 
 ```bash
 # The new default (this image's CMD): llama-swap owns the router, spawns llama-server children
@@ -154,6 +157,50 @@ and should never be set in the fleet.
 
 (As it happens ggml filters llvmpipe out on its own — it resolves only `Vulkan0: AMD Radeon
 RX 9070 (RADV GFX1201)`. The assertion does not depend on that continuing to be true.)
+
+## The ABI trap
+
+The llvmpipe trap's sibling, and the one that actually took the service down for ~30 hours in
+August 2026. Same shape: the guard passed and the thing was wrong.
+
+All three build stages start `FROM debian:sid-slim`, which rolls forward. The build stage
+installs `build-essential`, which drags in `libc6-dev` and upgrades `libc6` as a side effect;
+the runtime stage's package list never mentioned `libc6`, so it stayed on the base layer's
+older one. `COPY --from=build` then dropped binaries linked against the newer glibc onto the
+older loader, and every `llama-server` process died at dynamic-link time with
+``version `GLIBC_2.43' not found`` before it could open a port.
+
+What made it expensive to notice: **`llama-swap` is a static Go binary**, so the router itself
+was unaffected. It kept answering `/health` with `OK`, Docker kept reporting `(healthy)`, and
+`/v1/models` kept listing every alias. Only an actual inference request failed —
+`500 {"error":"unspecific error: upstream command exited prematurely"}` in ~0.25 s. That
+latency is the tell: a startup death, not a load timeout. And it hit *every* model, so a report
+that "embeddings are down" understates it.
+
+Two guards now exist, because either alone is insufficient:
+
+- **Build time** — the build stage records its resolved `libc6` version to
+  `/usr/local/share/llama-abi/libc6.version`, and the runtime stage `COPY`s that marker *before*
+  its `apt-get` line and installs that exact version. The COPY placement is not cosmetic: it
+  creates the BuildKit dependency edge that forces the build stage to finish first. Without it
+  the two `apt` transactions are independent graph vertices and may resolve different snapshots
+  of a moving index — which is why simply adding `libc6` to the runtime package list would not
+  have been enough.
+- **Boot time** — `entrypoint.sh` runs `llama-server --list-devices` and *fails closed* on a
+  non-zero exit, printing the loader error plus a diagnostic. It captures the output into a
+  variable before testing, because a pipeline reports its last command's status: the original
+  `llama-server ... | sed` returned 0 even as `llama-server` returned 1.
+
+Verify the pin from a running container — these two must agree:
+
+```bash
+docker exec inference-engine-llama dpkg-query -W -f='${Version}' libc6
+docker exec inference-engine-llama cat /usr/local/share/llama-abi/libc6.version
+docker exec inference-engine-llama ldd -r /usr/local/bin/llama-server   # no unresolved symbols
+```
+
+The durable lesson is the one in `AGENTS.md`: a green healthcheck is not evidence. Run
+`smoke-inference.sh` after every rebuild.
 
 ## A reranker is not an embedding model
 

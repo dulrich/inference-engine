@@ -64,7 +64,7 @@ macros:
   # `--embeddings` / `--reranking` each imply their own pooling on top of that — do not add
   # `--pooling` back in "to be explicit". `-ngl 99` offloads every layer to the GPU; the
   # `-c/-b/-ub 8192` context/batch sizing matches what was already tuned and measured for these
-  # two models.
+  # three models.
   llama_server_common: >
     /usr/local/bin/llama-server
     --host 0.0.0.0 --port ${PORT}
@@ -209,11 +209,13 @@ groups:
   # bound on this desktop-shared host).
   #
   # Per-model weights are exact file sizes (`stat -c %s`) on the candidate GGUFs already on disk
-  # (paths below map today to `~/.lmstudio/models/<publisher>/<repo>/…`, host layout unaffected by
-  # the pending GGUF-home move). KV cache is computed from each GGUF's own header metadata (block
-  # count, per-layer attention.head_count_kv, attention.key_length/value_length,
-  # attention.sliding_window — read directly, no model loaded) at f16 KV (llama.cpp's default
-  # cache type, unquantized) and is SWA-aware: gemma4 declares a per-layer sliding_window (1024
+  # (paths below mapped at measurement time to `~/.lmstudio/models/<publisher>/<repo>/…`; the
+  # GGUF-home move has since completed, and the host layout is now
+  # `/srv/models/<publisher>/<repo>/…`). KV cache is computed from each GGUF's own
+  # header metadata (block count, per-layer attention.head_count_kv,
+  # attention.key_length/value_length, attention.sliding_window — read directly, no model
+  # loaded) at f16 KV (llama.cpp's default cache type, unquantized) and is SWA-aware: gemma4
+  # declares a per-layer sliding_window (1024
   # tokens) and llama.cpp allocates the reduced cache size for the majority of layers that use it,
   # not the full requested context — only the minority "global" layers (the ones with a markedly
   # smaller head_count_kv in the GGUF metadata) scale with the full context size.

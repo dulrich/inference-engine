@@ -210,6 +210,11 @@ change to pooling or normalisation would move every vector this serves, and the 
 gradually worse search rather than an error. llama.cpp stays pinned at `b10121` as of this
 writing — the llama-swap addition is not a reason to bump it.
 
+An image rebuild is never complete on a green healthcheck — run `llama/smoke-inference.sh`
+after every rebuild, not only after a config change. The smoke script is the only thing that
+proves the rebuilt image can actually serve; the healthcheck only proves the router process
+started.
+
 ## Upgrading llama-swap
 
 ```bash
@@ -221,6 +226,11 @@ Pinned to ≥v242 (the release that fixed a TTL-unload deadlock) by tag *and* ch
 checksum from the new release's own `llama-swap_<ver>_checksums.txt` asset (pick the
 `linux_amd64.tar.gz` line) — don't hand-type it, and don't trust a value that isn't sourced from
 that file. `docker build` fails closed on a mismatch (`sha256sum -c -`).
+
+An image rebuild is never complete on a green healthcheck — run `llama/smoke-inference.sh`
+after every rebuild, not only after a config change. The smoke script is the only thing that
+proves the rebuilt image can actually serve; the healthcheck only proves the router process
+started.
 
 ## Migration status
 

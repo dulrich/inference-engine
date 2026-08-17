@@ -37,6 +37,15 @@
 
 FROM python:3.12-slim
 
+# Source commit baked in for the fleet view (same convention as the fleet-tools images).
+# Declared BEFORE the apt layer deliberately: a new commit busts the cache from here down, so
+# `apt-get upgrade` re-runs and picks up base-package security fixes instead of serving a stale
+# cached layer (the util-linux deb13u1 lesson, 2026-08-17). OS packages only — the python wheels
+# below stay exactly pinned; this layer never touches the numerics the parity gate protects.
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.revision=${GIT_SHA}
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
+
 # Pinned exactly. An inference runtime that changes numerics under a rebuild is precisely what
 # the export-time parity gate exists to make impossible, and an unpinned rebuild would route
 # around it. Bump deliberately, then re-run `tools/export_gliner2.py --verify-only` for every

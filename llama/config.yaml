@@ -200,6 +200,30 @@ models:
     ttl: 1800
     checkEndpoint: /health
 
+  Ling-3.0-tiny-UD-Q6_K_XL:
+    name: "Ling-3.0-tiny (UD-Q6_K_XL)"
+    aliases:
+      - ling-3-tiny-ud-q6-xl
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q6_K_XL.gguf
+      -c 8192
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
+  Ling-3.0-tiny-Q8_0:
+    name: "Ling-3.0-tiny (Q8_0)"
+    aliases:
+      - ling-3-tiny-q8
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q8_0.gguf
+      -c 8192
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
 groups:
   # Embedding and reranking are small enough, and used closely enough together by a single
   # search/rerank flow, that neither should evict the other: swap/exclusive both false means
@@ -327,10 +351,32 @@ groups:
   #   from baseline ≈ 5.03 GiB / 5.40 GB, ~0.05 GiB overhead beyond weights alone. Also
   #   comfortably under the nameplate total.
   #
-  # UD-Q6_K_XL (7.27 GB) and Q8_0 (8.41 GB) — the remaining two bake-off quants — land in WP-3
-  # with their own live measurement; both are expected to follow the same small-overhead pattern
-  # but are NOT assumed to until measured (Q8_0 in particular is the largest single file in this
-  # group, worth confirming rather than extrapolating).
+  # - Ling-3.0-tiny-UD-Q6_K_XL: weights 7,274,546,528 B = 6.77 GiB / 7.27 GB. Peak
+  #   `mem_info_vram_used` after load + single-turn + multi-turn (baseline re-measured at
+  #   1,295,380,480 B / 1.21 GiB just before this load — a few hundred MB higher than the Q4
+  #   pair's baseline above, ordinary desktop-VRAM fluctuation, not a fixed floor):
+  #   8,540,147,712 B = 7.95 GiB / 8.54 GB → delta from baseline ≈ 6.75 GiB / 7.24 GB, i.e.
+  #   essentially weights-alone (the ~0.03 GiB "negative overhead" against the raw weights figure
+  #   is baseline-measurement noise, not a real effect — two `mem_info_vram_used` reads taken
+  #   minutes apart on a shared desktop session routinely differ by a few hundred MB). Comfortably
+  #   under the 15.92 GiB nameplate total.
+  # - Ling-3.0-tiny-Q8_0: weights 8,408,187,968 B = 7.83 GiB / 8.41 GB — the largest single file
+  #   in this group. Note: its first single-turn probe (`max_tokens: 128`) hit `finish_reason:
+  #   "length"` with EMPTY `content` — this model's reasoning trace is more verbose than
+  #   Q4_K_M/UD-Q4_K_XL/UD-Q6_K_XL's, similar in shape to gemma-4's own `max_tokens >= 128`
+  #   requirement (see the `chat` group's macro comment) but needing more headroom still;
+  #   `max_tokens: 512` got a real answer. Not a hang, not a config defect — a bake-off/testing
+  #   finding worth carrying into whatever `max_tokens` the eventual bake-off evaluation uses; no
+  #   change made here since this group's `cmd` doesn't set `max_tokens` (that's a per-request
+  #   field, not a server flag). Peak `mem_info_vram_used` after load + both probes:
+  #   9,657,081,856 B = 8.99 GiB / 9.66 GB → delta from baseline ≈ 7.79 GiB / 8.36 GB, again
+  #   essentially weights-alone within the same measurement-noise band as UD-Q6_K_XL above.
+  #   Comfortably under the 15.92 GiB nameplate total — even this largest quant leaves several
+  #   GiB of headroom on this card.
+  #
+  # All four bake-off quants now load individually within nameplate VRAM with no compute-buffer
+  # surprises; none were tested loaded simultaneously (this group is exclusive:true by design —
+  # see above — so that was never the point).
   ling-bakeoff:
     swap: true
     exclusive: true
@@ -338,3 +384,5 @@ groups:
     members:
       - Ling-3.0-tiny-Q4_K_M
       - Ling-3.0-tiny-UD-Q4_K_XL
+      - Ling-3.0-tiny-UD-Q6_K_XL
+      - Ling-3.0-tiny-Q8_0

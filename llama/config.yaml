@@ -40,6 +40,20 @@
 # The onnx tier next door keeps its own registry with the same rules and the same header:
 # `onnx/models.yaml` (aliases `gliner2-base`, `gliner2-pii`).
 #
+# ── Bake-off / testing aliases (no external consumer yet) ──────────────────────────────────────
+#
+# `ling-3-tiny-q4-m`, `ling-3-tiny-ud-q4-xl`, `ling-3-tiny-ud-q6-xl`, `ling-3-tiny-q8` (the
+# `ling-bakeoff` group below) — four quants of Ling-3.0-tiny (bloomer010/Ling-3.0-tiny-GGUF,
+# BailingMoE3 architecture) added for an internal bake-off, not yet adopted by any consumer. Not
+# a full registry row above because there is nothing to protect yet — these are still subject to
+# rename/removal without the append-only consumer-registry guarantee until a consumer actually
+# adopts one. Move whichever quant wins the bake-off into the table above (with its own row) if
+# and when a consumer starts storing its alias. See
+# `plans/ling-3-tiny-bakeoff-and-gpu-hang-watchdog.md` for how these were validated (llama.cpp
+# version-gated to a BailingMoE3-capable build, canary-first live load order, per-alias
+# save-work-gated probing) — the plan covers getting these four aliases downloaded, configured,
+# and reachable; it does not cover running or judging the bake-off itself.
+#
 # One base-URL note: consumers reach this router at http://127.0.0.1:4811 (Crucible vaults
 # store http://127.0.0.1:4811/v1). The transitional 4806 host publish was retired 2026-07-27;
 # :4806 survives only as the container-internal listen port.

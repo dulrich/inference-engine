@@ -164,6 +164,42 @@ models:
     ttl: 1800
     checkEndpoint: /health
 
+  # ── Ling-3.0-tiny bake-off (bloomer010/Ling-3.0-tiny-GGUF), testing only, no external consumer
+  # yet — see plans/ling-3-tiny-bakeoff-and-gpu-hang-watchdog.md. BailingMoE3 architecture (a
+  # hybrid Kimi-Delta-Attention + Multi-head-Latent-Attention MoE, first landed upstream
+  # 2026-08-17, PR #26608) — only 6 of 24 layers carry a conventional KV cache (the other 18 are
+  # KDA/linear-attention layers, no conventional KV cache, no sliding_window metadata), which is
+  # why the VRAM fit math for the `ling-bakeoff` group below is deferred to a live measurement
+  # rather than a static extrapolation from the `chat` group's dense-model math above. `-c 8192`
+  # is deliberately conservative — well under this model's 131072-token supported context and
+  # below gemma-4-12b's 32768 — because that per-token KV scaling is unmeasured on this box. No
+  # `--draft`/`-md`/speculative-decoding flag on any entry: upstream reports MTP-adjacent
+  # Vulkan/RADV hangs for this architecture family, and the plan's canary-first risk posture
+  # keeps that code path untouched pending a separate, user-approved follow-up.
+  Ling-3.0-tiny-Q4_K_M:
+    name: "Ling-3.0-tiny (Q4_K_M)"
+    aliases:
+      - ling-3-tiny-q4-m
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q4_K_M.gguf
+      -c 8192
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
+  Ling-3.0-tiny-UD-Q4_K_XL:
+    name: "Ling-3.0-tiny (UD-Q4_K_XL)"
+    aliases:
+      - ling-3-tiny-ud-q4-xl
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q4_K_XL.gguf
+      -c 8192
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
 groups:
   # Embedding and reranking are small enough, and used closely enough together by a single
   # search/rerank flow, that neither should evict the other: swap/exclusive both false means
@@ -256,3 +292,49 @@ groups:
     members:
       - gemma-4-12B-it-Q4_K_M
       - nemotron-3-nano-4B-Q4_K_M
+
+  # ── ling-bakeoff — Ling-3.0-tiny quant bake-off, testing only, canary-first (see
+  # plans/ling-3-tiny-bakeoff-and-gpu-hang-watchdog.md). Same shape as `chat` above:
+  # swap:true/exclusive:true because no individual quant needs to coexist with anything else
+  # during testing, and exclusive:true is also a safety property — only one
+  # untrusted-on-this-host-architecture process resident at a time. No group-level `ttl` — the
+  # schema has none (see `chat`'s comment above); each model entry above carries its own
+  # `ttl: 1800`.
+  #
+  # ── VRAM fit math (host-verified 2026-08-20, live single- + multi-turn canary probes, two of
+  # the four bake-off quants — the other two land in WP-3) ──
+  #
+  # Not extrapolated from the `chat` group's dense-model math above — deliberately measured live
+  # instead, since this architecture's 6-of-24-layers-have-KV-cache shape (the other 18 are
+  # KDA/linear-attention, no conventional KV cache, no sliding_window metadata) makes a static
+  # extrapolation unreliable. `mem_info_vram_used` read directly before/after each load, at
+  # -c 8192, after both a single-turn and a ≥3-turn (5-message) exchange per model, watched
+  # against `journalctl -k -f` throughout with zero MES/wedged/reset signature.
+  #
+  # Baseline (nothing from this group loaded, desktop session active): 1,204,256,768 B
+  # = 1.12 GiB / 1.20 GB. (Lower than the `chat` group's older 2026-07-26 desktop-baseline
+  # measurement of ~3.1 GiB — a snapshot of whatever else happened to be holding the render node
+  # that day, not a fixed floor; re-measure at request time rather than assuming either figure.)
+  #
+  # - Ling-3.0-tiny-Q4_K_M: weights 4,823,894,880 B = 4.49 GiB / 4.82 GB. Peak `mem_info_vram_used`
+  #   after load + single-turn + multi-turn: 6,148,374,528 B = 5.73 GiB / 6.15 GB → weights+KV+
+  #   buffer delta from baseline ≈ 4.60 GiB / 4.94 GB, i.e. only ~0.11 GiB of KV+compute-buffer
+  #   overhead beyond the weights alone — small, consistent with only 6/24 layers carrying a real
+  #   KV cache and the conservative `-c 8192`. Comfortably under the 15.92 GiB nameplate total.
+  # - Ling-3.0-tiny-UD-Q4_K_XL: weights 5,340,611,328 B = 4.97 GiB / 5.34 GB. Peak
+  #   `mem_info_vram_used` after load + single-turn + multi-turn (measured after `exclusive: true`
+  #   fully evicted Q4_K_M first): 6,602,141,696 B = 6.15 GiB / 6.60 GB → weights+KV+buffer delta
+  #   from baseline ≈ 5.03 GiB / 5.40 GB, ~0.05 GiB overhead beyond weights alone. Also
+  #   comfortably under the nameplate total.
+  #
+  # UD-Q6_K_XL (7.27 GB) and Q8_0 (8.41 GB) — the remaining two bake-off quants — land in WP-3
+  # with their own live measurement; both are expected to follow the same small-overhead pattern
+  # but are NOT assumed to until measured (Q8_0 in particular is the largest single file in this
+  # group, worth confirming rather than extrapolating).
+  ling-bakeoff:
+    swap: true
+    exclusive: true
+    persistent: false
+    members:
+      - Ling-3.0-tiny-Q4_K_M
+      - Ling-3.0-tiny-UD-Q4_K_XL

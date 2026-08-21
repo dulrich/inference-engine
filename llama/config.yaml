@@ -179,17 +179,23 @@ models:
     checkEndpoint: /health
 
   # ── Ling-3.0-tiny bake-off (bloomer010/Ling-3.0-tiny-GGUF), testing only, no external consumer
-  # yet — see plans/ling-3-tiny-bakeoff-and-gpu-hang-watchdog.md. BailingMoE3 architecture (a
-  # hybrid Kimi-Delta-Attention + Multi-head-Latent-Attention MoE, first landed upstream
-  # 2026-08-17, PR #26608) — only 6 of 24 layers carry a conventional KV cache (the other 18 are
-  # KDA/linear-attention layers, no conventional KV cache, no sliding_window metadata), which is
-  # why the VRAM fit math for the `ling-bakeoff` group below is deferred to a live measurement
-  # rather than a static extrapolation from the `chat` group's dense-model math above. `-c 8192`
-  # is deliberately conservative — well under this model's 131072-token supported context and
-  # below gemma-4-12b's 32768 — because that per-token KV scaling is unmeasured on this box. No
-  # `--draft`/`-md`/speculative-decoding flag on any entry: upstream reports MTP-adjacent
-  # Vulkan/RADV hangs for this architecture family, and the plan's canary-first risk posture
-  # keeps that code path untouched pending a separate, user-approved follow-up.
+  # yet — see plans/ling-3-tiny-bakeoff-and-gpu-hang-watchdog.md (original load-in) and
+  # plans/ling-3-tiny-context-ceiling.md (this -c bump, WP-1). BailingMoE3 architecture (a hybrid
+  # Kimi-Delta-Attention + Multi-head-Latent-Attention MoE, first landed upstream 2026-08-17, PR
+  # #26608) — only 6 of 24 layers carry a conventional KV cache (the other 18 are KDA/linear-
+  # attention layers, no conventional KV cache, no sliding_window metadata), which is why the VRAM
+  # fit math for the `ling-bakeoff` group below was deferred to a live measurement rather than a
+  # static extrapolation from the `chat` group's dense-model math above. `-c 131072` is this
+  # model's real, hard context ceiling — confirmed two independent ways (base model
+  # `inclusionAI/Ling-3.0-tiny`'s HF `config.json`: `max_position_embeddings: 131072`,
+  # `rope_scaling: null`, no extension trick; and a direct GGUF-header parse of all four local
+  # quant files: every one carries `bailingmoe3.context_length = 131072`) — not a round-number
+  # guess. Landed after live needle-in-haystack probes at moderate (32768) and near-ceiling
+  # (~110-120K token) prompt sizes confirmed both correct recall and safe VRAM headroom; see the
+  # `ling-bakeoff` group's fit-math comment below for the live numbers. No `--draft`/`-md`/
+  # speculative-decoding flag on any entry: upstream reports MTP-adjacent Vulkan/RADV hangs for
+  # this architecture family, and the plan's canary-first risk posture keeps that code path
+  # untouched pending a separate, user-approved follow-up.
   Ling-3.0-tiny-Q4_K_M:
     name: "Ling-3.0-tiny (Q4_K_M)"
     aliases:
@@ -197,7 +203,7 @@ models:
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q4_K_M.gguf
-      -c 8192
+      -c 131072
       --jinja
     ttl: 1800
     checkEndpoint: /health
@@ -209,7 +215,7 @@ models:
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q4_K_XL.gguf
-      -c 8192
+      -c 131072
       --jinja
     ttl: 1800
     checkEndpoint: /health
@@ -221,7 +227,7 @@ models:
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q6_K_XL.gguf
-      -c 8192
+      -c 131072
       --jinja
     ttl: 1800
     checkEndpoint: /health
@@ -233,7 +239,7 @@ models:
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q8_0.gguf
-      -c 8192
+      -c 131072
       --jinja
     ttl: 1800
     checkEndpoint: /health
@@ -391,6 +397,59 @@ groups:
   # All four bake-off quants now load individually within nameplate VRAM with no compute-buffer
   # surprises; none were tested loaded simultaneously (this group is exclusive:true by design —
   # see above — so that was never the point).
+  #
+  # ── Context ceiling raised to 131072 (host-verified 2026-08-21, see
+  # plans/ling-3-tiny-context-ceiling.md) ──
+  #
+  # `-c 8192` above was deliberately conservative pending a live measurement of this hybrid
+  # KDA/MLA architecture's per-token KV cost; that measurement is now in. GGUF-header geometry
+  # (all four quants, byte-identical across quants): `block_count=24`,
+  # `attention.head_count_kv` nonzero at exactly 6 of 24 positions (the MLA layers) with
+  # `attention.key_length=576` = `attention.kv_lora_rank(512) + rope.dimension_count(64)` — a
+  # single compressed latent cached once per token per real-KV layer, not per-attention-head
+  # (`attention.head_count=16`), which is the mechanism (not a guess) behind MLA's cache being far
+  # smaller than a dense model's at the same head count/context. Assuming f16 storage of that
+  # 576-element latent on both the K and V side across the 6 real-KV layers predicts ≈13.5
+  # KB/token of KV overhead — matches the already-measured Q4_K_M `-c 8192` delta above (≈0.11
+  # GiB) almost exactly, and extrapolated linearly to 131072 tokens predicts only ≈1.7-1.8 GiB of
+  # KV overhead even at max context, against the ~12.8 GiB realistic free-VRAM budget below.
+  #
+  # Live needle-in-haystack probes (moderate ~32768 and near-ceiling ~110-120K prompt tokens,
+  # correct recall required, `journalctl -k -f` watched throughout, zero MES/wedged/reset
+  # signature) at `-c 131072`:
+  #
+  # - Ling-3.0-tiny-Q4_K_M (canary, WP-1 Part A, f16 cache): baseline 1,739,743,232 B (1.62 GiB).
+  #   Single-turn ping: 7,624,044,544 B (7.10 GiB). Moderate probe (29,463 real prompt tokens,
+  #   correct recall): 7,698,051,072 B (7.17 GiB). Near-ceiling probe (111,272 real prompt tokens,
+  #   correct recall, 62.2s wall): PEAK 8,013,406,208 B (7.46 GiB) → 1.35 GiB overhead beyond the
+  #   4.49 GiB weights (KV + compute buffer combined, at the full -c 131072 pre-allocation) —
+  #   under the ≈1.7-1.8 GiB a-priori estimate above. Real measured KV growth rate between the two
+  #   probes ≈3.85 KB/token (vs the ≈13.5 KB/token worst-case estimate — the gap is explained
+  #   below). Zero journal signature either probe. Comfortably under nameplate.
+  # - KV cache type test (WP-1 Part B): a hard-gated symmetric q8_0/q8_0 + `-fa on` compatibility
+  #   test was run on the canary given two upstream risk signals for this architecture+backend
+  #   combination (BailingMoE3's own merge PR reported "freezes on Vulkan"; the closely-related
+  #   DeepSeek MLA family has an open llama.cpp issue where quantized K-cache produces "confident
+  #   gibberish" while the server stays healthy). **Result: REJECTED, not landed.** A scratch
+  #   verbose-logged load confirmed flash_attn=enabled and real quantization took effect (K cache
+  #   14.34 MiB at q8_0 vs 27.00 MiB at f16, same 4096-token context) — and confirmed MLA caches
+  #   only ONE side (`V (q8_0): 0.00 MiB` — a single shared latent, not separate K/V caches, which
+  #   is why the real KV rate above is ~3.5x smaller than the dual-sided worst-case estimate).
+  #   The moderate probe (29,463 tokens) recalled correctly, matching the f16 baseline exactly
+  #   (GLiNER2 exact-entity-match + bge-m3 cosine similarity 1.0, both trivial since the completion
+  #   text was byte-identical). But the near-ceiling probe (111,272 tokens, identical prompt to the
+  #   f16 baseline) FAILED both times it was run: `finish_reason: "length"`, empty `content`, the
+  #   full 1024-token budget spent on `reasoning_content` that never located the embedded fact —
+  #   reproduced on a second attempt (10.4s wall, 111,268/111,272 tokens cache-hit, so not a
+  #   prefill-timing fluke) with the model's own reasoning trace showing it searching the wrong
+  #   region of the prompt. No hang, no journal signature, container stayed healthy throughout —
+  #   this is a correctness regression specific to quantized cache at large context, not a Vulkan
+  #   freeze. Per the plan's Part B decision rule, `ling-3-tiny-q4-m` (and, transitively, all four
+  #   quants — WP-2 stays f16-only) keep the f16 default; `-ctk`/`-ctv`/`-fa` are NOT added to any
+  #   entry in this group. Worth a separate, narrower follow-up if throughput ever motivates
+  #   revisiting this — not attempted again in this plan.
+  # - Ling-3.0-tiny-UD-Q4_K_XL, Ling-3.0-tiny-UD-Q6_K_XL, Ling-3.0-tiny-Q8_0: PENDING — filled in
+  #   at WP-2 close, f16 cache only per the Part B outcome above.
   ling-bakeoff:
     swap: true
     exclusive: true

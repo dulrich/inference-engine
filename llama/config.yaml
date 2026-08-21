@@ -54,6 +54,16 @@
 # save-work-gated probing) — the plan covers getting these four aliases downloaded, configured,
 # and reachable; it does not cover running or judging the bake-off itself.
 #
+# `gemma-4-12b-qat` (the `gemma-qat-bakeoff` group below) — unsloth/gemma-4-12B-it-qat-GGUF's
+# only published quant (UD-Q4_K_XL, QAT = quantization-aware-trained weights), added
+# plans/serving-harness-round-2.md WP-2 as a new no-consumer-yet testing alias, deliberately NOT
+# a repoint of the live `gemma-4-12b` alias above (append-only contract; a same-alias
+# backing-weights swap would be a silent, consumer-facing behavior change — see that plan's
+# Decisions locked). Text-only: unsloth's repo also publishes `mmproj-*`/`mtp-*` files
+# (vision/speculative-decoding) but neither is in this WP's scope — the live `gemma-4-12b` alias
+# already covers vision, and this addition is scoped to the bake-off harness's own (text-only)
+# cold/warm/hot + quality-corpus measurement, not a capability upgrade.
+#
 # One base-URL note: consumers reach this router at http://127.0.0.1:4811 (Crucible vaults
 # store http://127.0.0.1:4811/v1). The transitional 4806 host publish was retired 2026-07-27;
 # :4806 survives only as the container-internal listen port.
@@ -240,6 +250,24 @@ models:
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q8_0.gguf
       -c 131072
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
+  # ── Gemma4-12B QAT bake-off (unsloth/gemma-4-12B-it-qat-GGUF), testing only, no external
+  # consumer yet — see plans/serving-harness-round-2.md WP-2. Same base architecture as the live
+  # `gemma-4-12b` alias above (quantization-aware-trained weights instead of post-training
+  # quantization); `-c 32768` and `--jinja` match that alias's own config exactly (same family,
+  # no separate context-ceiling investigation in this round — that's Ling-3.0-tiny's own history,
+  # not repeated here). No `--mmproj`: text-only for this WP, per the registry comment above.
+  gemma-4-12B-it-qat-UD-Q4_K_XL:
+    name: "Gemma 4 12B it QAT (UD-Q4_K_XL)"
+    aliases:
+      - gemma-4-12b-qat
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf
+      -c 32768
       --jinja
     ttl: 1800
     checkEndpoint: /health
@@ -491,3 +519,28 @@ groups:
       - Ling-3.0-tiny-UD-Q4_K_XL
       - Ling-3.0-tiny-UD-Q6_K_XL
       - Ling-3.0-tiny-Q8_0
+
+  # ── gemma-qat-bakeoff — Gemma4-12B QAT, testing only (see plans/serving-harness-round-2.md
+  # WP-2). Same shape as `chat`/`ling-bakeoff` above: swap:true/exclusive:true so this new,
+  # unvalidated-on-this-host artifact never coexists with anything else in VRAM while its own
+  # save-work-gated canary load is still being verified. Single member for now — this is the
+  # only quant unsloth published for this model (see registry comment above).
+  #
+  # ── VRAM fit math (host-verified 2026-08-21, live cold/warm/hot sweep + needle probe + quality
+  # corpus through the new llama/bakeoff harness, journalctl -k -f watched throughout, zero
+  # hang signature) ──
+  #
+  # Weights: 6,716,356,800 B = 6.26 GiB. Baseline (nemotron-4b resident in `chat`, nothing from
+  # this group loaded): 4,080,046,080 B / 3.80 GiB. First load (single-turn ping):
+  # 9,395,146,752 B / 8.75 GiB. Post-sweep peak (cold/warm/hot + needle + quality corpus):
+  # 9,426,845,696 B / 8.78 GiB → ≈2.5 GiB overhead beyond weights alone (KV cache at -c 32768 +
+  # compute/graph buffer). Comfortably under the 15.92 GiB nameplate and the realistic free-VRAM
+  # budget. Full results (timing table, needle/quality-corpus findings, an open question about
+  # the cold/warm TTFT gap vs. the poller's own model_load_seconds reading):
+  # docs/gemma-4-12b-qat-bakeoff-results.md.
+  gemma-qat-bakeoff:
+    swap: true
+    exclusive: true
+    persistent: false
+    members:
+      - gemma-4-12B-it-qat-UD-Q4_K_XL

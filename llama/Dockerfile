@@ -1,6 +1,6 @@
 # llama.cpp `llama-server` on Vulkan + llama-swap, for the fleet's GPU inference services.
 #
-# Resulting tag: crucible-llamacpp-vulkan:b10121-swap243 (llama.cpp tag + llama-swap tag baked
+# Resulting tag: crucible-llamacpp-vulkan:b10534-swap243 (llama.cpp tag + llama-swap tag baked
 # into this image, so the tag alone tells you both pins without opening the Dockerfile).
 #
 # As of the llama-swap addition this image is dual-use, and that is deliberate — it is mid
@@ -52,7 +52,7 @@ FROM debian:sid-slim AS build
 # Bump deliberately, and re-run the agreement harness when you do — a llama.cpp change to pooling
 # or normalisation would move every vector this serves. That harness lives in the consumer that
 # owns the embedding space, not here: `obsidian-crucible/scripts/embedding-agreement.mjs`.
-ARG LLAMA_CPP_TAG=b10121
+ARG LLAMA_CPP_TAG=b10534
 
 # `glslc` alone is not enough: ggml's vulkan-shaders-gen resolves SPIRV-Headers through CMake's
 # find_package, and Debian ships those headers in their own package rather than pulling them in

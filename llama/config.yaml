@@ -1,5 +1,5 @@
 # inference-engine-llama — llama-swap router config for the Vulkan GPU llama.cpp image
-# (crucible-llamacpp-vulkan:b10121-swap243).
+# (crucible-llamacpp-vulkan:b10534-swap243).
 #
 # This file is bind-mounted read-only at /app/config.yaml by the compose service — it is NEVER
 # baked into the image (the Dockerfile does not COPY it), specifically so it can be edited

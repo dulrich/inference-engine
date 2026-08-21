@@ -26,7 +26,7 @@ is the difference between a button people avoid and one they press without think
 ## What is here
 
 ```
-Dockerfile          multi-stage build: llama.cpp b10121 (Vulkan) + llama-swap v243, debian:sid-slim
+Dockerfile          multi-stage build: llama.cpp b10534 (Vulkan) + llama-swap v243, debian:sid-slim
 entrypoint.sh       refuses to start on a software rasteriser (see "The llvmpipe trap") or on a
                     glibc-skewed image (see "The ABI trap"); dual-use exec tail — runs whatever
                     command it's given (llama-swap or a bare llama-server)
@@ -34,7 +34,7 @@ config.yaml         llama-swap router config: models, aliases, ttl, groups — b
 smoke-inference.sh  host-run smoke test against a running router (see "Smoke testing" below)
 ```
 
-Tag: **`crucible-llamacpp-vulkan:b10121-swap243`** — llama.cpp tag + llama-swap tag, both baked
+Tag: **`crucible-llamacpp-vulkan:b10534-swap243`** — llama.cpp tag + llama-swap tag, both baked
 into the name so it's visible without opening the Dockerfile.
 
 The compose service itself (`crucible-inference`, port mapping, `/models` and `config.yaml`
@@ -51,13 +51,13 @@ both shapes below, including the bare-`llama-server` one. Two supported shapes:
 ```bash
 # The new default (this image's CMD): llama-swap owns the router, spawns llama-server children
 # per config.yaml.
-docker run ... crucible-llamacpp-vulkan:b10121-swap243
+docker run ... crucible-llamacpp-vulkan:b10534-swap243
 # equivalent to:
-docker run ... crucible-llamacpp-vulkan:b10121-swap243 \
+docker run ... crucible-llamacpp-vulkan:b10534-swap243 \
   llama-swap -config /app/config.yaml -listen :4806
 
 # The old single-model shape still works unchanged, for anything not yet migrated:
-docker run ... crucible-llamacpp-vulkan:b10121-swap243 \
+docker run ... crucible-llamacpp-vulkan:b10534-swap243 \
   llama-server -m /models/CompendiumLabs/bge-m3-gguf/bge-m3-f16.gguf --embeddings -ngl 99 ...
 ```
 
@@ -299,7 +299,7 @@ docker build --build-arg LLAMA_CPP_TAG=bXXXXX -t crucible-llamacpp-vulkan:bXXXXX
 
 Bump `LLAMA_CPP_TAG` deliberately and re-run the agreement harness afterwards. A llama.cpp
 change to pooling or normalisation would move every vector this serves, and the symptom would be
-gradually worse search rather than an error. llama.cpp stays pinned at `b10121` as of this
+gradually worse search rather than an error. llama.cpp stays pinned at `b10534` as of this
 writing — the llama-swap addition is not a reason to bump it.
 
 An image rebuild is never complete on a green healthcheck — run `llama/smoke-inference.sh`
@@ -311,7 +311,7 @@ started.
 
 ```bash
 docker build --build-arg LLAMA_SWAP_TAG=vNNN --build-arg LLAMA_SWAP_SHA256=<sha256> \
-  -t crucible-llamacpp-vulkan:b10121-swapNNN llama
+  -t crucible-llamacpp-vulkan:b10534-swapNNN llama
 ```
 
 Pinned to ≥v242 (the release that fixed a TTL-unload deadlock) by tag *and* checksum. Get the

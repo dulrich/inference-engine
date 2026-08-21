@@ -448,8 +448,40 @@ groups:
   #   quants — WP-2 stays f16-only) keep the f16 default; `-ctk`/`-ctv`/`-fa` are NOT added to any
   #   entry in this group. Worth a separate, narrower follow-up if throughput ever motivates
   #   revisiting this — not attempted again in this plan.
-  # - Ling-3.0-tiny-UD-Q4_K_XL, Ling-3.0-tiny-UD-Q6_K_XL, Ling-3.0-tiny-Q8_0: PENDING — filled in
-  #   at WP-2 close, f16 cache only per the Part B outcome above.
+  # - Ling-3.0-tiny-UD-Q4_K_XL (WP-2, f16 cache): weights 5,340,611,328 B = 4.97 GiB / 5.34 GB.
+  #   Near-ceiling probe (111,269 real prompt tokens, correct recall, `finish_reason: "stop"`,
+  #   62.15s wall): PEAK 8,366,440,448 B = 7.79 GiB / 8.37 GB → ≈1.20 GiB overhead beyond weights
+  #   (using WP-1's clean empty-group baseline of 1,739,743,232 B / 1.62 GiB — see methodology
+  #   note below). Zero journal signature. Comfortably under nameplate.
+  # - Ling-3.0-tiny-UD-Q6_K_XL (WP-2, f16 cache): weights 7,274,546,528 B = 6.77 GiB / 7.27 GB.
+  #   Near-ceiling probe (111,271 real prompt tokens, correct recall, 61.93s wall): PEAK
+  #   10,316,177,408 B = 9.61 GiB / 10.32 GB → ≈1.21 GiB overhead beyond weights, in line with
+  #   UD-Q4_K_XL above. Zero journal signature. Comfortably under nameplate.
+  # - Ling-3.0-tiny-Q8_0 (WP-2, f16 cache): weights 8,408,187,968 B = 7.83 GiB / 8.41 GB — the
+  #   largest quant in this group. Single-turn ping needed `max_tokens: 512` (18 completion
+  #   tokens used; a shorter budget is not enough for this quant's more verbose reasoning trace —
+  #   same finding as the original -c 8192 bake-off, still true at -c 131072). Near-ceiling probe
+  #   (111,270 real prompt tokens, correct recall, `finish_reason: "stop"`, 61.09s wall): PEAK
+  #   10,913,460,224 B = 10.16 GiB / 10.91 GB → ≈0.71 GiB overhead beyond weights — lower than the
+  #   other two quants above; within the baseline-measurement noise band already documented in
+  #   this group's original VRAM-fit-math section (a few hundred MB of drift between reads on a
+  #   shared desktop session is ordinary here, not a real quant-dependent effect, since KV-cache
+  #   size is a function of context length and cache dtype, not weight quantization). No hang,
+  #   zero journal signature, container stayed healthy throughout. Comfortably under nameplate —
+  #   even the largest quant leaves several GiB of headroom at full -c 131072.
+  #
+  # Methodology note: a `mem_info_vram_used` reading taken as a "baseline" immediately before a
+  # load inside this `exclusive: true` group can be misleading — eviction of the previous
+  # resident model is triggered by the *incoming* request, not proactively, so a read taken right
+  # before firing that request can still capture the prior model mid-teardown or fully resident,
+  # producing an inflated apparent baseline (hit once during WP-2's live measurement). All three
+  # WP-2 overhead figures above therefore use WP-1's own verified empty-group baseline
+  # (1,739,743,232 B / 1.62 GiB, re-observed in the 1.62-1.94 GiB range across this plan) rather
+  # than a live pre-load reading.
+  #
+  # All four bake-off quants now verified individually at -c 131072, f16 cache only (no
+  # -ctk/-ctv/-fa on any entry — see the Part B rejection above), correct recall at both moderate
+  # and near-ceiling prompt sizes, zero hang signature throughout either WP-1 or WP-2.
   ling-bakeoff:
     swap: true
     exclusive: true

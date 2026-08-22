@@ -87,11 +87,16 @@
 # binding constraint on this 16 GiB card, not RAM: the `-c 100000` target from this plan's own
 # scope proved unsafe (0.10 GiB free) for even the smallest weights (canary UD-IQ3_S) — live
 # fit-testing (scratch port, exact linear KV-growth rate measured directly) found real safe
-# ceilings well below that target: `-c 40960` for UD-IQ3_XXS/UD-IQ3_S (1.85–2.76 GiB free),
+# ceilings well below that target with f16 KV cache: `-c 40960` for UD-IQ3_XXS (2.76 GiB free),
 # `-c 24576` for UD-Q3_K_XL (1.83 GiB free, the largest quant needing the most headroom back).
-# See the group's own fit-math comment below for the full record, including a genuine
+# See the group's own fit-math comment below for the full f16-cache record, including a genuine
 # accumulated-page-cache confound this WP found and fixed (`POST /api/models/unload` + a
 # `--force-recreate` for a truly fresh cgroup — see that comment for when each applies).
+# UD-IQ3_S alone was later revisited by plans/qwen38-27b-kv-cache-quantization.md WP-2/3
+# (2026-08-21/22): its `-c 40960`-f16 entry from this WP was superseded by a live-verified
+# q4_0/q4_0 KV-cache-quantization win reaching `-c 120000` at near-parity throughput — see that
+# model's own entry below for the ladder and the decision record; UD-IQ3_XXS/UD-Q3_K_XL were not
+# re-tested (out of that plan's scope) and remain on this WP's original f16-cache config.
 #
 # One base-URL note: consumers reach this router at http://127.0.0.1:4811 (Crucible vaults
 # store http://127.0.0.1:4811/v1). The transitional 4806 host publish was retired 2026-07-27;
@@ -370,6 +375,46 @@ models:
     ttl: 1800
     checkEndpoint: /health
 
+  # ── KV-cache-quantization decision (host-verified 2026-08-21/22, plans/qwen38-27b-kv-cache-
+  # quantization.md, WP-2) — UD-IQ3_S only, not propagated to its sibling quants above/below.
+  # Ladder tested via scratch llama-server, journalctl -k -f watched throughout, zero hang
+  # signature: A (f16/f16, the prior `-c 40960` baseline) -> B (q8_0/q8_0): correct, flash_attn
+  # fused, but fails the fit bar -- safe real-token ceiling ~62-65K under the 1.5-2 GiB
+  # VRAM-margin convention (c=90000 measured only 1.38 GiB free), short of the ~100K target ->
+  # D (q4_0 K/f16 V): rejected analytically without a live probe -- its measured cache footprint
+  # (1640 MiB @ c=40960, 42.0 KB/cell) is LARGER than B's (1360 MiB, 34.8 KB/cell), since V stays
+  # f16 and dominates cache size; quantizing only K cannot fix a fit problem B already had ->
+  # landed: q4_0/q4_0 (both K and V quantized -- NOT the plan's literal "mixed q4/q8" candidate
+  # E, which was expected per the plan's own audit disposition to hit the
+  # plans/ling-3-tiny-context-ceiling.md-documented non-fused-attention-fallback penalty for a
+  # mismatched quantized pair; symmetric q4_0/q4_0 avoids that risk category entirely and was
+  # confirmed live, not assumed, to keep flash_attn fused with zero fallback on every one of 4
+  # loads that WP -- see runs/dispatch/wp-2-report.md for the full deviation rationale). Clears
+  # every desired-result-bar axis: prompt_tokens=96,578 real at a c=120000 probe (calibrated
+  # target 100,000, within the +/-10% tolerance band), hot-median decode 34.37 tok/s (0.5% off
+  # the 34.55 tok/s f16 baseline, well inside the 15% band), zero correctness regression across
+  # an 8/12-prompt quality-corpus subset (all 8 categories) vs. the f16 baseline, VRAM margin
+  # 2.14-2.18 GiB. Full cold/warm/hot sweep (genuine per-round scratch-process restarts):
+  # runs/bakeoff/qwen38-27b-iq3s-kv-e-alt-q4q4-c120000/.
+  #
+  # Live verification of the router-managed alias's actual KV/FA state (WP-3, post-landing):
+  # `-v` was tried and then REMOVED -- it does make llama-server emit the `type_k`/`type_v`/
+  # `flash_attn` lines (confirmed via WP-2's scratch-server A/B test), but `fetch_router_logs`/
+  # `docker logs` never surface a router-managed child's own stdout AT ALL, verbose or not --
+  # confirmed directly post-restart: `/logs` and `docker logs` show only llama-swap's own
+  # request/health lines and the container entrypoint banner, zero lines from the llama-server
+  # child itself, `-v` present or absent. This is a harder limit than WP-2's Step-0 finding
+  # diagnosed (it blamed the missing `-v` flag; the real cause is llama-swap's own log capture
+  # never forwarding child stdout for router-managed processes, full stop) -- corrected here
+  # rather than left standing. Verified instead via VRAM arithmetic, quantitatively, not just a
+  # "did it load" check: fresh cold load measured 13.720 GiB total (weights 11.214 GiB + 2.506
+  # GiB non-weight overhead); the scratch-verified q4_0/q4_0 cache at this exact context
+  # (2110.50 MiB) accounts for all but ~456 MiB of that overhead (a plausible compute/graph
+  # buffer) -- and f16/f16 KV at this context would need ~7.34 GiB (this WP's own measured
+  # linear 0.0625 MiB/token rate), which would put total VRAM at ~18.99 GiB against a 15.92 GiB
+  # card -- i.e. it would not have loaded at all. The clean load at 13.720 GiB is itself
+  # quantitative proof the intended quantized cache is active, not an assumption from the
+  # request flags. Full results: docs/qwen38-27b-bakeoff-results.md.
   Qwen3.8-27B-UD-IQ3_S:
     name: "Qwen3.8 27B (UD-IQ3_S)"
     aliases:
@@ -377,7 +422,10 @@ models:
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf
-      -c 40960
+      -c 120000
+      -ctk q4_0
+      -ctv q4_0
+      -fa on
       --jinja
     ttl: 1800
     checkEndpoint: /health

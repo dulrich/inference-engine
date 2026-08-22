@@ -134,3 +134,101 @@ the lowest quality-corpus truncation rate of any model tested (17% vs. the A3B f
 58–75%) — this dense architecture is markedly less prone to the reasoning-budget-truncation
 pattern documented elsewhere in this plan, though it still exhibits it on the same two prompts
 across all three quants.
+
+---
+
+# KV-cache quantization follow-on (UD-IQ3_S only) — `plans/qwen38-27b-kv-cache-quantization.md`
+
+WP-2/WP-3 of a follow-on plan (2026-08-21/22): can KV-cache quantization raise `UD-IQ3_S`'s
+practical context ceiling from the `-c 40960` f16-cache landing above toward a genuine ~100K
+*actual*-token context, while holding decode throughput and correctness? Scope is `UD-IQ3_S`
+only — `UD-IQ3_XXS`/`UD-Q3_K_XL` and the Qwen3.6-35B-A3B family were not re-tested and remain on
+their f16-cache configs above.
+
+## Tested candidates and exact flags
+
+All candidates tested via a scratch `llama-server` on a throwaway port (own stdout/stderr log,
+never the router's `/logs`), `journalctl -k -f` watched continuously, zero hang signature
+throughout, `gpu-hang-watchdog.service` re-checked before/after every load.
+
+| Candidate | Flags | KV cache (measured, scratch-log verbatim) | Result |
+|---|---|---|---|
+| A (baseline) | f16/f16, `-c 40960` (already landed above) | — | Reused existing WP-5 numbers, not re-run |
+| B — `q8_0/q8_0` | `-ctk q8_0 -ctv q8_0 -fa on` | `K (q8_0): 680.00 MiB, V (q8_0): 680.00 MiB` @ c=40960 (1360.00 MiB total) | Correct + `flash_attn=enabled` (no fallback), but **fails the fit bar**: safe real-token ceiling ≈62–65K under the 1.5–2 GiB margin convention (c=90000 measured only 1.38 GiB free) — short of the ~100K target |
+| D — `q4_0` K / f16 V | `-ctk q4_0 -ctv f16 -fa on` | `K (q4_0): 360.00 MiB, V (f16): 1280.00 MiB` @ c=40960 (1640.00 MiB total) | **Rejected analytically, no live probe run**: 42.0 KB/cell vs. B's 34.8 KB/cell — D costs *more* VRAM per context cell than B, since V stays f16 and dominates cache size; cannot fix a fit problem B already had |
+| **"E-alt" — `q4_0/q4_0`** (see deviation note below) | `-ctk q4_0 -ctv q4_0 -fa on -c 120000` | `K (q4_0): 1055.25 MiB, V (q4_0): 1055.25 MiB` @ c=120064 (2110.50 MiB total), confirmed identical across all 4 loads (initial + 3 cold-round restarts) | **Qualifies — landed** |
+
+**Deviation, documented explicitly**: the plan's literal candidate "E" was "a mixed q4/q8
+combination." A literal mixed (asymmetric-type) pair was expected, per the plan's own audit
+disposition, to hit `plans/ling-3-tiny-context-ceiling.md`'s documented non-fused-attention-
+fallback penalty for a mismatched quantized K/V pair (its own tested case: `q8_0` K / `q4_0` V) —
+a low-expected-value test. D's own data showed the actual fix needed is quantizing V (the dominant
+cost), so **symmetric `q4_0/q4_0`** was tested instead — matched types, like B's own `q8_0/q8_0`,
+confirmed live (not assumed) to keep `flash_attn` fused with zero fallback on every load. Full
+rationale: `runs/dispatch/wp-2-report.md`.
+
+## Proof the landed KV type is actually active
+
+Scratch-server log evidence (candidate testing) is direct and verbatim — see table above. For the
+**router-managed alias post-landing**, `fetch_router_logs`/`docker logs` were tried and found to
+**never surface a router-managed child's own stdout at all** (confirmed with and without `-v` —
+`-v` does make `llama-server` itself emit the `type_k`/`type_v`/`flash_attn` lines, but llama-swap
+never forwards them into `/logs` or `docker logs` regardless), so live verification instead used
+**VRAM arithmetic**: a fresh cold load of the landed alias measured **13.720 GiB** total
+(weights 11.214 GiB + 2.506 GiB non-weight overhead). The scratch-verified `q4_0/q4_0` cache at
+this exact context (2110.50 MiB) accounts for all but ~456 MiB of that overhead (a plausible
+compute/graph buffer) — and f16/f16 KV at `-c 120000` would need ~7.34 GiB (this plan's own
+measured linear 0.0625 MiB/token rate), which would put total VRAM at ~18.99 GiB against a
+15.92 GiB card nameplate — i.e. it would not have loaded at all. **The clean load itself is
+quantitative proof the intended quantized cache is active**, not an assumption from the request
+flags.
+
+## Long-context correctness (tokenizer-calibrated, not the flat character estimate)
+
+The bake-off harness's flat `4.5 chars/token` estimate was independently confirmed (this plan's
+own WP-1) to be off by a live-measured factor for this tokenizer (empirical ratio **0.678**) — all
+long-context claims below use the new live-calibration mechanism, not the nominal target.
+
+| Probe | Real `prompt_tokens` | Target | Tolerance met | Result |
+|---|---|---|---|---|
+| Moderate (uncalibrated) | 20,350 | ~31K nominal | n/a | ✅ correct |
+| Calibrated ~100K | **96,578** | 100,000 (±10%) | ✅ `true` | ✅ correct (`JF3-NOVA-5858` recalled exactly) |
+
+## VRAM
+
+Loaded (fresh, `-c 120000`, `q4_0/q4_0`): **13.720–13.779 GiB** → margin **2.14–2.21 GiB** against
+the 15.92 GiB card nameplate — meets and slightly exceeds the ~1.5–2 GiB safety-margin convention.
+
+## Timing (cold/warm/hot, genuine per-round scratch-process restarts for cold)
+
+| Round | n | median TTFT | median decode tok/s | cache assertion |
+|---|---|---|---|---|
+| cold | 3 | 6912.0 ms | 34.94 | n/a |
+| warm | 3 | 7108.0 ms | 34.80 | 3/3 passed |
+| hot | 3 | 142.3 ms | **34.37** | 3/3 passed |
+
+Hot-median decode (34.37 tok/s) is **0.5% below** the f16 baseline's 34.55 tok/s hot-median —
+essentially throughput parity, comfortably inside the plan's 15% "close" band. Full record:
+`runs/bakeoff/qwen38-27b-iq3s-kv-e-alt-q4q4-c120000/`.
+
+## Quality comparison vs. the f16 baseline
+
+8/12 quality-corpus prompts tested (all 8 categories covered), each compared against the f16
+baseline's completions for the identical prompt: both sentinels exact-match (`qa-2`→`391`,
+`longctx-1`→`GEN-88214`); all 6 open-ended prompts materially equivalent in content and quality
+(e.g. `code-2`: identical off-by-one diagnosis and fix; `transform-1`: identical JSON fields,
+differing only in pretty- vs. compact-printing). One item (`synthesis-1`) truncated at the
+harness's default `max_tokens=768` — but the **f16 baseline shows the identical truncation on the
+identical prompt at the identical budget**, proving this is a pre-existing harness-default-budget
+artifact affecting both configurations equally, not a KV-quantization regression; re-run at
+`max_tokens=3000` produced a fully coherent, correct, on-task ~180-word synthesis
+(`finish_reason: stop`). **Zero material quality regression found.**
+
+## Recommendation and what landed
+
+**Landed**: `qwen38-27b-iq3s` now runs `-c 120000 -ctk q4_0 -ctv q4_0 -fa on` (was `-c 40960`,
+f16/f16). Nearly **3x the usable context** (96,578 real tokens recalled correctly vs. the prior
+f16 config's own 22,893-real-token near-ceiling probe) at **essentially unchanged decode
+throughput** (34.37 vs. 34.55 tok/s hot-median, 0.5% difference) and **no correctness regression**
+on any tested axis. `UD-IQ3_XXS`/`UD-Q3_K_XL` and the Qwen3.6-35B-A3B family were out of this
+plan's scope and remain unchanged (f16 cache, their original `-c` values above).

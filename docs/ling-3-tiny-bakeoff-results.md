@@ -119,3 +119,113 @@ recall at both moderate and near-ceiling prompt sizes, zero hang signature acros
 either plan, comfortably within the 15.92 GiB nameplate even at the largest quant (Q8_0, 10.16
 GiB peak). Quantized KV cache was tested once (Q4_K_M only) and rejected on a reproducible
 near-ceiling correctness failure — not pursued further, not applied to any other quant.
+
+## Round-2 retest — comparable-format numbers under the new bake-off harness
+
+WP-3 of `plans/serving-harness-round-2.md`: three of the four `ling-bakeoff` quants (Q8_0,
+UD-Q6_K_XL, UD-Q4_K_XL — UD-Q6_K_XL and UD-Q4_K_XL were not previously needle-probed at
+moderate size in the context-ceiling plan; Q8_0 was) re-run through the new
+`llama/bakeoff/run_harness.py` (WP-1) purely to capture comparable-format numbers — cold/warm/hot
+timing tables, numeric cache-hit assertions, and a first-ever manually-scored quality-corpus pass
+for this model family — **not a fresh safety validation**; `-c 131072`/f16 cache is already
+proven safe by the results above. UD-Q4_K_XL's config entry was not touched (already f16-cache,
+`-c 131072`). Raw records: `runs/bakeoff/ling-3-tiny-q8-full/`,
+`runs/bakeoff/ling-3-tiny-ud-q6-xl-full/`, `runs/bakeoff/ling-3-tiny-ud-q4-xl-full/`. Driver
+script and its full stdout: `runs/dispatch/wp3-driver-script.py`,
+`runs/dispatch/wp3-driver-full-output.log`.
+
+### Methodology
+
+- **Cold-round mechanism**: the same genuine-eviction proxy validated in WP-2 (a request into the
+  `chat` group's `nemotron-4b`, `exclusive: true` semantics evict the target alias; polled
+  `/v1/models` for `status.value == "unloaded"` before each cold round, never a fixed delay).
+- **Needle probes**: both `"moderate"` (fixed ~31000-token target) and `"near_ceiling"` (85% of
+  this model's real `-c 131072`) were run per quant — unlike WP-2's 32768-ctx Gemma-QAT model,
+  Ling's 131072 ceiling makes the two sizes meaningfully different (moderate ≈ target; real
+  near-ceiling `prompt_tokens` came back ~72,900–73,000 across all three quants, well below the
+  ~111,411-character target — tokenizer-dependent, expected per the harness's own documented
+  caveat, never assumed).
+- **Hang detection**: `journalctl -k -f` watched live from before the sweep through the end of
+  the quality corpus for all three quants sequentially. Zero MES/wedged/reset/amdgpu-fault
+  signature.
+- **Quality corpus**: WP-1's 12 fixed prompts, `max_tokens: 768`, scored manually (Decisions
+  locked: no automated judge this round) — same process as
+  `docs/gemma-4-12b-qat-bakeoff-results.md`.
+
+### Timing (cold/warm/hot, fixed ~8K-token-target performance fixture, 256-token output budget)
+
+| Quant | Round | n | median TTFT (ms) | median decode tok/s | cache assertion |
+|---|---|---|---|---|---|
+| Q8_0 | cold | 3 | 3344.0 | 163.42 | n/a |
+| Q8_0 | warm | 3 | 833.2 | 165.53 | 3/3 passed |
+| Q8_0 | hot | 3 | 33.7 | 165.02 | 3/3 passed |
+| UD-Q6_K_XL | cold | 3 | 3352.1 | 164.43 | n/a |
+| UD-Q6_K_XL | warm | 3 | 888.6 | 164.85 | 3/3 passed |
+| UD-Q6_K_XL | hot | 3 | 32.7 | 164.93 | 3/3 passed |
+| UD-Q4_K_XL | cold | 3 | 3356.8¹ | 172.58 | n/a |
+| UD-Q4_K_XL | warm | 3 | 892.5 | 175.23 | 3/3 passed |
+| UD-Q4_K_XL | hot | 3 | 33.1 | 174.30 | 3/3 passed |
+
+¹ UD-Q4_K_XL's cold-round TTFT has a wide spread not visible in the median alone: min 3355.7 ms,
+max 5375.3 ms, mean 4029.3 ms (stdev 1165.7) — one of the three cold rounds ran ~2s slower than
+the other two. No hang signature at any point during this round; most likely ordinary
+eviction/reload contention rather than a real per-quant effect (Q8_0 and UD-Q6_K_XL's cold rounds
+were tight, sub-100ms stdev). Not investigated further — a genuine service restart between cold
+rounds (rather than the exclusive-group eviction proxy) would be needed to rule out load-order
+noise, not attempted this WP.
+
+Cache assertions used the harness's pinned thresholds: warm `cached_tokens/prompt_tokens < 0.05`,
+hot `> 0.90` — all 18 (3 quants × warm+hot × 3 rounds) passed.
+
+### Needle-in-haystack correctness
+
+All 9 probes (3 quants × moderate + near_ceiling) recalled the correct reference code:
+
+| Quant | Moderate | Near-ceiling (real `prompt_tokens`) |
+|---|---|---|
+| Q8_0 | ✅ `MM5-CIPHER-2761` | ✅ `DS1-GAMMA-3944` (72,954) |
+| UD-Q6_K_XL | ✅ `GL0-LUMEN-4995` | ✅ `TV3-ZENITH-2714` (72,941) |
+| UD-Q4_K_XL | ✅ `NU3-CHARLIE-8387` | ✅ `ZV2-FOXTROT-0199` (72,896) |
+
+### Quality corpus (12 prompts × 3 quants, manual scoring)
+
+Both sentinels correct on every quant: `qa-2` → `391` (exact match); `longctx-1` → `GEN-88214`
+(exact match). All 36 corpus runs completed without transport/protocol error.
+
+**Finding: the reasoning-budget-truncation pattern already documented for Gemma4-12B QAT and for
+this model family's Q8_0 quant reproduces here too, at a lower rate.** At `max_tokens: 768`:
+
+| Quant | Prompts hitting `length` | Which | Empty visible `content`? |
+|---|---|---|---|
+| Q8_0 | 2 of 12 | `ambiguity-2` (cut mid-list), `synthesis-1` (cut mid-sentence, ~150 words visible) | No — both have substantial visible text |
+| UD-Q6_K_XL | 1 of 12 | `constraints-1` | **Yes** — full 768-token budget spent on `reasoning_content`, empty `content` |
+| UD-Q4_K_XL | 2 of 12 | `code-1`, `constraints-1` | **Yes** — both, same invisible-response pattern |
+
+Lower truncation rate overall than Gemma4-12B QAT's 4/12 at the same budget, but the same
+qualitative failure mode recurs: a caller using `constraints-1`-style prompts (multi-constraint
+instruction-following) at 768 `max_tokens` risks a well-formed but entirely invisible response
+for this model family, independent of quant. `constraints-1` truncated invisibly on 2 of the 3
+quants tested (UD-Q6_K_XL, UD-Q4_K_XL) but completed normally on Q8_0 — consistent with quant
+being a secondary factor at most; the prompt itself is the primary driver of reasoning-budget
+pressure.
+
+The other 10 (Q8_0), 11 (UD-Q6_K_XL), 10 (UD-Q4_K_XL) prompts per quant completed normally
+(`finish_reason: "stop"`) with correct or reasonable content — factual QA, code-debug, structured
+transformation, ambiguity judgment, correction uptake, and long-context retrieval all read
+correctly across all three quants on manual inspection; no coherence or correctness regressions
+observed relative to the pattern established for this model family in the Gemma4-12B QAT write-up.
+
+### Journal / hang check
+
+`journalctl -k -f` watched continuously across all three quants' sweeps (cold/warm/hot, both
+needle sizes, quality corpus). Zero MES/wedged/reset/amdgpu-fault signature at any point.
+
+### Summary
+
+Clean round-2 retest: all three quants pass every correctness check (18/18 needle recalls
+including this section's 9, both sentinels on every quant, zero hang signature), and the harness's
+cache-hit assertions all passed numerically for the first time against this model family. The one
+open observation (UD-Q4_K_XL's cold-round TTFT variance) is noted, not alarming, and not
+investigated further this WP. The reasoning-budget-truncation finding from the Gemma4-12B QAT
+write-up is now confirmed as a cross-model pattern of this harness's quality corpus at a 768-token
+budget, not specific to one model or quant.

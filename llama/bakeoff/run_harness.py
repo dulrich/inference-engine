@@ -60,6 +60,11 @@ DEFAULT_RUNS_DIR = REPO_ROOT / "runs" / "bakeoff"
 
 DEFAULT_BASE_URL = "http://127.0.0.1:4811/v1"
 
+# Deliberately separate from DEFAULT_BASE_URL above: this is llama-swap's own root, used only by
+# fetch_router_logs() for its `/logs` endpoint. Reusing DEFAULT_BASE_URL here would silently
+# produce the wrong path (".../v1/logs", which does not exist) -- plan WP-1, rev 2 audit finding.
+DEFAULT_ROUTER_BASE_URL = "http://127.0.0.1:4811"
+
 # Kept in sync with `llama/Dockerfile`'s `ARG LLAMA_CPP_TAG=` line by `resolve_llama_cpp_build()`
 # below; this is only the fallback used if that read/parse ever fails.
 FALLBACK_LLAMA_CPP_BUILD = "b10534"
@@ -609,10 +614,64 @@ def run_sweep(
 
 
 # ---------------------------------------------------------------------------------------------
+# Live tokenizer calibration (plan qwen38-27b-kv-cache-quantization.md, WP-1)
+# ---------------------------------------------------------------------------------------------
+
+# A modest probe -- large enough that per-token rounding noise doesn't dominate the ratio, small
+# enough that calibration itself stays cheap. Fixed seed for reproducibility, matching this
+# module's other filler-text callers (FIXTURE_SEED, needle_probe's own rng).
+CALIBRATION_PROBE_TOKENS = 2000
+CALIBRATION_SEED = 20260821
+CALIBRATION_MAX_TOKENS = 8  # only usage.prompt_tokens is read back -- the completion is discarded
+
+
+def calibrate_chars_per_token(
+    base_url: str,
+    alias: str,
+    probe_tokens: int = CALIBRATION_PROBE_TOKENS,
+    timeout: float = 60,
+) -> float:
+    """Live-derives `alias`'s real tokens-per-nominal-character-estimate-token ratio.
+
+    Builds a modest filler sample via `_build_filler_text(probe_tokens, seed=CALIBRATION_SEED)`,
+    fires one minimal chat-completion request (small `max_tokens` -- only `usage.prompt_tokens`
+    is read back, the completion itself is discarded), and returns the empirical ratio
+    `real_prompt_tokens / probe_tokens`.
+
+    Live-derived every call -- this deliberately never hardcodes CHARS_PER_TOKEN_ESTIMATE (~4.5,
+    the module's own filler-text sizing constant) or any other fixed ratio. The historical ~0.66
+    ratio this repo has previously observed (docs/ling-3-tiny-bakeoff-results.md) was measured on
+    a ~35K-token sample for a different model/tokenizer; nothing guarantees it holds for a
+    different alias or a much larger target, which is exactly why this function exists instead of
+    a constant.
+
+    Raises (does not catch-and-default) if the calibration request itself errors or times out --
+    a calibration failure is a hard stop for whatever called this, never silently defaulted to
+    1.0 or any other guessed value.
+    """
+    filler = _build_filler_text(probe_tokens, seed=CALIBRATION_SEED)
+    result = _execute_streaming_request(
+        base_url, alias, _single_user_message(filler), CALIBRATION_MAX_TOKENS, timeout=timeout
+    )
+    if not result["success"]:
+        raise RuntimeError(
+            f"calibrate_chars_per_token({alias!r}): calibration request failed: {result['error']}"
+        )
+    usage = result["usage"] or {}
+    real_prompt_tokens = usage.get("prompt_tokens")
+    if real_prompt_tokens is None:
+        raise RuntimeError(
+            f"calibrate_chars_per_token({alias!r}): response carried no usage.prompt_tokens"
+        )
+    return real_prompt_tokens / probe_tokens
+
+
+# ---------------------------------------------------------------------------------------------
 # Needle-in-haystack correctness probe
 # ---------------------------------------------------------------------------------------------
 
 NEEDLE_MODERATE_TOKENS = 31000  # midpoint of the plan's ~29-33K "moderate" band
+NEEDLE_CALIBRATION_TOLERANCE = 0.10  # +/-10% band around target_actual_tokens (plan WP-1)
 NEEDLE_NEAR_CEILING_FRACTION = 0.85  # leaves headroom for the question + reasoning-model budget
 
 _NEEDLE_WORDS = (
@@ -640,6 +699,7 @@ def needle_probe(
     max_tokens: int = 256,
     timeout: float = 300,
     seed: Optional[int] = None,
+    target_actual_tokens: Optional[int] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Formalizes the needle-in-haystack correctness probe both prior Ling plans hand-rolled ad
     hoc (runs/dispatch/wp-1-report.md, runs/dispatch/wp-2-report.md from
@@ -658,8 +718,33 @@ def needle_probe(
     the haystack text itself is not persisted verbatim (it would dominate the 25 MiB experiment
     size budget at near-ceiling scale); the record keeps the generation parameters instead (this
     WP's own field-to-file split call, see README.md).
+
+    `target_actual_tokens` (optional, plan WP-1): when given, bypasses the fixed
+    `NEEDLE_NEAR_CEILING_FRACTION`-of-`context_ceiling` (or fixed `NEEDLE_MODERATE_TOKENS`)
+    nominal-target computation entirely for this call. Instead, calls
+    `calibrate_chars_per_token(base_url, alias)` to get this alias's real, live tokenizer ratio,
+    and sets the nominal (character-count) build target to `target_actual_tokens / ratio`. The
+    haystack is built and sent at that nominal size; if the real `usage.prompt_tokens` the server
+    reports lands within +/-10% (`NEEDLE_CALIBRATION_TOLERANCE`) of `target_actual_tokens`, that
+    attempt's result is used as-is. If not, the nominal target is rescaled once more from the
+    *observed* ratio of that attempt and the probe is retried exactly once more -- never more than
+    two total haystack-building requests for one `target_actual_tokens=...` call. The returned
+    sample always carries `calibration_tolerance_met: bool` in this mode, reflecting whichever
+    attempt was actually used (the second, if a retry happened) -- `true` only if that attempt's
+    real `prompt_tokens` landed within the band, `false` otherwise (never silently claimed `true`
+    when it wasn't met). This only changes what gets *requested*; `prompt_tokens` in the sample is
+    always the real value read back from the server's own `usage` field for whichever attempt was
+    used, exactly as in the non-calibrated path (honest-timing-semantics contract, unchanged).
+
+    When `target_actual_tokens` is not given (the default, `None`), behavior is byte-identical to
+    before this parameter existed -- the existing `"moderate"`/`"near_ceiling"` size-handling
+    paths are untouched, and `calibration_tolerance_met` is absent from the returned sample.
     """
-    if size == "moderate":
+    calibrated = target_actual_tokens is not None
+    if calibrated:
+        ratio = calibrate_chars_per_token(base_url, alias)
+        target_tokens = int(target_actual_tokens / ratio)
+    elif size == "moderate":
         target_tokens = NEEDLE_MODERATE_TOKENS
     elif size == "near_ceiling":
         if not context_ceiling:
@@ -674,21 +759,44 @@ def needle_probe(
     effective_seed = seed if seed is not None else (hash((alias, size, context_ceiling)) & 0xFFFFFFFF)
     rng = random.Random(effective_seed)
     code = _generate_reference_code(rng)
-    haystack = _build_filler_text(target_tokens, seed=rng.randint(0, 2**31 - 1))
 
-    insert_at = int(len(haystack) * position_fraction)
-    boundary = haystack.find(". ", insert_at)
-    boundary = boundary + 2 if boundary != -1 else insert_at
-    sentinel_sentence = f"Reference code for this section: {code}. "
-    prompt = (
-        haystack[:boundary] + sentinel_sentence + haystack[boundary:]
-        + "\n\nQuestion: what is the exact reference code given above? "
-          "Reply with only the code, no other text."
-    )
+    def _build_and_send(tt: int):
+        haystack = _build_filler_text(tt, seed=rng.randint(0, 2**31 - 1))
+        insert_at = int(len(haystack) * position_fraction)
+        boundary = haystack.find(". ", insert_at)
+        boundary = boundary + 2 if boundary != -1 else insert_at
+        sentinel_sentence = f"Reference code for this section: {code}. "
+        prompt = (
+            haystack[:boundary] + sentinel_sentence + haystack[boundary:]
+            + "\n\nQuestion: what is the exact reference code given above? "
+              "Reply with only the code, no other text."
+        )
+        result = _execute_streaming_request(
+            base_url, alias, _single_user_message(prompt), max_tokens, timeout=timeout
+        )
+        return prompt, result
 
-    result = _execute_streaming_request(
-        base_url, alias, _single_user_message(prompt), max_tokens, timeout=timeout
-    )
+    prompt, result = _build_and_send(target_tokens)
+
+    calibration_tolerance_met: Optional[bool] = None
+    if calibrated:
+        actual_prompt_tokens = (result["usage"] or {}).get("prompt_tokens")
+        tolerance_met = (
+            actual_prompt_tokens is not None
+            and abs(actual_prompt_tokens - target_actual_tokens)
+            <= NEEDLE_CALIBRATION_TOLERANCE * target_actual_tokens
+        )
+        if not tolerance_met and actual_prompt_tokens:
+            target_tokens = int(target_tokens * target_actual_tokens / actual_prompt_tokens)
+            prompt, result = _build_and_send(target_tokens)
+            actual_prompt_tokens = (result["usage"] or {}).get("prompt_tokens")
+            tolerance_met = (
+                actual_prompt_tokens is not None
+                and abs(actual_prompt_tokens - target_actual_tokens)
+                <= NEEDLE_CALIBRATION_TOLERANCE * target_actual_tokens
+            )
+        calibration_tolerance_met = bool(tolerance_met)
+
     usage = result["usage"] or {}
     completion_text = result["content_text"] or ""
     found = bool(completion_text) and code in completion_text
@@ -709,6 +817,9 @@ def needle_probe(
         "wall_seconds": result["wall_seconds"],
         "timestamp": result["t0_iso"],
     }
+    if calibrated:
+        sample["target_actual_tokens"] = target_actual_tokens
+        sample["calibration_tolerance_met"] = calibration_tolerance_met
     completion = {
         "type": "needle_probe",
         "size": size,
@@ -718,6 +829,46 @@ def needle_probe(
         "finish_reason": result["finish_reason"],
     }
     return sample, completion
+
+
+# ---------------------------------------------------------------------------------------------
+# Router log capture (router-managed aliases only -- plan qwen38-27b-kv-cache-quantization.md,
+# WP-1)
+# ---------------------------------------------------------------------------------------------
+
+
+def fetch_router_logs(
+    router_base_url: str = DEFAULT_ROUTER_BASE_URL,
+    tail_bytes: Optional[int] = None,
+    timeout: float = 30,
+) -> str:
+    """Fetches llama-swap's own captured stdout/stderr log ring buffer: a plain
+    `GET {router_base_url}/logs` (confirmed live and returning `200` this session; no `/v1`
+    prefix -- see DEFAULT_ROUTER_BASE_URL's own comment for why this is a separate constant from
+    DEFAULT_BASE_URL, which is `/v1`-suffixed for OpenAI-compatible chat calls and would produce
+    the wrong path, `.../v1/logs`, if reused here).
+
+    This captures stdout/stderr **only for children llama-swap itself spawned** -- it is the
+    right mechanism for verifying a router-managed alias's real startup output (e.g. confirming a
+    landed KV-cache-type / Flash-Attention flag actually took effect on the live process, not just
+    in the config that requested it). It captures **nothing** for a bare scratch `llama-server`
+    process launched directly, outside llama-swap -- that is a different WP's concern
+    (plans/qwen38-27b-kv-cache-quantization.md WP-2, which verifies its scratch server via its own
+    redirected process log instead, not this function). Do not wire this up against a scratch
+    server expecting it to see anything.
+
+    Returns the raw response text verbatim -- no parsing. `tail_bytes`, if given, trims the
+    returned string client-side to at most its last `tail_bytes` bytes (decoded) -- this endpoint
+    is a ring buffer of indeterminate/unbounded total length, so this is a client-side safety net
+    for a large buffer, not a request for the server to do the trimming.
+    """
+    url = f"{router_base_url}/logs"
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read()
+    if tail_bytes is not None and len(raw) > tail_bytes:
+        raw = raw[-tail_bytes:]
+    return raw.decode("utf-8", errors="replace")
 
 
 # ---------------------------------------------------------------------------------------------

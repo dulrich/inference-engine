@@ -160,6 +160,78 @@ on-disk size of the four output files. If it would exceed 25 MiB, it raises
 `SizeBudgetExceeded` instead of writing a partial or over-budget directory — treat that as a
 hold-for-user signal, not something to silently retry past.
 
+### Live tokenizer calibration + calibrated needle probes
+
+```sh
+python3 -c "
+from llama.bakeoff.run_harness import calibrate_chars_per_token
+print(calibrate_chars_per_token('http://127.0.0.1:4811/v1', 'nemotron-4b'))
+"
+python3 llama/bakeoff/run_harness.py needle --alias qwen38-27b-iq3s --size moderate
+# (target_actual_tokens is Python-API only -- not currently wired to the needle CLI subcommand)
+```
+
+`calibrate_chars_per_token(base_url, alias, probe_tokens=2000, timeout=60)` builds a modest
+filler sample, fires one minimal chat-completion request (a small `max_tokens` -- only
+`usage.prompt_tokens` is read back, the completion itself is discarded), and returns the
+empirical ratio `real_prompt_tokens / probe_tokens` for that alias's real, live tokenizer.
+**Live-derived every call — never a hardcoded constant.** `CHARS_PER_TOKEN_ESTIMATE` (the
+module's ~4.5 filler-text sizing constant, used only to *target* a character count when building
+filler) is not a substitute for this: a ratio this repo previously measured on one model at a
+~35K-token sample is not guaranteed to hold for a different alias or a much larger (~150K-token)
+target, which is exactly the gap this function closes. **If the calibration request itself errors
+or times out, the function raises** rather than guessing a ratio — a calibration failure is a
+hard stop for whatever called it, never silently defaulted to `1.0`.
+
+`needle_probe(..., target_actual_tokens=100000)` (new, optional, additive parameter) uses this to
+request a haystack sized to land at a *real* ~100K-token prompt, not a nominal character-count
+guess that might resolve to something much smaller against an unfamiliar tokenizer. It calls
+`calibrate_chars_per_token` first, builds and sends the haystack at the derived nominal size, then
+checks whether the real `prompt_tokens` the server reports lands within **+/-10%** of
+`target_actual_tokens`. If not, it rescales once more from the *observed* ratio of that very
+attempt and retries **exactly once more** (never more than two total haystack-building requests
+per call). The returned sample carries a new field, `calibration_tolerance_met: bool`, reflecting
+whichever attempt was actually used (the second, if a retry happened) — `true` only if that
+attempt's real `prompt_tokens` landed within the band, `false` otherwise; it is never silently
+reported `true` when the band was missed. When `target_actual_tokens` is omitted (the default,
+`None`), `needle_probe`'s behavior is byte-identical to before this parameter existed — the
+existing `"moderate"`/`"near_ceiling"` size paths are untouched, and `calibration_tolerance_met`
+is simply absent from the sample.
+
+**Honest-timing-semantics note**: a calibrated target changes what gets *requested* (the nominal
+haystack size sent to the server), **never** what gets *reported* — `prompt_tokens` in the sample
+is always the real value read back from the server's own `usage` field for whichever attempt was
+used, exactly matching this harness's existing contract (see above). Calibration makes the
+*request* honest about what "~100K actual tokens" means for a given tokenizer; it does not change
+how the *response* is recorded.
+
+### Router log capture (router-managed aliases only)
+
+```sh
+python3 -c "
+from llama.bakeoff.run_harness import fetch_router_logs
+print(fetch_router_logs())
+"
+```
+
+`fetch_router_logs(router_base_url=DEFAULT_ROUTER_BASE_URL, tail_bytes=None, timeout=30)` is a
+thin wrapper around `GET {router_base_url}/logs` — llama-swap's own captured stdout/stderr log
+ring buffer (confirmed live and returning `200` this session), reached via a **separate**
+`DEFAULT_ROUTER_BASE_URL = "http://127.0.0.1:4811"` (no `/v1` suffix) rather than the chat-call
+`DEFAULT_BASE_URL = "http://127.0.0.1:4811/v1"` — reusing the latter here would silently produce
+the wrong path (`.../v1/logs`, which does not exist). `tail_bytes`, if given, trims the returned
+string client-side to at most its last `tail_bytes` bytes.
+
+**This is not a general process-log tool.** `/logs` captures stdout/stderr **only for children
+llama-swap itself spawned** — it is the right mechanism for confirming a **router-managed**
+alias's real startup output (e.g. that a landed KV-cache-type / Flash-Attention flag actually
+took effect on the live process, not just in the config that requested it). It captures
+**nothing** for a bare scratch `llama-server` process launched directly, outside llama-swap — a
+different concern (`plans/qwen38-27b-kv-cache-quantization.md` WP-2 verifies its own scratch
+server via a redirected process log instead, never via this function). Wiring `fetch_router_logs`
+up against a scratch server will silently return the *router's* unrelated log content, not an
+error — do not conflate the two.
+
 ## Field-to-file split (this WP's own call — the plan pins only the four-file split itself)
 
 - `config.json` — run-level metadata + the artifact-lineage field set (`hf_repo`, `hf_revision`,

@@ -197,7 +197,7 @@ model's reasoning verbosity relative to a 768-token budget.
 of the full harness run (config activation, cold/warm/hot, needle probes, quality corpus). Zero
 MES/wedged/reset/amdgpu-fault signature at any point across the entire WP.
 
-## Summary
+## Summary (canary quant, UD-Q4_K_XL)
 
 Config B (`-ncmoe 32`) lands as `qwen36-a3b`: correct needle recall at both moderate and
 near-ceiling context scales (the one near-ceiling "failure" on the real router being a budget
@@ -212,3 +212,73 @@ VRAM/RAM headroom — the clearest evidence in this plan yet that "maximal fit h
 family. The main carry-forward finding is this model's pronounced reasoning-budget sensitivity
 (75% of the quality corpus hit `length` at 768 tokens, worse than any other model this plan
 tested) — a genuine property of this model, not a harness or placement defect.
+
+## WP-4 step 5 — propagation to UD-Q5_K_XL / UD-Q6_K_XL
+
+Same config-B placement policy propagated upward, `-ncmoe` recomputed per quant from each file's
+own exact tensor-level GGUF math (fetched via an HTTP range request on the file header before the
+full download completed, so the config could be written and the download run in parallel):
+`qwen36-a3b-q5` (`-ncmoe 34`, UD-Q5_K_XL, 26,592,508,896 B / 24.77 GiB — sha256 verified against
+HF's own recorded hash) and `qwen36-a3b-q6` (`-ncmoe 35`, UD-Q6_K_XL, 31,843,777,504 B / 29.66 GiB
+— sha256 likewise verified). Both fresh downloads, both placed directly in
+`/srv/models/unsloth/Qwen3.6-35B-A3B-GGUF/` (no HF-cache repositioning needed, unlike the
+canary). Landed together with the canary's config.yaml edit, `docker compose restart` +
+`smoke-inference.sh` clean, then the full WP-1 harness run against both real router aliases.
+
+### Timing (cold/warm/hot, fixed ~8K-token-target performance fixture)
+
+| Quant | Round | n | median TTFT | median decode tok/s | cache assertion |
+|---|---|---|---|---|---|
+| UD-Q5_K_XL | cold | 3 | 16423.4 ms | 27.72 | n/a |
+| UD-Q5_K_XL | warm | 3 | 13242.7 ms | 27.80 | 3/3 passed |
+| UD-Q5_K_XL | hot | 3 | 107.0 ms | 27.87 | 3/3 passed |
+| UD-Q6_K_XL | cold | 3 | 18509.7 ms | 26.03 | n/a |
+| UD-Q6_K_XL | warm | 3 | 15772.7 ms | 25.77 | 3/3 passed |
+| UD-Q6_K_XL | hot | 3 | 116.3 ms | 25.87 | 3/3 passed |
+
+Cold/warm TTFT scales with file size as expected (UD-Q4_K_XL ~15-12s → UD-Q5_K_XL ~16-13s →
+UD-Q6_K_XL ~19-16s, tracking the larger weight sets' eviction/reload cost). Decode throughput
+scales down modestly with quant size (~31 → ~28 → ~26 tok/s) — expected, more bytes moved per
+token for the CPU-resident expert layers at higher precision, not a config regression.
+
+### Needle-in-haystack correctness — a cross-quant pattern, investigated and resolved
+
+Raw results: UD-Q5_K_XL moderate `correct: false`, near-ceiling `correct: false` (55,739 real
+prompt tokens); UD-Q6_K_XL moderate `correct: true`, near-ceiling `correct: false` (55,594 real
+prompt tokens). Combined with the canary's own near-ceiling "failure", every near-ceiling probe
+across all three quants and one of two moderate probes came back `correct: false` — investigated
+in full rather than accepted at face value, since this is exactly the shape config C's real
+correctness regression took.
+
+**Verdict: all four `false` results are the benign reasoning-budget-truncation pattern, not a
+repeat of config C's failure.** Read every reasoning trace directly:
+
+- UD-Q5_K_XL near-ceiling and UD-Q6_K_XL near-ceiling: both traces correctly locate and state the
+  reference code ("the exact reference code is FM9-NOVA-3174... I need to extract the code",
+  "Found it: `Reference code for this section: JK7-LUMEN-8676`... The code is `JK7-LUMEN-8676`")
+  before running out of the needle-probe's 256-token budget mid-formatting — identical shape to
+  the canary's own near-ceiling result.
+- UD-Q5_K_XL moderate: the reasoning trace explicitly finds the code, states it, and writes
+  "Done." ("The exact code is 'HZ7-CHARLIE-0987'... So the answer should be exactly
+  'HZ7-CHARLIE-0987'. Done.") — then continues into a self-verification step ("Let's double
+  check. Text snippet: ...") that quotes a chunk of haystack filler text and runs out of budget
+  mid-quote. Read only the trailing 600 characters in isolation, this looks identical to config
+  C's degenerate haystack regurgitation — reading the **full** trace shows it is a real,
+  goal-directed verification step that happens to quote filler text, occurring *after* the model
+  had already stated the correct answer. This is the load-bearing distinction from config C's
+  actual failures, where the reasoning trace never engaged with the task at all.
+- UD-Q6_K_XL moderate (the one that returned `correct: true`) shows the same shape without
+  hitting the budget: finds the code, states it, verifies once, and stops.
+
+Both sentinels correct in the quality corpus for both quants (`qa-2` → `391`, `longctx-1` →
+`GEN-88214`), consistent with the canary. Quality-corpus `length` rate: UD-Q5_K_XL 9/12 (matching
+the canary's 75%), UD-Q6_K_XL 7/12 (58%, somewhat better) — the reasoning-budget-sensitivity
+finding holds across all three quants, not a canary-specific artifact.
+
+### Summary (Q5/Q6 propagation)
+
+The propagated placement policy (config B, `-ncmoe` scaled per quant's measured routed-expert
+tensor size) works correctly on both larger quants: real correct recall at both context scales
+once the reasoning-budget-truncation artifact is accounted for, both sentinels correct, zero hang
+signature, cache assertions clean, decode throughput degrading gracefully (not cliff-dropping)
+with quant size. No placement re-tuning was needed beyond the `-ncmoe` value itself.

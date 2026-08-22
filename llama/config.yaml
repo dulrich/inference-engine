@@ -76,7 +76,9 @@
 # the group's own fit-math comment below for the full placement-search record. `-c 100000`: the
 # live-verified "useful long-context target" test point from the plan's own scope, not this
 # model's real ceiling (GGUF header reports `qwen35moe.context_length=262144`) — not pushed
-# further this WP, matching "push further only if cheap and justified."
+# further this WP, matching "push further only if cheap and justified." `qwen36-a3b-q5` /
+# `qwen36-a3b-q6` (UD-Q5_K_XL / UD-Q6_K_XL) propagate config B's placement policy upward per WP-4
+# step 5 (`-ncmoe` adjusted per quant's own measured routed-expert tensor size, not re-searched).
 #
 # One base-URL note: consumers reach this router at http://127.0.0.1:4811 (Crucible vaults
 # store http://127.0.0.1:4811/v1). The transitional 4806 host publish was retired 2026-07-27;
@@ -300,6 +302,40 @@ models:
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
       -ncmoe 32
+      -c 100000
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
+  # UD-Q5_K_XL / UD-Q6_K_XL: WP-4 step 5, propagating config B's placement policy upward rather
+  # than re-running the full A/B/C search per quant (Decisions locked). `-ncmoe` adjusted per
+  # quant via the same exact tensor-level GGUF math (stdlib struct parse of each file's own
+  # tensor-info table, fetched via an HTTP range request before the full download completed):
+  # Q5_K_XL's routed-expert weights average ~597.6 MiB/layer (vs Q4's ~491.8 MiB/layer), Q6_K_XL's
+  # ~728.9 MiB/layer — both scaled to keep GPU-resident routed-expert VRAM in the same ~6.1-6.4 GiB
+  # band as Q4's config B (non-expert weights are quant-count-identical at 2.494 GiB across all
+  # three — only the routed-expert tensors change size with quant).
+  Qwen3.6-35B-A3B-UD-Q5_K_XL:
+    name: "Qwen3.6 35B A3B (UD-Q5_K_XL)"
+    aliases:
+      - qwen36-a3b-q5
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf
+      -ncmoe 34
+      -c 100000
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
+  Qwen3.6-35B-A3B-UD-Q6_K_XL:
+    name: "Qwen3.6 35B A3B (UD-Q6_K_XL)"
+    aliases:
+      - qwen36-a3b-q6
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q6_K_XL.gguf
+      -ncmoe 35
       -c 100000
       --jinja
     ttl: 1800
@@ -641,9 +677,20 @@ groups:
   # the plan's own scope, not this model's real ceiling (`qwen35moe.context_length=262144` per the
   # GGUF header) — not pushed further this WP per "push further only if cheap and justified."
   # Full results (timing, needle/quality-corpus detail): docs/qwen36-35b-a3b-bakeoff-results.md.
+  #
+  # WP-4 step 5 (host-verified 2026-08-21): config B propagated to UD-Q5_K_XL (`-ncmoe 34`) and
+  # UD-Q6_K_XL (`-ncmoe 35`), each recomputed from that file's own tensor-level GGUF math. Both
+  # quants' near-ceiling needle probes (and UD-Q5_K_XL's moderate probe) initially read
+  # `correct: false` -- investigated by reading every reasoning trace in full rather than accepted
+  # at face value (this is exactly the shape config C's real failure took): all four are the
+  # benign reasoning-budget-truncation pattern (genuine correct recall, verbose self-verification
+  # exceeding the needle-probe's 256-token budget), never config C's degenerate haystack
+  # regurgitation. Full investigation and per-trace evidence in the results doc.
   qwen36-a3b-bakeoff:
     swap: true
     exclusive: true
     persistent: false
     members:
       - Qwen3.6-35B-A3B-UD-Q4_K_XL
+      - Qwen3.6-35B-A3B-UD-Q5_K_XL
+      - Qwen3.6-35B-A3B-UD-Q6_K_XL

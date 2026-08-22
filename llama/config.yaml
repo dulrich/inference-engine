@@ -80,6 +80,19 @@
 # `qwen36-a3b-q6` (UD-Q5_K_XL / UD-Q6_K_XL) propagate config B's placement policy upward per WP-4
 # step 5 (`-ncmoe` adjusted per quant's own measured routed-expert tensor size, not re-searched).
 #
+# `qwen38-27b-iq3xxs` / `qwen38-27b-iq3s` / `qwen38-27b-q3kxl` (the `qwen38-27b-bakeoff` group
+# below) — unsloth/Qwen3.8-27B-GGUF (`qwen35` architecture: a DENSE sibling of Qwen3.6-35B-A3B's
+# `qwen35moe`, same hybrid attention+SSM/recurrent layer mix, `full_attention_interval=4`),
+# added plans/serving-harness-round-2.md WP-5. Full `-ngl 99` (no MoE, no `-ncmoe`). VRAM is the
+# binding constraint on this 16 GiB card, not RAM: the `-c 100000` target from this plan's own
+# scope proved unsafe (0.10 GiB free) for even the smallest weights (canary UD-IQ3_S) — live
+# fit-testing (scratch port, exact linear KV-growth rate measured directly) found real safe
+# ceilings well below that target: `-c 40960` for UD-IQ3_XXS/UD-IQ3_S (1.85–2.76 GiB free),
+# `-c 24576` for UD-Q3_K_XL (1.83 GiB free, the largest quant needing the most headroom back).
+# See the group's own fit-math comment below for the full record, including a genuine
+# accumulated-page-cache confound this WP found and fixed (`POST /api/models/unload` + a
+# `--force-recreate` for a truly fresh cgroup — see that comment for when each applies).
+#
 # One base-URL note: consumers reach this router at http://127.0.0.1:4811 (Crucible vaults
 # store http://127.0.0.1:4811/v1). The transitional 4806 host publish was retired 2026-07-27;
 # :4806 survives only as the container-internal listen port.
@@ -337,6 +350,46 @@ models:
       -m /models/unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q6_K_XL.gguf
       -ncmoe 35
       -c 100000
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
+  # ── Qwen3.8-27B dense bake-off (unsloth/Qwen3.8-27B-GGUF), testing only, no external consumer
+  # yet — see plans/serving-harness-round-2.md WP-5. Full -ngl 99 (dense, no MoE offload). Per-quant
+  # -c set to each quant's own live-verified safe VRAM ceiling — see registry comment above and
+  # the group's own fit-math comment below for why these are lower than the plan's 100K target.
+  Qwen3.8-27B-UD-IQ3_XXS:
+    name: "Qwen3.8 27B (UD-IQ3_XXS)"
+    aliases:
+      - qwen38-27b-iq3xxs
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_XXS.gguf
+      -c 40960
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
+  Qwen3.8-27B-UD-IQ3_S:
+    name: "Qwen3.8 27B (UD-IQ3_S)"
+    aliases:
+      - qwen38-27b-iq3s
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf
+      -c 40960
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
+  Qwen3.8-27B-UD-Q3_K_XL:
+    name: "Qwen3.8 27B (UD-Q3_K_XL)"
+    aliases:
+      - qwen38-27b-q3kxl
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q3_K_XL.gguf
+      -c 24576
       --jinja
     ttl: 1800
     checkEndpoint: /health
@@ -694,3 +747,43 @@ groups:
       - Qwen3.6-35B-A3B-UD-Q4_K_XL
       - Qwen3.6-35B-A3B-UD-Q5_K_XL
       - Qwen3.6-35B-A3B-UD-Q6_K_XL
+
+  # ── qwen38-27b-bakeoff — Qwen3.8-27B dense, testing only (see plans/serving-harness-round-2.md
+  # WP-5). Same shape as the other bake-off groups: swap:true/exclusive:true.
+  #
+  # ── VRAM fit-finding (host-verified 2026-08-21, scratch llama-server on a throwaway port,
+  # journalctl -k -f watched throughout, zero hang signature any candidate) ──
+  #
+  # Card nameplate: 15.92 GiB. Canary UD-IQ3_S (12,040,883,104 B / 11.21 GiB) at the plan's own
+  # `-c 100000` target measured only 0.10 GiB free — investigated rather than accepted: KV cache
+  # growth is exactly linear (confirmed at three context points: 512 MiB @ 8192, 4096 MiB @ 65536,
+  # 6256 MiB @ 100000 -- 0.0625 MiB/token throughout), so the shortfall is real, not measurement
+  # noise. c=65536 (0.32 GiB free) and c=49152 (1.34 GiB free) were both still under this plan's
+  # ~1.5-2 GiB safety-margin convention; c=40960 landed at 1.85 GiB free (idle) / 1.83 GiB free
+  # (peak, after a real moderate needle-probe generation -- buffers pre-allocated, not growing
+  # further under use), correct recall confirmed. UD-IQ3_XXS (10,934,860,704 B / 10.18 GiB, the
+  # smallest quant) at the same c=40960: 2.76 GiB free, correct recall. UD-Q3_K_XL
+  # (13,146,393,504 B / 12.24 GiB, the largest quant) needed to step down to c=24576 for
+  # comparable headroom (1.83 GiB free), correct recall confirmed there too.
+  #
+  # A genuine confound found and fixed mid-WP: an early RAM-cgroup reading during the c=100000
+  # test showed memory.current within 0.53 GiB of the 36 GiB cap with memory.events "max"
+  # incrementing (real reclaim pressure) -- traced to ACCUMULATED PAGE CACHE from this session's
+  # earlier WP-4 model loads (~80 GiB of GGUF reads across Q4/Q5/Q6-A3B), not this model's own
+  # footprint: `POST /api/models/unload` (a genuine llama-swap unload-ALL-resident-models
+  # endpoint, more reliable than the exclusive-group-eviction trick for establishing a true empty
+  # baseline) cleared VRAM but NOT the stale page cache, since cgroup v2 charges page cache to
+  # whichever cgroup instance first read it and does not proactively evict on process exit; a full
+  # `docker compose up -d --force-recreate` (the same mechanism WP-0 used for HostConfig changes)
+  # was needed to get a genuinely fresh cgroup, after which RAM was never actually a binding
+  # constraint for this model (26+ GiB margin throughout, zero memory.max events) -- VRAM was the
+  # real, reproducible constraint all along. Full results (timing, needle/quality-corpus detail):
+  # docs/qwen38-27b-bakeoff-results.md.
+  qwen38-27b-bakeoff:
+    swap: true
+    exclusive: true
+    persistent: false
+    members:
+      - Qwen3.8-27B-UD-IQ3_XXS
+      - Qwen3.8-27B-UD-IQ3_S
+      - Qwen3.8-27B-UD-Q3_K_XL

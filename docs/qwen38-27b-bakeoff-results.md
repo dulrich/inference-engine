@@ -1,0 +1,136 @@
+# Qwen3.8-27B dense bake-off — results
+
+WP-5 of `plans/serving-harness-round-2.md`: 3-bit fit/quality frontier for a dense 27B model on
+this 16 GiB card, run under the standard benchmark profile as the default operating state. See
+also `docs/gemma-4-12b-qat-bakeoff-results.md`, `docs/ling-3-tiny-bakeoff-results.md`,
+`docs/qwen36-35b-a3b-bakeoff-results.md`.
+
+## What this is
+
+`unsloth/Qwen3.8-27B-GGUF`, three quants: `UD-IQ3_XXS` (10,934,860,704 B / 10.18 GiB),
+`UD-IQ3_S` (12,040,883,104 B / 11.21 GiB, the canary), `UD-Q3_K_XL` (13,146,393,504 B /
+12.24 GiB). Architecture (`qwen35` per the GGUF header): a **dense sibling of Qwen3.6-35B-A3B's
+`qwen35moe`** — same hybrid attention+SSM/recurrent layer mix (`full_attention_interval=4`, 65
+blocks → 16 real-attention layers, the rest fixed-state recurrent), no MoE, no `-ncmoe`, full
+`-ngl 99`. Real context ceiling per the GGUF header: 262,144 tokens — not reachable on this card
+(see below).
+
+**Artifact lineage**: `hf_repo: unsloth/Qwen3.8-27B-GGUF`, `hf_revision:
+4ca720788d1e01f1bff70c033e0d0028fd02e502`, all three quants sha256-verified byte-identical
+against HF's own recorded hash before use. `llama_cpp_build: b10534`.
+
+## Methodology
+
+- **VRAM fit-finding via scratch server**, same throwaway-port technique as WP-4's placement
+  search — not a placement search here (dense, nothing to search), but a genuine "what context
+  can this card actually hold" investigation, since the plan's own `-c 100000` target proved
+  unsafe.
+- **A genuine session confound found and fixed**: an early RAM-cgroup reading looked marginal
+  (0.53 GiB free of the 36 GiB cap, `memory.events` "max" incrementing) — traced to accumulated
+  page cache from this session's earlier WP-4 model loads (~80 GiB of GGUF reads), not this
+  model's own footprint. `POST /api/models/unload` (llama-swap's genuine unload-all-resident
+  endpoint, discovered this WP — more reliable than the exclusive-group-eviction trick for a true
+  empty baseline) cleared VRAM but not the stale page cache; a `docker compose up -d
+  --force-recreate` (the same mechanism WP-0 used for `HostConfig` changes) was needed for a
+  genuinely fresh cgroup. After that, RAM was never actually a binding constraint for this model
+  (26+ GiB margin throughout, zero `memory.max` events) — **VRAM was the real, reproducible
+  constraint**, unaffected by the cgroup confound (VRAM baseline measurements were identical
+  before and after the recreate, confirming the two resources are genuinely independent here).
+- **KV cache growth confirmed exactly linear** (0.0625 MiB/token) across three context points on
+  the canary (512 MiB @ 8192, 4096 MiB @ 65536, 6256 MiB @ 100000) — used to compute per-quant
+  safe context ceilings from live measurements rather than guessing.
+- **Hang detection**: `journalctl -k -f` watched live throughout the entire WP (fit-finding,
+  config activation, full harness runs for all three quants). Zero MES/wedged/reset/amdgpu-fault
+  signature — including one benign kernel `hrtimer` latency note under load, not a hang
+  signature.
+- **Cold-round mechanism** (full harness runs, real router aliases): the same genuine-eviction
+  proxy verified in WP-2/3/4.
+
+## VRAM fit-finding — why the landed `-c` values are well below the plan's 100K target
+
+Card nameplate: 15.92 GiB. The plan's own `-c 100000` target, tested live on the canary
+(UD-IQ3_S), measured only **0.10 GiB free** — investigated rather than accepted, since the KV
+growth rate was already confirmed linear and the shortfall was real. Progressively more
+conservative candidates were live-tested:
+
+| Context | Margin (canary UD-IQ3_S) | Verdict |
+|---|---|---|
+| 100000 | 0.10 GiB | REJECTED — at the plan's own abort threshold |
+| 65536 | 0.32 GiB | REJECTED — still under the ~1.5–2 GiB safety-margin convention |
+| 49152 | 1.34 GiB | REJECTED — still under the ~1.5–2 GiB convention |
+| **40960** | **1.85 GiB (idle) / 1.83 GiB (peak, after a real needle-probe generation)** | **LANDED** |
+
+`UD-IQ3_XXS` (the smallest quant) at the same `-c 40960`: 2.76 GiB free — comfortable margin,
+correct recall. `UD-Q3_K_XL` (the largest quant) needed to step down to **`-c 24576`** for
+comparable headroom (1.83 GiB free) — its ~1 GiB larger weight footprint directly consumes the
+margin `UD-IQ3_S` had at 40960. All three per-quant ceilings were live-verified with a real
+moderate needle-probe generation before landing, not just an idle-load VRAM reading.
+
+## Landed configuration
+
+`qwen38-27b-bakeoff` group: `qwen38-27b-iq3xxs` and `qwen38-27b-iq3s` at `-c 40960`,
+`qwen38-27b-q3kxl` at `-c 24576`, all `-ngl 99 --jinja`, no offload flags (dense). Activated via
+`docker compose restart` (config-only), full `smoke-inference.sh` clean.
+
+## Timing (cold/warm/hot, fixed ~8K-token-target performance fixture)
+
+| Quant | Round | n | median TTFT | median decode tok/s | cache assertion |
+|---|---|---|---|---|---|
+| UD-IQ3_XXS | cold | 3 | 9936.8 ms | 37.23 | n/a |
+| UD-IQ3_XXS | warm | 3 | 7040.5 ms | 37.11 | 3/3 passed |
+| UD-IQ3_XXS | hot | 3 | 138.8 ms | 36.95 | 3/3 passed |
+| UD-IQ3_S | cold | 3 | 11176.0 ms | 34.70 | n/a |
+| UD-IQ3_S | warm | 3 | 7198.6 ms | 34.64 | 3/3 passed |
+| UD-IQ3_S | hot | 3 | 140.3 ms | 34.55 | 3/3 passed |
+| UD-Q3_K_XL | cold | 3 | 11174.6 ms | 32.34 | n/a |
+| UD-Q3_K_XL | warm | 3 | 7214.7 ms | 32.28 | 3/3 passed |
+| UD-Q3_K_XL | hot | 3 | 143.8 ms | 32.18 | 3/3 passed |
+
+Decode throughput scales down smoothly with quant precision (37.2 → 34.6 → 32.2 tok/s) — no
+cliff, consistent with this being a fully GPU-resident dense model (no CPU-offload compute
+bottleneck the way the A3B models had). Cold/warm TTFT track file size as expected. All 18 cache
+assertions (3 quants × warm+hot × 3 rounds) passed at the harness's pinned thresholds.
+
+## Needle-in-haystack correctness
+
+**All 6 probes (3 quants × moderate + near-ceiling) recalled correctly** — the cleanest result of
+any model in this plan, no budget-truncation artifacts on any needle probe:
+
+| Quant | Moderate | Near-ceiling (real `prompt_tokens`) |
+|---|---|---|
+| UD-IQ3_XXS | ✅ correct | ✅ correct (22,841, ctx=40960) |
+| UD-IQ3_S | ✅ correct | ✅ correct (22,893, ctx=40960) |
+| UD-Q3_K_XL | ✅ correct | ✅ correct (13,772, ctx=24576) |
+
+## Quality corpus (12 prompts × 3 quants, manual scoring)
+
+Both sentinels correct on every quant: `qa-2` → `391` (exact match); `longctx-1` → `GEN-88214`
+(exact match). Truncation rate is by far the lowest of any model in this plan: `code-1` and
+`synthesis-1` hit `length` with empty visible content on **all three quants** (a genuine,
+prompt-specific reasoning-budget-sensitivity finding, consistent across quants — 2/12, 17%,
+matching Ling-3.0-tiny's rate, far better than the A3B family's 58–75%); `UD-IQ3_S` additionally
+truncated `ambiguity-2` but with substantial visible content already written (not empty). The
+other 9–10 of 12 prompts per quant completed normally (`finish_reason: "stop"`) with correct or
+reasonable content on manual inspection — factual QA, code-debug (the non-truncated `code-2`),
+structured transformation, ambiguity judgment, correction uptake, and long-context retrieval all
+read correctly across all three quants, consistent with each other (e.g. `code-2`'s off-by-one
+diagnosis is materially identical across all three, just phrased differently).
+
+## Journal / hang check
+
+`journalctl -k -f` watched continuously from before the VRAM fit-finding through the end of the
+full harness run for all three quants. Zero MES/wedged/reset/amdgpu-fault signature at any point.
+
+## Summary
+
+Dense 27B is genuinely viable on this 16 GiB card at 3-bit quantization, but **not** at the
+plan's original `-c 100000` aspiration — VRAM is the hard, reproducible binding constraint (not
+RAM, despite an early false alarm this WP traced to stale session-wide page cache and fixed with
+a container recreate), and the real safe ceiling is `-c 40960` for the two smaller quants,
+stepping down to `-c 24576` for the largest. Within those live-verified ceilings, results are the
+cleanest of any model in this plan: all 6 needle probes correct, both sentinels correct on all
+three quants, decode throughput degrading smoothly (not cliff-dropping) with quant precision, and
+the lowest quality-corpus truncation rate of any model tested (17% vs. the A3B family's
+58–75%) — this dense architecture is markedly less prone to the reasoning-budget-truncation
+pattern documented elsewhere in this plan, though it still exhibits it on the same two prompts
+across all three quants.

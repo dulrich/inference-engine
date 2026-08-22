@@ -64,6 +64,20 @@
 # already covers vision, and this addition is scoped to the bake-off harness's own (text-only)
 # cold/warm/hot + quality-corpus measurement, not a capability upgrade.
 #
+# `qwen36-a3b` (the `qwen36-a3b-bakeoff` group below) — unsloth/Qwen3.6-35B-A3B-GGUF (`qwen35moe`
+# architecture: a hybrid of attention + SSM/recurrent layers, 256 fine-grained routed experts +
+# 1 shared expert, 8 active per token), added plans/serving-harness-round-2.md WP-4. MoE
+# expert-offload placement search (configs A/B/C: `-ncmoe` layer count on the same maximal
+# `-ngl 99`) landed config B (`-ncmoe 32`, 8 of 40 layers' routed experts GPU-resident) as the
+# winner — config A (`-ncmoe 24`) left an unsafe VRAM margin at moderate/long context; config C
+# (`-cmoe`, all experts CPU-resident) had superior VRAM/RAM headroom but FAILED near-ceiling
+# (~55K token) needle recall reproducibly on two independent probes (degenerate haystack-token
+# regurgitation instead of reasoning, not merely a truncated-but-on-track reasoning trace) — see
+# the group's own fit-math comment below for the full placement-search record. `-c 100000`: the
+# live-verified "useful long-context target" test point from the plan's own scope, not this
+# model's real ceiling (GGUF header reports `qwen35moe.context_length=262144`) — not pushed
+# further this WP, matching "push further only if cheap and justified."
+#
 # One base-URL note: consumers reach this router at http://127.0.0.1:4811 (Crucible vaults
 # store http://127.0.0.1:4811/v1). The transitional 4806 host publish was retired 2026-07-27;
 # :4806 survives only as the container-internal listen port.
@@ -268,6 +282,25 @@ models:
       ${llama_server_chat_common}
       -m /models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf
       -c 32768
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
+  # ── Qwen3.6-35B-A3B bake-off (unsloth/Qwen3.6-35B-A3B-GGUF), testing only, no external consumer
+  # yet — see plans/serving-harness-round-2.md WP-4. `-ncmoe 32` (keep the routed-MoE-expert
+  # weights of the first 32 of 40 layers in CPU RAM, the last 8 layers' experts + all non-expert
+  # tensors GPU-resident via the macro's own `-ngl 99`) is the winning placement from the live
+  # A/B/C search — see the `qwen36-a3b-bakeoff` group comment below for the full record and the
+  # registry comment above for why A and C were rejected.
+  Qwen3.6-35B-A3B-UD-Q4_K_XL:
+    name: "Qwen3.6 35B A3B (UD-Q4_K_XL)"
+    aliases:
+      - qwen36-a3b
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+      -ncmoe 32
+      -c 100000
       --jinja
     ttl: 1800
     checkEndpoint: /health
@@ -544,3 +577,73 @@ groups:
     persistent: false
     members:
       - gemma-4-12B-it-qat-UD-Q4_K_XL
+
+  # ── qwen36-a3b-bakeoff — Qwen3.6-35B-A3B, testing only (see plans/serving-harness-round-2.md
+  # WP-4). Same shape as the other bake-off groups: swap:true/exclusive:true.
+  #
+  # ── Offload-placement search (host-verified 2026-08-21, scratch llama-server on a throwaway
+  # port :8099, UD-Q4_K_XL canary quant, journalctl -k -f watched throughout, zero hang signature
+  # any config) ──
+  #
+  # Exact tensor-level GGUF math (stdlib struct parse, no gguf pip package — same technique as
+  # Ling's context-ceiling research): 40 blocks, all MoE; routed-expert weights total 18.320 GiB
+  # (~491.8 MiB/layer average), non-expert weights (attention/ssm/embedding/output/shared-expert/
+  # router) total 2.494 GiB, always GPU-resident at `-ngl 99` regardless of `-ncmoe`. Only 10 of 40
+  # layers carry real attention KV cache (`full_attention_interval=4`); the rest are SSM/recurrent
+  # layers with a fixed-size (not context-scaling) state buffer — same KV-lightness pattern as
+  # Ling-3.0-tiny's hybrid KDA/MLA architecture.
+  #
+  # Config A (`-ngl 99 -ncmoe 24`, 16 layers' experts GPU-resident): c=8192 peak
+  # 14,948,843,520 B / 13.92 GiB (2.00 GiB free of 15.92 GiB nameplate); c=32768 peak
+  # 15,477,321,728 B / 14.42 GiB (1.505 GiB free — at the plan's ~1.5 GiB abort-margin
+  # threshold). REJECTED: extrapolated free margin at the ~100K useful-context target is
+  # ≈0.47 GiB, well under any safe threshold — not live-tested at 100K given this was already
+  # clear from the moderate-context measurement plus the linear KV-growth rate measured on config
+  # A itself (160 MiB @ 8192 → 640 MiB @ 32768, exact match to the linear prediction).
+  #
+  # Config B (`-ngl 99 -ncmoe 32`, 8 layers' experts GPU-resident) — WINNER. c=8192:
+  # 11,048,169,472 B / 10.29 GiB (5.63 GiB free). c=100000: idle-loaded 13,024,489,472 B /
+  # 12.13 GiB, peak-after-needle-probe 13,095,755,776 B / 12.20 GiB (3.72–3.79 GiB free either
+  # way — buffers are pre-allocated at load, not growing further under real use). RAM (cgroup):
+  # 28.38 GiB current of 36 GiB cap at c=100000 under active load, 10.28 GiB margin, zero OOM
+  # events. Near-ceiling needle probe (scratch port, 100000 ceiling → 55,618 real prompt tokens):
+  # CORRECT, clean `stop` finish. Decode throughput (200-token generation, c=8192): ≈30.2 tok/s.
+  # A second near-ceiling probe run later through the real router alias (WP-4's full-harness
+  # pass, 55,588 real prompt tokens) hit the 256-token needle-probe budget before emitting visible
+  # `content` — but the captured `reasoning_content` shows the model correctly located the code
+  # ("the exact reference code is FW9-DELTA-3123... Response: FW9-DELTA-3123") and then spent the
+  # rest of the budget on redundant self-verification ("Check format... Correct... Ready...
+  # Done...") without ever transitioning to `content`. This is the same benign
+  # reasoning-budget-truncation pattern already documented for Gemma4-12B-QAT and Ling-3.0-tiny
+  # elsewhere in this plan — genuine correct recall, a formatting/budget artifact, not a wrong
+  # answer — explicitly NOT config C's degenerate-regurgitation failure mode below. This model
+  # exhibits it more severely than any other model in this plan (9 of 12 quality-corpus prompts
+  # hit `length` at the harness's default 768-token budget, 6 with zero visible content) — see the
+  # results doc for the full per-prompt table.
+  #
+  # Config C (`-ngl 99 -cmoe`, ALL experts CPU-resident) — REJECTED despite superior VRAM/RAM
+  # headroom (c=100000 peak 9,052,823,552 B / 8.43 GiB, 7.49 GiB free; RAM margin 10.44 GiB;
+  # decode throughput ≈27.2 tok/s at c=8192, only ~10% slower than B). Near-ceiling needle probe
+  # FAILED reproducibly on two independent probes (different embedded codes, ~55.5-55.6K real
+  # prompt tokens both times): `finish_reason: "length"`, empty `content`, and — the load-bearing
+  # detail that makes this a real correctness regression rather than the already-documented
+  # reasoning-budget-truncation pattern — the `reasoning_content` was not genuine on-topic
+  # reasoning cut off in progress (the shape seen elsewhere in this plan), it was **degenerate
+  # regurgitation of haystack filler tokens** ("block interval artifact archive cycle. driver
+  # archive engine artifact profile anomaly..."), on both probes. Zero hang signature, container
+  # stayed healthy throughout both — the same "healthy but wrong" shape as the
+  # ling-3-tiny-context-ceiling plan's Part B quantized-KV-cache rejection, but a distinct,
+  # previously undocumented failure mode for this specific config (all-CPU MoE compute at large
+  # context), not that plan's cause (quantized cache) — this model's cache is f16 throughout, only
+  # placement varies here.
+  #
+  # `-c 100000` lands as the permanent value: the live-verified "useful long-context target" from
+  # the plan's own scope, not this model's real ceiling (`qwen35moe.context_length=262144` per the
+  # GGUF header) — not pushed further this WP per "push further only if cheap and justified."
+  # Full results (timing, needle/quality-corpus detail): docs/qwen36-35b-a3b-bakeoff-results.md.
+  qwen36-a3b-bakeoff:
+    swap: true
+    exclusive: true
+    persistent: false
+    members:
+      - Qwen3.6-35B-A3B-UD-Q4_K_XL

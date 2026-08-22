@@ -3,8 +3,8 @@
 WP-4 of `plans/serving-harness-round-2.md`: offload-placement search (configs A/B/C) plus a full
 `llama/bakeoff/run_harness.py` (WP-1) run against the winning placement, landed as the new
 `qwen36-a3b` testing alias (`qwen36-a3b-bakeoff` group). See also
-`docs/gemma-4-12b-qat-bakeoff-results.md`, `docs/ling-3-tiny-bakeoff-results.md`, and once landed,
-`docs/qwen38-27b-bakeoff-results.md`.
+`docs/gemma-4-12b-qat-bakeoff-results.md`, `docs/ling-3-tiny-bakeoff-results.md`, and
+`docs/qwen38-27b-bakeoff-results.md` (Qwen3.8-27B dense).
 
 ## What this is
 

@@ -8,7 +8,10 @@ record (it travels with the config it documents); this doc is the readable summa
 Source plans: `plans/ling-3-tiny-bakeoff-and-gpu-hang-watchdog.md` (IMPLEMENTED, established the
 four quants at `-c 8192`) and `plans/ling-3-tiny-context-ceiling.md` (IMPLEMENTED, raised `-c` to
 131072 and tested a KV-cache-quantization compatibility experiment). Source reports:
-`runs/dispatch/wp-1-report.md`, `runs/dispatch/wp-2-report.md` (context-ceiling plan).
+`runs/dispatch/wp-1-report.md`, `runs/dispatch/wp-2-report.md` (context-ceiling plan). The
+"Round-2 retest" section below is WP-3 of `plans/serving-harness-round-2.md`. See also
+`docs/gemma-4-12b-qat-bakeoff-results.md`, `docs/qwen36-35b-a3b-bakeoff-results.md` (Qwen3.6-35B-A3B
+MoE), and `docs/qwen38-27b-bakeoff-results.md` (Qwen3.8-27B dense).
 
 ## Architecture context (why the numbers look the way they do)
 

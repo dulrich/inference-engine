@@ -15,7 +15,9 @@ if str(BAKEOFF_DIR) not in sys.path:
     sys.path.insert(0, str(BAKEOFF_DIR))
 
 import batch  # noqa: E402
+import longcontext  # noqa: E402
 import run_harness  # noqa: E402
+import sampling_table  # noqa: E402
 import sweep  # noqa: E402
 
 
@@ -237,6 +239,16 @@ class TestResolveQueueCells(unittest.TestCase):
         self.assertEqual(resolved[0]["gpu_weights_bytes"], 6 * sweep.GIB)
         self.assertEqual(resolved[0]["kv_attention_layers"], 10)
         self.assertEqual(resolved[0]["server_flags"]["-ncmoe"], 32)
+
+    def test_model_family_propagates_from_model_registry_when_present(self):
+        q = _minimal_queue()
+        q["models"]["model-a"]["model_family"] = "gemma4"
+        resolved = batch.resolve_queue_cells(q)
+        self.assertEqual(resolved[0]["model_family"], "gemma4")
+
+    def test_model_family_absent_when_registry_omits_it(self):
+        resolved = batch.resolve_queue_cells(_minimal_queue())  # model-a carries no model_family
+        self.assertNotIn("model_family", resolved[0])
 
     def test_cell_ids_are_distinct(self):
         resolved = batch.resolve_queue_cells(_minimal_queue())
@@ -505,6 +517,256 @@ class TestDefaultCellRunner(unittest.TestCase):
         outcome = batch.default_cell_runner(self._handle(True, False), {})
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(outcome.reason, "invalid_config")
+
+
+# -------------------------------------------------------------------------------------------
+# make_longcontext_cell_runner (plan longcontext-pow2-overnight-campaign.md WP-2's battery
+# hookup) -- `battery_fn`/`production_sampling_fn`/`vram_used_bytes_fn` are always fakes here;
+# this suite never calls `longcontext.run_live_battery` (a live network call) or
+# `sweep.read_vram_used_bytes` (real host sysfs).
+# -------------------------------------------------------------------------------------------
+
+
+def _handle(healthy=True, verified=True, base_url="http://fake-bridge:9001", vram_before=1000):
+    return sweep.ScratchServerHandle(
+        cell_id="lc-cell", base_url=base_url, healthy=healthy, verified=verified,
+        details={"checks": {}}, log_text="", vram_before_bytes=vram_before, port=1,
+        container="fake",
+    )
+
+
+def _longcontext_cell(battery=("vram", "needle"), sampling_arm="capability", trials=3,
+                       model_family="gemma4", context=32768):
+    return {
+        "cell_id": "lc-cell", "alias": "lc-alias", "battery": list(battery),
+        "server_flags": {"-c": context}, "_sampling_arm": sampling_arm, "_trials": trials,
+        "model_family": model_family,
+    }
+
+
+def _sample(task, verdict, correct, success=True):
+    return {
+        "task": task, "classifier_verdict": verdict, "correct": correct, "success": success,
+    }
+
+
+def _fake_battery_fn_factory(samples_by_task):
+    """Returns a `battery_fn` stub matching `longcontext.run_live_battery`'s return shape
+    (`{task_name: {position_fraction: CellResult}}`) -- one CellResult per task, all samples at a
+    single synthetic position (0.45), and records every call's arguments for assertion."""
+    calls = []
+
+    def _fn(base_url, alias, cell_id_prefix, target_tokens, sampling_arm, sampling_payload,
+             n_trials=10, max_tokens=256, timeout=300):
+        calls.append({
+            "base_url": base_url, "alias": alias, "cell_id_prefix": cell_id_prefix,
+            "target_tokens": target_tokens, "sampling_arm": sampling_arm,
+            "sampling_payload": dict(sampling_payload), "n_trials": n_trials,
+        })
+        out = {}
+        for task_name, samples in samples_by_task.items():
+            cell_result = longcontext.CellResult(samples=samples, completions=[], summary=None)
+            out[task_name] = {0.45: cell_result}
+        return out
+
+    _fn.calls = calls
+    return _fn
+
+
+class TestLongcontextCellRunner(unittest.TestCase):
+    def test_unhealthy_fails_before_battery_runs(self):
+        battery_fn = _fake_battery_fn_factory({"single_needle": [_sample("single_needle", "correct", True)]})
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(healthy=False), _longcontext_cell())
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.reason, "health_timeout")
+        self.assertFalse(outcome.correctness_failure)
+        self.assertEqual(battery_fn.calls, [])  # never even attempted
+
+    def test_unverified_fails_before_battery_runs(self):
+        battery_fn = _fake_battery_fn_factory({"single_needle": [_sample("single_needle", "correct", True)]})
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(verified=False), _longcontext_cell())
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.reason, "invalid_config")
+        self.assertEqual(battery_fn.calls, [])
+
+    def test_non_needle_battery_defers_to_default_cell_runner(self):
+        battery_fn = _fake_battery_fn_factory({})
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(), _longcontext_cell(battery=["vram"]))
+        self.assertEqual(outcome.status, "completed")
+        self.assertEqual(battery_fn.calls, [])  # default_cell_runner never touches the battery
+
+    def test_clean_battery_completes(self):
+        battery_fn = _fake_battery_fn_factory({
+            "single_needle": [_sample("single_needle", "correct", True)],
+            "passage_qa": [_sample("passage_qa", "correct", True)],
+        })
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(), _longcontext_cell())
+        self.assertEqual(outcome.status, "completed")
+        self.assertIsNone(outcome.reason)
+        self.assertFalse(outcome.correctness_failure)
+
+    def test_degenerate_sample_fails_with_correctness_failure(self):
+        battery_fn = _fake_battery_fn_factory({
+            "passage_qa": [_sample("passage_qa", "degenerate", False)],
+        })
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(), _longcontext_cell())
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.reason, "degenerate")
+        self.assertTrue(outcome.correctness_failure)
+        self.assertIn(outcome.reason, batch.CORRECTNESS_FAILURE_REASONS)
+
+    def test_needle_recall_wrong_fails_with_correctness_failure(self):
+        battery_fn = _fake_battery_fn_factory({
+            "single_needle": [_sample("single_needle", "wrong", False)],
+        })
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(), _longcontext_cell())
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.reason, "needle_failure")
+        self.assertTrue(outcome.correctness_failure)
+        self.assertIn(outcome.reason, batch.CORRECTNESS_FAILURE_REASONS)
+
+    def test_multi_needle_wrong_also_counts_as_needle_failure(self):
+        battery_fn = _fake_battery_fn_factory({
+            "multi_needle": [_sample("multi_needle", "wrong", False)],
+        })
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(), _longcontext_cell())
+        self.assertEqual(outcome.reason, "needle_failure")
+
+    def test_passage_qa_wrong_alone_does_not_trigger_needle_failure(self):
+        # passage_qa is NoLiMa-class non-literal recall, deliberately excluded from the
+        # needle_failure predicate (this module's own interpretive call -- see the runner's
+        # docstring).
+        battery_fn = _fake_battery_fn_factory({
+            "passage_qa": [_sample("passage_qa", "wrong", False)],
+        })
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(), _longcontext_cell())
+        self.assertEqual(outcome.status, "completed")
+
+    def test_truncated_benign_alone_does_not_trigger_needle_failure(self):
+        battery_fn = _fake_battery_fn_factory({
+            "single_needle": [_sample("single_needle", "truncated(benign)", False)],
+        })
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(), _longcontext_cell())
+        self.assertEqual(outcome.status, "completed")
+
+    def test_degenerate_takes_priority_over_needle_failure(self):
+        battery_fn = _fake_battery_fn_factory({
+            "single_needle": [_sample("single_needle", "wrong", False)],
+            "passage_qa": [_sample("passage_qa", "degenerate", False)],
+        })
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(), _longcontext_cell())
+        self.assertEqual(outcome.reason, "degenerate")
+
+    def test_transport_failure_without_correctness_issue(self):
+        # passage_qa (never a needle_failure source) with success=False isolates a pure
+        # transport/HTTP failure from the correctness-classification checks above.
+        battery_fn = _fake_battery_fn_factory({
+            "passage_qa": [_sample("passage_qa", "wrong", False, success=False)],
+        })
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(), _longcontext_cell())
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.reason, "transport_error")
+        self.assertFalse(outcome.correctness_failure)
+
+    def test_capability_arm_uses_capability_preset(self):
+        battery_fn = _fake_battery_fn_factory({"single_needle": [_sample("single_needle", "correct", True)]})
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        runner(_handle(), _longcontext_cell(sampling_arm="capability"))
+        self.assertEqual(battery_fn.calls[0]["sampling_arm"], "capability")
+        payload = battery_fn.calls[0]["sampling_payload"]
+        self.assertEqual(payload["temperature"], run_harness.SAMPLING_ARM_CAPABILITY["temperature"])
+        self.assertEqual(payload["top_k"], run_harness.SAMPLING_ARM_CAPABILITY["top_k"])
+
+    def test_production_arm_with_known_family_fills_table_values(self):
+        battery_fn = _fake_battery_fn_factory({"single_needle": [_sample("single_needle", "correct", True)]})
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(), _longcontext_cell(sampling_arm="production", model_family="gemma4"))
+        self.assertEqual(battery_fn.calls[0]["sampling_arm"], "production")
+        payload = battery_fn.calls[0]["sampling_payload"]
+        expected = sampling_table.production_sampling("gemma4")
+        self.assertEqual(payload["temperature"], expected["temperature"])
+        self.assertEqual(payload["top_p"], expected["top_p"])
+        self.assertEqual(payload["top_k"], expected["top_k"])
+        self.assertEqual(outcome.detail["sampling_arm_effective"], "production")
+        self.assertIsNone(outcome.detail["production_sampling_fallback_reason"])
+
+    def test_production_arm_with_silent_family_falls_back_to_capability(self):
+        battery_fn = _fake_battery_fn_factory({"single_needle": [_sample("single_needle", "correct", True)]})
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(
+            _handle(), _longcontext_cell(sampling_arm="production", model_family="nemotron_h"),
+        )
+        self.assertEqual(battery_fn.calls[0]["sampling_arm"], "capability")
+        payload = battery_fn.calls[0]["sampling_payload"]
+        self.assertEqual(payload["temperature"], run_harness.SAMPLING_ARM_CAPABILITY["temperature"])
+        self.assertEqual(outcome.detail["sampling_arm_effective"], "capability")
+        self.assertIsNotNone(outcome.detail["production_sampling_fallback_reason"])
+        self.assertEqual(outcome.status, "completed")  # the fallback itself is not a failure
+
+    def test_production_arm_with_unset_model_family_falls_back_to_capability(self):
+        battery_fn = _fake_battery_fn_factory({"single_needle": [_sample("single_needle", "correct", True)]})
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        cell = _longcontext_cell(sampling_arm="production")
+        del cell["model_family"]
+        outcome = runner(_handle(), cell)
+        self.assertEqual(outcome.detail["sampling_arm_effective"], "capability")
+
+    def test_invalid_sampling_arm_fails_cleanly(self):
+        battery_fn = _fake_battery_fn_factory({})
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(), _longcontext_cell(sampling_arm="bogus"))
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.reason, "invalid_sampling_arm")
+        self.assertEqual(battery_fn.calls, [])
+
+    def test_battery_exception_is_caught_and_recorded_not_raised(self):
+        def raising_battery_fn(*args, **kwargs):
+            raise RuntimeError("boom")
+        runner = batch.make_longcontext_cell_runner(battery_fn=raising_battery_fn)
+        outcome = runner(_handle(), _longcontext_cell())
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.reason, "battery_error")
+        self.assertFalse(outcome.correctness_failure)
+
+    def test_target_tokens_leaves_headroom_under_context(self):
+        battery_fn = _fake_battery_fn_factory({"single_needle": [_sample("single_needle", "correct", True)]})
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        runner(_handle(), _longcontext_cell(context=32768))
+        target_tokens = battery_fn.calls[0]["target_tokens"]
+        self.assertLess(target_tokens, 32768)
+        self.assertEqual(target_tokens, int(32768 * run_harness.NEEDLE_NEAR_CEILING_FRACTION))
+
+    def test_vram_read_back_and_base_url_alias_forwarded(self):
+        battery_fn = _fake_battery_fn_factory({"single_needle": [_sample("single_needle", "correct", True)]})
+        runner = batch.make_longcontext_cell_runner(
+            battery_fn=battery_fn, vram_used_bytes_fn=lambda: 5555,
+        )
+        handle = _handle(base_url="http://fake-bridge:9001", vram_before=1234)
+        outcome = runner(handle, _longcontext_cell())
+        self.assertEqual(battery_fn.calls[0]["base_url"], "http://fake-bridge:9001")
+        self.assertEqual(battery_fn.calls[0]["alias"], "lc-alias")
+        self.assertEqual(outcome.detail["vram_before_bytes"], 1234)
+        self.assertEqual(outcome.detail["vram_after_bytes"], 5555)
+
+    def test_real_defaults_never_touched_when_battery_fn_injected(self):
+        # The factory's real defaults (longcontext.run_live_battery, sampling_table.
+        # production_sampling, sweep.read_vram_used_bytes) are never exercised by this test --
+        # only injected fakes -- proving this suite itself never opens a socket or reads sysfs.
+        battery_fn = _fake_battery_fn_factory({"single_needle": [_sample("single_needle", "correct", True)]})
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn, vram_used_bytes_fn=lambda: 0)
+        outcome = runner(_handle(), _longcontext_cell())
+        self.assertEqual(outcome.status, "completed")
 
 
 # -------------------------------------------------------------------------------------------

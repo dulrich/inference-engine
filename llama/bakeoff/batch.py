@@ -20,13 +20,20 @@ WP's own tests always inject a fake context-manager factory instead -- `batch ru
 this module's own test suite never spawn a scratch server, never call `docker`, and never read
 host sysfs.
 
-**Battery-execution seam (deferred to WP-2)**: this WP owns the queue/state-machine/safety-rail
-scaffolding, not the actual longcontext battery run. `run_queue`'s `cell_runner` parameter is
-where WP-2 wires in the real battery (`longcontext.py`'s live entry, per that plan's Key
-Changes); `default_cell_runner` here is a placeholder that only verifies scratch-server startup
-state (see its own docstring). This WP's tests inject fake `cell_runner`s to exercise every
-disposition (completed / health-timeout / OOM / degenerate / needle-recall failure) the state
-machine has to handle, without the real battery existing yet.
+**Battery-execution seam (WP-1 scaffolding; landed by WP-2)**: WP-1 owns the queue/state-machine/
+safety-rail scaffolding, not the actual longcontext battery run -- `run_queue`'s `cell_runner`
+parameter is the seam; `default_cell_runner` here is WP-1's placeholder, verifying only
+scratch-server startup state (see its own docstring), and stays `run_queue`'s unchanged internal
+default (every direct `run_queue(...)` caller that omits `cell_runner=`, including this module's
+and WP-1's own tests, is unaffected by WP-2). WP-2 lands the real battery hookup as
+`make_longcontext_cell_runner()` (below `default_cell_runner`) -- `cmd_run` (the CLI path) wires
+it in explicitly; it drives `longcontext.py`'s live entry (`run_live_battery`) for any cell whose
+`battery` includes `"needle"`, filling the `production` sampling arm from `sampling_table.py`,
+and defers to `default_cell_runner` for every other cell. This module's OWN tests still inject
+fake `cell_runner`s (both `default_cell_runner`-style stubs and `make_longcontext_cell_runner`'s
+own injected `battery_fn`/`production_sampling_fn`/`vram_used_bytes_fn` fakes) to exercise every
+disposition (completed / health-timeout / OOM / degenerate / needle-recall failure) without ever
+touching a live scratch server.
 """
 
 from __future__ import annotations
@@ -42,11 +49,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional
 
-# `sweep`/`run_harness` live beside this file with no package `__init__.py` under `llama/` --
-# see longcontext.py's own comment on this exact gotcha. A plain top-level import works whenever
-# the importer has already put this directory on `sys.path` (true when this file is run directly
-# as a script, and when a test under `tests/` inserts this directory itself).
+# `sweep`/`run_harness`/`longcontext`/`sampling_table` live beside this file with no package
+# `__init__.py` under `llama/` -- see longcontext.py's own comment on this exact gotcha. A plain
+# top-level import works whenever the importer has already put this directory on `sys.path` (true
+# when this file is run directly as a script, and when a test under `tests/` inserts this
+# directory itself).
+import longcontext
 import run_harness
+import sampling_table
 import sweep
 
 MODULE_DIR = Path(__file__).resolve().parent
@@ -166,6 +176,16 @@ def resolve_cell(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]) -> Di
         raw["kv_attention_layers"] = model_entry["kv_attention_layers"]
     if model_entry.get("swa_layer_spec") is not None:
         raw["swa_layer_spec"] = model_entry["swa_layer_spec"]
+    if model_entry.get("model_family") is not None:
+        # WP-2 addition: an optional, plain pass-through (same shape as gpu_weights_bytes/
+        # kv_attention_layers/swa_layer_spec above), NOT queue-only metadata -- a GGUF
+        # `general.architecture` string (`gemma4`/`qwen35`/`qwen35moe`/`bailingmoe3`/...) the
+        # queue author already knows when writing the model registry entry. This is how
+        # `make_longcontext_cell_runner` selects a `production_sampling()` table entry without
+        # re-parsing the GGUF header on every live cell run; a queue that omits it simply never
+        # gets the `production` sampling arm resolved (falls back to `capability`, same as an
+        # unrecognized/silent family -- see that function's docstring).
+        raw["model_family"] = model_entry["model_family"]
 
     cell = sweep.normalize_cell(raw)
     cell["cell_id"] = sweep.compute_cell_id(cell)
@@ -515,6 +535,171 @@ def default_cell_runner(handle: "sweep.ScratchServerHandle", cell: Dict[str, Any
     return CellOutcome("completed", None, False, {"startup_details": handle.details})
 
 
+# -------------------------------------------------------------------------------------------
+# Live longcontext battery hookup (plan `longcontext-pow2-overnight-campaign.md`, WP-2). This is
+# the real `cell_runner` `run_queue`'s "Battery-execution seam" docstring names -- `cmd_run` wires
+# it in (see below); `run_queue`'s own internal default stays `default_cell_runner` UNCHANGED (so
+# every WP-1 test that omits `cell_runner=` and relies on that default keeps passing byte-for-byte
+# -- this WP touches no state-machine code).
+# -------------------------------------------------------------------------------------------
+
+# The abbreviated cell's `battery` vocabulary (`sweep.VALID_BATTERY_ITEMS`) is coarse-grained;
+# `"needle"` is the one item this WP's runner understands -- any cell whose `battery` does NOT
+# include it defers entirely to `default_cell_runner` (startup-verification only), never silently
+# dropped.
+LONGCONTEXT_BATTERY_ITEM = "needle"
+
+
+def make_longcontext_cell_runner(
+    battery_fn: Optional[Callable[..., Dict[str, Dict[float, Any]]]] = None,
+    production_sampling_fn: Optional[Callable[[str], Dict[str, float]]] = None,
+    vram_used_bytes_fn: Optional[Callable[[], int]] = None,
+    max_tokens: int = 256,
+    timeout: float = 300,
+) -> Callable[["sweep.ScratchServerHandle", Dict[str, Any]], CellOutcome]:
+    """Builds the real live `cell_runner` for a `battery: [..., "needle"]` queue cell:
+    `longcontext.run_live_battery`'s full task x position x trial sweep against `handle`'s live
+    scratch server, with the production sampling arm (when requested) filled from
+    `sampling_table.production_sampling` -- the harness's documented `SAMPLING_ARM_PRODUCTION`
+    None-placeholder deferral, closed here via `run_harness.sampling_arm_payload`'s existing
+    contract (`run_harness.py` itself is not edited).
+
+    `battery_fn`/`production_sampling_fn`/`vram_used_bytes_fn` default to the real, live-capable
+    collaborators (`longcontext.run_live_battery`, `sampling_table.production_sampling`,
+    `sweep.read_vram_used_bytes`) -- same "real default, fake injected in tests" pattern this
+    module already uses for `container_controller`/`scratch_server_fn`/`hang_check_fn`; this WP's
+    own tests always inject fakes, so this factory's unit tests never touch a live scratch server
+    or host sysfs.
+
+    A cell whose `battery` does not include `"needle"` (`LONGCONTEXT_BATTERY_ITEM`) defers
+    entirely to `default_cell_runner` -- this runner only OWNS the longcontext-battery cells; any
+    other battery item (`vram`/`timing`/`quality`) gets the WP-1 startup-verification-only
+    disposition, same as before this WP existed.
+
+    **CellOutcome mapping** (brief-pinned, exact strings): the battery completing with no
+    degenerate sample and no `wrong`-verdict `single_needle`/`multi_needle` sample -> `completed`.
+    ANY sample classified `degenerate` anywhere in the battery -> `failed`,
+    `correctness_failure=True`, `reason="degenerate"` (checked FIRST -- garbage generation is the
+    more specific, higher-priority signal). Otherwise, ANY `single_needle`/`multi_needle` sample
+    whose `classifier_verdict == "wrong"` (a coherent-but-incorrect literal-recall miss --
+    deliberately NOT `truncated(benign)`, which `classify_trial`'s own docstring says is not
+    degeneracy evidence, and deliberately scoped to the two NIAH-style needle tasks, not
+    `passage_qa`'s NoLiMa-class non-literal recall -- this module's own interpretive call, see the
+    WP-2 report) -> `failed`, `correctness_failure=True`, `reason="needle_failure"`. Neither, but
+    some sample's `success` is `False` (a transport/HTTP failure) -> `failed`,
+    `correctness_failure=False`, `reason="transport_error"`. Both of these exact reason strings
+    are `CORRECTNESS_FAILURE_REASONS` above -- `propagate_skips` (WP-1, unmodified) keys off
+    `correctness_failure`, not the reason string itself, but the string is kept in that pinned
+    vocabulary for a downstream reader (verify_run.py, WP-4) to match against.
+
+    Health/verification failure (`not handle.healthy` / `not handle.verified`) is checked FIRST,
+    before the battery ever runs -- `failed`, `correctness_failure=False`, matching
+    `default_cell_runner`'s existing health-gate behavior exactly (never sends a single request to
+    an unhealthy/unverified server).
+    """
+    battery_fn = battery_fn or longcontext.run_live_battery
+    production_sampling_fn = production_sampling_fn or sampling_table.production_sampling
+    vram_used_bytes_fn = vram_used_bytes_fn or sweep.read_vram_used_bytes
+
+    def _runner(handle: "sweep.ScratchServerHandle", cell: Dict[str, Any]) -> CellOutcome:
+        if not handle.healthy:
+            return CellOutcome("failed", "health_timeout", False, {"startup_details": handle.details})
+        if not handle.verified:
+            return CellOutcome("failed", "invalid_config", False, {"startup_details": handle.details})
+
+        if LONGCONTEXT_BATTERY_ITEM not in (cell.get("battery") or []):
+            return default_cell_runner(handle, cell)
+
+        sampling_arm = cell.get("_sampling_arm")
+        if sampling_arm not in ("capability", "production"):
+            return CellOutcome(
+                "failed", "invalid_sampling_arm", False, {"sampling_arm": sampling_arm},
+            )
+        trials = cell.get("_trials") or longcontext.MIN_TRIALS_FOR_WILSON
+        context = cell["server_flags"]["-c"]
+        # Leaves headroom for the question/completion budget under the server's own `-c` ceiling
+        # -- the same established fraction `run_harness.needle_probe`'s "near_ceiling" size uses,
+        # reused here rather than reimplemented (module docstring: "never a substitute", same
+        # spirit).
+        target_tokens = max(1, int(context * run_harness.NEEDLE_NEAR_CEILING_FRACTION))
+        family = cell.get("model_family")
+
+        effective_arm = sampling_arm
+        fallback_reason: Optional[str] = None
+        if sampling_arm == "production":
+            try:
+                preset = production_sampling_fn(family)
+            except sampling_table.MissingProductionSamplingError as exc:
+                effective_arm = "capability"
+                fallback_reason = str(exc)
+                preset = run_harness.SAMPLING_ARM_CAPABILITY
+        else:
+            preset = run_harness.SAMPLING_ARM_CAPABILITY
+
+        # Per-trial seed is `longcontext.run_cell`'s own `derive_trial_seed` schedule (established
+        # invariant) -- this placeholder seed is always overwritten before any request goes out.
+        sampling_payload = run_harness.sampling_arm_payload(preset, seed=0)
+
+        try:
+            battery_results = battery_fn(
+                handle.base_url, cell["alias"], cell["cell_id"], target_tokens,
+                effective_arm, sampling_payload, n_trials=trials,
+                max_tokens=max_tokens, timeout=timeout,
+            )
+        except Exception as exc:  # pragma: no cover -- defensive: an unexpected transport/battery
+            # exception never propagates out and aborts the whole queue; it becomes an ordinary
+            # failed-cell disposition, same as a health-timeout.
+            return CellOutcome("failed", "battery_error", False, {"error": str(exc)})
+
+        try:
+            vram_after_bytes = vram_used_bytes_fn()
+        except OSError:
+            vram_after_bytes = None
+
+        all_samples = [
+            sample
+            for per_position in battery_results.values()
+            for cell_result in per_position.values()
+            for sample in cell_result.samples
+        ]
+        has_degenerate = any(s.get("classifier_verdict") == "degenerate" for s in all_samples)
+        has_needle_failure = any(
+            s.get("classifier_verdict") == "wrong"
+            for task_name, per_position in battery_results.items()
+            if task_name in ("single_needle", "multi_needle")
+            for cell_result in per_position.values()
+            for s in cell_result.samples
+        )
+        has_transport_failure = any(s.get("success") is False for s in all_samples)
+
+        summaries = {
+            f"{task_name}@{position_fraction:.2f}": cell_result.summary
+            for task_name, per_position in battery_results.items()
+            for position_fraction, cell_result in per_position.items()
+        }
+        detail = {
+            "sampling_arm_requested": sampling_arm,
+            "sampling_arm_effective": effective_arm,
+            "production_sampling_fallback_reason": fallback_reason,
+            "model_family": family,
+            "target_tokens": target_tokens,
+            "vram_before_bytes": handle.vram_before_bytes,
+            "vram_after_bytes": vram_after_bytes,
+            "sample_count": len(all_samples),
+            "summaries": summaries,
+        }
+
+        if has_degenerate:
+            return CellOutcome("failed", "degenerate", True, detail)
+        if has_needle_failure:
+            return CellOutcome("failed", "needle_failure", True, detail)
+        if has_transport_failure:
+            return CellOutcome("failed", "transport_error", False, detail)
+        return CellOutcome("completed", None, False, detail)
+
+    return _runner
+
+
 def _execute_cell(
     cell: Dict[str, Any],
     cell_runner: Callable[["sweep.ScratchServerHandle", Dict[str, Any]], CellOutcome],
@@ -719,6 +904,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             vram_profile=args.vram_profile,
             dry_run=args.dry_run,
             re_arm=args.re_arm,
+            # WP-2: the real CLI-driven path always runs the longcontext-aware cell runner (it
+            # defers to `default_cell_runner` per-cell for anything not a `"needle"`-battery
+            # cell -- see `make_longcontext_cell_runner`'s docstring). `run_queue`'s own internal
+            # default stays `default_cell_runner` -- untouched -- so every direct `run_queue(...)`
+            # caller (including this WP's and WP-1's own tests) that doesn't pass `cell_runner=`
+            # is unaffected.
+            cell_runner=make_longcontext_cell_runner(),
             container_controller=controller,
             port=args.port,
             container=args.container,

@@ -929,6 +929,87 @@ def run_position_sweep(
 
 
 # ---------------------------------------------------------------------------------------------
+# Live entry point (plan `longcontext-pow2-overnight-campaign.md`, WP-2). Wires the battery above
+# (untouched -- `run_cell`/`run_position_sweep`/`classify_trial`/passage selection all unchanged)
+# to a real scratch server via `run_harness._execute_streaming_request`, the same call shape this
+# module's own `run_cell` docstring already documented as the intended live wiring (that docstring
+# example is now made real here instead of only prose). Never invoked by this module's own test
+# suite's DEFAULT collaborators -- `run_live_battery`'s `request_fn` parameter is always injected
+# by this WP's own tests (same "real default, fake in tests" pattern `sweep.py`/`batch.py` use for
+# `scratch_server_fn`/`container_controller`), so no test here ever opens a socket.
+# ---------------------------------------------------------------------------------------------
+
+
+def build_live_request_fn(base_url: str, alias: str, timeout: float = 300) -> RequestFn:
+    """Builds a `RequestFn` (this module's `run_cell`/`run_position_sweep` contract) bound to one
+    live scratch server (`base_url`) and `alias`, via `run_harness._execute_streaming_request`.
+    A thin closure only -- no battery logic lives here. Calling the RETURNED function performs a
+    real HTTP request; calling THIS function does not (building the closure is pure)."""
+
+    def request_fn(prompt: str, max_tokens: int, sampling: Dict[str, Any]) -> Dict[str, Any]:
+        return run_harness._execute_streaming_request(
+            base_url,
+            alias,
+            [{"role": "user", "content": prompt}],
+            max_tokens,
+            timeout=timeout,
+            temperature=sampling.get("temperature"),
+            top_p=sampling.get("top_p"),
+            top_k=sampling.get("top_k"),
+            seed=sampling.get("seed"),
+        )
+
+    return request_fn
+
+
+def run_live_battery(
+    base_url: str,
+    alias: str,
+    cell_id_prefix: str,
+    target_tokens: int,
+    sampling_arm: str,
+    sampling_payload: Dict[str, Any],
+    n_trials: int = MIN_TRIALS_FOR_WILSON,
+    tasks: Optional[Dict[str, Task]] = None,
+    positions: Sequence[float] = POSITION_FRACTIONS,
+    max_tokens: int = 256,
+    timeout: float = 300,
+    manifest: Optional[Dict[str, Any]] = None,
+    request_fn: Optional[RequestFn] = None,
+) -> Dict[str, Dict[float, CellResult]]:
+    """The live entry point: drives the FULL battery -- every task in `tasks` (default `TASKS`,
+    all three battery tasks) x every position in `positions` (default `POSITION_FRACTIONS`) x
+    `n_trials` -- against one live scratch server, matching the plan's "position sweep x tasks x
+    trials per the existing cell contract" (Key Changes, WP-2). Battery logic itself
+    (`run_cell`/`run_position_sweep`) is completely untouched; this function's only job is
+    building the live request_fn once (`build_live_request_fn`) and driving it across the task
+    set -- every `usage.prompt_tokens` read-back and every schema-v2 field is `run_cell`'s own
+    existing, unmodified behavior.
+
+    `request_fn`, if given, OVERRIDES the live request_fn entirely (this WP's own tests always
+    supply one -- a fixture-returning stub, never real -- to exercise this function's task/
+    position loop and its returned shape without a network call; the real live default is built
+    from `base_url`/`alias`/`timeout` via `build_live_request_fn` exactly as an orchestrator would
+    call this live).
+
+    Returns `{task_name: {position_fraction: CellResult}}` -- never merges/averages across task
+    or position (Req 5, inherited unchanged from `run_position_sweep`); a caller wanting one
+    pass/fail number per cell is doing something this function deliberately does not do (see
+    `batch.make_longcontext_cell_runner` for how ONE `CellOutcome` is derived from this shape).
+    """
+    effective_request_fn = request_fn or build_live_request_fn(base_url, alias, timeout=timeout)
+    tasks = tasks or TASKS
+    results: Dict[str, Dict[float, CellResult]] = {}
+    for task_name, task in tasks.items():
+        results[task_name] = run_position_sweep(
+            effective_request_fn, task, f"{cell_id_prefix}-{task_name}", target_tokens,
+            sampling_arm, sampling_payload, positions=positions, n_trials=n_trials,
+            max_tokens=max_tokens, manifest=manifest,
+        )
+    return results
+
+
+# ---------------------------------------------------------------------------------------------
 # CLI (offline only -- touches no Docker/network/GPU, matching sweep.py's --dry-run convention)
 # ---------------------------------------------------------------------------------------------
 

@@ -106,7 +106,9 @@ class TestRunCellSchemaV2Fields(unittest.TestCase):
         self.assertEqual(len(result.samples), 3)
         for sample in result.samples:
             self.assertEqual(sample["schema_version"], 2)
-            self.assertEqual(sample["corpus_manifest_id"], "gutenberg-longcontext-haystack-v1")
+            # v2 since lc-pow2 WP-3 made gutenberg-longcontext-haystack-v2 the default manifest
+            # (v1 stays on disk as corpus/manifest-v1.json for reproducing old records).
+            self.assertEqual(sample["corpus_manifest_id"], "gutenberg-longcontext-haystack-v2")
             self.assertIn("haystack_sha256", sample)
             self.assertIsNotNone(sample["haystack_sha256"])
             self.assertIn("classifier_verdict", sample)

@@ -125,16 +125,41 @@ def _select_contiguous_passages(
     rng: random.Random,
 ) -> Tuple[str, Tuple[str, ...]]:
     """Core, disk-free chunk-selection algorithm (separated from `assemble_haystack` so it's
-    directly unit-testable against small synthetic texts, without needing the real ~1-6 MiB
-    corpus files on disk for every test).
+    directly unit-testable against small synthetic texts, without needing the real corpus files
+    on disk for every test).
 
     Cycles through `book_order` (already seeded/shuffled by the caller), taking one contiguous,
     randomly-positioned passage per book per pass, until the concatenated (`"\\n\\n"`-joined)
-    text reaches `target_chars`. For every real corpus book and realistic sweep target (up to
-    the near-ceiling 0.85 * 65536-token band), a single book's ~300K-900K chars covers the
-    target in ONE pass -- multi-book concatenation only engages for a target larger than the
-    largest single book, exercised directly by this function's own unit tests against a tiny
-    synthetic corpus, not by the real corpus in normal use.
+    text reaches `target_chars`. Documented band: realistic sweep targets up to and including
+    the 512k-token-equivalent regime (tested directly against on-disk corpus schema v2 --
+    `gutenberg-longcontext-haystack-v2`, 12 books / ~8.08M chars) rest on that corpus's size --
+    a 524288-token haystack consumes <35% of it at `run_harness.CHARS_PER_TOKEN_ESTIMATE`'s
+    sizing estimate, so book start offsets stay genuinely random rather than collapsing near-
+    deterministic the way they did against the old, smaller corpus at that target (see the
+    fair-share paragraph below). Whenever a SINGLE book can satisfy the whole remaining need on
+    its own (`len(text) >= remaining_needed`), it does -- one book, one randomized offset, done
+    in one pass; against corpus v2 this is still the common case for small-to-mid targets, and
+    remains available at 512k too (a large single book can still cover the target alone,
+    depending on shuffle order and target size).
+
+    When no single book can finish the target alone, multi-book concatenation engages. Each
+    pass's bite is capped to a FAIR SHARE of what's still needed --
+    `ceil(remaining_needed / books_left_this_lap)`, recomputed every pass over the books not yet
+    visited in the current lap through `book_order` -- rather than greedily grabbing as much as
+    the book allows. This is the audit-M1 fix for the whole-book zero-offset re-emission bug:
+    the old greedy `take = min(remaining_needed, len(text))` strategy front-loaded whole-book,
+    offset-forced-to-zero takes into however many books of `book_order` the greedy walk needed
+    to reach `target_chars`, so most books in a multi-book haystack degenerated to the SAME
+    whole-book text every time regardless of seed (only the walk's final, leftover book ever got
+    a randomized offset) -- exactly what made book-order shuffling alone, not real passage-
+    content variation, responsible for cross-seed digest differences at the 512k target against
+    the old (pre-v2, ~2.72M-char) corpus, where a haystack consumed ~85% of it. With a fair-share
+    cap, a book still degrades gracefully to a deterministic whole-book take (offset forced to
+    0 -- there is no unused content left to vary) exactly when the book is itself SHORTER than
+    its fair share; every book long enough to exceed its slice keeps a genuinely `rng`-drawn
+    start offset. Multiple laps through `book_order` (each recomputing the fair share over the
+    books not yet visited THAT lap) make up any shortfall left by short books, up to `max_passes`
+    below.
     """
     if target_chars <= 0 or not book_order:
         return "", ()
@@ -144,13 +169,27 @@ def _select_contiguous_passages(
     pass_num = 0
     # Guards against an unreachable target (e.g. every book exhausted at zero remaining length)
     # looping forever -- 50 full cycles through the book order is far more than any realistic
-    # corpus/target combination needs (see docstring above: one pass normally suffices).
+    # corpus/target combination needs (see docstring above: one pass normally suffices for a
+    # single-book-covers-it target, and corpus v2 is sized so multi-book targets finish within a
+    # small number of laps).
     max_passes = len(book_order) * 50
     while total < target_chars and pass_num < max_passes:
         book_id = book_order[pass_num % len(book_order)]
         text = book_texts[book_id]
         remaining_needed = target_chars - total
-        take = min(remaining_needed, len(text))
+        if len(text) >= remaining_needed:
+            # This book alone can finish the target -- take exactly what's needed (the common,
+            # single-pass case for a realistic target against the real corpus).
+            take = remaining_needed
+        else:
+            # This book can't finish the target alone; multi-book concatenation is unavoidable
+            # regardless of how much of THIS book we take now, so don't front-load a whole-book
+            # take just because this book happens to be early in the (seeded) shuffle order --
+            # cap this pass's bite to a fair share of what's left, spread over the books not yet
+            # visited in the current lap (audit M1 fix -- see docstring).
+            books_left_this_lap = len(book_order) - (pass_num % len(book_order))
+            fair_share = -(-remaining_needed // books_left_this_lap)  # ceil division
+            take = min(len(text), fair_share)
         if take <= 0:
             pass_num += 1
             continue

@@ -1,6 +1,6 @@
 {
-  "corpus_id": "gutenberg-longcontext-haystack-v1",
-  "description": "Coherent public-domain prose haystack corpus for llama/bakeoff/longcontext.py (plans/quant-sweep-harness-and-instrument-v2.md WP-3). Replaces the uniform-random word-soup haystack (run_harness.py:_build_filler_text, retained as a timing-only fixture) for every correctness-scored long-context trial.",
+  "corpus_id": "gutenberg-longcontext-haystack-v2",
+  "description": "Coherent public-domain prose haystack corpus for llama/bakeoff/longcontext.py (plans/longcontext-pow2-overnight-campaign.md WP-3, extending plans/quant-sweep-harness-and-instrument-v2.md WP-3's original 5-book v1 corpus). Replaces the uniform-random word-soup haystack (run_harness.py:_build_filler_text, retained as a timing-only fixture) for every correctness-scored long-context trial. v1 (5 books, ~2.72M chars, corpus_id gutenberg-longcontext-haystack-v1) is preserved byte-for-byte in manifest-v1.json so records produced under it stay reproducible; v2 adds 7 more books (~5.36M chars) so a 512k-token-equivalent haystack consumes <35% of the corpus and per-book start offsets stay genuinely randomized across seeds (plan audit M1).",
   "fetched": "2026-08-23",
   "source": "Project Gutenberg (https://www.gutenberg.org)",
   "books": [
@@ -68,6 +68,104 @@
       "license_note": "Public domain (pre-1929 US publication / Project Gutenberg public-domain release). Distributed text carries the Project Gutenberg License (https://www.gutenberg.org/policy/license.html); this file is the stripped literary text only -- the Gutenberg header/footer boilerplate (license terms, eBook metadata banner) has been removed, per this WP's corpus-provenance requirement.",
       "char_count": 282858,
       "file_size_bytes": 283648
+    },
+    {
+      "id": "moby-dick",
+      "title": "Moby Dick; Or, The Whale",
+      "author": "Herman Melville",
+      "domain": "fiction",
+      "source_url": "https://www.gutenberg.org/cache/epub/2701/pg2701.txt",
+      "gutenberg_id": 2701,
+      "file": "moby-dick.txt",
+      "sha256": "1c4a88c718dcb3512267d55e92be1871ec62b52406aa278555675d1cd09490d4",
+      "license_note": "Public domain (pre-1929 US publication / Project Gutenberg public-domain release). Distributed text carries the Project Gutenberg License (https://www.gutenberg.org/policy/license.html); this file is the stripped literary text only -- the Gutenberg header/footer boilerplate (license terms, eBook metadata banner) has been removed, per this WP's corpus-provenance requirement.",
+      "char_count": 1219147,
+      "file_size_bytes": 1234713,
+      "fetched": "2026-08-23"
+    },
+    {
+      "id": "the-republic",
+      "title": "The Republic",
+      "author": "Plato (trans. Benjamin Jowett)",
+      "domain": "philosophy",
+      "source_url": "https://www.gutenberg.org/cache/epub/1497/pg1497.txt",
+      "gutenberg_id": 1497,
+      "file": "the-republic.txt",
+      "sha256": "6546bba4f31bc3e12996631e08bda39ee0486f5d8e6625c4e120ed87e7aface6",
+      "license_note": "Public domain (pre-1929 US publication / Project Gutenberg public-domain release). Distributed text carries the Project Gutenberg License (https://www.gutenberg.org/policy/license.html); this file is the stripped literary text only -- the Gutenberg header/footer boilerplate (license terms, eBook metadata banner) has been removed, per this WP's corpus-provenance requirement.",
+      "char_count": 1194655,
+      "file_size_bytes": 1200051,
+      "fetched": "2026-08-23"
+    },
+    {
+      "id": "a-tale-of-two-cities",
+      "title": "A Tale of Two Cities",
+      "author": "Charles Dickens",
+      "domain": "fiction",
+      "source_url": "https://www.gutenberg.org/cache/epub/98/pg98.txt",
+      "gutenberg_id": 98,
+      "file": "a-tale-of-two-cities.txt",
+      "sha256": "07bbfb431d5abdbad93560c263701c5c1f8241c0ec1c877eda6510f8d195ec40",
+      "license_note": "Public domain (pre-1929 US publication / Project Gutenberg public-domain release). Distributed text carries the Project Gutenberg License (https://www.gutenberg.org/policy/license.html); this file is the stripped literary text only -- the Gutenberg header/footer boilerplate (license terms, eBook metadata banner) has been removed, per this WP's corpus-provenance requirement.",
+      "char_count": 757807,
+      "file_size_bytes": 771705,
+      "fetched": "2026-08-23"
+    },
+    {
+      "id": "walden",
+      "title": "Walden, and On The Duty Of Civil Disobedience",
+      "author": "Henry David Thoreau",
+      "domain": "nature / philosophy",
+      "source_url": "https://www.gutenberg.org/cache/epub/205/pg205.txt",
+      "gutenberg_id": 205,
+      "file": "walden.txt",
+      "sha256": "56505282f4b45573492b0cb4da71c4f478e23f9d14cb8922375f12a59ed5d6a8",
+      "license_note": "Public domain (pre-1929 US publication / Project Gutenberg public-domain release). Distributed text carries the Project Gutenberg License (https://www.gutenberg.org/policy/license.html); this file is the stripped literary text only -- the Gutenberg header/footer boilerplate (license terms, eBook metadata banner) has been removed, per this WP's corpus-provenance requirement.",
+      "char_count": 635019,
+      "file_size_bytes": 638070,
+      "fetched": "2026-08-23"
+    },
+    {
+      "id": "frankenstein",
+      "title": "Frankenstein; Or, The Modern Prometheus",
+      "author": "Mary Wollstonecraft Shelley",
+      "domain": "fiction",
+      "source_url": "https://www.gutenberg.org/cache/epub/84/pg84.txt",
+      "gutenberg_id": 84,
+      "file": "frankenstein.txt",
+      "sha256": "25ef9cdda3d4d5569aed04f5be684cdb536f8d6e8d31f3a5018dcf23f780b0d2",
+      "license_note": "Public domain (pre-1929 US publication / Project Gutenberg public-domain release). Distributed text carries the Project Gutenberg License (https://www.gutenberg.org/policy/license.html); this file is the stripped literary text only -- the Gutenberg header/footer boilerplate (license terms, eBook metadata banner) has been removed, per this WP's corpus-provenance requirement.",
+      "char_count": 419570,
+      "file_size_bytes": 421769,
+      "fetched": "2026-08-23"
+    },
+    {
+      "id": "huckleberry-finn",
+      "title": "Adventures of Huckleberry Finn",
+      "author": "Mark Twain",
+      "domain": "fiction",
+      "source_url": "https://www.gutenberg.org/cache/epub/76/pg76.txt",
+      "gutenberg_id": 76,
+      "file": "huckleberry-finn.txt",
+      "sha256": "c8bcad1ecfd15e0ec47ef20b2fc5b750c5a08fc640fed1bbd627ef901a85c53f",
+      "license_note": "Public domain (pre-1929 US publication / Project Gutenberg public-domain release). Distributed text carries the Project Gutenberg License (https://www.gutenberg.org/policy/license.html); this file is the stripped literary text only -- the Gutenberg header/footer boilerplate (license terms, eBook metadata banner) has been removed, per this WP's corpus-provenance requirement.",
+      "char_count": 571260,
+      "file_size_bytes": 590864,
+      "fetched": "2026-08-23"
+    },
+    {
+      "id": "sherlock-holmes",
+      "title": "The Adventures of Sherlock Holmes",
+      "author": "Arthur Conan Doyle",
+      "domain": "fiction",
+      "source_url": "https://www.gutenberg.org/cache/epub/1661/pg1661.txt",
+      "gutenberg_id": 1661,
+      "file": "sherlock-holmes.txt",
+      "sha256": "e25508e4e4f56c002f49238533890274a0d10da2b6322347350d4394e2d4c7eb",
+      "license_note": "Public domain (pre-1929 US publication / Project Gutenberg public-domain release). Distributed text carries the Project Gutenberg License (https://www.gutenberg.org/policy/license.html); this file is the stripped literary text only -- the Gutenberg header/footer boilerplate (license terms, eBook metadata banner) has been removed, per this WP's corpus-provenance requirement.",
+      "char_count": 562423,
+      "file_size_bytes": 576014,
+      "fetched": "2026-08-23"
     }
   ]
 }

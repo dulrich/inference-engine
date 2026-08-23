@@ -729,27 +729,46 @@ way around.
 
 ### Corpus (`corpus/`)
 
-5 public-domain Project Gutenberg books across 5 distinct domains, plain text, Gutenberg
+12 public-domain Project Gutenberg books across 6 distinct domains, plain text, Gutenberg
 header/footer boilerplate stripped, each prefixed with a one-line provenance note (also works
 around a libmagic false-positive in some environments where a file's first three bytes being
-literally `MED` gets misidentified as an Amiga tracker module — verified live during this WP;
-applied uniformly to all five books rather than special-casing the one that needed it):
+literally `MED` gets misidentified as an Amiga tracker module — verified live during the
+original 5-book WP; applied uniformly to all twelve books rather than special-casing the one
+that needed it):
 
-| id | title | author | domain |
-| --- | --- | --- | --- |
-| `pride-and-prejudice` | Pride and Prejudice | Jane Austen | fiction |
-| `origin-of-species` | On the Origin of Species... | Charles Darwin | natural science |
-| `franklin-autobiography` | The Autobiography of Benjamin Franklin | Benjamin Franklin | history / memoir |
-| `meditations` | Meditations | Marcus Aurelius | philosophy |
-| `the-prince` | The Prince | Niccolo Machiavelli | political philosophy |
+| id | title | author | domain | corpus |
+| --- | --- | --- | --- | --- |
+| `pride-and-prejudice` | Pride and Prejudice | Jane Austen | fiction | v1+v2 |
+| `origin-of-species` | On the Origin of Species... | Charles Darwin | natural science | v1+v2 |
+| `franklin-autobiography` | The Autobiography of Benjamin Franklin | Benjamin Franklin | history / memoir | v1+v2 |
+| `meditations` | Meditations | Marcus Aurelius | philosophy | v1+v2 |
+| `the-prince` | The Prince | Niccolo Machiavelli | political philosophy | v1+v2 |
+| `moby-dick` | Moby Dick; Or, The Whale | Herman Melville | fiction | v2 only |
+| `the-republic` | The Republic | Plato (trans. Benjamin Jowett) | philosophy | v2 only |
+| `a-tale-of-two-cities` | A Tale of Two Cities | Charles Dickens | fiction | v2 only |
+| `walden` | Walden, and On The Duty Of Civil Disobedience | Henry David Thoreau | nature / philosophy | v2 only |
+| `frankenstein` | Frankenstein; Or, The Modern Prometheus | Mary Wollstonecraft Shelley | fiction | v2 only |
+| `huckleberry-finn` | Adventures of Huckleberry Finn | Mark Twain | fiction | v2 only |
+| `sherlock-holmes` | The Adventures of Sherlock Holmes | Arthur Conan Doyle | fiction | v2 only |
 
-`corpus/manifest.json`: `corpus_id` (`"gutenberg-longcontext-haystack-v1"` — this is the value
-every emitted sample's `corpus_manifest_id` field carries) plus, per book, `{id, title, author,
-domain, source_url, gutenberg_id, file, sha256, license_note, char_count, file_size_bytes}`. All
-five books are public domain (pre-1929 US publication); the distributed Gutenberg text itself
-carries the Project Gutenberg License (gutenberg.org/policy/license.html) — `license_note`
-restates this per book. Total committed size ≈2.6 MiB, inside the plan's 8 MiB cap
-(`du -sb llama/bakeoff/corpus/`).
+Two manifests, two `corpus_id`s (`plans/longcontext-pow2-overnight-campaign.md` WP-3 —
+append-only extension, never a rename of v1): **v1** (`gutenberg-longcontext-haystack-v1`,
+`corpus/manifest-v1.json`, the 5 `v1+v2`-marked books above, ~2.72M chars) is frozen
+byte-for-byte so records produced under it stay reproducible, and is never the default manifest
+again. **v2** (`gutenberg-longcontext-haystack-v2`, `corpus/manifest.json`) is now
+`load_corpus_manifest()`'s default (and the battery's) — all 12 books above, ~8.08M chars, total
+corpus directory ≈7.8 MiB (`du -sb llama/bakeoff/corpus/`), inside the plan's 8 MiB cap
+(`tests/test_corpus.py` asserts this against the default manifest's book list). v2 exists
+because a 512k-token-equivalent haystack against v1 consumed ~85% of the corpus, collapsing
+per-book start offsets to near-zero-variance across seeds; against v2 the same target consumes
+<35% (audit M1 — see "Haystack assembly" below).
+
+`corpus/manifest.json`: `corpus_id` (this is the value every emitted sample's
+`corpus_manifest_id` field carries) plus, per book, `{id, title, author, domain, source_url,
+gutenberg_id, file, sha256, license_note, char_count, file_size_bytes}` (the 7 books added for
+v2 also carry `fetched`, their fetch date). All twelve books are public domain (pre-1929 US
+publication); the distributed Gutenberg text itself carries the Project Gutenberg License
+(gutenberg.org/policy/license.html) — `license_note` restates this per book.
 
 **Refresh note**: `sha256`/`char_count` are computed AFTER stripping — recomputing them against
 the committed files must reproduce `manifest.json` exactly (`tests/test_corpus.py` asserts
@@ -769,10 +788,30 @@ contiguous, randomly-positioned passage per book per pass, concatenated with `"\
 assembled text reaches `target_tokens * chars_per_token` (default
 `run_harness.CHARS_PER_TOKEN_ESTIMATE`) characters — a sizing TARGET only; the real on-wire
 token count always comes back from the server's own `usage.prompt_tokens`, exactly like
-`_build_filler_text`. For every realistic sweep target (up through the near-ceiling 0.85 *
-65536-token band), a single corpus book covers it in one pass; multi-book concatenation is
-implemented and unit-tested (`tests/test_haystack.py`) but only engages for a target larger than
-the largest single book.
+`_build_filler_text`.
+
+**Documented band: realistic sweep targets up to and including the 512k-token-equivalent
+(524288-token) regime, tested directly against corpus v2** (`tests/test_haystack.py`'s
+`TestHaystack512kRegime`, against the real on-disk corpus — no synthetic stand-in). Whenever a
+single book can satisfy the whole remaining need on its own, it does: one book, one randomized
+offset, one pass — still the common case at small-to-mid targets against v2, and still available
+at 512k depending on shuffle order and target size. When no single book can (multi-book
+concatenation), each pass's bite is capped to a FAIR SHARE of what's left
+(`ceil(remaining_needed / books_left_this_lap)`, recomputed every pass over the books not yet
+visited in the current lap) rather than greedily draining whichever book comes first in the
+shuffle order — the audit-M1 fix for the pre-v2 whole-book, zero-offset re-emission bug. The old
+greedy strategy front-loaded entire books (offset forced to 0 -- no unused content left to vary)
+into however many books it took to reach the target, so at the 512k target against the old
+~2.72M-char v1 corpus (a haystack there consumed ~85% of it), all but the walk's last book
+degenerated to identical whole-book content on every seed, and cross-seed `haystack_sha256`
+differences came entirely from book-order shuffling, never real passage-content variation
+(seeded book-order shuffling alone already made the digest differ across seeds on the unmodified
+code — a digest-inequality test alone passes vacuously). With the fair-share cap, a book still
+degrades gracefully to a deterministic whole-book, offset-0 take exactly when it's shorter than
+its fair share (still no unused content to vary); every book long enough to exceed its slice
+keeps a genuinely `rng`-drawn start offset. Multi-book concatenation is exercised both by
+`tests/test_haystack.py`'s synthetic-corpus unit tests (tight boundary cases) and by the real
+corpus v2 at the 512k regime.
 
 `insert_at_fraction`/`insert_multiple` snap injection points to the next sentence boundary
 (matching `needle_probe`'s existing `". "`-boundary convention). `insert_multiple` requires

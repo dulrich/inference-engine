@@ -1,24 +1,47 @@
 <script lang="ts">
   import { Activity } from "lucide-svelte";
-  import { AppHeader } from "@fleet-tools/signalworks";
-  import { getExperiments, getHealth } from "./api.ts";
-  import type { ExperimentSummary, HealthResponse } from "@bench-dashboard/shared";
+  import { AppHeader, PollControl } from "@fleet-tools/signalworks";
+  import type { ExperimentSummary } from "@bench-dashboard/shared";
+  import { getExperiments } from "./api.ts";
+  import { guardedNavClick, parsePath, runDetailPath, tabToPath, type Tab } from "./routes.ts";
+  import Runs from "./views/Runs.svelte";
+  import Ladders from "./views/Ladders.svelte";
+  import LongContext from "./views/LongContext.svelte";
+  import Fit from "./views/Fit.svelte";
+  import Serving from "./views/Serving.svelte";
 
-  // WP-1 stub (brief's File scope pin): proves API wiring with a health + experiment-count
-  // readout. WP-2 replaces this body with the real views (Runs/Ladders/Long-context/Fit/
-  // Serving) on top of the API this WP already ships in full.
+  // WP-2: the five real views (Runs/Ladders/Long-context/Fit/Serving) on top of the full
+  // API WP-1 already ships. `experiments` is fetched ONCE here (App owns it, same shape as
+  // model_scoreboard's App.svelte owning `catalog`) and passed down -- every view that needs
+  // more (a ladder, a curve, a detail, the serving join) fetches that itself, keyed on
+  // `refreshToken` so a poll tick or manual refresh re-pulls it too.
 
-  let health = $state<HealthResponse | null>(null);
+  const NAV_TABS: { tab: Tab; label: string }[] = [
+    { tab: "runs", label: "Runs" },
+    { tab: "ladders", label: "Ladders" },
+    { tab: "longcontext", label: "Long-context" },
+    { tab: "fit", label: "Fit" },
+    { tab: "serving", label: "Serving" },
+  ];
+
+  let activeTab = $state<Tab>("runs");
+  // Only meaningful while activeTab === "runs" (routes.ts `/runs/:id`): Runs renders a
+  // drill-down page when this is set, its list otherwise.
+  let activeRunId = $state<string | undefined>(undefined);
+
   let experiments = $state<ExperimentSummary[]>([]);
-  let error = $state("");
   let loading = $state(true);
+  let error = $state("");
+  // Bumped on every successful refresh -- the one-way signal every view's own independent
+  // fetch (ladders/curves/serving/fit-detail) re-pulls on, same `refreshToken` shape
+  // `model_scoreboard`'s Analysis/Feed views use against their own PollControl.
+  let refreshToken = $state(0);
 
   async function refresh() {
     error = "";
     try {
-      const [nextHealth, nextExperiments] = await Promise.all([getHealth(), getExperiments()]);
-      health = nextHealth;
-      experiments = nextExperiments;
+      experiments = await getExperiments();
+      refreshToken += 1;
     } catch (e) {
       error = e instanceof Error ? e.message : "Unable to reach the dashboard API";
     } finally {
@@ -26,60 +49,62 @@
     }
   }
 
+  function goToTab(tab: Tab) {
+    activeTab = tab;
+    if (tab === "runs") activeRunId = undefined;
+    history.pushState(null, "", tabToPath(tab));
+  }
+
+  function goToRun(id: string) {
+    activeRunId = id;
+    activeTab = "runs";
+    history.pushState(null, "", runDetailPath(id));
+  }
+
+  function backToRuns() {
+    activeRunId = undefined;
+    history.pushState(null, "", tabToPath("runs"));
+  }
+
+  function applyLocation() {
+    const route = parsePath(location.pathname);
+    activeTab = route.tab;
+    activeRunId = route.tab === "runs" ? route.runId : undefined;
+    if (!route.matched) history.replaceState(null, "", "/");
+  }
+
+  applyLocation();
   refresh();
 </script>
 
-<AppHeader tool="Bench Dashboard" icon={Activity} appId="bench-dashboard" />
+<svelte:window onpopstate={applyLocation} />
 
-<main class="page">
-  <h1>Bench Dashboard</h1>
-  <p class="lede">
-    Bake-off measurement records (<code>runs/bakeoff/</code>), served over
-    <code>127.0.0.1:4810</code>. Views land in WP-2 — this is the WP-1 wiring stub.
-  </p>
+<AppHeader tool="Bench Dashboard" icon={Activity} appId="bench-dashboard">
+  <nav class="sw-nav" slot="nav" aria-label="Bench Dashboard views">
+    {#each NAV_TABS as { tab, label } (tab)}
+      <a
+        href={tabToPath(tab)}
+        class:active={activeTab === tab}
+        aria-current={activeTab === tab ? "page" : undefined}
+        onclick={(event) => guardedNavClick(event, () => goToTab(tab))}
+      >
+        {label}
+      </a>
+    {/each}
+  </nav>
+  <PollControl slot="poll" storageKey="bench-dashboard.poll.v1" defaultMs={0} busy={loading} onTick={refresh} />
+</AppHeader>
 
-  {#if loading}
-    <p>Loading…</p>
-  {:else if error}
-    <p class="error">{error}</p>
+<main class="page wide">
+  {#if activeTab === "runs"}
+    <Runs {experiments} {loading} {error} runId={activeRunId} {refreshToken} onopenrun={goToRun} onback={backToRuns} />
+  {:else if activeTab === "ladders"}
+    <Ladders {experiments} {loading} {error} {refreshToken} />
+  {:else if activeTab === "longcontext"}
+    <LongContext {experiments} {loading} {error} {refreshToken} />
+  {:else if activeTab === "fit"}
+    <Fit {experiments} {loading} {error} {refreshToken} />
   {:else}
-    <div class="stat-row">
-      <div class="stat">
-        <span class="stat-label">API health</span>
-        <span class="stat-value">{health?.status ?? "unknown"}</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">Ingested experiments</span>
-        <span class="stat-value">{experiments.length}</span>
-      </div>
-    </div>
+    <Serving {experiments} {loading} {error} {refreshToken} onopenrun={goToRun} />
   {/if}
 </main>
-
-<style>
-  .lede {
-    color: var(--text-muted, var(--text));
-    max-width: 60ch;
-  }
-  .stat-row {
-    display: flex;
-    gap: 24px;
-    margin-top: 16px;
-  }
-  .stat {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .stat-label {
-    font-size: 0.8em;
-    opacity: 0.75;
-  }
-  .stat-value {
-    font-size: 1.6em;
-    font-weight: 600;
-  }
-  .error {
-    color: var(--error-text, var(--error));
-  }
-</style>

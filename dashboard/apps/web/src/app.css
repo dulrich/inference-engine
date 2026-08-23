@@ -1,4 +1,181 @@
 /* Tool-local additions on top of @fleet-tools/signalworks/css (imported first in
- * main.ts). Signalworks' base.css already owns global type/surface/`.page` rules — this
- * file stays deliberately empty for the WP-1 stub (every rule the stub view needs is
- * scoped inside App.svelte's own <style> block); WP-2 grows it alongside the real views. */
+ * main.ts) -- base.css already owns global type/surface/`.page`/`.row`/`.pill`/`.seg-group`
+ * rules (CC-01..CC-20); every rule below is layout/namespacing only, in `var(--…)` tokens
+ * where color is involved (CC-01), scoped to a class (never a bare button/a/select/input/
+ * textarea -- CC-15) so it can never fight a package-owned control's geometry.
+ *
+ * WP-2 view CSS lives in three namespaced blocks: `.run-*` (shared by every view --
+ * eyebrow ledes, empty/error states, the one table shape, the Runs list/detail), `.ladders-*`
+ * (the model picker field), `.serving-*` (the alias/measured-cell cells). No new CSS custom
+ * properties -- every color is a vendored Signalworks token. */
+
+/* ---- Shared view chrome ------------------------------------------------- */
+
+.run-lede {
+  max-width: 70ch;
+  color: var(--muted);
+}
+
+.run-empty,
+.run-note {
+  max-width: 70ch;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.run-note {
+  margin-top: 10px;
+  padding: 8px 12px;
+  font-size: 0.78rem;
+}
+
+/* ---- Runs: list ---------------------------------------------------------- */
+
+.run-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* `.row` (base.css) already owns the card geometry/hover/color contract (CC-05); this only
+ * adds the left/right split this row's content needs. */
+.run-row {
+  justify-content: space-between;
+  gap: 16px;
+  text-decoration: none;
+}
+
+.run-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.run-row-id {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+.run-row-sub {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-row-meta {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-row-time {
+  color: var(--muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+/* ---- Runs: detail --------------------------------------------------------- */
+
+.back-link {
+  display: inline-flex;
+  margin-bottom: 16px;
+}
+
+.run-description {
+  max-width: 70ch;
+  color: var(--muted);
+}
+
+.run-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px 24px;
+  margin: 16px 0 24px;
+}
+
+.run-wilson {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+
+/* ---- The one table shape, shared by Runs/Ladders/Long-context/Fit/Serving ------------- */
+
+.run-table-wrap {
+  margin-top: 10px;
+  overflow-x: auto;
+}
+
+.run-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.run-table th,
+.run-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.run-table th {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.run-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.run-table th.run-table-num,
+.run-table td.run-table-num {
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
+.run-table-muted {
+  color: var(--muted);
+}
+
+.run-table-flags {
+  overflow: hidden;
+  max-width: 32ch;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Ladders / Long-context: the hf_repo / experiment picker field -------------------- */
+
+.ladders-picker {
+  max-width: 420px;
+  margin: 16px 0;
+}
+
+/* ---- Serving ---------------------------------------------------------------- */
+
+.serving-aliases {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+}
+
+.serving-measured-link {
+  color: var(--accent-text);
+}
+
+.serving-measured-link:hover {
+  text-decoration: underline;
+}

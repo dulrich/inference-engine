@@ -1,0 +1,73 @@
+{
+  "corpus_id": "gutenberg-longcontext-haystack-v1",
+  "description": "Coherent public-domain prose haystack corpus for llama/bakeoff/longcontext.py (plans/quant-sweep-harness-and-instrument-v2.md WP-3). Replaces the uniform-random word-soup haystack (run_harness.py:_build_filler_text, retained as a timing-only fixture) for every correctness-scored long-context trial.",
+  "fetched": "2026-08-23",
+  "source": "Project Gutenberg (https://www.gutenberg.org)",
+  "books": [
+    {
+      "id": "pride-and-prejudice",
+      "title": "Pride and Prejudice",
+      "author": "Jane Austen",
+      "domain": "fiction",
+      "source_url": "https://www.gutenberg.org/cache/epub/1342/pg1342.txt",
+      "gutenberg_id": 1342,
+      "file": "pride-and-prejudice.txt",
+      "sha256": "ab0cc12c633b17e2bb8aea734c1d9c2b70f525e1b59580c49e23f6c24e44be5e",
+      "license_note": "Public domain (pre-1929 US publication / Project Gutenberg public-domain release). Distributed text carries the Project Gutenberg License (https://www.gutenberg.org/policy/license.html); this file is the stripped literary text only -- the Gutenberg header/footer boilerplate (license terms, eBook metadata banner) has been removed, per this WP's corpus-provenance requirement.",
+      "char_count": 728913,
+      "file_size_bytes": 738113
+    },
+    {
+      "id": "origin-of-species",
+      "title": "On the Origin of Species By Means of Natural Selection",
+      "author": "Charles Darwin",
+      "domain": "natural science",
+      "source_url": "https://www.gutenberg.org/cache/epub/1228/pg1228.txt",
+      "gutenberg_id": 1228,
+      "file": "origin-of-species.txt",
+      "sha256": "0626320e1e965c26edc7bac5c3874b82e722569ed7c9d6d19361e68df8a85778",
+      "license_note": "Public domain (pre-1929 US publication / Project Gutenberg public-domain release). Distributed text carries the Project Gutenberg License (https://www.gutenberg.org/policy/license.html); this file is the stripped literary text only -- the Gutenberg header/footer boilerplate (license terms, eBook metadata banner) has been removed, per this WP's corpus-provenance requirement.",
+      "char_count": 933228,
+      "file_size_bytes": 934729
+    },
+    {
+      "id": "franklin-autobiography",
+      "title": "The Autobiography of Benjamin Franklin",
+      "author": "Benjamin Franklin",
+      "domain": "history / memoir",
+      "source_url": "https://www.gutenberg.org/cache/epub/148/pg148.txt",
+      "gutenberg_id": 148,
+      "file": "franklin-autobiography.txt",
+      "sha256": "cdd206c5e426973c5ead76c90941b49a2dbb811b528e2307429c141bf722a40a",
+      "license_note": "Public domain (pre-1929 US publication / Project Gutenberg public-domain release). Distributed text carries the Project Gutenberg License (https://www.gutenberg.org/policy/license.html); this file is the stripped literary text only -- the Gutenberg header/footer boilerplate (license terms, eBook metadata banner) has been removed, per this WP's corpus-provenance requirement.",
+      "char_count": 378824,
+      "file_size_bytes": 378874
+    },
+    {
+      "id": "meditations",
+      "title": "Meditations",
+      "author": "Marcus Aurelius (trans. George Long)",
+      "domain": "philosophy",
+      "source_url": "https://www.gutenberg.org/cache/epub/2680/pg2680.txt",
+      "gutenberg_id": 2680,
+      "file": "meditations.txt",
+      "sha256": "ebc16e663c3ad7a7641840272bdd4b34eede1ccd2bb51580aae7f49cf1374487",
+      "license_note": "Public domain (pre-1929 US publication / Project Gutenberg public-domain release). Distributed text carries the Project Gutenberg License (https://www.gutenberg.org/policy/license.html); this file is the stripped literary text only -- the Gutenberg header/footer boilerplate (license terms, eBook metadata banner) has been removed, per this WP's corpus-provenance requirement.",
+      "char_count": 398418,
+      "file_size_bytes": 398899
+    },
+    {
+      "id": "the-prince",
+      "title": "The Prince",
+      "author": "Niccolo Machiavelli (trans. W. K. Marriott)",
+      "domain": "political philosophy",
+      "source_url": "https://www.gutenberg.org/cache/epub/1232/pg1232.txt",
+      "gutenberg_id": 1232,
+      "file": "the-prince.txt",
+      "sha256": "7463853b3643389f84ac37b79f28a78736ce8ec6cf4169da9b802ac8a0691fd5",
+      "license_note": "Public domain (pre-1929 US publication / Project Gutenberg public-domain release). Distributed text carries the Project Gutenberg License (https://www.gutenberg.org/policy/license.html); this file is the stripped literary text only -- the Gutenberg header/footer boilerplate (license terms, eBook metadata banner) has been removed, per this WP's corpus-provenance requirement.",
+      "char_count": 282858,
+      "file_size_bytes": 283648
+    }
+  ]
+}

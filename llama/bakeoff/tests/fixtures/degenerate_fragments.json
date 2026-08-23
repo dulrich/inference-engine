@@ -1,0 +1,44 @@
+{
+  "_provenance": "Verbatim wire captures from the 2026-08-22/23 pre-plan scratch-server run (gemma-4-12b-qat at -c 65536, production llama_server_chat_common flags, f16 KV, unpinned sampling). Extracted by the orchestrator into runs/dispatch/qshiv2-wp-3-fixture-source.md (main checkout, not in this worktree -- see plans/quant-sweep-harness-and-instrument-v2.md Context and docs/long-context-collapse.md for the run this came from). The full degenerate reasoning_content streams were 20k+ chars; only the driver-printed tails survive below, whitespace included, unmodified. These are the ONLY captured degenerate gemma-qat text -- ground-truth `degenerate` positives for llama/bakeoff/tests/test_classifier.py.",
+  "fragments": [
+    {
+      "id": "fragment-a-near-ceiling",
+      "description": "near-ceiling probe, 55,265 real prompt tokens",
+      "metadata": {
+        "type": "needle_probe",
+        "size": "near_ceiling",
+        "target_tokens": 84401,
+        "context_ceiling": 65536,
+        "position_fraction": 0.45,
+        "seed_used": 42,
+        "prompt_tokens": 55265,
+        "expected_code": "WD0-NOVA-4332",
+        "correct": false,
+        "finish_reason": "length",
+        "wall_seconds": 117.135,
+        "reasoning_text_total_length_chars": 27596
+      },
+      "content_text": "",
+      "reasoning_text_tail": "tor edge block layer response socket entry layer variance policy variance cache context sequence capacity. context signal volume policy signal weight sequence handler throughput driver layer. throughput handler cluster handler driver thread system trace. signal sample interval container anomaly response kernel baseline adapter device. mount block engine archive baseline log system log config gateway server system buffer table instance graph. ledger log mount vector client adapter region latency.",
+      "finish_reason": "length"
+    },
+    {
+      "id": "fragment-b",
+      "description": "44,649 real prompt tokens",
+      "metadata": {
+        "target": 45000,
+        "prompt_tokens": 44649,
+        "correct": false,
+        "finish_reason": "length"
+      },
+      "content_text": "",
+      "reasoning_text_tail": "ncy frame socket. outcome chunk port metric artifact sensor stream stream batch backup monitor signal summary cluster archive. schema weight region ledger schema handler monitor gradient interval. pattern anomaly layer container pipeline monitor metric finding. endpoint thread context router channel",
+      "finish_reason": "length"
+    }
+  ],
+  "interpretation_notes": [
+    "Both fragments are the incoherent-high-entropy shape (word-salad over the haystack's own vocabulary domain), NOT the repetition/entropy-collapse shape.",
+    "content-channel-never-reached + finish_reason: length + budget exhausted in reasoning is itself a load-bearing degeneracy signal (both fragments exhibit it) -- but is NOT sufficient alone (see test_classifier.py's clean-fixture near-miss cases from the same completions.jsonl file).",
+    "The haystack-vocabulary-overlap flag can be exercised against these fragments only qualitatively -- the generating haystack text is not recoverable; synthetic fixtures in test_classifier.py exercise that flag directly against a known haystack."
+  ]
+}

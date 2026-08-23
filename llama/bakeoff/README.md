@@ -3,7 +3,9 @@
 Reusable measurement tooling, originally built in `plans/serving-harness-round-2.md` WP-1 and
 called by every later per-model WP against a different already-configured router alias, then
 extended into a declarative sweep framework by `plans/quant-sweep-harness-and-instrument-v2.md`
-WP-1. There is no alias-specific code path anywhere in `run_harness.py` — the harness works
+WP-1, and into a valid long-context correctness instrument by that same plan's WP-3
+(`longcontext.py` — see "Long-context correctness instrument v2" below). There is no
+alias-specific code path anywhere in `run_harness.py`/`longcontext.py` — the harness works
 against any alias the router already knows how to spawn.
 
 Zero new runtime dependencies: Python 3 stdlib only (`urllib`, `json`, `time`, `statistics`,
@@ -18,6 +20,15 @@ from-scratch worker can run this with nothing beyond what's already on the host 
 - `sweep.py` — the declarative sweep framework: spec loading/expansion, the VRAM-fit pre-filter,
   ladder expansion, deterministic cell IDs, exact-command building, and the scratch-server
   lifecycle (spawn/health-poll/verify/teardown/VRAM-read-back). See "Sweep framework" below.
+- `longcontext.py` — the long-context correctness instrument v2: coherent haystack corpus
+  loading/assembly, the 3-task battery, the position sweep + n-trial cell driver, Wilson-interval
+  statistics, and the degeneracy classifier. See "Long-context correctness instrument v2" below.
+- `corpus/` — the coherent public-domain haystack corpus (Project Gutenberg) `longcontext.py`
+  assembles trials from, plus `corpus/manifest.json`'s provenance record. See that section.
+- `tests/` — stdlib `unittest` suite for `longcontext.py` (corpus integrity, haystack assembly,
+  task battery, classifier — including the real captured degenerate fragments and the committed
+  clean gemma-qat transcripts as fixtures — statistics, and the cell driver). Run with
+  `python3 -m unittest discover -s llama/bakeoff/tests -p 'test_*.py' -v`.
 - `examples/sweep-example.json` — a 3-cell fixture for `sweep.py --dry-run` (synthetic geometry,
   no real model file required — see that section).
 - `quality_corpus.jsonl` — 12 fixed prompts across the 8 categories in
@@ -383,6 +394,223 @@ live-verified against build `b10534`'s actual console format (see `_STARTUP_PATT
   pre-teardown and post-teardown reading so a caller can confirm VRAM actually returned to
   baseline, not merely that the process is gone.
 
+## Long-context correctness instrument v2 (`longcontext.py`)
+
+`plans/quant-sweep-harness-and-instrument-v2.md` WP-3, built on WP-2's research
+(`docs/long-context-collapse.md`). **Why this exists as a separate module from `run_harness.
+needle_probe`, not a mode of it**: `needle_probe`'s haystack (`_build_filler_text`) is uniform
+random words from a fixed bank — explicitly a *timing* fixture, never quality-scored (Decisions
+locked). A degenerate completion after that input cannot be attributed to genuine long-context
+collapse versus out-of-distribution-input mirroring; this repo's own captured evidence (two
+degenerate `gemma-4-12b-qat` fragments, `llama/bakeoff/tests/fixtures/degenerate_fragments.json`)
+shows the degenerate word-salad vocabulary matching that exact word bank. `_build_filler_text`
+stays exactly as it was; `longcontext.py` is the correctness-scored replacement, never the other
+way around.
+
+### Corpus (`corpus/`)
+
+5 public-domain Project Gutenberg books across 5 distinct domains, plain text, Gutenberg
+header/footer boilerplate stripped, each prefixed with a one-line provenance note (also works
+around a libmagic false-positive in some environments where a file's first three bytes being
+literally `MED` gets misidentified as an Amiga tracker module — verified live during this WP;
+applied uniformly to all five books rather than special-casing the one that needed it):
+
+| id | title | author | domain |
+| --- | --- | --- | --- |
+| `pride-and-prejudice` | Pride and Prejudice | Jane Austen | fiction |
+| `origin-of-species` | On the Origin of Species... | Charles Darwin | natural science |
+| `franklin-autobiography` | The Autobiography of Benjamin Franklin | Benjamin Franklin | history / memoir |
+| `meditations` | Meditations | Marcus Aurelius | philosophy |
+| `the-prince` | The Prince | Niccolo Machiavelli | political philosophy |
+
+`corpus/manifest.json`: `corpus_id` (`"gutenberg-longcontext-haystack-v1"` — this is the value
+every emitted sample's `corpus_manifest_id` field carries) plus, per book, `{id, title, author,
+domain, source_url, gutenberg_id, file, sha256, license_note, char_count, file_size_bytes}`. All
+five books are public domain (pre-1929 US publication); the distributed Gutenberg text itself
+carries the Project Gutenberg License (gutenberg.org/policy/license.html) — `license_note`
+restates this per book. Total committed size ≈2.6 MiB, inside the plan's 8 MiB cap
+(`du -sb llama/bakeoff/corpus/`).
+
+**Refresh note**: `sha256`/`char_count` are computed AFTER stripping — recomputing them against
+the committed files must reproduce `manifest.json` exactly (`tests/test_corpus.py` asserts
+this). If a book is ever re-fetched (Gutenberg text can be revised), re-run the same
+strip-and-hash procedure (locate `*** START/END OF THE PROJECT GUTENBERG EBOOK ... ***`, keep
+only the text between them, prepend the one-line provenance note) and update `manifest.json`'s
+`sha256`/`char_count`/`file_size_bytes` together — a stale hash here is a silent corpus-drift
+bug, not caught by anything except this test.
+
+### Haystack assembly
+
+`assemble_haystack(rng, target_tokens, manifest=None, chars_per_token=None)` — `rng` (a
+`random.Random(haystack_seed)` instance) drives ALL haystack randomness (book shuffle order,
+per-book passage start offsets); `sampler_seed` never does (separate-seed-fields contract,
+inherited from `run_harness.needle_probe`). Cycles through the corpus books, taking one
+contiguous, randomly-positioned passage per book per pass, concatenated with `"\n\n"`, until the
+assembled text reaches `target_tokens * chars_per_token` (default
+`run_harness.CHARS_PER_TOKEN_ESTIMATE`) characters — a sizing TARGET only; the real on-wire
+token count always comes back from the server's own `usage.prompt_tokens`, exactly like
+`_build_filler_text`. For every realistic sweep target (up through the near-ceiling 0.85 *
+65536-token band), a single corpus book covers it in one pass; multi-book concatenation is
+implemented and unit-tested (`tests/test_haystack.py`) but only engages for a target larger than
+the largest single book.
+
+`insert_at_fraction`/`insert_multiple` snap injection points to the next sentence boundary
+(matching `needle_probe`'s existing `". "`-boundary convention). `insert_multiple` requires
+`fractions` ascending and processes insertions in descending-index order — this correctly
+resolves the case where two fractions snap to the identical boundary (a real tie, observed live
+against this corpus at the multi-needle task's 0.03 spread), which a naive stable
+sort-by-boundary-value would silently invert; see that function's docstring and
+`tests/test_haystack.py`'s regression test.
+
+### Task battery
+
+Three tasks (`longcontext.TASKS`), each scored independently, never merged:
+
+- **`single_needle`** — literal-match recall (NIAH-style): a unique reference code injected at
+  `position_fraction`, the model must reproduce it verbatim.
+- **`multi_needle`** — 3 distinct reference codes injected in ascending order, clustered near
+  `position_fraction` (0.03-fraction spread) rather than at 3 independent positions —
+  `position_fraction` stays the single per-cell independent variable; correct requires all 3
+  codes present AND recovered in original order (ordered readback).
+- **`passage_qa`** — passage-anchored QA, the NON-literal-recall half of doc Req 1's "separate
+  literal-match recall from non-literal recall as distinct battery tasks": a short synthetic
+  passage (`PASSAGE_QA_ITEMS`, 4 items) states a fact using an invented, distinctive multi-word
+  answer term; the paired question asks about it via paraphrase and NEVER repeats the answer
+  term verbatim (`tests/test_tasks.py` asserts this programmatically for every item) — the model
+  must locate the right passage semantically, not by grepping the question against the haystack
+  (NoLiMa-class). A pass on `single_needle` does not bound performance here.
+
+### Position sweep + statistics
+
+`POSITION_FRACTIONS = (0.10, 0.45, 0.85)` — the plan's first-class position cells.
+`run_cell(request_fn, task, cell_id, position_fraction, target_tokens, sampling_arm,
+sampling_payload, n_trials=10, ...)` runs one (task, position) cell for `n_trials` distinct
+`haystack_seed`s (deterministic schedule below), emitting one schema-v2 `longcontext_probe`
+sample per trial plus (only at `n_trials >= 10`) a per-cell Wilson-interval failure-rate
+summary. `run_position_sweep(...)` runs one task across all 3 positions as INDEPENDENT cells,
+returned in a dict keyed by `position_fraction` — **never averaged or merged across positions or
+tasks** (doc Req 5 / plan Decisions locked); a caller wanting one rollup number is doing
+something this module deliberately does not do.
+
+**No live Docker/GPU execution lives here.** `request_fn(prompt, max_tokens, sampling) ->
+result_dict` is the caller's own live-request hook (matching `run_harness.
+_execute_streaming_request`'s return shape) — a live orchestrator wires it to the real router;
+`longcontext.py`'s own tests pass a deterministic offline stub and never touch the network.
+
+**Sampling is pinned, mechanically enforced** (doc Req 3): `run_cell` raises `ValueError` if
+`sampling_arm` isn't `"capability"`/`"production"`, or if `sampling_payload` is missing/has any
+of `temperature`/`top_p`/`top_k`/`seed` as `None` — build it with
+`run_harness.sampling_arm_payload(SAMPLING_ARM_CAPABILITY, seed)`, or fill in the specific
+model's recommended values for the production arm first. `sampling_payload["seed"]` is
+overridden per-trial by this driver's own `sampler_seed` schedule regardless of what's passed in
+(every trial gets a distinct sampler seed, never one shared across a cell's `n_trials`).
+
+**Deterministic per-trial seed schedule**: `derive_trial_seed(cell_id, trial_index, purpose)` —
+`sha256(f"{cell_id}:{trial_index}:{purpose}")` truncated to a positive 31-bit int, `purpose` ∈
+`{"haystack", "sampler"}`. `haystack_seed` and `sampler_seed` are always distinct fields on every
+sample, never one shared derivation — re-running the same cell reproduces the identical trial
+sequence.
+
+**Wilson intervals**: `wilson_interval(k, n, sided, confidence=0.95)` — `sided` (`"one"`/`"two"`)
+is a REQUIRED parameter with no default (the plan's binding "state the convention explicitly at
+every use site" pin, correcting the cycle-2 audit's exact one-sided/two-sided mixing finding).
+`"one"` returns only an upper bound (`lower` is `None`) — the convention for a directional "is
+the failure rate below X%" claim (e.g. the plan's own cited "0/30 Wilson upper = 8.27%",
+reproduced by `tests/test_statistics.py`). `"two"` returns both bounds. Only 95% two-sided/
+one-sided are tabulated (`_Z_TABLE`) — any other confidence raises `ValueError` rather than
+guessing a z-value. A cell's failure-rate summary counts every non-`"correct"` verdict as a
+failure (wrong + degenerate + truncated(benign) all count) — this module's own call, restated on
+the summary dict itself (`sided`/`confidence` keys always present) so nothing downstream has to
+guess the convention from context.
+
+`haystack_structure` (doc Req 2) is recorded on every sample, `"coherent"` by default
+(`HAYSTACK_STRUCTURE_COHERENT`) — this module's only implemented assembly mode; a documented
+variable field, not an assumed-safe constant, so a future shuffled-haystack arm (testing
+Chroma's measured shuffle-vs-flow effect, `docs/long-context-collapse.md` §1) is a parameter
+value, not a rewrite.
+
+### Degeneracy classifier
+
+`classify_trial(reasoning_text, content_text, finish_reason, correct=None, haystack_text=None)`
+→ `ClassifierResult(verdict, shape, flags)`. Verdict ∈ `VERDICTS = ("correct", "wrong",
+"degenerate", "truncated(benign)")`; when `degenerate`, `shape` ∈ `DEGENERATE_SHAPES =
+("incoherent", "repetition", "special_token_spam")` (doc Req 6: tag degeneration SHAPE, not just
+pass/fail — each shape implicates a different cause). `compute_flags(...)` computes, over the
+full `reasoning_text` + `content_text` stream: `max_ngram_repetition_rate`, `distinct_2_ratio`,
+`haystack_vocabulary_overlap` (only when `haystack_text` is supplied — informational, confirms
+input-mirroring when the generating haystack is known; not gating on its own),
+`special_token_match_count`, `core_function_word_count`, `content_channel_never_reached`,
+`budget_exhausted_in_reasoning`.
+
+**Checked in priority order, thresholds and rationale** (this WP's discretion, per the plan's
+classifier spec — chosen and verified against `tests/test_classifier.py`'s fixtures, not merely
+asserted):
+
+1. **`special_token_spam`** — `special_token_match_count >= 3`
+   (`<unused\d+>`-class / `<|...|>`-style markers, doc §6 / upstream issue #21321). A count
+   floor, not a single-mention trigger, so one incidental literal mention (e.g. a
+   tokenizer-internals discussion) never misfires.
+2. **`repetition`** — `token_count >= 20` AND (`max_ngram_repetition_rate >= 0.20` (4-grams) OR
+   `distinct_2_ratio <= 0.40`) — Holtzman-style entropy-collapse/loop shape.
+3. **`incoherent`** — `token_count >= 15` AND ZERO occurrences of any of a small "core"
+   function-word set (`the a an of and or in on to for with is are this that`) in the stream.
+   **This is the classifier's most load-bearing, and most carefully measured, threshold**: the
+   two real captured degenerate fragments (`tests/fixtures/degenerate_fragments.json` — verbatim
+   wire captures, `runs/dispatch/qshiv2-wp-3-fixture-source.md`) both score EXACTLY 0 core
+   function words (68 and 40 tokens respectively — pure jargon-noun concatenation, no grammar).
+   The 23 committed clean `gemma-4-12b-qat` rows (`runs/bakeoff/gemma-4-12b-qat-full/
+   completions.jsonl`) — including several `timing_round` rows sharing the fragments' exact
+   metadata shape (`finish_reason: "length"`, `content_text` empty, since they're the old
+   word-soup fixture cut off by `max_tokens` mid-list) — score a MINIMUM of 3 core function
+   words. A margin of 0 vs. 3+, not a fractional-ratio threshold near a boundary, is what makes
+   this reliable rather than fragile; see `tests/test_classifier.py`'s
+   `TestCleanGemmaQatRowsClassifyNonDegenerate` and `TestDegenerateFragmentsAreGroundTruthPositives`.
+
+**Important, empirically load-bearing**: `content_channel_never_reached` +
+`budget_exhausted_in_reasoning` (`finish_reason == "length"` with an empty content channel) is
+**NOT, by itself, sufficient evidence of `degenerate`** — those same clean `timing_round` rows
+above exhibit exactly that combination while reasoning in genuinely fluent, on-topic prose that
+simply ran out of budget. That combination alone classifies `truncated(benign)`, not
+`degenerate`; only the three content-shape checks above (1–3) classify `degenerate`. A caller
+that assumed "empty content + finish_reason length = degenerate" without this module would have
+misclassified 3 of this repo's own 23 clean fixture rows.
+
+Verdicts are recorded per-trial (`classifier_verdict`/`classifier_shape`/`classifier_flags` on
+every `longcontext_probe` sample), **never silently trusted** — a manual spot-check of a sample
+of `degenerate`/`truncated(benign)` verdicts against their `completions.jsonl` text is expected
+practice before citing a rate in a results doc, same as the existing quality-corpus manual-
+scoring convention above.
+
+### Live usage sketch (not executed by this module or its tests)
+
+```python
+from llama.bakeoff import run_harness, longcontext
+
+def request_fn(prompt, max_tokens, sampling):
+    return run_harness._execute_streaming_request(
+        base_url, alias, [{"role": "user", "content": prompt}], max_tokens,
+        temperature=sampling["temperature"], top_p=sampling["top_p"],
+        top_k=sampling["top_k"], seed=sampling["seed"],
+    )
+
+payload = run_harness.sampling_arm_payload(run_harness.SAMPLING_ARM_CAPABILITY, seed=20260823)
+results = longcontext.run_position_sweep(
+    request_fn, longcontext.TASKS["single_needle"], "gemma-4-12b-qat-c65536",
+    target_tokens=31000, sampling_arm="capability", sampling_payload=payload,
+)
+# results[0.10].summary, results[0.45].summary, results[0.85].summary -- reported PER CELL,
+# never averaged (doc Req 4/7/8/9 -- FA/KV-type verification, llama.cpp-build-fix verification,
+# -b/-ub fixed, context-shift-off verification -- are live-run/campaign concerns the deferred
+# `gemma-qat-longcontext-campaign` plan owns; this instrument assumes the caller already
+# verified them per llama/AGENTS.md's standing invariants, it does not re-verify them itself).
+```
+
+Offline sanity check (touches no Docker/network/GPU, matching `sweep.py --dry-run`):
+
+```sh
+python3 llama/bakeoff/longcontext.py --dry-run --target-tokens 31000
+```
+
 ## Schema v2 (draft — frozen at WP-4)
 
 `plans/quant-sweep-harness-and-instrument-v2.md` WP-1 makes the producer (`write_experiment_
@@ -407,6 +635,12 @@ ingests — treat the field list below as the current producer shape, not yet th
   assembled prompt text — the haystack-by-reference field; the full haystack text itself is
   never persisted, matching the pre-existing `seed_used`/`target_tokens`/`position_fraction`
   reproducibility contract).
+- **WP-3 adds a new sample `type`, `"longcontext_probe"`** (`longcontext.run_cell`), carrying
+  every field above PLUS `task`/`cell_id`/`trial_index`/`haystack_structure`/`haystack_book_ids`/
+  `classifier_shape`/`classifier_flags`/`trial_meta` — `corpus_manifest_id` is non-`null` here
+  (`"gutenberg-longcontext-haystack-v1"`), the inverse of `needle_probe`'s always-`null` value,
+  since this IS the corpus-backed instrument. See "Long-context correctness instrument v2" above
+  for the full field-by-field description; WP-4 folds this into the frozen schema-v2 field list.
 
 ### Sampling-arm presets
 
@@ -445,8 +679,21 @@ byte-identical-behavior guarantee for every pre-existing caller that doesn't pas
 
 ## Gate reference
 
-- `python3 -m py_compile llama/bakeoff/run_harness.py llama/bakeoff/sweep.py` — must exit 0
-  (root `AGENTS.md` Gates #1).
+- `python3 -m py_compile llama/bakeoff/run_harness.py llama/bakeoff/sweep.py
+  llama/bakeoff/longcontext.py` — must exit 0 (root `AGENTS.md` Gates #1).
 - `python3 llama/bakeoff/sweep.py --dry-run llama/bakeoff/examples/sweep-example.json` — expands
   the 3-cell fixture, prints per-cell fit classification and the exact command each cell would
   run; non-empty, deterministic, touches no Docker.
+- `python3 -m unittest discover -s llama/bakeoff/tests -p 'test_*.py' -v` — the
+  `longcontext.py` classifier/haystack/task/statistics/cell-driver suite; green, with a nonzero
+  discovered-test count (no package `__init__.py` under `llama/` — bare root discovery can
+  green-pass zero tests here; each `tests/test_*.py` file inserts `llama/bakeoff` onto
+  `sys.path` itself so `import longcontext`/`import run_harness` resolve regardless of
+  discovery's own top-level-dir choice). Touches no Docker/network/GPU.
+- `du -sb llama/bakeoff/corpus/` — must be ≤ 8388608 bytes (8 MiB, plan-pinned cap).
+- Corpus manifest integrity: recompute every book's sha256 against `corpus/manifest.json` and
+  diff — `tests/test_corpus.py` runs this automatically as part of the suite above; it can also
+  be run standalone (see that test file).
+- `python3 llama/bakeoff/longcontext.py --dry-run --target-tokens 31000` — assembles one trial
+  per task/position from the real committed corpus, prints JSON; non-empty, deterministic,
+  touches no Docker/network/GPU.

@@ -1,0 +1,791 @@
+#!/usr/bin/env python3
+"""Queue-driven unattended batch runner (plans/longcontext-pow2-overnight-campaign.md, WP-1).
+
+Turns a self-contained queue file (a `models:` registry + an ordered `cells:` list of
+abbreviated `{model, alias, c, ctk, ctv, fa, battery, sampling_arm, trials}` entries) into a
+durable, resumable run: cells resolve against the queue's own registry into normalized
+`sweep.py` cells, execute serially through `sweep.py`'s scratch-server lifecycle (never the
+router), and a per-cell/per-queue state machine persists to disk after every state transition so
+a crashed or deadline-paused run resumes cleanly on the next invocation, and a terminal queue
+(`completed`/`aborted-hang`) never silently re-runs.
+
+Zero new runtime dependencies: Python 3 stdlib only, matching `sweep.py`/`run_harness.py`'s
+existing stance.
+
+**No live operation happens unless a caller explicitly supplies live-capable collaborators**
+(`ContainerController`, a real hang-check function, `sweep.py`'s own real VRAM readers/scratch-
+server context manager). `run_queue`'s `scratch_server_fn` parameter defaults to `sweep.
+scratch_server` (the real Docker-touching spawn/health/verify/teardown context manager) but this
+WP's own tests always inject a fake context-manager factory instead -- `batch run --dry-run` and
+this module's own test suite never spawn a scratch server, never call `docker`, and never read
+host sysfs.
+
+**Battery-execution seam (deferred to WP-2)**: this WP owns the queue/state-machine/safety-rail
+scaffolding, not the actual longcontext battery run. `run_queue`'s `cell_runner` parameter is
+where WP-2 wires in the real battery (`longcontext.py`'s live entry, per that plan's Key
+Changes); `default_cell_runner` here is a placeholder that only verifies scratch-server startup
+state (see its own docstring). This WP's tests inject fake `cell_runner`s to exercise every
+disposition (completed / health-timeout / OOM / degenerate / needle-recall failure) the state
+machine has to handle, without the real battery existing yet.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional
+
+# `sweep`/`run_harness` live beside this file with no package `__init__.py` under `llama/` --
+# see longcontext.py's own comment on this exact gotcha. A plain top-level import works whenever
+# the importer has already put this directory on `sys.path` (true when this file is run directly
+# as a script, and when a test under `tests/` inserts this directory itself).
+import run_harness
+import sweep
+
+MODULE_DIR = Path(__file__).resolve().parent
+
+QUEUE_FORMAT_VERSION = 1
+
+# The only currently-implemented stop policy: pause (never abort) at the queue's `deadline`.
+# A required field, not a hard-coded behavior -- kept explicit and validated so a queue author
+# never wonders what happens at a missed deadline, and so a future policy (e.g. a hard stop that
+# also kills an in-flight cell) has a place to be added without a queue-format bump.
+STOP_POLICIES = ("pause-at-deadline",)
+
+PENDING = "pending"
+RUNNING = "running"
+COMPLETED = "completed"
+FAILED = "failed"
+SKIPPED_PROPAGATED = "skipped-propagated"
+ABORTED_HANG = "aborted-hang"
+
+CELL_STATES = (PENDING, RUNNING, COMPLETED, FAILED, SKIPPED_PROPAGATED, ABORTED_HANG)
+
+QUEUE_RUNNING = "running"
+QUEUE_PAUSED_RESUMABLE = "paused-resumable"
+QUEUE_COMPLETED = "completed"
+QUEUE_ABORTED_HANG = "aborted-hang"
+
+TERMINAL_QUEUE_STATES = (QUEUE_COMPLETED, QUEUE_ABORTED_HANG)
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# -------------------------------------------------------------------------------------------
+# Queue file: load, validate, resolve (audit E3, pinned: the queue file is self-contained -- no
+# external registry file; cells resolve against the queue's own `models:` map).
+# -------------------------------------------------------------------------------------------
+
+
+class QueueValidationError(ValueError):
+    """Raised by `load_queue`/`validate_queue` on a structurally invalid queue file -- never a
+    silent partial parse."""
+
+
+_REQUIRED_ABBREVIATED_CELL_KEYS = (
+    "model", "alias", "c", "ctk", "ctv", "fa", "battery", "sampling_arm", "trials",
+)
+
+
+def validate_queue(queue: Dict[str, Any]) -> None:
+    if queue.get("queue_format") != QUEUE_FORMAT_VERSION:
+        raise QueueValidationError(
+            f"unsupported queue_format {queue.get('queue_format')!r}; expected {QUEUE_FORMAT_VERSION}"
+        )
+    models = queue.get("models")
+    if not isinstance(models, dict) or not models:
+        raise QueueValidationError("queue has no non-empty 'models' registry map")
+    for model_id, entry in models.items():
+        missing = [k for k in ("model_container_path", "server_flags") if k not in entry]
+        if missing:
+            raise QueueValidationError(f"models[{model_id!r}] missing required key(s): {missing}")
+    cells = queue.get("cells")
+    if not isinstance(cells, list) or not cells:
+        raise QueueValidationError("queue has no non-empty 'cells' list")
+    vram_profile = queue.get("vram_profile")
+    if vram_profile not in sweep.VRAM_PROFILES:
+        raise QueueValidationError(
+            f"queue vram_profile {vram_profile!r} must be one of {sweep.VRAM_PROFILES}"
+        )
+    if not queue.get("deadline"):
+        raise QueueValidationError("queue missing required 'deadline' (HH:MM wall-clock cutoff)")
+    _parse_deadline_time(queue["deadline"])  # raises on malformed HH:MM
+    stop_policy = queue.get("stop_policy")
+    if stop_policy not in STOP_POLICIES:
+        raise QueueValidationError(f"queue stop_policy {stop_policy!r} must be one of {STOP_POLICIES}")
+    for idx, cell in enumerate(cells):
+        missing = [k for k in _REQUIRED_ABBREVIATED_CELL_KEYS if k not in cell]
+        if missing:
+            raise QueueValidationError(f"cells[{idx}] missing required key(s): {missing}")
+        if cell["model"] not in models:
+            raise QueueValidationError(
+                f"cells[{idx}] references unknown model {cell['model']!r} (not in this queue's own 'models' registry)"
+            )
+
+
+def load_queue(queue_path: Path) -> Dict[str, Any]:
+    with open(queue_path, "r", encoding="utf-8") as f:
+        queue = json.load(f)
+    validate_queue(queue)
+    return queue
+
+
+def resolve_cell(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]) -> Dict[str, Any]:
+    """Merges one queue model registry entry's base `server_flags` with one abbreviated cell's
+    `c`/`ctk`/`ctv`/`fa` overrides into the normalized cell shape `sweep.py` expects (its own
+    `normalize_cell`), then attaches the abbreviated cell's queue-only metadata under
+    underscore-prefixed keys (`_queue_model_id`/`_sampling_arm`/`_trials`) -- private to this
+    module, never passed to `sweep.py`'s own functions, which only look at the keys they already
+    know about."""
+    flags = dict(model_entry.get("server_flags") or {})
+    flags["-c"] = abbreviated["c"]
+    flags["-ctk"] = abbreviated["ctk"]
+    flags["-ctv"] = abbreviated["ctv"]
+    flags["-fa"] = abbreviated["fa"]
+
+    raw: Dict[str, Any] = {
+        "alias": abbreviated["alias"],
+        "model_container_path": model_entry["model_container_path"],
+        "server_flags": flags,
+        "battery": abbreviated["battery"],
+    }
+    if model_entry.get("model_host_path"):
+        raw["model_host_path"] = model_entry["model_host_path"]
+    if model_entry.get("gpu_weights_bytes") is not None:
+        raw["gpu_weights_bytes"] = model_entry["gpu_weights_bytes"]
+    if model_entry.get("kv_attention_layers") is not None:
+        raw["kv_attention_layers"] = model_entry["kv_attention_layers"]
+    if model_entry.get("swa_layer_spec") is not None:
+        raw["swa_layer_spec"] = model_entry["swa_layer_spec"]
+
+    cell = sweep.normalize_cell(raw)
+    cell["cell_id"] = sweep.compute_cell_id(cell)
+    cell["_queue_model_id"] = abbreviated["model"]
+    cell["_sampling_arm"] = abbreviated["sampling_arm"]
+    cell["_trials"] = abbreviated["trials"]
+    return cell
+
+
+def resolve_queue_cells(queue: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Resolves every abbreviated cell in queue order. Duplicate `cell_id`s across the resolved
+    list (two abbreviated cells that happen to render identically) raise -- a queue's cells are
+    meant to be distinct measurements, and the state machine keys everything by `cell_id`, so a
+    collision would silently merge two cells' state."""
+    models = queue["models"]
+    out = []
+    seen_ids = set()
+    for idx, abbreviated in enumerate(queue["cells"]):
+        model_entry = models[abbreviated["model"]]
+        cell = resolve_cell(model_entry, abbreviated)
+        if cell["cell_id"] in seen_ids:
+            raise QueueValidationError(
+                f"cells[{idx}] (alias={abbreviated['alias']!r}) resolves to a cell_id "
+                f"{cell['cell_id']!r} already used by an earlier cell in this queue -- "
+                f"two distinct queue entries must never collide"
+            )
+        seen_ids.add(cell["cell_id"])
+        out.append(cell)
+    return out
+
+
+# -------------------------------------------------------------------------------------------
+# Durable per-cell/per-queue state machine (audit B6).
+# -------------------------------------------------------------------------------------------
+
+
+def default_state_path(queue_path: Path) -> Path:
+    return queue_path.with_name(queue_path.stem + ".state.json")
+
+
+def init_state(resolved_cells: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return {
+        "queue_state": QUEUE_RUNNING,
+        "created_at": _utc_now_iso(),
+        "cells": {c["cell_id"]: {"state": PENDING, "reason": None} for c in resolved_cells},
+    }
+
+
+def load_state(state_path: Path) -> Optional[Dict[str, Any]]:
+    if not state_path.exists():
+        return None
+    with open(state_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_state(state_path: Path, state: Dict[str, Any]) -> None:
+    """Atomic write (`os.replace` after a same-directory temp file) -- a crash mid-write never
+    leaves a truncated/corrupt state file behind for the next invocation to trip over."""
+    state["updated_at"] = _utc_now_iso()
+    tmp_path = state_path.with_suffix(state_path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2, sort_keys=False)
+        f.write("\n")
+    os.replace(tmp_path, state_path)
+
+
+def apply_interrupted_rule(state: Dict[str, Any]) -> List[str]:
+    """A `running` cell found at startup means the previous invocation crashed mid-cell (a clean
+    exit always leaves a cell `completed`/`failed`/`aborted-hang`/`skipped-propagated`, never
+    `running`) -- mark it `failed` with reason `interrupted`, never silently re-run it. Returns
+    the list of cell_ids changed."""
+    changed = []
+    for cell_id, cs in state["cells"].items():
+        if cs["state"] == RUNNING:
+            cs["state"] = FAILED
+            cs["reason"] = "interrupted"
+            changed.append(cell_id)
+    return changed
+
+
+def re_arm_state(state: Dict[str, Any]) -> None:
+    """`--re-arm`: every cell not already `completed` goes back to `pending` (this includes
+    `failed`, `skipped-propagated`, and `aborted-hang` cells -- a full retry of everything that
+    didn't succeed), and the queue state resets to `running`. A `completed` cell's record already
+    exists and is never re-run by a re-arm."""
+    for cs in state["cells"].values():
+        if cs["state"] != COMPLETED:
+            cs["state"] = PENDING
+            cs["reason"] = None
+    state["queue_state"] = QUEUE_RUNNING
+
+
+CORRECTNESS_FAILURE_REASONS = ("degenerate", "needle_failure")
+
+
+def propagate_skips(
+    resolved_cells: List[Dict[str, Any]],
+    state: Dict[str, Any],
+    failing_cell_id: str,
+) -> List[str]:
+    """Skip propagation (audit E2, pinned): when `failing_cell_id`'s KV arm is quantized
+    (`-ctk`/`-ctv` != f16) and it failed for a correctness reason, mark every LATER `pending` cell
+    (queue order) with the same `(_queue_model_id, ctk, ctv)` and a larger `-c` as
+    `skipped-propagated`, referencing the failing cell. Purely mechanical -- the caller decides
+    whether `failing_cell_id`'s failure reason qualifies as a correctness failure at all; this
+    function itself only re-checks the quantized-KV-arm half of the gate (defense in depth) and
+    is otherwise unconditional given a failing_cell_id."""
+    by_id = {c["cell_id"]: c for c in resolved_cells}
+    failing = by_id[failing_cell_id]
+    f_flags = failing["server_flags"]
+    f_ctk, f_ctv, f_c = f_flags.get("-ctk", "f16"), f_flags.get("-ctv", "f16"), f_flags["-c"]
+    if f_ctk == "f16" and f_ctv == "f16":
+        return []
+    f_model = failing["_queue_model_id"]
+    changed = []
+    for cell in resolved_cells:
+        if cell["cell_id"] == failing_cell_id:
+            continue
+        flags = cell["server_flags"]
+        if cell["_queue_model_id"] != f_model:
+            continue
+        if flags.get("-ctk", "f16") != f_ctk or flags.get("-ctv", "f16") != f_ctv:
+            continue
+        if flags["-c"] <= f_c:
+            continue
+        cs = state["cells"].get(cell["cell_id"])
+        if cs is not None and cs["state"] == PENDING:
+            cs["state"] = SKIPPED_PROPAGATED
+            cs["reason"] = f"propagated from failing cell {failing_cell_id}"
+            changed.append(cell["cell_id"])
+    return changed
+
+
+# -------------------------------------------------------------------------------------------
+# Deadline (a daily HH:MM wall-clock cutoff, recomputed fresh relative to each invocation's own
+# start time -- a queue that spans multiple nights gets a fresh deadline each night, by design).
+# -------------------------------------------------------------------------------------------
+
+
+def _parse_deadline_time(deadline: str) -> tuple:
+    try:
+        hh, mm = deadline.split(":")
+        hh, mm = int(hh), int(mm)
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            raise ValueError
+    except ValueError:
+        raise QueueValidationError(f"deadline {deadline!r} is not a valid 'HH:MM' wall-clock time")
+    return hh, mm
+
+
+def compute_deadline_dt(deadline: str, start_dt: datetime) -> datetime:
+    """The next occurrence of `deadline` (HH:MM) at or after `start_dt` -- if the time-of-day has
+    already passed today relative to `start_dt`, the deadline is tomorrow (the overnight-run
+    case: start at 23:00, deadline '07:00' next morning); otherwise it's later today."""
+    hh, mm = _parse_deadline_time(deadline)
+    candidate = start_dt.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    if candidate <= start_dt:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+# -------------------------------------------------------------------------------------------
+# Pre-enqueue size check (audit E4, pinned): before running any cell with c >= 262144, project
+# the record size data-driven from the ACTUAL record shape (run_harness.needle_probe's sample/
+# completion dicts), never a hand-guessed number.
+# -------------------------------------------------------------------------------------------
+
+LARGE_CONTEXT_SIZE_CHECK_THRESHOLD = 262144
+SIZE_PROJECTION_HEADROOM = 1.25
+
+# Conservative worst-case field-length assumptions for the projection -- deliberately larger than
+# any real value this harness produces (never used to WRITE a real record, only to bound the
+# projection above what a real cell of this shape could possibly serialize to).
+_MAX_COMPLETION_TOKENS = 2048
+_MAX_STRING_FIELD_CHARS = 4000
+_CHARS_PER_TOKEN_CONSERVATIVE = 5  # generous vs. this repo's own measured ~3.7-4.2 chars/token
+
+
+def project_cell_record_size_bytes(cell: Dict[str, Any], trials: int) -> int:
+    """Conservative pre-enqueue size projection for one cell's contribution to
+    `runs/bakeoff/<experiment-id>/{samples,completions}.jsonl` (the two per-trial files;
+    `run_harness.write_experiment_record`'s `SIZE_LIMIT_BYTES` budget covers the whole
+    experiment directory, but a single near-ceiling cell's own trials are what could blow it).
+    Builds one synthetic WORST-CASE sample + completion pair matching the real
+    `needle_probe`/`longcontext.py` record shape (every string field at
+    `_MAX_STRING_FIELD_CHARS`, a `_MAX_COMPLETION_TOKENS`-sized completion text), serializes it
+    exactly as `write_experiment_record` would (`json.dumps` + trailing newline per JSONL line),
+    multiplies the per-trial total by `trials`, then by `SIZE_PROJECTION_HEADROOM` (25%
+    headroom against the projection's own inevitable drift from a real record's exact field
+    lengths). Never writes anything to disk."""
+    filler = "x" * _MAX_STRING_FIELD_CHARS
+    completion_text = "y" * (_MAX_COMPLETION_TOKENS * _CHARS_PER_TOKEN_CONSERVATIVE)
+    context = cell["server_flags"].get("-c")
+
+    sample = {
+        "type": "needle_probe",
+        "schema_version": 2,
+        "size": "near_ceiling",
+        "target_tokens": context,
+        "context_ceiling": context,
+        "position_fraction": 0.45,
+        "seed_used": 0,
+        "haystack_seed": 0,
+        "sampler_seed": 1,
+        "sampling_arm": "production",
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": 50,
+        "corpus_manifest_id": "gutenberg-longcontext-haystack-v2",
+        "haystack_sha256": "0" * 64,
+        "classifier_verdict": "correct",
+        "prompt_tokens": context,
+        "expected_code": filler[:64],
+        "correct": True,
+        "success": True,
+        "error": filler,  # worst case: an error string present even on a "successful" projection
+        "finish_reason": "stop",
+        "wall_seconds": 999.999,
+        "timestamp": "2026-08-23T00:00:00+00:00",
+    }
+    completion = {
+        "type": "needle_probe",
+        "size": "near_ceiling",
+        "expected_code": filler[:64],
+        "content_text": completion_text,
+        "reasoning_text": completion_text,
+        "finish_reason": "stop",
+    }
+    one_sample_bytes = len(json.dumps(sample, ensure_ascii=False).encode("utf-8")) + 1
+    one_completion_bytes = len(json.dumps(completion, ensure_ascii=False).encode("utf-8")) + 1
+    projected = (one_sample_bytes + one_completion_bytes) * max(trials, 1)
+    return int(projected * SIZE_PROJECTION_HEADROOM)
+
+
+# -------------------------------------------------------------------------------------------
+# Unattended safety rail -- hang-signature detection (audit, brief's own text).
+#
+# Provenance (verbatim signature, copied deliberately rather than re-derived): both lines are
+# quoted directly from fleet-tools/references/rdna4-gpu-hang.md ("The signature" section,
+# and "Automated recovery" section: "either `MES might be in unrecoverable state` or `Failed to
+# evict process queues` alone is enough -- journald delivers lines one at a time, so the full
+# cascade never arrives as one matchable unit") and match
+# fleet-tools/scripts/gpu-hang-watchdog.sh's own `SIGNATURE_RE` byte-for-byte.
+# -------------------------------------------------------------------------------------------
+
+HANG_SIGNATURE_RE = re.compile(r"MES might be in unrecoverable state|Failed to evict process queues")
+
+
+def detect_hang_signature(lines: Iterable[str]) -> Optional[str]:
+    """Scans `lines` (any iterable of decoded kernel-log lines -- a finite test list, or a real
+    live source) and returns the first line matching the hang signature, or `None` if the
+    iterable is exhausted with no match. Pure function, no I/O -- the piece this WP's tests
+    exercise directly."""
+    for line in lines:
+        if HANG_SIGNATURE_RE.search(line):
+            return line
+    return None
+
+
+def poll_journal_for_hang(since_iso: str, timeout: float = 5.0) -> Optional[str]:
+    """LIVE: `journalctl -k --since <since_iso>` (bounded, not `-f`) -- run_queue's per-cell
+    `hang_check_fn` calling this repeatedly achieves the same never-miss-a-line property as a
+    persistent `-f` follower (each poll's `--since` covers everything since the last check)
+    without a background thread/subprocess-lifecycle to manage. NEVER invoked by this WP's own
+    tests -- `detect_hang_signature` above is the tested, pure piece; this function only wraps it
+    with the real subprocess call, same "real function exists, only ever invoked live" pattern as
+    `sweep.py`'s own `discover_bridge_ip`/`read_vram_used_bytes`."""
+    try:
+        result = subprocess.run(
+            ["journalctl", "-k", "--since", since_iso],
+            capture_output=True, text=True, timeout=timeout, check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    return detect_hang_signature(result.stdout.splitlines())
+
+
+# -------------------------------------------------------------------------------------------
+# GPU ownership / maintenance window (audit B3): stop the router container for the queue
+# lifetime, restart on every exit path. `ContainerController` is injectable; the real one is
+# never invoked by this WP's tests or by anything in this module's own default code paths.
+# -------------------------------------------------------------------------------------------
+
+
+class ContainerController:
+    """Real `docker stop`/`docker start` against the router container. Only ever constructed and
+    invoked by `cmd_run` for a non-dry-run CLI invocation -- `run_queue` itself just calls
+    whatever `container_controller` object it's given (or does nothing if `None`), so a test
+    passing a fake object (or no controller at all) never touches Docker."""
+
+    def __init__(self, container: str = sweep.DEFAULT_CONTAINER_NAME) -> None:
+        self.container = container
+
+    def stop(self) -> None:
+        subprocess.run(["docker", "stop", self.container], check=True)
+
+    def start(self) -> None:
+        subprocess.run(["docker", "start", self.container], check=True)
+
+
+class _GracefulExit(Exception):
+    """Raised from the SIGTERM/SIGINT handler installed around the main run loop -- turns an
+    external signal into an ordinary Python exception so the surrounding `try/finally`
+    (container restart, signal-handler restoration) runs, same as any other exception unwind.
+    SIGTERM does not raise anything by default; only this installed handler makes it
+    `finally`-catchable ("trap-guaranteed" per the brief)."""
+
+
+def _install_signal_traps():
+    def _handler(signum, frame):
+        raise _GracefulExit(f"batch run received signal {signum}")
+
+    old_term = signal.signal(signal.SIGTERM, _handler)
+    old_int = signal.signal(signal.SIGINT, _handler)
+    return old_term, old_int
+
+
+def _restore_signal_traps(old_handlers) -> None:
+    old_term, old_int = old_handlers
+    signal.signal(signal.SIGTERM, old_term)
+    signal.signal(signal.SIGINT, old_int)
+
+
+# -------------------------------------------------------------------------------------------
+# Cell execution seam (scratch-server lifecycle reused from sweep.py -- audit E1, single
+# implementation, no duplication).
+# -------------------------------------------------------------------------------------------
+
+
+class CellOutcome(NamedTuple):
+    status: str  # "completed" | "failed" | "aborted-hang"
+    reason: Optional[str] = None
+    correctness_failure: bool = False  # drives skip propagation -- only True for degenerate/
+    #  needle-recall-class reasons, never for health-timeout/OOM/hang/interrupted/size-exceeded.
+    detail: Optional[Dict[str, Any]] = None
+
+
+def default_cell_runner(handle: "sweep.ScratchServerHandle", cell: Dict[str, Any]) -> CellOutcome:
+    """WP-1's own placeholder cell runner (see module docstring's "Battery-execution seam").
+    Verifies the scratch server actually came up healthy and passed startup-state verification,
+    and marks the cell `completed` on that basis alone -- it runs NO battery. WP-2 replaces this
+    via `run_queue`'s `cell_runner` parameter."""
+    if not handle.healthy:
+        return CellOutcome("failed", "health_timeout", False, {"startup_details": handle.details})
+    if not handle.verified:
+        return CellOutcome("failed", "invalid_config", False, {"startup_details": handle.details})
+    return CellOutcome("completed", None, False, {"startup_details": handle.details})
+
+
+def _execute_cell(
+    cell: Dict[str, Any],
+    cell_runner: Callable[["sweep.ScratchServerHandle", Dict[str, Any]], CellOutcome],
+    port: int,
+    container: str,
+    scratch_server_fn: Callable[..., Any],
+) -> CellOutcome:
+    """`scratch_server_fn` is `sweep.scratch_server` by default (the real spawn/health/verify/
+    teardown context manager -- Docker-touching) but is ALWAYS explicitly threaded through from
+    `run_queue`, which itself defaults it the same way; every one of this WP's own tests passes a
+    fake context-manager factory instead (a plain `@contextlib.contextmanager` generator yielding
+    a stand-in handle), so `run_queue`'s full cell loop is exercised without ever importing
+    Docker into the test process."""
+    with scratch_server_fn(cell, port=port, container=container) as handle:
+        outcome = cell_runner(handle, cell)
+    return outcome
+
+
+# -------------------------------------------------------------------------------------------
+# Main run loop.
+# -------------------------------------------------------------------------------------------
+
+
+def run_queue(
+    queue_path: Path,
+    state_path: Optional[Path] = None,
+    vram_profile: Optional[str] = None,
+    dry_run: bool = False,
+    re_arm: bool = False,
+    cell_runner: Optional[Callable[["sweep.ScratchServerHandle", Dict[str, Any]], CellOutcome]] = None,
+    container_controller: Optional[ContainerController] = None,
+    hang_check_fn: Optional[Callable[[], Optional[str]]] = None,
+    now_fn: Optional[Callable[[], datetime]] = None,
+    vram_total_bytes_fn: Optional[Callable[[], int]] = None,
+    vram_used_bytes_fn: Optional[Callable[[], int]] = None,
+    scratch_server_fn: Optional[Callable[..., Any]] = None,
+    port: int = 8899,
+    container: str = sweep.DEFAULT_CONTAINER_NAME,
+) -> Dict[str, Any]:
+    """Runs (or resumes, or no-ops on, or re-arms) one queue. Returns a plain result dict; never
+    raises for an ordinary cell failure (that's recorded in the state file) -- it DOES raise
+    `QueueValidationError` for a malformed queue and `sweep.VRAMProfileRefused` for a mischosen
+    `headless` profile (both are hold-for-user conditions, not per-cell dispositions).
+
+    Every collaborator is injectable with a safe (offline, no-op, or real-but-never-exercised-by-
+    tests) default -- see each parameter's own default and the module docstring's "no live
+    operation happens unless explicitly supplied" invariant.
+    """
+    queue_path = Path(queue_path)
+    queue = load_queue(queue_path)
+    resolved_cells = resolve_queue_cells(queue)
+    effective_vram_profile = vram_profile or queue["vram_profile"]
+
+    now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+    vram_total_bytes_fn = vram_total_bytes_fn or sweep.read_vram_total_bytes
+    vram_used_bytes_fn = vram_used_bytes_fn or sweep.read_vram_used_bytes
+    cell_runner = cell_runner or default_cell_runner
+    hang_check_fn = hang_check_fn or (lambda: None)
+    scratch_server_fn = scratch_server_fn or sweep.scratch_server
+
+    if dry_run:
+        return _dry_run_report(queue, resolved_cells, effective_vram_profile, vram_total_bytes_fn, vram_used_bytes_fn)
+
+    state_path = Path(state_path) if state_path else default_state_path(queue_path)
+
+    existing = load_state(state_path)
+    if existing is not None:
+        state = existing
+        if state["queue_state"] in TERMINAL_QUEUE_STATES and not re_arm:
+            return {
+                "noop": True,
+                "queue_state": state["queue_state"],
+                "message": (
+                    f"queue {queue_path} is already terminal ({state['queue_state']!r}); "
+                    f"pass --re-arm to run it again"
+                ),
+            }
+        if re_arm:
+            re_arm_state(state)
+    else:
+        state = init_state(resolved_cells)
+
+    apply_interrupted_rule(state)
+    save_state(state_path, state)
+
+    # Budget resolution up front -- raises VRAMProfileRefused for a mischosen headless profile
+    # before anything (container stop, first cell) happens.
+    sweep.compute_vram_budget_bytes(effective_vram_profile, vram_total_bytes_fn, vram_used_bytes_fn)
+
+    if container_controller is not None:
+        container_controller.stop()
+    old_handlers = _install_signal_traps()
+    try:
+        start_dt = now_fn()
+        deadline_dt = compute_deadline_dt(queue["deadline"], start_dt)
+
+        for cell in resolved_cells:
+            cs = state["cells"][cell["cell_id"]]
+            if cs["state"] != PENDING:
+                continue
+
+            if now_fn() >= deadline_dt:
+                state["queue_state"] = QUEUE_PAUSED_RESUMABLE
+                save_state(state_path, state)
+                break
+
+            c_value = cell["server_flags"]["-c"]
+            if c_value >= LARGE_CONTEXT_SIZE_CHECK_THRESHOLD:
+                projected = project_cell_record_size_bytes(cell, cell.get("_trials", 1))
+                if projected > run_harness.SIZE_LIMIT_BYTES:
+                    cs["state"] = FAILED
+                    cs["reason"] = "projected_size_exceeded"
+                    cs["detail"] = {"projected_bytes": projected, "limit_bytes": run_harness.SIZE_LIMIT_BYTES}
+                    save_state(state_path, state)
+                    continue
+
+            cs["state"] = RUNNING
+            cs["reason"] = None
+            save_state(state_path, state)
+
+            outcome = _execute_cell(
+                cell, cell_runner, port=port, container=container, scratch_server_fn=scratch_server_fn,
+            )
+            hang_line = hang_check_fn()
+
+            if hang_line is not None or outcome.status == "aborted-hang":
+                cs["state"] = ABORTED_HANG
+                cs["reason"] = hang_line or outcome.reason or "hang_signature"
+                state["queue_state"] = QUEUE_ABORTED_HANG
+                save_state(state_path, state)
+                break
+
+            if outcome.status == "completed":
+                cs["state"] = COMPLETED
+                cs["reason"] = None
+            else:
+                cs["state"] = FAILED
+                cs["reason"] = outcome.reason
+                if outcome.correctness_failure:
+                    propagate_skips(resolved_cells, state, cell["cell_id"])
+            save_state(state_path, state)
+        else:
+            # Loop completed without `break` -- every cell reached a terminal per-cell state.
+            state["queue_state"] = QUEUE_COMPLETED
+            save_state(state_path, state)
+    finally:
+        if container_controller is not None:
+            try:
+                container_controller.start()
+            except Exception:
+                pass  # never block termination on a failed restart attempt
+        _restore_signal_traps(old_handlers)
+
+    return {"noop": False, "queue_state": state["queue_state"], "state": state}
+
+
+def _dry_run_report(
+    queue: Dict[str, Any],
+    resolved_cells: List[Dict[str, Any]],
+    vram_profile: str,
+    vram_total_bytes_fn: Callable[[], int],
+    vram_used_bytes_fn: Callable[[], int],
+) -> Dict[str, Any]:
+    """`batch run --dry-run`: resolves every cell and classifies its fit, without touching
+    Docker, the state file, or the container. Same intent as `sweep.py --dry-run`, one level up
+    (queue-level, not spec-level)."""
+    out = []
+    for cell in resolved_cells:
+        fit = sweep.classify_fit(
+            cell, vram_profile=vram_profile,
+            vram_total_bytes_fn=vram_total_bytes_fn, vram_used_bytes_fn=vram_used_bytes_fn,
+        )
+        out.append({
+            "cell_id": cell["cell_id"],
+            "alias": cell["alias"],
+            "model": cell["_queue_model_id"],
+            "server_flags": cell["server_flags"],
+            "battery": cell["battery"],
+            "sampling_arm": cell.get("_sampling_arm"),
+            "trials": cell.get("_trials"),
+            "fit": fit,
+        })
+    return {
+        "noop": False, "dry_run": True, "vram_profile": vram_profile,
+        "cell_count": len(out), "cells": out,
+    }
+
+
+# -------------------------------------------------------------------------------------------
+# CLI
+# -------------------------------------------------------------------------------------------
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    controller = None
+    if not args.dry_run and not args.no_container_control:
+        controller = ContainerController(container=args.container)
+    try:
+        result = run_queue(
+            Path(args.queue),
+            state_path=Path(args.state) if args.state else None,
+            vram_profile=args.vram_profile,
+            dry_run=args.dry_run,
+            re_arm=args.re_arm,
+            container_controller=controller,
+            port=args.port,
+            container=args.container,
+        )
+    except _GracefulExit as exc:
+        print(f"batch run interrupted: {exc}", file=sys.stderr)
+        return 130
+    print(json.dumps(result, indent=2, sort_keys=False, default=str))
+    if result.get("dry_run") or result.get("noop"):
+        return 0
+    return 1 if result["queue_state"] == QUEUE_ABORTED_HANG else 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    """`batch verify --run <dir>`: dispatch seam only in this WP -- `verify_run.py` is WP-4's
+    module. A clean, explicit error (never a traceback) if it isn't present yet."""
+    try:
+        import verify_run  # type: ignore  # noqa: E402  (WP-4 module, may not exist yet)
+    except ImportError:
+        print(
+            f"verify_run.py not found (WP-4 not landed yet) -- 'batch verify' is a dispatch "
+            f"seam only in WP-1; nothing to verify against {args.run!r} yet",
+            file=sys.stderr,
+        )
+        return 2
+    if not hasattr(verify_run, "main"):
+        print("verify_run module has no main() entrypoint -- cannot delegate", file=sys.stderr)
+        return 2
+    return verify_run.main(["--run", args.run])
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="batch.py",
+        description="Queue-driven unattended batch runner "
+        "(plans/longcontext-pow2-overnight-campaign.md WP-1). See llama/bakeoff/README.md.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_run = sub.add_parser("run", help="run (or resume, or re-arm) a queue")
+    p_run.add_argument("--queue", required=True)
+    p_run.add_argument("--vram-profile", choices=sweep.VRAM_PROFILES, default=None)
+    p_run.add_argument("--dry-run", action="store_true")
+    p_run.add_argument("--re-arm", action="store_true")
+    p_run.add_argument("--state", default=None, help="override the default sibling state-file path")
+    p_run.add_argument("--container", default=sweep.DEFAULT_CONTAINER_NAME)
+    p_run.add_argument("--port", type=int, default=8899)
+    p_run.add_argument(
+        "--no-container-control", action="store_true",
+        help="skip stop/start of the llama container around the run (manual/testing use only)",
+    )
+    p_run.set_defaults(func=cmd_run)
+
+    p_verify = sub.add_parser("verify", help="delegate to verify_run.py (WP-4)")
+    p_verify.add_argument("--run", required=True)
+    p_verify.set_defaults(func=cmd_verify)
+
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

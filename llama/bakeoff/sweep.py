@@ -46,7 +46,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 MODULE_DIR = Path(__file__).resolve().parent
 LLAMA_DIR = MODULE_DIR.parent
@@ -103,6 +103,89 @@ NON_WEIGHT_OVERHEAD_GIB = 0.5
 # job is to gate attempts, not replace the real load-and-measure step.
 FIT_MARGIN_GIB = 2.0
 MARGINAL_MARGIN_GIB = 1.5
+
+# -------------------------------------------------------------------------------------------
+# VRAM budget profiles (audit B4, plan longcontext-pow2-overnight-campaign.md WP-1). Two named
+# profiles a queue selects between, never a bare constant: `desktop-shared` is
+# REALISTIC_FREE_VRAM_GIB above, unchanged in meaning (this machine's normal, desktop-sharing-the-
+# GPU state); `headless` is computed LIVE at queue-start time from the actual measured VRAM
+# state, for an operator who has confirmed no other GPU client is running.
+# -------------------------------------------------------------------------------------------
+
+VRAM_PROFILES = ("desktop-shared", "headless")
+
+# Subtracted from the live-measured `mem_info_vram_total` for the `headless` profile's admissible
+# budget -- a small reserve for whatever isn't captured by `mem_info_vram_used` at the instant of
+# reading (e.g. driver/firmware reservations). Card nameplate 15.92 GiB (CARD_NAMEPLATE_VRAM_GIB)
+# minus the plan's own stated "headless" usable figure, "measured mem_info_vram_total minus
+# margin, ~15.4 GiB usable" (Decisions locked) = ~0.52 GiB; rounded to a clean 0.5 GiB.
+HEADLESS_PINNED_MARGIN_GIB = 0.5
+
+# `headless` REFUSES outright (raises VRAMProfileRefused) when the measured baseline VRAM-used
+# figure exceeds this ceiling -- the profile's whole premise is "nothing else is on the GPU", and
+# a live desktop session invalidates it. Pinned per this WP's brief ("pick and document a value
+# ~1.5 GiB -- a live desktop holds ~3.1 GiB, so it must trip then"): `llama/config.yaml`'s gemma
+# fit-math comment measured `mem_info_vram_used` = 3,327,463,424 B (~3.1 GiB) on this exact
+# desktop-shared host with ghostty/firefox/LM Studio/obsidian/nvtop all holding the render node --
+# well above 1.5 GiB, so that live baseline correctly trips this refusal.
+HEADLESS_BASELINE_CEILING_GIB = 1.5
+
+
+class VRAMProfileRefused(RuntimeError):
+    """Raised by `compute_vram_budget_bytes('headless', ...)` when the measured VRAM-used
+    baseline exceeds HEADLESS_BASELINE_CEILING_GIB -- a mischosen `headless` profile on a live
+    desktop session fails loudly here instead of silently overcommitting VRAM."""
+
+
+def read_vram_total_bytes(sysfs_path: str = "/sys/class/drm/card1/device/mem_info_vram_total") -> int:
+    """Reads `mem_info_vram_total` directly from host sysfs -- same mechanism and same host-path
+    rationale as `read_vram_used_bytes()` below (this repo's established VRAM read-back
+    technique). Real, live-capable; never invoked by this WP's own tests (`compute_vram_budget_
+    bytes`'s `vram_total_bytes_fn` parameter is what tests fake)."""
+    with open(sysfs_path, "r", encoding="utf-8") as f:
+        return int(f.read().strip())
+
+
+def compute_vram_budget_bytes(
+    vram_profile: str,
+    vram_total_bytes_fn: Callable[[], int] = read_vram_total_bytes,
+    vram_used_bytes_fn: Optional[Callable[[], int]] = None,
+) -> float:
+    """Resolves `vram_profile` ('desktop-shared'|'headless') to an admissible cell-footprint
+    budget in bytes, audit B4's formula: `min(profile_cap, mem_info_vram_total -
+    measured_used_at_queue_start - pinned_margin)`.
+
+    `desktop-shared`'s cap is the pre-existing static REALISTIC_FREE_VRAM_GIB figure -- this
+    branch touches NEITHER reader function at all (no live I/O for the profile this repo's
+    existing dry-run/classify_fit callers have always used, so nothing about their behavior
+    changes by this feature existing).
+
+    `headless` is live: reads `vram_used_bytes_fn()` first and REFUSES
+    (`VRAMProfileRefused`) if it exceeds `HEADLESS_BASELINE_CEILING_GIB`; otherwise returns
+    `vram_total_bytes_fn() - used - HEADLESS_PINNED_MARGIN_GIB*GIB` (unbounded above by any
+    static cap -- the live measurement IS the whole story for this profile).
+
+    Both VRAM readers are injectable; the module-level `read_vram_total_bytes`/
+    `read_vram_used_bytes` are the real, live-capable defaults -- this WP's own tests always pass
+    fakes and never exercise the real sysfs reads (same "real controller, fake in tests" pattern
+    as `ContainerController` in `batch.py`).
+    """
+    if vram_used_bytes_fn is None:
+        vram_used_bytes_fn = read_vram_used_bytes
+    if vram_profile == "desktop-shared":
+        return REALISTIC_FREE_VRAM_GIB * GIB
+    if vram_profile == "headless":
+        used = vram_used_bytes_fn()
+        if used > HEADLESS_BASELINE_CEILING_GIB * GIB:
+            raise VRAMProfileRefused(
+                f"headless VRAM profile refused: measured baseline VRAM-used "
+                f"({used / GIB:.2f} GiB) exceeds the pinned ceiling "
+                f"({HEADLESS_BASELINE_CEILING_GIB} GiB) -- this looks like a live desktop "
+                f"session sharing the GPU, not a headless box; choose desktop-shared instead"
+            )
+        total = vram_total_bytes_fn()
+        return total - used - HEADLESS_PINNED_MARGIN_GIB * GIB
+    raise ValueError(f"unknown vram_profile {vram_profile!r}; expected one of {VRAM_PROFILES}")
 
 
 # -------------------------------------------------------------------------------------------
@@ -235,6 +318,24 @@ def gguf_attention_geometry(metadata: Dict[str, Any]) -> Dict[str, Optional[int]
     if value_length is None:
         value_length = key_length
     context_length = _get("context_length")
+    # SWA-awareness (audit B2, plan longcontext-pow2-overnight-campaign.md WP-1). Two more
+    # `<arch>.attention.*` keys, pinned here by name (brief: "pin the chosen key names in code
+    # comments") -- both verified live against the real gemma-4-12B-it-qat-UD-Q4_K_XL.gguf header
+    # this WP grounds against:
+    #   `attention.sliding_window` (scalar): the window size in tokens for whichever layers are
+    #   window-capped (gemma4: 1024).
+    #   `attention.sliding_window_pattern` (per-layer BOOL array, same length as the per-layer
+    #   `attention.head_count_kv` array when that key is itself an array): `True` at a layer index
+    #   means that layer is SWA/window-capped, `False` means it's a "global" full-context layer.
+    #   Live-verified exact match against gemma4's own head_count_kv array (2026-08-23 grounding):
+    #   48 entries, `sliding_window_pattern[i] == True` at every one of the 40 indices where
+    #   `head_count_kv[i] == 8` (the SWA layers) and `== False` at every one of the 8 indices
+    #   where `head_count_kv[i] == 1` (the global layers) -- zero mismatches. This is the ONLY
+    #   signal `kv_bytes_per_token` trusts to split SWA vs. global layers; it never infers the
+    #   split from `head_count_kv` magnitude alone (that heuristic is explicitly rejected -- see
+    #   `kv_bytes_per_token`'s docstring).
+    sliding_window = _get("attention.sliding_window")
+    sliding_window_pattern = _get("attention.sliding_window_pattern")
     return {
         "architecture": arch,
         "block_count": block_count,
@@ -243,6 +344,8 @@ def gguf_attention_geometry(metadata: Dict[str, Any]) -> Dict[str, Optional[int]
         "key_length": key_length,
         "value_length": value_length,
         "context_length": context_length,
+        "sliding_window": sliding_window,
+        "sliding_window_pattern": sliding_window_pattern,
     }
 
 
@@ -281,6 +384,8 @@ def kv_bytes_per_token(
     ctk: str,
     ctv: str,
     kv_attention_layers: Optional[int] = None,
+    context: Optional[int] = None,
+    swa_layer_spec: Optional[List[bool]] = None,
 ) -> float:
     """KV-cache bytes/token = attention_layers * (head_count_kv*key_length*bpe(ctk) +
     head_count_kv*value_length*bpe(ctv)) -- llama.cpp's own per-layer K+V cache tensor sizing.
@@ -301,6 +406,24 @@ def kv_bytes_per_token(
     8448 B/token vs ~14.4 KB/token measured at -c 8192 -- llama.cpp's MLA cache layout is not
     plain head_count_kv*key/value_length) -- treat per-layer-array MLA fits as approximate and
     lean on the live VRAM read-back, not this number, near any margin boundary.
+
+    **SWA-awareness (audit B2, longcontext-pow2-overnight-campaign.md WP-1)**: the pre-existing
+    per-layer-array path above scaled EVERY array entry with the full requested `context` -- wrong
+    for an architecture like gemma4, where only the minority "global" layers actually scale with
+    context; the majority "SWA" layers are capped at a fixed window regardless of `-c`. When
+    `context` is given AND a per-layer SWA signal is available -- either the caller-supplied
+    `swa_layer_spec` override (same shape as `head_count_kv`, `True` = window-capped) or, absent
+    that, `geometry["sliding_window_pattern"]` read straight from the GGUF (see
+    `gguf_attention_geometry`) -- AND `geometry["sliding_window"]` is known, each layer
+    contributes `min(context, sliding_window)` tokens' worth of bytes if it's SWA, or `context`
+    tokens' worth if it's global; this function still returns a bytes/TOKEN rate (not a total),
+    computed as `total_bytes_at_context / context`, so `classify_fit`'s existing
+    `bytes_per_token * context` formula recovers the exact same total unchanged. **No heuristic
+    fallback**: if no per-layer SWA signal is available at all (no override, no
+    `sliding_window_pattern` in the header, or a length mismatch against `head_count_kv`), this
+    silently reverts to the pre-existing conservative behavior -- every array entry scales with
+    the full context, i.e. today's (over-estimating, not under-estimating) behavior -- rather than
+    ever guessing which layers are SWA from `head_count_kv` magnitude alone.
     """
     layers = kv_attention_layers if kv_attention_layers is not None else geometry.get("block_count")
     head_count_kv = geometry.get("head_count_kv")
@@ -322,6 +445,21 @@ def kv_bytes_per_token(
         ) from exc
     per_token_both = key_length * bpe_k + value_length * bpe_v
     if per_layer_kv:
+        spec = swa_layer_spec if swa_layer_spec is not None else geometry.get("sliding_window_pattern")
+        window = geometry.get("sliding_window")
+        if (
+            context is not None
+            and window is not None
+            and spec is not None
+            and len(spec) == len(head_count_kv)
+        ):
+            capped_tokens = min(context, window)
+            total_bytes = sum(
+                h * per_token_both * (capped_tokens if is_swa else context)
+                for h, is_swa in zip(head_count_kv, spec)
+                if h
+            )
+            return total_bytes / context
         return float(sum(h * per_token_both for h in head_count_kv if h))
     return layers * head_count_kv * per_token_both
 
@@ -392,11 +530,33 @@ def compute_cell_id(cell: Dict[str, Any]) -> str:
 
 
 def _resolve_geometry_and_weights(cell: Dict[str, Any]) -> Tuple[Optional[int], Optional[Dict[str, Any]], Optional[str]]:
+    """Wraps `_resolve_geometry_and_weights_raw` with placement-awareness (audit B2): when the
+    cell carries a `gpu_weights_bytes` override, it REPLACES the raw file-size/synthetic
+    `weights_bytes` figure -- a cell running under `-ncmoe` (or any other partial-offload flag)
+    does not have the whole GGUF resident on the GPU, and counting the whole file overestimates
+    VRAM pressure by exactly the CPU-resident fraction. `qwen36-a3b`'s config B (`-ngl 99 -ncmoe
+    32`, `llama/config.yaml` offload-placement comments ~721-745): 2.494 GiB non-expert weights
+    (always GPU-resident regardless of `-ncmoe`) + 8 of 40 layers' routed-expert weights
+    GPU-resident, vs. the full on-disk GGUF (~20.8 GiB) -- using the file size there would
+    misclassify every cell of that model `excluded`. Never applied when the cell carries no such
+    override (the pre-existing whole-file/whole-synthetic-geometry behavior is unchanged).
+    """
+    weights_bytes, geometry, reason = _resolve_geometry_and_weights_raw(cell)
+    override = cell.get("gpu_weights_bytes")
+    if weights_bytes is not None and override is not None:
+        weights_bytes = override
+    return weights_bytes, geometry, reason
+
+
+def _resolve_geometry_and_weights_raw(cell: Dict[str, Any]) -> Tuple[Optional[int], Optional[Dict[str, Any]], Optional[str]]:
     """Returns `(weights_bytes, geometry, reason_unknown)`. Prefers a real host GGUF
     (`model_host_path`) when present; falls back to `synthetic_geometry` (fixture/testing
     override -- never used when a real host path is given, so a real cell can never silently run
     on stale/fabricated numbers). Returns `(None, None, reason)` if neither is available -- the
-    caller classifies that cell `"unknown"`, not a guessed fit.
+    caller classifies that cell `"unknown"`, not a guessed fit. `weights_bytes` here is always the
+    whole-file/whole-synthetic-geometry figure -- `_resolve_geometry_and_weights` (the wrapper
+    every other function in this module calls) is where the `gpu_weights_bytes` placement
+    override, if any, gets applied.
     """
     host_path = cell.get("model_host_path")
     if host_path:
@@ -427,17 +587,37 @@ def _resolve_geometry_and_weights(cell: Dict[str, Any]) -> Tuple[Optional[int], 
             "key_length": synthetic["key_length"],
             "value_length": synthetic["value_length"],
             "context_length": synthetic.get("context_length"),
+            # SWA-awareness (audit B2): a fixture can shape a synthetic geometry as SWA-capable
+            # too, same two keys as the real-header path (`gguf_attention_geometry`) -- absent by
+            # default (`None`), which is exactly the "no per-layer SWA signal" case
+            # `kv_bytes_per_token` falls back conservatively from.
+            "sliding_window": synthetic.get("sliding_window"),
+            "sliding_window_pattern": synthetic.get("sliding_window_pattern"),
         }
         return weights_bytes, geometry, None
     return None, None, "cell has neither model_host_path nor synthetic_geometry"
 
 
-def classify_fit(cell: Dict[str, Any]) -> Dict[str, Any]:
+def classify_fit(
+    cell: Dict[str, Any],
+    vram_profile: str = "desktop-shared",
+    vram_total_bytes_fn: Callable[[], int] = read_vram_total_bytes,
+    vram_used_bytes_fn: Optional[Callable[[], int]] = None,
+) -> Dict[str, Any]:
     """Pure-math VRAM-fit predictor. Returns a dict always carrying `classification` (one of
     `"fits"`, `"marginal"`, `"excluded"`, `"unknown"`) plus the numbers behind it -- never raises
     on missing geometry (that's the `"unknown"` case, with `reason` explaining why), since a
     dry-run over a whole spec should report every cell, not abort on the first one it can't
-    estimate.
+    estimate. **Except** `VRAMProfileRefused` (a mischosen `vram_profile='headless'` on a live
+    desktop) -- that's a loud, unrecoverable-for-this-run refusal, not a per-cell "unknown".
+
+    `vram_profile` (audit B4, default `"desktop-shared"` -- the pre-existing, always-static
+    behavior, unchanged for every caller that doesn't pass this) selects the admissible-footprint
+    budget via `compute_vram_budget_bytes()`; both VRAM reader functions are threaded straight
+    through to it (see that function's docstring -- `desktop-shared` never invokes either).
+    SWA-awareness (kv_bytes_per_token's `context`/`swa_layer_spec`) is applied automatically here
+    by always passing this cell's own `-c` as `context` and `cell.get("swa_layer_spec")` as the
+    override.
     """
     weights_bytes, geometry, reason = _resolve_geometry_and_weights(cell)
     if weights_bytes is None or geometry is None:
@@ -449,7 +629,10 @@ def classify_fit(cell: Dict[str, Any]) -> Dict[str, Any]:
     ctv = flags.get("-ctv", "f16")
     try:
         bytes_per_token = kv_bytes_per_token(
-            geometry, ctk, ctv, kv_attention_layers=cell.get("kv_attention_layers")
+            geometry, ctk, ctv,
+            kv_attention_layers=cell.get("kv_attention_layers"),
+            context=context,
+            swa_layer_spec=cell.get("swa_layer_spec"),
         )
     except (GGUFParseError, ValueError) as exc:
         return {"classification": "unknown", "reason": str(exc)}
@@ -457,7 +640,7 @@ def classify_fit(cell: Dict[str, Any]) -> Dict[str, Any]:
     kv_bytes = bytes_per_token * context
     overhead_bytes = NON_WEIGHT_OVERHEAD_GIB * GIB
     estimated_total_bytes = weights_bytes + kv_bytes + overhead_bytes
-    budget_bytes = REALISTIC_FREE_VRAM_GIB * GIB
+    budget_bytes = compute_vram_budget_bytes(vram_profile, vram_total_bytes_fn, vram_used_bytes_fn)
     predicted_margin_bytes = budget_bytes - estimated_total_bytes
 
     if predicted_margin_bytes >= FIT_MARGIN_GIB * GIB:
@@ -474,12 +657,13 @@ def classify_fit(cell: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "classification": classification,
         "reason": None,
+        "vram_profile": vram_profile,
         "weights_bytes": weights_bytes,
         "kv_bytes_per_token": bytes_per_token,
         "kv_bytes_at_context": kv_bytes,
         "non_weight_overhead_bytes": overhead_bytes,
         "estimated_total_bytes": estimated_total_bytes,
-        "realistic_free_vram_bytes": budget_bytes,
+        "vram_budget_bytes": budget_bytes,
         "predicted_margin_bytes": predicted_margin_bytes,
         "predicted_margin_gib": predicted_margin_bytes / GIB,
         "architecture": geometry.get("architecture"),
@@ -785,6 +969,115 @@ def verify_startup_state(log_text: str, cell: Dict[str, Any]) -> Tuple[bool, Dic
 
 
 # -------------------------------------------------------------------------------------------
+# Scratch-server lifecycle context manager (audit E1, longcontext-pow2-overnight-campaign.md
+# WP-1). Single implementation of spawn -> health-check -> verify -> (caller does its work) ->
+# teardown, reused by BOTH this module's own `cmd_run` below and `batch.py`'s per-cell execution
+# -- never duplicated. Only `scratch_server(...)`'s callers that actually enter the `with` block
+# touch Docker; `--dry-run` and every other code path in this module still never do.
+# -------------------------------------------------------------------------------------------
+
+
+class ScratchServerHandle:
+    """Mutable handle yielded by `scratch_server()`. `teardown_result` is `None` until the `with`
+    block exits (set inside the context manager's own `finally`) -- callers that keep a reference
+    to the handle can read it once their `with` block has exited, since it's the same object
+    mutated in place, not a snapshot."""
+
+    def __init__(
+        self,
+        cell_id: str,
+        base_url: str,
+        healthy: bool,
+        verified: bool,
+        details: Dict[str, Any],
+        log_text: str,
+        vram_before_bytes: int,
+        port: int,
+        container: str,
+    ) -> None:
+        self.cell_id = cell_id
+        self.base_url = base_url
+        self.healthy = healthy
+        self.verified = verified
+        self.details = details
+        self.log_text = log_text
+        self.vram_before_bytes = vram_before_bytes
+        self.port = port
+        self.container = container
+        self.teardown_result: Optional[Dict[str, Any]] = None
+
+
+class _ScratchServerContext:
+    """`contextlib.contextmanager`-style object, written as a class rather than a generator
+    function so `teardown_result` can be attached to the yielded handle from inside `__exit__`
+    (a plain `@contextmanager` generator's `finally` runs at the same point, but a class makes the
+    "teardown always runs, even on an exception from the caller's `with` body" contract explicit
+    and testable in isolation)."""
+
+    def __init__(
+        self,
+        cell: Dict[str, Any],
+        port: int,
+        container: str,
+        health_timeout: float,
+    ) -> None:
+        self.cell = cell
+        self.port = port
+        self.container = container
+        self.health_timeout = health_timeout
+        self.handle: Optional[ScratchServerHandle] = None
+
+    def __enter__(self) -> ScratchServerHandle:
+        cell_id = self.cell.get("cell_id") or compute_cell_id(self.cell)
+        vram_before = read_vram_used_bytes()
+        argv = build_command(self.cell, port=self.port)
+        log_path = f"/tmp/sweep-cell-{cell_id}.log"
+        spawn_scratch_server(argv, log_path, container=self.container)
+
+        bridge_ip = discover_bridge_ip(self.container)
+        base_url = f"http://{bridge_ip}:{self.port}"
+        healthy = wait_for_health(base_url, timeout=self.health_timeout)
+
+        log_result = subprocess.run(
+            ["docker", "exec", self.container, "cat", log_path],
+            capture_output=True, text=True,
+        )
+        log_text = log_result.stdout
+        verified, details = verify_startup_state(log_text, self.cell)
+
+        self.handle = ScratchServerHandle(
+            cell_id=cell_id, base_url=base_url, healthy=healthy, verified=verified,
+            details=details, log_text=log_text, vram_before_bytes=vram_before,
+            port=self.port, container=self.container,
+        )
+        return self.handle
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        teardown_result = teardown_scratch_server(self.port, container=self.container)
+        if self.handle is not None:
+            self.handle.teardown_result = teardown_result
+        return False  # never swallow an exception from the caller's `with` body
+
+
+def scratch_server(
+    cell: Dict[str, Any],
+    port: int,
+    container: str = DEFAULT_CONTAINER_NAME,
+    health_timeout: float = 120.0,
+) -> _ScratchServerContext:
+    """Context manager: spawn `cell`'s scratch server inside `container`, health-poll it, verify
+    its startup state from its own log, yield a `ScratchServerHandle` -- and ALWAYS tear it down
+    (`finally` semantics via `__exit__`, runs even if the caller's `with` body raises). This is
+    the one scratch-server lifecycle implementation in this module; `cmd_run` below and
+    `batch.py`'s per-cell execution both go through it, never re-implementing spawn/health/verify/
+    teardown separately. Only entering this context manager touches Docker -- never called by
+    `--dry-run` or by anything in this WP's own test suite (tests exercise `default_cell_runner`/
+    `run_queue` in `batch.py` with a fake standing in for this function entirely).
+    """
+    return _ScratchServerContext(cell, port=port, container=container, health_timeout=health_timeout)
+
+
+# -------------------------------------------------------------------------------------------
 # CLI
 # -------------------------------------------------------------------------------------------
 
@@ -811,8 +1104,10 @@ def cmd_dry_run(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace) -> int:
     """Live path: spawn one cell's scratch server, verify startup state, poll health, read VRAM,
-    tear down. Not exercised by this WP (no live Docker/GPU execution) -- wired for the
-    orchestrator's post-merge live smoke cell."""
+    tear down -- via the shared `scratch_server()` context manager (audit E1; see its own
+    docstring). Not exercised by this WP (no live Docker/GPU execution) -- wired for the
+    orchestrator's post-merge live smoke cell. Output shape and exit code are byte-for-byte
+    unchanged from before this WP's refactor."""
     cells = load_spec(Path(args.spec))
     target = None
     for cell in cells:
@@ -824,23 +1119,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"no cell with cell_id={args.cell_id!r} in {args.spec}", file=sys.stderr)
         return 2
 
-    vram_before = read_vram_used_bytes()
-    argv = build_command(target, port=args.port)
-    log_path = f"/tmp/sweep-cell-{args.cell_id}.log"
-    spawn_scratch_server(argv, log_path, container=args.container)
-
-    bridge_ip = discover_bridge_ip(args.container)
-    base_url = f"http://{bridge_ip}:{args.port}"
-    healthy = wait_for_health(base_url, timeout=args.health_timeout)
-
-    log_result = subprocess.run(
-        ["docker", "exec", args.container, "cat", log_path],
-        capture_output=True, text=True,
-    )
-    log_text = log_result.stdout
-    verified, details = verify_startup_state(log_text, target)
-
-    teardown_result = teardown_scratch_server(args.port, container=args.container)
+    with scratch_server(
+        target, port=args.port, container=args.container, health_timeout=args.health_timeout,
+    ) as handle:
+        healthy = handle.healthy
+        verified = handle.verified
+        details = handle.details
+        vram_before = handle.vram_before_bytes
 
     result = {
         "cell_id": args.cell_id,
@@ -848,7 +1133,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "startup_verified": verified,
         "startup_details": details,
         "vram_before_bytes": vram_before,
-        "teardown": teardown_result,
+        "teardown": handle.teardown_result,
         "invalid_config": not verified,
     }
     print(json.dumps(result, indent=2))

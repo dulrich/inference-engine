@@ -300,24 +300,73 @@ cell end-to-end.
 
 ### VRAM-fit pre-filter
 
-`classify_fit(cell)` returns one of `"fits"` / `"marginal"` / `"excluded"` / `"unknown"` (the
-last when neither `model_host_path` nor `synthetic_geometry` is usable — never a guessed fit),
-plus the numbers behind the classification. Formula:
-`estimated_total = weights_bytes + kv_bytes_per_token(ctk, ctv) * -c + NON_WEIGHT_OVERHEAD_GIB`,
-classified against `REALISTIC_FREE_VRAM_GIB` with a `FIT_MARGIN_GIB`/`MARGINAL_MARGIN_GIB` band.
-Every constant is cited in `sweep.py`'s own comments to a specific prior bake-off doc line or
-this plan's own text — see the module for the full citations (card nameplate 15.92 GiB; the
-plan's own "~12.8 GiB realistic free VRAM" sizing budget, `plans/quant-sweep-harness-and-
-instrument-v2.md:50-51`; ~456 MiB non-weight overhead, `docs/qwen38-27b-bakeoff-results.md:177-
-179`; the "~1.5-2 GiB safety-margin convention" repeated across every prior bake-off doc).
-**This is a pure-math predictor, never a substitute for measurement** — the framework's house
-rule (plan Key Changes/WP-1): estimates gate what gets attempted, a live VRAM read-back
-(`read_vram_used_bytes()`) is still what a real run trusts.
+`classify_fit(cell, vram_profile="desktop-shared", vram_total_bytes_fn=..., vram_used_bytes_fn=
+...)` returns one of `"fits"` / `"marginal"` / `"excluded"` / `"unknown"` (the last when neither
+`model_host_path` nor `synthetic_geometry` is usable — never a guessed fit), plus the numbers
+behind the classification. Formula:
+`estimated_total = weights_bytes + kv_bytes_per_token(ctk, ctv, context=-c, ...) * -c +
+NON_WEIGHT_OVERHEAD_GIB`, classified against `compute_vram_budget_bytes(vram_profile, ...)`
+(below) with a `FIT_MARGIN_GIB`/`MARGINAL_MARGIN_GIB` band. Every constant is cited in
+`sweep.py`'s own comments to a specific prior bake-off doc line or this plan's own text — see the
+module for the full citations (card nameplate 15.92 GiB; the plan's own "~12.8 GiB realistic free
+VRAM" sizing budget, `plans/quant-sweep-harness-and-instrument-v2.md:50-51`; ~456 MiB non-weight
+overhead, `docs/qwen38-27b-bakeoff-results.md:177-179`; the "~1.5-2 GiB safety-margin convention"
+repeated across every prior bake-off doc). **This is a pure-math predictor, never a substitute
+for measurement** — the framework's house rule (plan Key Changes/WP-1): estimates gate what gets
+attempted, a live VRAM read-back (`read_vram_used_bytes()`) is still what a real run trusts.
 
 KV-cache byte-per-element table (`KV_TYPE_BYTES_PER_ELEMENT`) covers `f32`/`f16`/`bf16` (exact)
 and `q8_0`/`q8_1`/`q5_0`/`q5_1`/`q4_0`/`q4_1` (ggml's own 32-element block-quant layout,
 `block_bytes / 32`) — cross-checked against this repo's own live measurement in
 `docs/qwen38-27b-bakeoff-results.md:158` (the q4_0 vs. q8_0 "KB/cell" comparison).
+
+#### SWA-awareness (audit B2, `longcontext-pow2-overnight-campaign.md` WP-1)
+
+Some architectures (gemma4) window-cap the majority of their attention layers — only a minority
+of "global" layers actually scale their KV cache with `-c`. `gguf_attention_geometry` now also
+extracts `<arch>.attention.sliding_window` (the window size) and `<arch>.attention.
+sliding_window_pattern` (a per-layer bool array, `True` = window-capped) straight from the GGUF
+header — live-verified against gemma-4-12B-it-qat-UD-Q4_K_XL.gguf's real header: 48 entries,
+exact match against the `head_count_kv` array (40 SWA layers @ head_count_kv=8, 8 global layers @
+head_count_kv=1, zero mismatches). `kv_bytes_per_token(geometry, ctk, ctv, context=..., 
+swa_layer_spec=...)` uses this (or an explicit cell-level `swa_layer_spec` override, same shape)
+to give window-capped layers `min(context, sliding_window)` tokens' worth of bytes and global
+layers the full `context` — a ~18x reduction in gemma's predicted KV bytes/token at `-c 32768`
+versus the old uniform-scaling formula, which is what made the earlier classifier wrongly exclude
+gemma at every rung. **No heuristic**: absent an explicit per-layer signal (header or override),
+this falls back to the pre-existing conservative (uniform-scaling) behavior — it never infers the
+SWA/global split from `head_count_kv` magnitude alone.
+
+#### Placement-awareness (audit B2)
+
+A cell running under `-ncmoe` (or any other partial-offload flag) doesn't have the whole GGUF
+resident on the GPU — counting the whole file overestimates VRAM pressure by the CPU-resident
+fraction. A cell (or its queue model-registry entry) carrying `gpu_weights_bytes` has that figure
+used in place of the raw file `stat()`/`synthetic_geometry.weights_bytes` size, applied uniformly
+regardless of whether the geometry came from a real header or a synthetic fixture. qwen36-a3b's
+`-ncmoe 32` config (`llama/config.yaml` offload-placement comments ~721-745): 2.494 GiB
+non-expert weights (always GPU-resident) + 8 of 40 layers' routed-expert weights GPU-resident,
+vs. its ~20.8 GiB whole-file size.
+
+#### VRAM budget profiles (audit B4)
+
+Two named profiles, never a bare constant — `compute_vram_budget_bytes(vram_profile,
+vram_total_bytes_fn, vram_used_bytes_fn)`:
+
+- **`desktop-shared`** — the pre-existing static `REALISTIC_FREE_VRAM_GIB` (12.8 GiB) figure.
+  Touches neither VRAM reader at all (no live I/O for this profile — every existing dry-run/
+  `classify_fit` caller is unaffected by this feature existing).
+- **`headless`** — live: `min` isn't even needed, the formula is `mem_info_vram_total -
+  measured_used_at_queue_start - HEADLESS_PINNED_MARGIN_GIB` (0.5 GiB). **Refuses**
+  (`sweep.VRAMProfileRefused`) when the measured baseline exceeds `HEADLESS_BASELINE_CEILING_GIB`
+  (1.5 GiB, pinned) — a live desktop session (measured ~3.1 GiB baseline, `llama/config.yaml`'s
+  gemma fit-math comment) trips this refusal loudly rather than the profile silently
+  overcommitting VRAM.
+
+Both VRAM reader functions are injectable; the module-level `read_vram_total_bytes`/
+`read_vram_used_bytes` are the real, live-capable sysfs-reading defaults — never invoked by this
+repo's own test suite, same "real function exists, only ever invoked live" pattern as
+`discover_bridge_ip`/`teardown_scratch_server` below.
 
 ### Ladder expansion
 
@@ -344,6 +393,16 @@ dict, and both the argv list and a shell-quoted `command_str` for each — as JS
 literally).
 
 ### Scratch-server lifecycle (live path — `sweep.py run`, not exercised by WP-1 itself)
+
+**Single implementation, reused by `batch.py`** (audit E1, `longcontext-pow2-overnight-
+campaign.md` WP-1): the spawn → health-check → verify → teardown sequence below is implemented
+once, as the `scratch_server(cell, port, container, health_timeout)` context manager — `sweep.py
+run`'s own `cmd_run` and `batch.py`'s per-cell execution both go through it; neither
+re-implements any piece of it. Entering the context manager spawns and health-polls; the yielded
+`ScratchServerHandle` (`healthy`/`verified`/`details`/`log_text`/`base_url`/...) is what a caller
+inspects (or, for `batch.py`, what its injectable `cell_runner` inspects/uses); teardown always
+runs on exit, including when the caller's own code raises. `batch.py`'s tests inject a fake
+context-manager factory in place of this — never Docker.
 
 Container facts baked in (verified live 2026-08-23, this WP's brief): `inference-engine-llama`
 has no `python3`, `kill`, or `pkill` inside the image; only the router's
@@ -393,6 +452,164 @@ live-verified against build `b10534`'s actual console format (see `_STARTUP_PATT
   container process exists to `exec` into. `teardown_scratch_server()` returns both a
   pre-teardown and post-teardown reading so a caller can confirm VRAM actually returned to
   baseline, not merely that the process is gone.
+
+## Batch runner (`batch.py`)
+
+`plans/longcontext-pow2-overnight-campaign.md` WP-1. Turns a self-contained queue file into an
+unattended, resumable run: cells execute serially through `sweep.py`'s `scratch_server()`
+lifecycle (never the router), with a durable state machine, a GPU-ownership maintenance window,
+a kernel-log hang safety rail, and skip propagation for KV arms that fail correctness. **No live
+operation happens by default** — every collaborator that could touch Docker/GPU/sysfs
+(`ContainerController`, the real `scratch_server`, the real VRAM readers, a real hang-check
+function) is injectable, and this module's own test suite (`tests/test_batch.py`) always injects
+fakes.
+
+### Queue file format (`queue_format: 1`, JSON)
+
+**Self-contained** (audit E3, pinned): a queue never references an external registry file — cells
+resolve against the queue's own `models:` map, so one queue file is one reproducible artifact.
+
+```json
+{
+  "queue_format": 1,
+  "vram_profile": "desktop-shared",
+  "deadline": "07:00",
+  "stop_policy": "pause-at-deadline",
+  "models": {
+    "gemma-4-12b-qat": {
+      "model_host_path": "/srv/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+      "model_container_path": "/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+      "server_flags": {"--jinja": true}
+    }
+  },
+  "cells": [
+    {
+      "model": "gemma-4-12b-qat", "alias": "gemma-4-12b-qat-c32768-f16",
+      "c": 32768, "ctk": "f16", "ctv": "f16", "fa": "on",
+      "battery": ["vram", "timing", "needle"], "sampling_arm": "capability", "trials": 3
+    }
+  ]
+}
+```
+
+- `models` — model id → `{model_host_path, model_container_path, server_flags (base flags,
+  e.g. `-ncmoe`/`--jinja`), gpu_weights_bytes (optional placement override), kv_attention_layers
+  (optional), swa_layer_spec (optional)}`.
+- `cells` — an ORDERED list of abbreviated cells `{model, alias, c, ctk, ctv, fa, battery,
+  sampling_arm, trials}`. `resolve_cell()`/`resolve_queue_cells()` merge each abbreviated cell's
+  `c`/`ctk`/`ctv`/`fa` onto its model's base `server_flags`, producing the normalized cell shape
+  `sweep.py` expects (`normalize_cell`'s contract — see "Spec format" above), and compute each
+  cell's `cell_id` (`sweep.compute_cell_id`); two queue entries resolving to a colliding
+  `cell_id` is a validation error, never a silent merge.
+- `vram_profile` — `"desktop-shared"` or `"headless"` (see VRAM budget profiles above); the CLI's
+  `--vram-profile` flag, if given, overrides the queue file's own value.
+- `deadline` — an `"HH:MM"` wall-clock cutoff, recomputed fresh relative to EACH invocation's own
+  start time (`compute_deadline_dt`): the next occurrence of that time at or after the
+  invocation started (today if still ahead, tomorrow if already passed today) — an overnight
+  queue spanning multiple nights gets a fresh deadline each night, by design.
+- `stop_policy` — currently only `"pause-at-deadline"` is implemented (validated, not just
+  accepted-and-ignored) — a required, explicit field so a queue author never wonders what happens
+  at a missed deadline; reserved for a future hard-stop policy without a queue-format bump.
+
+### Durable state machine (audit B6)
+
+State file: JSON, sibling of the queue file by default (`<queue>.state.json` —
+`default_state_path`), atomically written (`save_state`: temp file + `os.replace`) after every
+transition. Per-cell states: `pending` / `running` / `completed` / `failed` /
+`skipped-propagated` / `aborted-hang`. Queue-level states: `running` / `paused-resumable` /
+`completed` / `aborted-hang` (the last two are terminal — `TERMINAL_QUEUE_STATES`).
+
+- **Past the deadline**: no new cell launches; queue → `paused-resumable`. Already-running or
+  already-terminal cells are untouched; every still-`pending` cell stays `pending` for the next
+  invocation.
+- **Terminal no-op**: `batch run` against a queue whose last-saved state is `completed` or
+  `aborted-hang` prints a clear message and exits `0` without touching the container, the state
+  file, or any cell — UNLESS `--re-arm` is passed.
+- **`--re-arm`**: every cell not already `completed` (i.e. `failed`, `skipped-propagated`,
+  `aborted-hang`, AND `pending`) resets to `pending`; queue state resets to `running`. A full
+  retry of everything that didn't already succeed — a `completed` cell's record is never
+  re-run.
+- **Interrupted cell**: a cell found `running` at the START of an invocation means the previous
+  invocation crashed mid-cell (a clean exit always leaves a cell in a terminal per-cell state) —
+  it's marked `failed`/`interrupted` immediately, before anything else happens, and is never
+  silently re-run in the same invocation (only a later `--re-arm` retries it).
+- **Resuming a `paused-resumable` queue**: an ordinary `batch run` (no flags needed) picks up
+  every still-`pending` cell in queue order; `completed`/`failed`/`skipped-propagated` cells are
+  untouched.
+
+### GPU ownership / maintenance window (audit B3)
+
+`batch run` (non-dry-run) stops the `inference-engine-llama` container for the whole queue
+lifetime and restarts it on every exit path — normal completion, a deadline pause, a hang abort,
+and any exception (including from a `cell_runner`) — via a `try/finally` PLUS installed
+`SIGTERM`/`SIGINT` handlers (`_install_signal_traps`, `_GracefulExit`) so an external signal is
+just as `finally`-catchable as any other Python exception ("trap-guaranteed" per the plan). A
+failed restart attempt is swallowed (logged nowhere yet — WP-4/WP-6 territory) rather than
+masking the original failure or blocking process exit. `ContainerController` is the real
+`docker stop`/`docker start` collaborator — constructed only by `cmd_run` for a live, non-dry-run
+CLI invocation; `run_queue` itself just calls whatever object it's given (or does nothing if
+`None`), so no test in this repo ever invokes it.
+
+### Unattended safety rail — kernel-log hang signature
+
+`detect_hang_signature(lines)` matches EITHER `"MES might be in unrecoverable state"` or
+`"Failed to evict process queues"` (verbatim from `fleet-tools/references/rdna4-gpu-
+hang.md`'s "The signature" section and `fleet-tools/scripts/gpu-hang-watchdog.sh`'s own
+`SIGNATURE_RE` — either line alone is sufficient; journald delivers lines one at a time, so the
+full cascade never arrives as one matchable unit). `run_queue`'s injectable `hang_check_fn`
+(default a no-op) is checked once per cell; a match — or a `cell_runner`-reported `"aborted-
+hang"` status — marks that cell `aborted-hang`, halts the QUEUE terminally (`aborted-hang`, no
+further cells run, none get marked `skipped-propagated` — the queue just stops), and the
+maintenance-window restart above still fires. `poll_journal_for_hang(since_iso)` is the real,
+live-capable `journalctl -k --since <since>` polling implementation (repeated polling with an
+advancing `--since` achieves the same never-miss-a-line property as a persistent `-f` follower,
+without a background-thread/subprocess-lifecycle to manage) — never invoked by this repo's own
+tests, same pattern as `ContainerController`.
+
+### Skip propagation (audit E2, pinned)
+
+When a cell whose KV arm is quantized (`-ctk`/`-ctv` != f16) terminates `failed` for a
+CORRECTNESS reason (`CellOutcome.correctness_failure=True` — reserved for a classifier
+`degenerate` verdict or a needle-recall failure, never for health-timeout/OOM/interrupted/
+size-exceeded), `propagate_skips()` marks every LATER `pending` cell (queue order) with the same
+`(model, ctk, ctv)` and a strictly larger `-c` as `skipped-propagated`, referencing the failing
+cell's id. A non-correctness failure (health timeout, OOM-refusal) never propagates — the next
+cell just runs normally. Deterministic, unit-tested.
+
+### Pre-enqueue size check (audit E4, pinned)
+
+Before launching any cell with `-c >= 262144`, `project_cell_record_size_bytes(cell, trials)`
+builds a synthetic WORST-CASE sample+completion pair (every string field at a conservative
+maximum length, matching the real `needle_probe`/`longcontext.py` record shape), serializes it
+exactly as `run_harness.write_experiment_record` would, multiplies by `trials` then by 1.25
+(headroom), and compares against `run_harness.SIZE_LIMIT_BYTES`. Over budget → the cell is marked
+`failed`/`projected_size_exceeded` WITHOUT ever spawning a scratch server for it; the writer's own
+authoritative pre-write guard (`run_harness.py` ~1106-1189) is untouched and still the last word
+for whatever actually gets written.
+
+### Battery-execution seam (deferred to WP-2)
+
+This WP owns the queue/state-machine/safety-rail scaffolding, not the actual longcontext battery
+run. `run_queue`'s `cell_runner` parameter is the seam WP-2 wires the real battery into (per that
+plan's Key Changes: "`llama/bakeoff/batch.py` (battery hookup)"); `default_cell_runner` here is a
+placeholder that only checks scratch-server startup verification (`ScratchServerHandle.healthy`/
+`.verified`) and marks the cell `completed` on that basis alone — it runs no battery at all. This
+WP's own tests inject scripted fake `cell_runner`s to exercise every disposition (completed /
+health-timeout / OOM / degenerate / needle-recall failure / hang) the state machine has to
+handle, without the real battery existing yet.
+
+### CLI
+
+```sh
+python3 llama/bakeoff/batch.py run --queue <queue.json> [--vram-profile desktop-shared|headless] [--dry-run] [--re-arm]
+python3 llama/bakeoff/batch.py verify --run <run-dir>
+```
+
+`batch run --dry-run` resolves every cell and prints its `classify_fit()` classification (same
+shape as `sweep.py --dry-run`, one level up — queue-level, not spec-level) — touches no Docker,
+no state file, no container. `batch verify` is a dispatch seam only in this WP: it tries `import
+verify_run` (WP-4's module) and delegates to its `main()`; absent that module (true today), it
+prints a clear message to stderr and exits `2` — never a traceback.
 
 ## Long-context correctness instrument v2 (`longcontext.py`)
 

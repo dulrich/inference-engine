@@ -213,8 +213,19 @@ class TestSchemaConformance(unittest.TestCase):
         self.assertTrue(any("sha256" in e for e in errors))
 
     def test_empty_samples_flagged(self):
-        errors = verify_run.schema_conformance_errors(self._good_config(), [])
+        # WP-5: empty samples are a schema error only for records whose battery includes a
+        # sample-producing item ("needle"/"quality") -- a vram-only fit cell's record
+        # legitimately carries zero samples (its payload is config['vram']).
+        config = self._good_config()
+        config.setdefault("sweep_cell", {})["battery"] = ["needle"]
+        errors = verify_run.schema_conformance_errors(config, [])
         self.assertTrue(any("no parsed sample rows" in e for e in errors))
+
+    def test_empty_samples_conformant_for_vram_only_battery(self):
+        config = self._good_config()
+        config.setdefault("sweep_cell", {})["battery"] = ["vram"]
+        errors = verify_run.schema_conformance_errors(config, [])
+        self.assertFalse(any("no parsed sample rows" in e for e in errors))
 
     def test_longcontext_probe_missing_field_flagged(self):
         sample = _lc_sample("cell-a", 0)

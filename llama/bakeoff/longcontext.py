@@ -871,9 +871,22 @@ def run_cell(
         finish_reason = result.get("finish_reason")
 
         correct = task.score(content_text, trial)
+        # WP-5 attended-validation finding #7 (root AGENTS.md "wire fields not matching docs"
+        # family): a reasoning-model chat template (nemotron_h, live-measured) can route the
+        # ENTIRE answer to the reasoning channel and finish with `stop` on an empty content
+        # channel -- nemotron recalled every needle perfectly at 55k prompt tokens while all 27
+        # trials scored `wrong` against the empty `content_text`. When the model finished
+        # cleanly, produced no content, but did produce reasoning, grade the reasoning channel
+        # (there IS no other final answer) and flag the sample so analysis can always
+        # distinguish channel-fallback scores from ordinary content-channel scores.
+        scored_on_reasoning = False
+        if not correct and not content_text.strip() and reasoning_text.strip() and finish_reason == "stop":
+            correct = task.score(reasoning_text, trial)
+            scored_on_reasoning = True
         classifier = classify_trial(
             reasoning_text, content_text, finish_reason, correct=correct, haystack_text=haystack.text
         )
+        classifier.flags["scored_on_reasoning_channel"] = scored_on_reasoning
         usage = result.get("usage") or {}
         prompt_sha256 = hashlib.sha256(trial.prompt.encode("utf-8")).hexdigest()
 

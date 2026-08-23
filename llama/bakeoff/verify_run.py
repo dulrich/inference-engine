@@ -285,7 +285,13 @@ def schema_conformance_errors(config: Optional[Dict[str, Any]], samples: List[Di
         errors.append(f"config.json['lineage'] missing required field(s): {missing_lineage}")
 
     if not samples:
-        errors.append("samples.jsonl has no parsed sample rows")
+        # WP-5 (live-validation finding): a non-needle cell (e.g. a `battery: ["vram"]`
+        # fit-measurement cell) legitimately records an EMPTY sample set -- its payload is
+        # config['vram']'s baseline/loaded numbers, not trials. Empty samples are a schema
+        # error only for records whose battery includes a sample-producing item.
+        battery = (config.get("sweep_cell") or {}).get("battery") or []
+        if "needle" in battery or "quality" in battery:
+            errors.append("samples.jsonl has no parsed sample rows")
 
     for idx, sample in enumerate(samples):
         stype = sample.get("type")

@@ -1105,5 +1105,142 @@ class TestCLI(unittest.TestCase):
         self.assertIn("verify_run.py not found", buf.getvalue())
 
 
+class TestWp5DetailPersistence(unittest.TestCase):
+    """WP-5 glue: `run_queue` persists `CellOutcome.detail` into the state file (WP-2's runner
+    populated it but nothing wrote it durably -- the 262144 fit-measurement margin, audit B1's
+    WP-6 admission condition, needs an on-disk home)."""
+
+    def test_outcome_detail_persisted_in_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = _write_queue(tmp, _minimal_queue())
+            detail = {"vram_before_bytes": 111, "vram_after_bytes": 222, "sample_count": 3}
+            result = batch.run_queue(
+                queue_path,
+                cell_runner=lambda handle, cell: batch.CellOutcome("completed", None, False, dict(detail)),
+                scratch_server_fn=fake_scratch_server_factory(),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
+                vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
+            )
+            for cs in result["state"]["cells"].values():
+                self.assertEqual(cs["detail"], detail)
+            # And durably: the saved state file carries it too, not just the in-memory dict.
+            saved = json.loads(batch.default_state_path(queue_path).read_text())
+            for cs in saved["cells"].values():
+                self.assertEqual(cs["detail"], detail)
+
+    def test_deferred_vram_cell_detail_gains_vram_readbacks(self):
+        battery_fn = _fake_battery_fn_factory({})
+        runner = batch.make_longcontext_cell_runner(
+            battery_fn=battery_fn, vram_used_bytes_fn=lambda: 4321,
+        )
+        outcome = runner(_handle(vram_before=1000), _longcontext_cell(battery=["vram"]))
+        self.assertEqual(outcome.status, "completed")
+        self.assertEqual(battery_fn.calls, [])  # still deferred -- battery never ran
+        self.assertEqual(outcome.detail["vram_before_bytes"], 1000)
+        self.assertEqual(outcome.detail["vram_after_bytes"], 4321)
+        self.assertIn("startup_details", outcome.detail)
+
+    def test_deferred_vram_cell_writes_record_when_records_dir_set(self):
+        # WP-5 verifier finding: a completed non-needle cell with no records subdirectory fails
+        # verify_run's records_present check -- the deferral path must write the same four-file
+        # record shape (empty sample set; the config's vram numbers are the payload).
+        with tempfile.TemporaryDirectory() as td:
+            records_dir = Path(td)
+            runner = batch.make_longcontext_cell_runner(
+                battery_fn=_fake_battery_fn_factory({}), vram_used_bytes_fn=lambda: 4321,
+                records_dir=records_dir,
+            )
+            cell = _longcontext_cell(battery=["vram"])
+            outcome = runner(_handle(vram_before=1000), cell)
+            self.assertEqual(outcome.status, "completed")
+            self.assertIsNone(outcome.detail["record_error"])
+            record_dir = Path(outcome.detail["record_path"])
+            self.assertTrue(record_dir.is_dir())
+            self.assertEqual(record_dir.parent, records_dir)
+            for fname in ("config.json", "samples.jsonl", "completions.jsonl", "prompts.jsonl"):
+                self.assertTrue((record_dir / fname).exists(), fname)
+            config = json.loads((record_dir / "config.json").read_text())
+            self.assertEqual(config["vram"]["baseline_bytes"], 1000)
+            self.assertEqual(config["vram"]["loaded_bytes"], 4321)
+
+
+class TestWriteCellRecord(unittest.TestCase):
+    """WP-5 glue: `write_cell_record` persists one live cell's battery output as the
+    `verify_run.py`-consumable run-directory shape (`records_dir/<cell_id>/`, four-file
+    `write_experiment_record` layout, experiment_id == cell_id)."""
+
+    def _battery_results(self, n=2, summary=None):
+        samples = [_sample("single_needle", "correct", True) for _ in range(n)]
+        completions = [{"type": "longcontext_probe", "trial_index": i} for i in range(n)]
+        return {"single_needle": {0.45: longcontext.CellResult(
+            samples=samples, completions=completions, summary=summary,
+        )}}
+
+    def test_writes_verify_run_consumable_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_gguf = Path(tmp) / "fake-model.gguf"
+            fake_gguf.write_bytes(b"x" * 128)
+            cell = dict(_longcontext_cell())
+            cell["model_host_path"] = str(fake_gguf)
+            records_dir = Path(tmp) / "run-wp5"
+            out = batch.write_cell_record(
+                records_dir, cell, self._battery_results(),
+                vram_baseline_bytes=1000, vram_loaded_bytes=9000,
+                sampling_arm_effective="capability",
+            )
+            self.assertEqual(out, records_dir / "lc-cell")
+            config = json.loads((out / "config.json").read_text())
+            for key in run_harness.REQUIRED_LINEAGE_FIELDS:
+                self.assertIn(key, config["lineage"])
+            self.assertEqual(config["lineage"]["filename"], "fake-model.gguf")
+            self.assertEqual(config["lineage"]["file_size"], 128)
+            self.assertEqual(config["sweep_cell"]["cell_id"], "lc-cell")
+            self.assertEqual(config["vram"]["baseline_bytes"], 1000)
+            self.assertEqual(config["vram"]["loaded_bytes"], 9000)
+            self.assertIsNone(config["wilson_summary"])
+            samples = (out / "samples.jsonl").read_text().strip().splitlines()
+            self.assertEqual(len(samples), 2)
+
+    def test_runner_writes_record_when_records_dir_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            battery_fn = _fake_battery_fn_factory(
+                {"single_needle": [_sample("single_needle", "correct", True)]},
+            )
+            runner = batch.make_longcontext_cell_runner(
+                battery_fn=battery_fn, vram_used_bytes_fn=lambda: 5000,
+                records_dir=Path(tmp) / "run-x",
+            )
+            outcome = runner(_handle(), _longcontext_cell())
+            self.assertEqual(outcome.status, "completed")
+            self.assertIsNotNone(outcome.detail["record_path"])
+            self.assertIsNone(outcome.detail["record_error"])
+            self.assertTrue((Path(outcome.detail["record_path"]) / "config.json").exists())
+
+    def test_runner_record_write_failure_never_aborts_the_cell(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            unwritable = Path(tmp) / "not-a-dir.txt"
+            unwritable.write_text("occupied")
+            battery_fn = _fake_battery_fn_factory(
+                {"single_needle": [_sample("single_needle", "correct", True)]},
+            )
+            runner = batch.make_longcontext_cell_runner(
+                battery_fn=battery_fn, vram_used_bytes_fn=lambda: 5000,
+                records_dir=unwritable,  # a file where a directory is needed -> write fails
+            )
+            outcome = runner(_handle(), _longcontext_cell())
+            self.assertEqual(outcome.status, "completed")  # persistence failure is not a cell failure
+            self.assertIsNone(outcome.detail["record_path"])
+            self.assertIsNotNone(outcome.detail["record_error"])
+
+
+class TestWp5CliArgs(unittest.TestCase):
+    def test_scratch_container_and_records_dir_default_to_none(self):
+        parser = batch.build_arg_parser()
+        args = parser.parse_args(["run", "--queue", "q.json"])
+        self.assertIsNone(args.scratch_container)
+        self.assertIsNone(args.records_dir)
+
+
 if __name__ == "__main__":
     unittest.main()

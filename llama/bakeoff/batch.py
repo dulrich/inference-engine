@@ -454,9 +454,13 @@ def poll_journal_for_hang(since_iso: str, timeout: float = 5.0) -> Optional[str]
     with the real subprocess call, same "real function exists, only ever invoked live" pattern as
     `sweep.py`'s own `discover_bridge_ip`/`read_vram_used_bytes`."""
     try:
+        # errors='replace' (WP-5 finding #5, same class as sweep.py's startup-log read): kernel
+        # log lines are not guaranteed UTF-8, and a strict decode would crash the hang rail
+        # mid-run. The hang signatures are all ASCII -- lossy replacement never masks one.
         result = subprocess.run(
             ["journalctl", "-k", "--since", since_iso],
-            capture_output=True, text=True, timeout=timeout, check=False,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout, check=False,
         )
     except (subprocess.TimeoutExpired, OSError):
         return None
@@ -550,12 +554,84 @@ def default_cell_runner(handle: "sweep.ScratchServerHandle", cell: Dict[str, Any
 LONGCONTEXT_BATTERY_ITEM = "needle"
 
 
+def write_cell_record(
+    records_dir: Path,
+    cell: Dict[str, Any],
+    battery_results: Dict[str, Dict[float, Any]],
+    vram_baseline_bytes: Optional[int],
+    vram_loaded_bytes: Optional[int],
+    sampling_arm_effective: str,
+) -> Path:
+    """WP-5 glue: persists one live cell's battery output as a standard four-file
+    `run_harness.write_experiment_record` directory under `records_dir/<cell_id>/` -- exactly the
+    run-directory convention `verify_run.py` (WP-4) consumes (`experiment_id == cell_id`, one
+    subdirectory per queue cell). WP-2 deliberately left disk persistence out of the cell runner
+    (its `CellOutcome.detail` carries only a compact summary); this closes that gap for the CLI
+    path.
+
+    Lineage: `filename`/`file_size` come from the cell's own `model_host_path` (stat'd live);
+    `sha256`/`hf_repo`/`hf_revision`/`llama_cpp_build` are recorded as explicit `None` --
+    `REQUIRED_LINEAGE_FIELDS` requires every key present, and permits `None` for genuinely
+    unresolved values (hashing a multi-GiB GGUF per cell is not worth the wall-clock; the host
+    path + size pin the artifact well enough for this campaign's records).
+
+    `wilson_summary`: the first non-null per-task/position summary from the battery (Wilson
+    intervals exist only where `n_trials >= longcontext.MIN_TRIALS_FOR_WILSON`); `None` for
+    smoke-depth cells -- `write_experiment_record` keeps the key present either way.
+    """
+    cell_id = cell["cell_id"]
+    host_path = cell.get("model_host_path")
+    file_size = None
+    filename = None
+    if host_path:
+        filename = Path(host_path).name
+        try:
+            file_size = Path(host_path).stat().st_size
+        except OSError:
+            file_size = None
+    lineage = {
+        "hf_repo": None, "hf_revision": None, "filename": filename,
+        "file_size": file_size, "sha256": None, "llama_cpp_build": None,
+    }
+    samples: List[Dict[str, Any]] = []
+    completions: List[Dict[str, Any]] = []
+    wilson_summary: Optional[Dict[str, Any]] = None
+    for per_position in battery_results.values():
+        for cell_result in per_position.values():
+            samples.extend(cell_result.samples)
+            completions.extend(cell_result.completions)
+            if wilson_summary is None and cell_result.summary is not None:
+                wilson_summary = cell_result.summary
+    config = {
+        "lineage": lineage,
+        "sweep_cell": {
+            "cell_id": cell_id,
+            "alias": cell.get("alias"),
+            "server_flags": cell.get("server_flags"),
+            "model_host_path": host_path,
+            "battery": cell.get("battery"),
+            "sampling_arm": sampling_arm_effective,
+        },
+        "vram": {
+            "baseline_bytes": vram_baseline_bytes,
+            "loaded_bytes": vram_loaded_bytes,
+            "after_teardown_bytes": None,
+        },
+        "wilson_summary": wilson_summary,
+    }
+    run_harness.write_experiment_record(
+        cell_id, config, [], completions, samples, base_dir=records_dir,
+    )
+    return records_dir / cell_id
+
+
 def make_longcontext_cell_runner(
     battery_fn: Optional[Callable[..., Dict[str, Dict[float, Any]]]] = None,
     production_sampling_fn: Optional[Callable[[str], Dict[str, float]]] = None,
     vram_used_bytes_fn: Optional[Callable[[], int]] = None,
     max_tokens: int = 256,
     timeout: float = 300,
+    records_dir: Optional[Path] = None,
 ) -> Callable[["sweep.ScratchServerHandle", Dict[str, Any]], CellOutcome]:
     """Builds the real live `cell_runner` for a `battery: [..., "needle"]` queue cell:
     `longcontext.run_live_battery`'s full task x position x trial sweep against `handle`'s live
@@ -608,7 +684,36 @@ def make_longcontext_cell_runner(
             return CellOutcome("failed", "invalid_config", False, {"startup_details": handle.details})
 
         if LONGCONTEXT_BATTERY_ITEM not in (cell.get("battery") or []):
-            return default_cell_runner(handle, cell)
+            outcome = default_cell_runner(handle, cell)
+            # WP-5: augment the startup-only disposition with VRAM read-backs so a
+            # vram-battery fit-measurement cell (e.g. the gemma 262144 f16 cell whose measured
+            # margin is audit B1's WP-6 admission condition) persists its numbers via the
+            # state file's `detail` instead of evaporating with the scratch server.
+            try:
+                vram_after = vram_used_bytes_fn()
+            except OSError:
+                vram_after = None
+            augmented = dict(outcome.detail or {})
+            augmented["vram_before_bytes"] = handle.vram_before_bytes
+            augmented["vram_after_bytes"] = vram_after
+            # WP-5 (verifier finding): a completed non-needle cell with NO records subdirectory
+            # fails verify_run's `records_present` check -- the unattended loop (batch run ->
+            # batch verify, audit M2) would page on every fit-measurement cell. Write the same
+            # four-file record shape with an empty sample/completion set; the config's vram
+            # numbers are the cell's actual payload.
+            if records_dir is not None and outcome.status == "completed":
+                try:
+                    augmented["record_path"] = str(write_cell_record(
+                        records_dir, cell, {},
+                        vram_baseline_bytes=handle.vram_before_bytes,
+                        vram_loaded_bytes=vram_after,
+                        sampling_arm_effective=None,
+                    ))
+                    augmented["record_error"] = None
+                except Exception as exc:  # noqa: BLE001 -- record write must never fail a cell
+                    augmented["record_path"] = None
+                    augmented["record_error"] = f"{type(exc).__name__}: {exc}"
+            return CellOutcome(outcome.status, outcome.reason, outcome.correctness_failure, augmented)
 
         sampling_arm = cell.get("_sampling_arm")
         if sampling_arm not in ("capability", "production"):
@@ -656,6 +761,20 @@ def make_longcontext_cell_runner(
         except OSError:
             vram_after_bytes = None
 
+        record_path: Optional[str] = None
+        record_error: Optional[str] = None
+        if records_dir is not None:
+            # WP-5 glue: persist the battery output as a verify_run.py-consumable record
+            # directory. A persistence failure (size budget, disk) never aborts the queue --
+            # it is surfaced in `detail` and by the verifier's own records_present check.
+            try:
+                record_path = str(write_cell_record(
+                    Path(records_dir), cell, battery_results,
+                    handle.vram_before_bytes, vram_after_bytes, effective_arm,
+                ))
+            except Exception as exc:
+                record_error = f"{type(exc).__name__}: {exc}"
+
         all_samples = [
             sample
             for per_position in battery_results.values()
@@ -687,6 +806,8 @@ def make_longcontext_cell_runner(
             "vram_after_bytes": vram_after_bytes,
             "sample_count": len(all_samples),
             "summaries": summaries,
+            "record_path": record_path,
+            "record_error": record_error,
         }
 
         if has_degenerate:
@@ -825,6 +946,13 @@ def run_queue(
             )
             hang_line = hang_check_fn()
 
+            # WP-5: persist the runner's compact detail (VRAM read-backs, sampling-arm
+            # provenance, per-task Wilson summaries, record path) into the state file -- WP-2's
+            # runner populated `CellOutcome.detail` but nothing wrote it durably, so the 262144
+            # fit-measurement margin (audit B1's admission condition for WP-6) had no on-disk
+            # home. `detail` is JSON-serializable by construction in every runner in this module.
+            cs["detail"] = outcome.detail
+
             if hang_line is not None or outcome.status == "aborted-hang":
                 cs["state"] = ABORTED_HANG
                 cs["reason"] = hang_line or outcome.reason or "hang_signature"
@@ -893,6 +1021,22 @@ def _dry_run_report(
 # -------------------------------------------------------------------------------------------
 
 
+def make_live_hang_check_fn() -> Callable[[], Optional[str]]:
+    """WP-5 glue: the real per-cell hang check for the CLI path. `run_queue`'s `hang_check_fn`
+    default is a no-op (correct for tests), but `cmd_run` never wired the live implementation --
+    `poll_journal_for_hang` existed as dead code from the CLI (found in WP-5's attended
+    validation). Each call polls `journalctl -k` since the previous call (first call: since this
+    factory was built), so repeated per-cell polling never misses a line."""
+    state = {"since": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")}
+
+    def _check() -> Optional[str]:
+        since = state["since"]
+        state["since"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        return poll_journal_for_hang(since)
+
+    return _check
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     controller = None
     if not args.dry_run and not args.no_container_control:
@@ -910,10 +1054,22 @@ def cmd_run(args: argparse.Namespace) -> int:
             # default stays `default_cell_runner` -- untouched -- so every direct `run_queue(...)`
             # caller (including this WP's and WP-1's own tests) that doesn't pass `cell_runner=`
             # is unaffected.
-            cell_runner=make_longcontext_cell_runner(),
+            cell_runner=make_longcontext_cell_runner(
+                records_dir=Path(args.records_dir) if args.records_dir else None,
+            ),
             container_controller=controller,
+            # WP-5: wire the real kernel-log hang rail for live (non-dry-run) invocations;
+            # dry-run keeps the no-op default (it never spawns anything to hang).
+            hang_check_fn=None if args.dry_run else make_live_hang_check_fn(),
             port=args.port,
-            container=args.container,
+            # WP-5 (attended validation finding): the maintenance window `docker stop`s the
+            # ROUTER container (`--container`), but `sweep.scratch_server` `docker exec`s into
+            # its target -- a stopped container cannot host an exec. Live runs therefore spawn
+            # scratch servers in a SIBLING container (`--scratch-container`: same image, same
+            # GPU devices and model mounts, no port publish) while the router stays stopped for
+            # the whole window; the default (scratch == router container) survives only for
+            # dry-run/test paths that never stop anything.
+            container=args.scratch_container or args.container,
         )
     except _GracefulExit as exc:
         print(f"batch run interrupted: {exc}", file=sys.stderr)
@@ -957,6 +1113,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--re-arm", action="store_true")
     p_run.add_argument("--state", default=None, help="override the default sibling state-file path")
     p_run.add_argument("--container", default=sweep.DEFAULT_CONTAINER_NAME)
+    p_run.add_argument(
+        "--scratch-container", default=None,
+        help="container scratch servers exec into (a running SIBLING of the stopped router "
+        "container for live runs -- see cmd_run's comment); defaults to --container",
+    )
+    p_run.add_argument(
+        "--records-dir", default=None,
+        help="run directory for verify_run.py-consumable per-cell records "
+        "(runs/bakeoff/<run-name>); no records are written when omitted",
+    )
     p_run.add_argument("--port", type=int, default=8899)
     p_run.add_argument(
         "--no-container-control", action="store_true",

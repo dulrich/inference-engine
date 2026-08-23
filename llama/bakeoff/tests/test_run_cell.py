@@ -165,6 +165,84 @@ class TestRunCellSchemaV2Fields(unittest.TestCase):
             self.assertNotEqual(sample["classifier_verdict"], "correct")
 
 
+class TestReasoningChannelFallbackScoring(unittest.TestCase):
+    """WP-5 attended-validation finding #7: a reasoning-model chat template (nemotron_h,
+    live-measured) can put the ENTIRE answer in the reasoning channel and finish `stop` with an
+    empty content channel. run_cell must grade the reasoning channel in exactly that case --
+    empty content + non-empty reasoning + finish_reason 'stop' -- and flag the sample
+    (`scored_on_reasoning_channel`), never touching ordinary content-channel scoring."""
+
+    def setUp(self):
+        self.task = longcontext.SingleNeedleTask()
+        self.payload = run_harness.sampling_arm_payload(run_harness.SAMPLING_ARM_CAPABILITY, seed=999)
+
+    @staticmethod
+    def _reasoning_only_request_fn(finish_reason="stop"):
+        marker = "Reference code for this section: "
+
+        def request_fn(prompt, max_tokens, sampling):
+            start = prompt.index(marker) + len(marker)
+            code = prompt[start:prompt.index(".", start)]
+            return {
+                "success": True, "error": None, "content_text": "",
+                "reasoning_text": f"The reference code is {code}.",
+                "finish_reason": finish_reason, "usage": {"prompt_tokens": 1234},
+                "wall_seconds": 0.1, "t0_iso": "2026-08-23T00:00:00+00:00",
+            }
+
+        return request_fn
+
+    def test_empty_content_with_answer_in_reasoning_scores_correct_and_flags(self):
+        result = longcontext.run_cell(
+            self._reasoning_only_request_fn(), self.task, "cell-reasoning-fallback", 0.45, 2000,
+            sampling_arm="capability", sampling_payload=self.payload, n_trials=2,
+        )
+        for sample in result.samples:
+            self.assertTrue(sample["correct"])
+            self.assertEqual(sample["classifier_verdict"], "correct")
+            self.assertTrue(sample["classifier_flags"]["scored_on_reasoning_channel"])
+
+    def test_truncated_reasoning_never_triggers_fallback(self):
+        # finish_reason 'length' with empty content stays the truncated(benign) path -- the
+        # fallback applies only to a CLEAN finish whose answer landed in the reasoning channel.
+        result = longcontext.run_cell(
+            self._reasoning_only_request_fn(finish_reason="length"), self.task,
+            "cell-reasoning-truncated", 0.45, 2000,
+            sampling_arm="capability", sampling_payload=self.payload, n_trials=1,
+        )
+        sample = result.samples[0]
+        self.assertFalse(sample["correct"])
+        self.assertEqual(sample["classifier_verdict"], "truncated(benign)")
+        self.assertFalse(sample["classifier_flags"]["scored_on_reasoning_channel"])
+
+    def test_content_channel_scoring_unaffected(self):
+        result = longcontext.run_cell(
+            _make_correct_request_fn(self.task), self.task, "cell-content-normal", 0.45, 2000,
+            sampling_arm="capability", sampling_payload=self.payload, n_trials=1,
+        )
+        sample = result.samples[0]
+        self.assertTrue(sample["correct"])
+        self.assertFalse(sample["classifier_flags"]["scored_on_reasoning_channel"])
+
+    def test_wrong_on_both_channels_stays_wrong(self):
+        def request_fn(prompt, max_tokens, sampling):
+            return {
+                "success": True, "error": None, "content_text": "",
+                "reasoning_text": "I could not find any reference code in the text provided.",
+                "finish_reason": "stop", "usage": {"prompt_tokens": 1234},
+                "wall_seconds": 0.1, "t0_iso": "2026-08-23T00:00:00+00:00",
+            }
+
+        result = longcontext.run_cell(
+            request_fn, self.task, "cell-reasoning-wrong", 0.45, 2000,
+            sampling_arm="capability", sampling_payload=self.payload, n_trials=1,
+        )
+        sample = result.samples[0]
+        self.assertFalse(sample["correct"])
+        self.assertEqual(sample["classifier_verdict"], "wrong")
+        self.assertTrue(sample["classifier_flags"]["scored_on_reasoning_channel"])
+
+
 class TestLiveEntryPoint(unittest.TestCase):
     """WP-2's live entry point (`build_live_request_fn`/`run_live_battery`). Never opens a
     socket: `build_live_request_fn`'s own tests monkeypatch `run_harness._execute_streaming_

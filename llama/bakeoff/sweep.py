@@ -673,10 +673,27 @@ def classify_fit(
 _FLAG_ORDER = ["-m", "--port", "-c", "-ctk", "-ctv", "-fa", "-ngl"]
 
 
+def _flag_args(key: str, value: Any) -> List[str]:
+    """Serializes one server flag for the argv. Booleans mean flag PRESENCE, not a literal
+    argument: JSON `true` emits the bare flag (`--jinja`), `false`/`None` omits it entirely.
+    WP-5 attended-validation finding #3: `str(True)` produced `--jinja True`, which llama-server
+    rejects at parse time (`error: invalid argument: True`) -- the server died instantly, the
+    health poll timed out against a corpse, and every cell failed `health_timeout` while the
+    queue exited 0 "completed". Valueless flags are a real llama-server class and queue authors
+    write JSON booleans for them; this keeps cell ids stable (the hash covers the flags dict,
+    not the argv)."""
+    if value is True:
+        return [key]
+    if value is False or value is None:
+        return []
+    return [key, str(value)]
+
+
 def build_command(cell: Dict[str, Any], port: int) -> List[str]:
     """Builds the exact `llama-server` argv this cell would run, in a fixed, deterministic flag
     order (`_FLAG_ORDER` first, any remaining `server_flags` keys after, sorted) -- two calls on
-    the same cell+port always produce byte-identical output.
+    the same cell+port always produce byte-identical output. Boolean flag values are
+    presence/absence markers, never literal arguments (`_flag_args`).
     """
     flags = dict(cell["server_flags"])
     flags["-m"] = cell["model_container_path"]
@@ -686,10 +703,10 @@ def build_command(cell: Dict[str, Any], port: int) -> List[str]:
     seen = set()
     for key in _FLAG_ORDER:
         if key in flags:
-            argv += [key, str(flags[key])]
+            argv += _flag_args(key, flags[key])
             seen.add(key)
     for key in sorted(k for k in flags if k not in seen):
-        argv += [key, str(flags[key])]
+        argv += _flag_args(key, flags[key])
     return argv
 
 
@@ -1029,6 +1046,15 @@ class _ScratchServerContext:
 
     def __enter__(self) -> ScratchServerHandle:
         cell_id = self.cell.get("cell_id") or compute_cell_id(self.cell)
+        # WP-5 attended-validation finding #6: pre-spawn orphan sweep. A crash inside this
+        # method after `spawn_scratch_server` but before the handle exists (finding #5's
+        # UnicodeDecodeError was exactly that) skips __exit__ teardown and leaves the server
+        # running; the next run's spawn on the same port then collides with the orphan -- the
+        # health poll answers from the orphan while the new process's log fails startup
+        # verification, and the cell fails `invalid_config` for a reason that has nothing to do
+        # with its config. Kill anything already on the port before spawning.
+        if find_host_pid_by_port(self.port, container=self.container) is not None:
+            teardown_scratch_server(self.port, container=self.container)
         vram_before = read_vram_used_bytes()
         argv = build_command(self.cell, port=self.port)
         log_path = f"/tmp/sweep-cell-{cell_id}.log"
@@ -1038,11 +1064,17 @@ class _ScratchServerContext:
         base_url = f"http://{bridge_ip}:{self.port}"
         healthy = wait_for_health(base_url, timeout=self.health_timeout)
 
+        # WP-5 attended-validation finding #5: NEVER `text=True` here -- llama-server's `-lv 9`
+        # startup log is not guaranteed UTF-8 (nemotron's log carried a raw 0xc4 byte), and a
+        # strict decode raises UnicodeDecodeError out of __enter__, crashing the whole queue
+        # mid-cell (state file left with the cell stuck 'running'). Decode bytes with
+        # errors='replace': the startup-state patterns are all ASCII, so lossy replacement can
+        # never break `verify_startup_state`.
         log_result = subprocess.run(
             ["docker", "exec", self.container, "cat", log_path],
-            capture_output=True, text=True,
+            capture_output=True,
         )
-        log_text = log_result.stdout
+        log_text = log_result.stdout.decode("utf-8", errors="replace")
         verified, details = verify_startup_state(log_text, self.cell)
 
         self.handle = ScratchServerHandle(

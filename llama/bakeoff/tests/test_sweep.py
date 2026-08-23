@@ -319,5 +319,45 @@ class TestRealQwen36A3BHeaderRegression(unittest.TestCase):
         self.assertEqual(fit_no_override["classification"], "excluded")
 
 
+class TestBuildCommandBooleanFlags(unittest.TestCase):
+    """WP-5 attended-validation finding #3: JSON `true` in server_flags must emit the BARE flag,
+    never a literal `True` argument -- llama-server rejects `--jinja True` at parse time
+    (`error: invalid argument: True`), the server dies instantly, and the health poll times out
+    against a corpse while the queue exits 0 'completed'."""
+
+    @staticmethod
+    def _cell(server_flags):
+        flags = {"-c": 32768}
+        flags.update(server_flags)
+        return sweep.normalize_cell({
+            "alias": "boolflags",
+            "model_container_path": "/models/fake.gguf",
+            "server_flags": flags,
+            "battery": ["needle"],
+        })
+
+    def test_true_emits_bare_flag_without_argument(self):
+        argv = sweep.build_command(self._cell({"--jinja": True}), port=18080)
+        self.assertIn("--jinja", argv)
+        self.assertNotIn("True", argv)
+        # The bare flag must not swallow the next token: whatever follows --jinja is another flag.
+        nxt = argv[argv.index("--jinja") + 1] if argv.index("--jinja") + 1 < len(argv) else None
+        if nxt is not None:
+            self.assertTrue(nxt.startswith("-"), f"--jinja swallowed {nxt!r}")
+
+    def test_false_and_none_omit_the_flag_entirely(self):
+        argv = sweep.build_command(self._cell({"--jinja": False, "--no-warmup": None}), port=18080)
+        self.assertNotIn("--jinja", argv)
+        self.assertNotIn("--no-warmup", argv)
+        self.assertNotIn("False", argv)
+        self.assertNotIn("None", argv)
+
+    def test_non_boolean_values_still_serialize_as_key_value_pairs(self):
+        argv = sweep.build_command(self._cell({"--jinja": True}), port=18080)
+        i = argv.index("-c")
+        self.assertEqual(argv[i + 1], "32768")
+        self.assertEqual(argv[argv.index("--port") + 1], "18080")
+
+
 if __name__ == "__main__":
     unittest.main()

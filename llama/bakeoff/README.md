@@ -339,6 +339,15 @@ has no `python3`, `kill`, or `pkill` inside the image; only the router's
 4806(container)->4811(host) port is published; a scratch server's port is container-internal
 only.
 
+Two default `server_flags` are load-bearing, both first surfaced by the WP-1 live smoke cell
+(2026-08-23): **`--host 0.0.0.0`** (llama-server defaults to 127.0.0.1 — container-internal
+loopback — so the server comes up healthy while being unreachable via the bridge IP) and
+**`-lv 9`** (the `llama_context`/`llama_kv_cache` lines the startup-state verification parses
+never print at default verbosity, and *lower* `-lv` values print less, not more — without it
+every cell is unverifiable-by-construction and classifies `invalid_config`). Both live in
+`_DEFAULT_SERVER_FLAGS` with their citations; the verification patterns themselves are
+live-verified against build `b10534`'s actual console format (see `_STARTUP_PATTERNS`).
+
 - **Spawn**: `spawn_scratch_server(argv, log_path, container)` — `docker exec -d <container> sh
   -c 'nohup <argv...> > <log_path> 2>&1 < /dev/null &'`. `nohup`/`sh` are ordinary coreutils/dash,
   present in the runtime image; no `python3` needed to launch it.

@@ -287,12 +287,28 @@ def kv_bytes_per_token(
 
     `kv_attention_layers` overrides `geometry["block_count"]` for hybrid architectures (see
     `gguf_attention_geometry`'s docstring); defaults to the GGUF's raw `block_count` when absent.
+
+    **Per-layer-array `head_count_kv`** (orchestrator fix, first surfaced by the WP-1 live smoke
+    cell against the real BailingMoE3 GGUF header): several live architectures store
+    `attention.head_count_kv` as a per-layer ARRAY, not a scalar -- BailingMoE3 (24 entries,
+    nonzero at exactly the 6 MLA layers) and gemma4 (48 entries: 8 for the 40 SWA layers, 1 for
+    the 8 global layers) both do. In that case the array is itself the ground truth for which
+    layers carry KV and how many heads each has, so bytes/token is the per-layer sum and both
+    `kv_attention_layers` and `block_count` are ignored (zero entries contribute nothing --
+    the hybrid-architecture problem the scalar-path override exists for never arises).
+    Caveat shared with the scalar path: this is standard K/V-tensor arithmetic. For MLA layers
+    it can mis-estimate in EITHER direction (live check, Ling-3.0-tiny Q4_K_M: predicted
+    8448 B/token vs ~14.4 KB/token measured at -c 8192 -- llama.cpp's MLA cache layout is not
+    plain head_count_kv*key/value_length) -- treat per-layer-array MLA fits as approximate and
+    lean on the live VRAM read-back, not this number, near any margin boundary.
     """
     layers = kv_attention_layers if kv_attention_layers is not None else geometry.get("block_count")
     head_count_kv = geometry.get("head_count_kv")
     key_length = geometry.get("key_length")
     value_length = geometry.get("value_length")
-    if not all([layers, head_count_kv, key_length, value_length]):
+    per_layer_kv = isinstance(head_count_kv, (list, tuple))
+    required = [head_count_kv, key_length, value_length] if per_layer_kv else [layers, head_count_kv, key_length, value_length]
+    if not all(required):
         raise GGUFParseError(
             f"incomplete attention geometry for KV bytes/token: {geometry!r} "
             f"(kv_attention_layers override: {kv_attention_layers!r})"
@@ -304,7 +320,10 @@ def kv_bytes_per_token(
         raise ValueError(
             f"unknown KV cache type {exc}; known types: {sorted(KV_TYPE_BYTES_PER_ELEMENT)}"
         ) from exc
-    return layers * (head_count_kv * key_length * bpe_k + head_count_kv * value_length * bpe_v)
+    per_token_both = key_length * bpe_k + value_length * bpe_v
+    if per_layer_kv:
+        return float(sum(h * per_token_both for h in head_count_kv if h))
+    return layers * head_count_kv * per_token_both
 
 
 # -------------------------------------------------------------------------------------------
@@ -313,7 +332,15 @@ def kv_bytes_per_token(
 
 VALID_BATTERY_ITEMS = ("vram", "timing", "needle", "quality")
 
-_DEFAULT_SERVER_FLAGS = {"-ctk": "f16", "-ctv": "f16", "-fa": "on", "-ngl": 99}
+# --host 0.0.0.0 is load-bearing (orchestrator fix, first surfaced by the WP-1 live smoke
+# cell): llama-server defaults to 127.0.0.1, which inside the container is container-internal
+# loopback -- the scratch server comes up healthy and logs "listening on http://127.0.0.1:<port>"
+# while being unreachable from the host via the bridge IP, so the health poll times out against
+# a perfectly healthy server. The router's own `llama_server_chat_common` macro carries the same
+# flag for the same reason (llama/config.yaml).
+# -lv 9 is load-bearing too (same smoke cell): the startup-state verification lines
+# (llama_context/llama_kv_cache) never print at default verbosity -- see _STARTUP_PATTERNS.
+_DEFAULT_SERVER_FLAGS = {"--host": "0.0.0.0", "-lv": 9, "-ctk": "f16", "-ctv": "f16", "-fa": "on", "-ngl": 99}
 
 
 def normalize_cell(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -687,13 +714,27 @@ def teardown_scratch_server(
 # intended, safe failure direction (never a silent pass).
 # -------------------------------------------------------------------------------------------
 
+# Patterns verified LIVE against build b10534's actual console output (orchestrator, WP-1 live
+# smoke cell, 2026-08-23; scratch log retained in-container as /tmp/sweep-cell-<cell_id>.log).
+# The load-bearing lines at `-lv 9` are:
+#   load_model: loading model '/models/.../file.gguf'
+#   llama_context: n_ctx                 = 8192
+#   llama_context: flash_attn            = enabled
+#   load_tensors: offloaded 25/25 layers to GPU
+#   llama_kv_cache: size = 54.00 MiB (8192 cells, 6 layers, ...), K (f16): ..., V (f16): ...
+# NONE of the llama_context/llama_kv_cache lines print at llama-server's default verbosity (3),
+# and LOWER -lv values print less, not more -- which is why `-lv 9` lives in
+# _DEFAULT_SERVER_FLAGS: without it every cell is unverifiable-by-construction and correctly
+# classifies invalid_config. The `type_k =`/`type_v =` alternations cover the older format
+# docs/qwen38-27b-bakeoff-results.md:174-176 described for `-v`.
 _STARTUP_PATTERNS = {
     "model_path": re.compile(
-        r"model(?:\s+loaded from|\s*(?:path)?\s*[=:])\s*'?([^\s'\"]+\.gguf)'?", re.I
+        r"(?:loading model|model(?:\s+loaded from|\s*(?:path)?\s*[=:]))\s*'?([^\s'\"]+\.gguf)'?",
+        re.I,
     ),
     "n_ctx": re.compile(r"n_ctx\s*=\s*(\d+)"),
-    "type_k": re.compile(r"type_k\s*=\s*'?(\w+)'?"),
-    "type_v": re.compile(r"type_v\s*=\s*'?(\w+)'?"),
+    "type_k": re.compile(r"(?:type_k\s*=\s*'?|K \()(\w+)"),
+    "type_v": re.compile(r"(?:type_v\s*=\s*'?|V \()(\w+)"),
     "flash_attn": re.compile(r"flash_attn\s*=\s*(\d+|enabled|disabled|auto)", re.I),
     "offloaded_layers": re.compile(r"offloaded\s+(\d+)/(\d+)\s+layers\s+to\s+GPU", re.I),
 }

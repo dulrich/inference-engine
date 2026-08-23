@@ -1,0 +1,49 @@
+# Fixture llama-swap config for `GET /api/serving` tests — deliberately small, structurally
+# matching the real `llama/config.yaml` (macros + models, same key names) but never read from
+# there (brief hard constraint: tests never depend on the real file being mounted).
+
+healthCheckTimeout: 120
+startPort: 15800
+
+macros:
+  llama_server_common: >
+    /usr/local/bin/llama-server
+    --host 0.0.0.0 --port ${PORT}
+    -ngl 99 -c 8192 -b 8192 -ub 8192
+
+models:
+  fixture-embed-f16:
+    name: "Fixture embedding (f16)"
+    aliases:
+      - fixture-embed
+    cmd: |
+      ${llama_server_common}
+      -m /models/example-org/fixture-embed-gguf/fixture-embed-f16.gguf
+      --embeddings
+    ttl: 1800
+    checkEndpoint: /health
+
+  fixture-chat-q4:
+    name: "Fixture chat model (Q4_K_M)"
+    aliases:
+      - fixture-chat
+    cmd: |
+      /usr/local/bin/llama-server
+      --host 0.0.0.0 --port ${PORT}
+      -m /models/example-org/fixture-chat-gguf/fixture-chat-Q4_K_M.gguf
+      -c 32768
+      -ctk q4_0
+      -ctv q4_0
+      -fa on
+      -ngl 99
+    ttl: 1800
+    checkEndpoint: /health
+
+  # No `aliases:` -- must be FILTERED OUT of `GET /api/serving`'s response (not reachable
+  # by any consumer, so not a "served alias").
+  fixture-unaliased:
+    name: "Fixture model with no alias"
+    cmd: |
+      /usr/local/bin/llama-server --host 0.0.0.0 --port ${PORT}
+    ttl: 1800
+    checkEndpoint: /health

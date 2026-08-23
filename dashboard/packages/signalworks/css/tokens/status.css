@@ -1,0 +1,62 @@
+/* Signalworks — status (CC-04): ANSI hues, constant-shifted. Fills (dots/charts) are constant; pills = hue label + border + 5%-tint bg (3:1 graphical defense, redundancy required, never sole carrier, discouraged over --panel-2); prose uses the 4.5:1 -text tokens.
+   Chip tints stay panel-derived by design and are reused over --bg — hue + border carry the 3:1 there (gate warns; permanent policy, no --bg-composited set planned).
+   Constancy exception (the single one): Med --user-hue lifts to #c084fc for the 3:1 chip floor; Dark keeps #b45fd6. */
+:root {
+  --ok: #4ade80; /* fill: dots, chart series, borders — never text */
+  --warn: #fbbf24; /* fill: dots, chart series, borders — never text */
+  --error: #f87171; /* fill: dots, chart series, borders — never text */
+  --info: #60a5fa; /* fill: dots, chart series, borders — never text */
+  --user: #c084fc; /* fill: dots, chart series, borders — never text */
+  --ok-hue: #17b585;
+  --ok-chip-bg: #434b4a; /* chroma-chip: hue @5% over --panel */
+  --warn-hue: #ffd100;
+  --warn-chip-bg: #4e4c43; /* chroma-chip: hue @5% over --panel */
+  --error-hue: #ff5a63;
+  --error-chip-bg: #4e4648; /* chroma-chip: hue @5% over --panel */
+  --error-chip-bg-hover: #58474a; /* chroma-chip: hue @10% over --panel — .btn-danger:hover (2026-07-18) */
+  --info-hue: #3f9bff;
+  --info-chip-bg: #454950; /* chroma-chip: hue @5% over --panel */
+  --user-hue: #c084fc;
+  --user-chip-bg: #4b4850; /* chroma-chip: hue @5% over --panel */
+  --ok-text: #79eba8; /* AA 4.67 on --panel-2 #5a5a5c */
+  --warn-text: #f4cd85; /* AA 4.56 */
+  --error-text: #ffc9c2; /* AA 4.72 — unchanged */
+  --info-text: #b7d7fd; /* AA 4.64 */
+  --user-text: #e4c9fd; /* AA 4.61 */
+}
+:root[data-surround="dark"] {
+  --ok-hue: #17b585;
+  --ok-chip-bg: #17201f; /* chroma-chip: hue @5% over --panel */
+  --warn-hue: #ffd100;
+  --warn-chip-bg: #232119; /* chroma-chip: hue @5% over --panel */
+  --error-hue: #ff5a63;
+  --error-chip-bg: #231b1e; /* chroma-chip: hue @5% over --panel */
+  --error-chip-bg-hover: #2e1f21; /* chroma-chip: hue @10% over --panel — .btn-danger:hover (2026-07-18) */
+  --info-hue: #3f9bff;
+  --info-chip-bg: #191f25; /* chroma-chip: hue @5% over --panel */
+  --user-hue: #b45fd6;
+  --user-chip-bg: #1f1c23; /* chroma-chip: hue @5% over --panel */
+  --ok-text: #4ade80;
+  --warn-text: #f1c675;
+  --error-text: #ffc0b9;
+  --info-text: #60a5fa;
+  --user-text: #c084fc;
+}
+:root[data-surround="light"] {
+  --ok-hue: #046a4e;
+  --ok-chip-bg: #d4d9d9; /* chroma-chip: hue @5% over --panel */
+  --warn-hue: #996600;
+  --warn-chip-bg: #dcd9d5; /* chroma-chip: hue @5% over --panel */
+  --error-hue: #b00d23;
+  --error-chip-bg: #ddd5d7; /* chroma-chip: hue @5% over --panel */
+  --error-chip-bg-hover: #dacacd; /* chroma-chip: hue @10% over --panel — .btn-danger:hover (2026-07-18) */
+  --info-hue: #0060ae;
+  --info-chip-bg: #d4d9dd; /* chroma-chip: hue @5% over --panel */
+  --user-hue: #631d6e;
+  --user-chip-bg: #d9d5da; /* chroma-chip: hue @5% over --panel */
+  --ok-text: #1d5c31;
+  --warn-text: #684400;
+  --error-text: #8f231a;
+  --info-text: #144a8f;
+  --user-text: #5d1f9e;
+}

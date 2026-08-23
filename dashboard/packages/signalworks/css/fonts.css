@@ -1,0 +1,20 @@
+/*
+ * Signalworks — brand font delivery (self-hosted).
+ * Inter v4.1 variable fonts (InterVariable), SIL OFL 1.1 — see ./fonts/OFL.txt.
+ * --font-ui (tokens) names Inter first; these faces make it resolve on LAN
+ * deployments with no external font network.
+ */
+@font-face {
+  font-family: "Inter";
+  src: url("./fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("./fonts/InterVariable-Italic.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}

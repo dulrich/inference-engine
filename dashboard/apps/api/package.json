@@ -1,0 +1,18 @@
+{
+  "name": "@bench-dashboard/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch run src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --target=bun --outdir=dist",
+    "ingest": "bun run src/ingest/cli.ts",
+    "smoke": "bun run src/smoke.ts"
+  },
+  "dependencies": {
+    "@bench-dashboard/shared": "workspace:*",
+    "hono": "^4.6.0",
+    "zod": "^3.23.0"
+  }
+}

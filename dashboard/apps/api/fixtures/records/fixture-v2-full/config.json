@@ -1,0 +1,38 @@
+{
+  "description": "Fixture v2 full-CLI-style record for dashboard tests (ladders/curves/wilson-summary population).",
+  "alias": "fixture-full-alias",
+  "base_url": "http://127.0.0.1:4811/v1",
+  "lineage": {
+    "hf_repo": "example-org/Example-Big-GGUF",
+    "hf_revision": "deadbeefcafe0000000000000000000000000000",
+    "filename": "Example-Big-UD-Q4_K_XL.gguf",
+    "file_size": 9876543210,
+    "sha256": "abc123abc123abc123abc123abc123abc123abc123abc123abc123abc123ab",
+    "llama_cpp_build": "b10534"
+  },
+  "sweep_cell": null,
+  "configuration": {
+    "fixture_input_tokens_target": 8000,
+    "fixture_output_tokens": 256,
+    "cold_rounds": 3,
+    "warm_rounds": 3,
+    "hot_rounds": 3
+  },
+  "experiment_id": "fixture-v2-full",
+  "timestamp": "2026-08-22T00:00:00+00:00",
+  "schema_version": 2,
+  "wilson_summary": {
+    "n": 30,
+    "k": 0,
+    "rate": 0.0,
+    "sided": "one",
+    "confidence": 0.95,
+    "lower": null,
+    "upper": 0.08266815016452403
+  },
+  "size_check": {
+    "total_bytes": 5000,
+    "limit_bytes": 26214400,
+    "within_budget": true
+  }
+}

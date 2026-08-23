@@ -1,0 +1,54 @@
+{
+  "description": "Fixture v2 record for dashboard tests (mirrors the live wp1-smoke-cell-ling-q4km shape: sweep_cell present, wilson_summary explicit null, sampling_echo_check samples).",
+  "lineage": {
+    "hf_repo": "example-org/Example-Tiny-GGUF",
+    "hf_revision": null,
+    "filename": "Example-Tiny-Q4_K_M.gguf",
+    "file_size": 123456789,
+    "sha256": null,
+    "llama_cpp_build": "b10534"
+  },
+  "sweep_cell": {
+    "cell_id": "fixture-cell-f16-c8192-ctkf16-ctvf16-faon",
+    "alias": "fixture-alias-f16-c8192",
+    "server_flags": {
+      "--host": "0.0.0.0",
+      "-lv": 9,
+      "-ctk": "f16",
+      "-ctv": "f16",
+      "-fa": "on",
+      "-ngl": 99,
+      "-c": 8192
+    },
+    "command": "llama-server -m /models/example-org/Example-Tiny-GGUF/Example-Tiny-Q4_K_M.gguf --port 8899 -c 8192 -ctk f16 -ctv f16 -fa on -ngl 99 --host 0.0.0.0 -lv 9"
+  },
+  "startup_verification": {
+    "verified": true,
+    "checks": {
+      "model_path": true,
+      "n_ctx": true,
+      "type_k": true,
+      "type_v": true,
+      "flash_attn": true,
+      "offload_placement": true
+    }
+  },
+  "vram": {
+    "baseline_bytes": 100000000,
+    "loaded_bytes": 500000000,
+    "after_teardown_bytes": 100000000
+  },
+  "seed_determinism": {
+    "same_seed_identical": true,
+    "diff_seed_different": true
+  },
+  "experiment_id": "fixture-v2-smoke-cell",
+  "timestamp": "2026-08-23T18:56:20.520839+00:00",
+  "schema_version": 2,
+  "wilson_summary": null,
+  "size_check": {
+    "total_bytes": 1000,
+    "limit_bytes": 26214400,
+    "within_budget": true
+  }
+}

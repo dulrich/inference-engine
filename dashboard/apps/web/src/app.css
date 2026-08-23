@@ -1,0 +1,4 @@
+/* Tool-local additions on top of @fleet-tools/signalworks/css (imported first in
+ * main.ts). Signalworks' base.css already owns global type/surface/`.page` rules — this
+ * file stays deliberately empty for the WP-1 stub (every rule the stub view needs is
+ * scoped inside App.svelte's own <style> block); WP-2 grows it alongside the real views. */

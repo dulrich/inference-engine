@@ -1,0 +1,25 @@
+# Bun/TypeScript workspace build + dependency output
+node_modules/
+apps/*/dist
+packages/*/dist
+dist/
+build/
+coverage/
+
+# generated runtime data (bun:sqlite) — derived from runs/bakeoff/, recreate via `bun run ingest`
+data/
+*.db
+*.db-*
+*.log
+
+# env
+.env
+.env.*
+
+# editor/OS junk
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store

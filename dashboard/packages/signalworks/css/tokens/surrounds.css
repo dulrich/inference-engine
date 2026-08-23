@@ -1,0 +1,46 @@
+/* Signalworks — surround tokens. Med is the :root default (CC-03: symmetric surface stack). */
+:root {
+  --bg: #3a3a3b;
+  --panel: #454547;
+  --panel-2: #5a5a5c;
+  --inset: #333335;
+  --line: #666668;
+  --text: #f3f3f4;
+  --text-dim: #dedee0;
+  --muted: #d2d2d4; /* AA 4.56 on --panel-2 #5a5a5c (Med lift, 2026-07-17) */
+  --text-faint: #949496;
+  --heading: #ffffff;
+  --header-bg: rgba(58,58,59,.9);
+  --glow: #454546;
+  --backdrop: rgba(110,110,112,.96);
+}
+:root[data-surround="dark"] {
+  --bg: #0e0e10;
+  --panel: #17181a;
+  --panel-2: #26262a;
+  --inset: #0d0d0f;
+  --line: #37383b;
+  --text: #e9e9ea;
+  --text-dim: #cacbcd;
+  --muted: #9b9c9f;
+  --text-faint: #7c7d80;
+  --heading: #ffffff;
+  --header-bg: rgba(14,14,16,.9);
+  --glow: #1c1c1f;
+  --backdrop: rgba(8,8,9,.92);
+}
+:root[data-surround="light"] {
+  --bg: #f4f4f5;
+  --panel: #dfdfe0;
+  --panel-2: #d2d2d4;
+  --inset: #fbfbfc;
+  --line: #a5a5a8;
+  --text: #191a1b;
+  --text-dim: #333335;
+  --muted: #4f5052;
+  --text-faint: #6d6d6f;
+  --heading: #0c0c0d;
+  --header-bg: rgba(244,244,245,.9);
+  --glow: #ffffff;
+  --backdrop: rgba(160,160,162,.96);
+}

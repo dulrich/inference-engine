@@ -1,0 +1,15 @@
+/*
+ * @fleet-tools/signalworks — full fleet stylesheet.
+ * Import this BEFORE the tool's own app.css:  import "@fleet-tools/signalworks/css";
+ *
+ * tokens/ is a byte-verbatim export from the Signalworks design bundle
+ * (skills/signalworks-design/tokens/ at the repo root) — never hand-edited here.
+ * base.css carries the fleet-uniform contract surface (CC-01…CC-13).
+ */
+@import "./fonts.css";
+@import "./tokens/surrounds.css";
+@import "./tokens/accents.css";
+@import "./tokens/status.css";
+@import "./tokens/dataviz.css";
+@import "./tokens/layout.css";
+@import "./base.css";

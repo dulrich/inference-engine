@@ -1,0 +1,22 @@
+/* Signalworks — categorical dataviz series (CC-17, lab-decided 2026-07-18). Series are never verdicts: status hues stay reserved for status. Constant on Dark/Med; lightness-shifted on Light (CC-04 discipline). Map by series index, not meaning. */
+:root {
+  --viz-1: #2dd4bf; /* teal */
+  --viz-2: #818cf8; /* indigo */
+  --viz-3: #e879b9; /* magenta */
+  --viz-4: #a3e635; /* lime */
+  --viz-5: #22d3ee; /* cyan */
+}
+:root[data-surround="dark"] {
+  --viz-1: #2dd4bf;
+  --viz-2: #818cf8;
+  --viz-3: #e879b9;
+  --viz-4: #a3e635;
+  --viz-5: #22d3ee;
+}
+:root[data-surround="light"] {
+  --viz-1: #0f766e;
+  --viz-2: #4f46e5;
+  --viz-3: #be2f7f;
+  --viz-4: #4d7c0f;
+  --viz-5: #0e7490;
+}

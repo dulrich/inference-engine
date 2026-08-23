@@ -1,0 +1,124 @@
+import type { Database } from "bun:sqlite";
+
+// The database's schema, as ONE baseline — no migration chain (greenfield WP, unlike the
+// model_scoreboard exemplar this pattern is borrowed from, which carries retired v1-v9
+// history this codebase has none of yet). `applySchema` is `CREATE TABLE IF NOT EXISTS`
+// throughout, so it is safe to call on every process boot and every test's temp database.
+//
+// Four tables (brief's File scope, apps/api bullet):
+//
+// - `experiments` — one row per `runs/bakeoff/<experiment-id>/config.json`, schema-v2 only
+//   (v1 is skipped by the ingest CLI, never reaches this table). Every frozen field the
+//   config.json carries maps to a named column (lineage's six keys, `sweep_cell`,
+//   `wilson_summary`); `raw_config_json` keeps the FULL original object — nothing this
+//   schema doesn't name is ever lost. `raw_prompts_json`/`raw_completions_json` hold the
+//   parsed `prompts.jsonl`/`completions.jsonl` arrays verbatim (samples.jsonl's own
+//   verbatim reconstruction comes from `trials.raw_json`, ordered by `line_index`) — so
+//   `GET /api/export/scoreboard-capture`'s raw pass-through is servable from the DB alone,
+//   with no live re-read of `runs/bakeoff/` at request time.
+// - `trials` — one row per `samples.jsonl` line, any `type` (frozen contract: "type is
+//   data, not an enum ingest validates against"). `raw_json` is the full original line;
+//   the named columns are a best-effort projection so listing/filtering doesn't require
+//   parsing JSON in every route.
+// - `metrics` — one row per VRAM snapshot (`config.json`'s `vram` object, 0-3 rows) or
+//   `timing_round` sample (0-N rows) — the timing/VRAM half of a record, kept separate
+//   from `trials`'s correctness/classifier half.
+// - `summaries` — at most one row per experiment, populated only when `wilson_summary` is
+//   non-null (explicit-null stays absent here too — "no data lives only in the DB" cuts
+//   both ways: an explicit null on disk is never turned into a row).
+//
+// Ingest idempotency (brief: "re-run ingest is always safe … same experiment twice ⇒
+// identical content tables") is achieved by DELETE-then-INSERT per experiment inside one
+// transaction (`ingest/run.ts`), not by per-row upsert keys — simplest correct answer for
+// a derived table whose row set is wholly owned by one experiment_id at a time.
+
+export function applySchema(db: Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS experiments (
+      id                  TEXT PRIMARY KEY,
+      schema_version      INTEGER NOT NULL,
+      description         TEXT,
+      timestamp           TEXT,
+      hf_repo             TEXT,
+      hf_revision         TEXT,
+      filename            TEXT,
+      file_size           INTEGER,
+      sha256              TEXT,
+      llama_cpp_build     TEXT,
+      sweep_cell_id       TEXT,
+      sweep_alias         TEXT,
+      sweep_server_flags  TEXT,
+      sweep_command       TEXT,
+      wilson_summary_json TEXT,
+      raw_config_json      TEXT NOT NULL,
+      raw_prompts_json     TEXT NOT NULL,
+      raw_completions_json TEXT NOT NULL,
+      ingested_at          TEXT NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_experiments_hf_repo ON experiments(hf_repo)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS trials (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      experiment_id       TEXT NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+      line_index          INTEGER NOT NULL,
+      type                TEXT NOT NULL,
+      trial               INTEGER,
+      sampling_arm        TEXT,
+      temperature         REAL,
+      top_p                REAL,
+      top_k                INTEGER,
+      sampler_seed        REAL,
+      haystack_seed       REAL,
+      corpus_manifest_id  TEXT,
+      haystack_sha256     TEXT,
+      classifier_verdict  TEXT,
+      classifier_shape    TEXT,
+      prompt_tokens       INTEGER,
+      completion_tokens   INTEGER,
+      finish_reason       TEXT,
+      position_fraction   REAL,
+      task                TEXT,
+      cell_id             TEXT,
+      correct             INTEGER,
+      raw_json            TEXT NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_trials_experiment_id ON trials(experiment_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_trials_type ON trials(type)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS metrics (
+      id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+      experiment_id             TEXT NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+      line_index                 INTEGER,
+      metric_type                TEXT NOT NULL,
+      round_type                 TEXT,
+      round_index                 INTEGER,
+      bytes                      INTEGER,
+      first_generation_token_ms  REAL,
+      observed_decode_tok_s      REAL,
+      prompt_tokens              INTEGER,
+      cached_tokens               INTEGER,
+      cache_hit_ratio             REAL,
+      cache_assertion_passed     INTEGER,
+      raw_json                    TEXT NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_metrics_experiment_id ON metrics(experiment_id)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS summaries (
+      experiment_id TEXT PRIMARY KEY REFERENCES experiments(id) ON DELETE CASCADE,
+      n             INTEGER,
+      k             INTEGER,
+      rate          REAL,
+      sided         TEXT,
+      confidence    REAL,
+      lower         REAL,
+      upper         REAL,
+      raw_json      TEXT NOT NULL
+    )
+  `);
+}

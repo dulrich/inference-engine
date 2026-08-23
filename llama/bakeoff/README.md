@@ -1,19 +1,25 @@
 # llama/bakeoff — serving-harness bake-off tooling
 
-Reusable measurement tooling for `plans/serving-harness-round-2.md`, built once in WP-1 and
-called by every later WP (WP-2 through WP-5) against a different already-configured router
-alias. There is no alias-specific code path anywhere in `run_harness.py` — the harness works
+Reusable measurement tooling, originally built in `plans/serving-harness-round-2.md` WP-1 and
+called by every later per-model WP against a different already-configured router alias, then
+extended into a declarative sweep framework by `plans/quant-sweep-harness-and-instrument-v2.md`
+WP-1. There is no alias-specific code path anywhere in `run_harness.py` — the harness works
 against any alias the router already knows how to spawn.
 
 Zero new runtime dependencies: Python 3 stdlib only (`urllib`, `json`, `time`, `statistics`,
-`hashlib`, `threading`, `argparse`, `random`, `uuid`). No `requests`, no venv, no
-`requirements.txt` — a from-scratch worker can run this with nothing beyond what's already on
-the host image.
+`hashlib`, `threading`, `argparse`, `random`, `uuid`, `struct`, `subprocess`, `re`, `shlex`,
+`signal`). No `requests`, no `gguf`, no `numpy`, no venv, no `requirements.txt` — a
+from-scratch worker can run this with nothing beyond what's already on the host image.
 
 ## Files
 
 - `run_harness.py` — the harness itself (timing sweep, needle probe, quality corpus, record
   writer, CLI).
+- `sweep.py` — the declarative sweep framework: spec loading/expansion, the VRAM-fit pre-filter,
+  ladder expansion, deterministic cell IDs, exact-command building, and the scratch-server
+  lifecycle (spawn/health-poll/verify/teardown/VRAM-read-back). See "Sweep framework" below.
+- `examples/sweep-example.json` — a 3-cell fixture for `sweep.py --dry-run` (synthetic geometry,
+  no real model file required — see that section).
 - `quality_corpus.jsonl` — 12 fixed prompts across the 8 categories in
   `references/serving-harness-test-round-2.md` §5 (factual/technical QA, code/debug reasoning,
   multi-constraint instruction following, structured transformation, ambiguity/judgment,
@@ -232,6 +238,189 @@ server via a redirected process log instead, never via this function). Wiring `f
 up against a scratch server will silently return the *router's* unrelated log content, not an
 error — do not conflate the two.
 
+## Sweep framework (`sweep.py`)
+
+`plans/quant-sweep-harness-and-instrument-v2.md` WP-1. Turns "one model, one hand-typed `docker
+exec`, one improvised candidate ladder" into a declarative spec plus automation for driving one
+cell end-to-end.
+
+### Spec format
+
+```json
+{
+  "cells": [
+    {
+      "cell_id": "optional-explicit-override",
+      "model_container_path": "/models/org/repo/file-Q4_K_M.gguf",
+      "model_host_path": "/srv/models/org/repo/file-Q4_K_M.gguf",
+      "kv_attention_layers": 16,
+      "alias": "candidate-alias",
+      "server_flags": {"-c": 40960, "-ctk": "q4_0", "-ctv": "q4_0", "-fa": "on", "-ngl": 99},
+      "battery": ["vram", "timing", "needle", "quality"]
+    }
+  ]
+}
+```
+
+- `model_container_path` (required) — the path baked into the `-m` flag of the built command
+  (this repo's `/models/...` container-internal convention, same split as `run_harness.py`'s
+  `--gguf-host-path` vs. the config's `cmd:` block).
+- `model_host_path` (optional) — a **real host filesystem path**. When given, the fit pre-filter
+  reads it directly: `stat()` for `weights_bytes`, and a minimal GGUF header/metadata parse
+  (`read_gguf_metadata`/`gguf_attention_geometry` — stdlib `struct`, no tensor data ever read)
+  for KV-cache geometry (`block_count`, `head_count_kv`, `key_length`, `value_length`).
+- `synthetic_geometry` (optional, mutually exclusive in practice with `model_host_path` — the
+  latter always wins when present) — an inline override
+  `{weights_bytes, block_count, head_count_kv, key_length, value_length, architecture?,
+  head_count?, context_length?}` used when no real host file is available (this is what
+  `examples/sweep-example.json` uses, so the dry-run gate never depends on a multi-GB model file
+  being present on the host running it).
+- `kv_attention_layers` (optional) — overrides the GGUF's raw `block_count` for the KV
+  bytes/token formula. **Needed for hybrid architectures**: `docs/qwen38-27b-bakeoff-
+  results.md:12-15` documents `qwen35`'s `full_attention_interval=4` (65 total blocks, only 16
+  carry a real attention KV cache) — using raw `block_count` there overestimates KV bytes/token
+  by ~4x. Verified live during this WP against the real `Qwen3.8-27B-UD-IQ3_S.gguf` header: the
+  16-layer override reproduces the doc's own measured **0.0625 MiB/token** f16/f16 KV growth rate
+  exactly; the raw `block_count=65` gives 0.254 MiB/token, ~4.06x too high.
+- `battery` — subset of `{"vram", "timing", "needle", "quality"}`.
+- `cell_id` (optional) — explicit override for the deterministic per-cell ID; omit to have
+  `compute_cell_id()` derive one from the cell's identity-bearing fields (never random, never
+  timestamped — the same spec always reproduces the same IDs).
+
+### VRAM-fit pre-filter
+
+`classify_fit(cell)` returns one of `"fits"` / `"marginal"` / `"excluded"` / `"unknown"` (the
+last when neither `model_host_path` nor `synthetic_geometry` is usable — never a guessed fit),
+plus the numbers behind the classification. Formula:
+`estimated_total = weights_bytes + kv_bytes_per_token(ctk, ctv) * -c + NON_WEIGHT_OVERHEAD_GIB`,
+classified against `REALISTIC_FREE_VRAM_GIB` with a `FIT_MARGIN_GIB`/`MARGINAL_MARGIN_GIB` band.
+Every constant is cited in `sweep.py`'s own comments to a specific prior bake-off doc line or
+this plan's own text — see the module for the full citations (card nameplate 15.92 GiB; the
+plan's own "~12.8 GiB realistic free VRAM" sizing budget, `plans/quant-sweep-harness-and-
+instrument-v2.md:50-51`; ~456 MiB non-weight overhead, `docs/qwen38-27b-bakeoff-results.md:177-
+179`; the "~1.5-2 GiB safety-margin convention" repeated across every prior bake-off doc).
+**This is a pure-math predictor, never a substitute for measurement** — the framework's house
+rule (plan Key Changes/WP-1): estimates gate what gets attempted, a live VRAM read-back
+(`read_vram_used_bytes()`) is still what a real run trusts.
+
+KV-cache byte-per-element table (`KV_TYPE_BYTES_PER_ELEMENT`) covers `f32`/`f16`/`bf16` (exact)
+and `q8_0`/`q8_1`/`q5_0`/`q5_1`/`q4_0`/`q4_1` (ggml's own 32-element block-quant layout,
+`block_bytes / 32`) — cross-checked against this repo's own live measurement in
+`docs/qwen38-27b-bakeoff-results.md:158` (the q4_0 vs. q8_0 "KB/cell" comparison).
+
+### Ladder expansion
+
+`expand_ladder(base_cell, kv_type_ladder, context_ladder, battery=None)` cross-products one base
+cell against a `[(ctk, ctv), ...]` list and a `[-c, ...]` list, producing one normalized cell per
+combination (alias gets a `-ctk<ctk>-ctv<ctv>-c<c>` suffix so cells never collide).
+
+### Exact command building
+
+`build_command(cell, port)` returns the exact `llama-server` argv a cell would run, in a fixed
+flag order (`-m`, `--port`, `-c`, `-ctk`, `-ctv`, `-fa`, `-ngl`, then any remaining flags sorted)
+— deterministic across calls, which is what `--dry-run`'s gate output relies on.
+
+### Dry-run
+
+```sh
+python3 llama/bakeoff/sweep.py --dry-run llama/bakeoff/examples/sweep-example.json
+```
+
+Expands every cell, prints `cell_id`, `battery`, `server_flags`, the full `fit` classification
+dict, and both the argv list and a shell-quoted `command_str` for each — as JSON to stdout.
+**Touches no Docker, no network, no GPU.** The `--dry-run <spec>` spelling and the equivalent
+`dry-run <spec>` subcommand spelling both work (the former matches this WP's gate invocation
+literally).
+
+### Scratch-server lifecycle (live path — `sweep.py run`, not exercised by WP-1 itself)
+
+Container facts baked in (verified live 2026-08-23, this WP's brief): `inference-engine-llama`
+has no `python3`, `kill`, or `pkill` inside the image; only the router's
+4806(container)->4811(host) port is published; a scratch server's port is container-internal
+only.
+
+- **Spawn**: `spawn_scratch_server(argv, log_path, container)` — `docker exec -d <container> sh
+  -c 'nohup <argv...> > <log_path> 2>&1 < /dev/null &'`. `nohup`/`sh` are ordinary coreutils/dash,
+  present in the runtime image; no `python3` needed to launch it.
+- **Reach it**: `discover_bridge_ip(container)` — `docker inspect` for the container's bridge IP;
+  the scratch server is reachable at `http://<bridge-ip>:<port>`, never `127.0.0.1:<port>` (that
+  port isn't published to the host).
+- **Health poll by response body** (root `AGENTS.md` Quirks: "Probe by response body, never
+  status code"): `wait_for_health(base_url, timeout)` polls `GET {base_url}/health` and requires
+  `body["status"] == "ok"` — a connection error, a non-JSON body, or any other status value keeps
+  it polling, never counted as healthy from the status code alone.
+- **Per-cell startup-state verification** ("a healthy endpoint has told you nothing" —
+  `llama/AGENTS.md`): `verify_startup_state(log_text, cell)` regex-parses the scratch server's
+  own redirected stdout/stderr and asserts the requested model path, `-c`, `-ctk`/`-ctv`,
+  flash-attention state, and offload placement were **actually activated** — any field the log
+  doesn't mention at all (e.g. `-v` wasn't passed, so `type_k`/`type_v`/`flash_attn` never print)
+  counts as a mismatch, never a silent pass. A mismatch means the cell is `invalid_config` and
+  its measurements don't count. These patterns are written against llama-server build `b10534`'s
+  known console format but are **not live-verified by this WP** (no live Docker/GPU execution
+  here) — the orchestrator's one live smoke cell (plan Test Plan) is where a pattern mismatch
+  would first surface; a spurious `invalid_config` from a drifted log format is the intended,
+  safe failure direction.
+- **Teardown via host-visible PID**: `find_host_pid_by_port(port, container)` reads `docker top
+  <container> -eo pid,args` (host PIDs, not container-namespace ones) and matches on `--port
+  <port>`; `teardown_scratch_server(port, container)` signals that PID directly from the host
+  (`os.kill` SIGTERM, then SIGKILL after a grace period if still alive) — never asks the
+  container to kill its own child, since there's no `kill`/`pkill` binary inside the image to ask.
+- **VRAM read-back**: `read_vram_used_bytes()` reads `mem_info_vram_used` directly from host
+  sysfs (`/sys/class/drm/card1/device/mem_info_vram_used`) — this repo's established mechanism
+  (see the Honest-timing-semantics-adjacent docs cited in `sweep.py`'s own comment). Read from
+  the HOST path, not via `docker exec`: `/dev/dri` is passed through as the same physical device,
+  so host and container see identical counters, and a host-side read works even before any
+  container process exists to `exec` into. `teardown_scratch_server()` returns both a
+  pre-teardown and post-teardown reading so a caller can confirm VRAM actually returned to
+  baseline, not merely that the process is gone.
+
+## Schema v2 (draft — frozen at WP-4)
+
+`plans/quant-sweep-harness-and-instrument-v2.md` WP-1 makes the producer (`write_experiment_
+record`, `needle_probe`, `run_quality_corpus`) v2-conformant from day one; **WP-4 freezes and
+formally documents this as the versioned DB contract** `bench-results-db-and-dashboard`
+ingests — treat the field list below as the current producer shape, not yet the frozen contract.
+
+- `config.json` gains `schema_version: 2` (unconditional — this producer no longer emits v1;
+  pre-existing v1 records on disk are untouched), `sweep_cell` (the sweep-cell identity a
+  sweep-driven caller supplies; `null` for a non-sweep `full` CLI record), and `wilson_summary`
+  (**deferred audit pin**: always present as a key, `null` whenever the record has no replicated
+  correctness cells (n>=10) to summarize with a Wilson interval — never omitted).
+- Every `needle_probe`/`run_quality_corpus` sample in `samples.jsonl` gains: `sampling_arm`
+  (`"capability"`/`"production"`/`null`, a provenance label), `temperature`/`top_p`/`top_k`
+  (whatever was actually sent, `null` if omitted), `sampler_seed`, and `classifier_verdict`
+  (**nullable now — the classifier arrives in WP-3**).
+- `needle_probe` samples additionally gain, per the **separate-seed-fields deferred audit pin**:
+  `haystack_seed` (the haystack-generation seed, distinct from `sampler_seed` — never one shared
+  value even when a caller passes the same integer for both), `corpus_manifest_id` (`null` here
+  — this instrument still uses the word-soup timing-fixture haystack, not WP-3's real corpus,
+  which is the only haystack source with a manifest), and `haystack_sha256` (sha256 of the
+  assembled prompt text — the haystack-by-reference field; the full haystack text itself is
+  never persisted, matching the pre-existing `seed_used`/`target_tokens`/`position_fraction`
+  reproducibility contract).
+
+### Sampling-arm presets
+
+```python
+from llama.bakeoff.run_harness import (
+    SAMPLING_ARM_CAPABILITY, SAMPLING_ARM_PRODUCTION, sampling_arm_payload,
+)
+
+# capability: temperature 0, seeded -- deterministic-decoding shape, fixed numeric values.
+payload = sampling_arm_payload(SAMPLING_ARM_CAPABILITY, seed=20260823)
+needle_probe(base_url, alias, "moderate",
+             temperature=payload["temperature"], top_p=payload["top_p"],
+             top_k=payload["top_k"], sampler_seed=payload["seed"],
+             sampling_arm="capability")
+
+# production: the model's OWN recommended sampling, seeded -- SAMPLING_ARM_PRODUCTION carries
+# None placeholders (this harness has no per-model sampling-recommendation table); the caller
+# fills temperature/top_p/top_k in with the specific model's recommended values before use.
+```
+
+`temperature`/`top_p`/`top_k`/`seed` are omitted from the wire payload entirely when `None` — the
+byte-identical-behavior guarantee for every pre-existing caller that doesn't pass them.
+
 ## Field-to-file split (this WP's own call — the plan pins only the four-file split itself)
 
 - `config.json` — run-level metadata + the artifact-lineage field set (`hf_repo`, `hf_revision`,
@@ -247,5 +436,8 @@ error — do not conflate the two.
 
 ## Gate reference
 
-`python3 -m py_compile llama/bakeoff/run_harness.py` — must exit 0 (root `AGENTS.md` Gates #1,
-added in this WP for the repo's first Python files).
+- `python3 -m py_compile llama/bakeoff/run_harness.py llama/bakeoff/sweep.py` — must exit 0
+  (root `AGENTS.md` Gates #1).
+- `python3 llama/bakeoff/sweep.py --dry-run llama/bakeoff/examples/sweep-example.json` — expands
+  the 3-cell fixture, prints per-cell fit classification and the exact command each cell would
+  run; non-empty, deterministic, touches no Docker.

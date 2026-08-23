@@ -237,6 +237,10 @@ def _execute_streaming_request(
     messages: List[Dict[str, str]],
     max_tokens: int,
     timeout: float = 180,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    top_k: Optional[float] = None,
+    seed: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Fires one streaming `/v1/chat/completions` request and independently timestamps every
     delta as it arrives (verified live against this repo's real router: urllib's chunked-transfer
@@ -251,6 +255,14 @@ def _execute_streaming_request(
     `usage.prompt_tokens_details.cached_tokens` and `timings.*` (server-reported
     prompt/decode counts, times, tok/s) -- both retained verbatim in the returned dict, never
     substituted for the client-side timestamps.
+
+    `temperature`/`top_p`/`top_k`/`seed` (plan `quant-sweep-harness-and-instrument-v2.md` WP-1,
+    "Pinned-sampling plumbing"): each is omitted from the request payload entirely when `None`
+    (the default) -- calling this with all four omitted is byte-identical to the pre-WP-1 payload,
+    preserving current behavior for the timing fixtures (`run_round`/`run_sweep`), which the plan
+    explicitly keeps on server defaults ("Timing fixtures may keep server defaults; they are never
+    quality-scored" -- Decisions locked). `needle_probe` and `run_quality_corpus` are the two
+    callers that thread real values through these parameters, for correctness-bearing requests.
     """
     url = f"{base_url}/chat/completions"
     payload = {
@@ -260,6 +272,14 @@ def _execute_streaming_request(
         "stream_options": {"include_usage": True},
         "messages": messages,
     }
+    if temperature is not None:
+        payload["temperature"] = temperature
+    if top_p is not None:
+        payload["top_p"] = top_p
+    if top_k is not None:
+        payload["top_k"] = top_k
+    if seed is not None:
+        payload["seed"] = seed
 
     t0 = time.monotonic()
     t0_iso = _utc_now_iso()
@@ -667,6 +687,42 @@ def calibrate_chars_per_token(
 
 
 # ---------------------------------------------------------------------------------------------
+# Pinned-sampling arm presets (plan `quant-sweep-harness-and-instrument-v2.md`, Decisions locked:
+# "Sampling is pinned everywhere: every correctness-bearing request carries explicit
+# temperature/top_p/top_k/seed. Two standard arms: capability (temperature 0, seeded) and
+# production (the model's own recommended sampling, seeded)."). Defined once, here.
+# ---------------------------------------------------------------------------------------------
+
+# Capability arm: deterministic-decoding shape, independent of which model is under test --
+# temperature 0 is deterministic by construction, so top_p/top_k are pinned to no-op values
+# (top_p=1.0 keeps the full distribution available before temperature-0 argmax selects one
+# token; top_k=1 is belt-and-suspenders with the same effect). Numeric values are fixed.
+SAMPLING_ARM_CAPABILITY: Dict[str, Optional[float]] = {"temperature": 0.0, "top_p": 1.0, "top_k": 1}
+
+# Production arm: "the model's own recommended sampling" is a per-model fact (e.g. Gemma's
+# card recommends ~temperature 1.0; a different model recommends something else) -- this harness
+# has no per-model sampling-recommendation table, and building one is out of this WP's scope
+# (schema + plumbing, not a research campaign). The preset below is therefore the ARM'S SHAPE
+# only: `None` placeholders the caller (a later WP or campaign that already knows the specific
+# model's recommended sampling) fills in before use. `seed` is the one field this WP fixes for
+# both arms -- seeding is a harness policy, not a per-model one (see `sampling_arm_payload`).
+SAMPLING_ARM_PRODUCTION: Dict[str, Optional[float]] = {"temperature": None, "top_p": None, "top_k": None}
+
+
+def sampling_arm_payload(arm: Dict[str, Optional[float]], seed: int) -> Dict[str, Optional[float]]:
+    """Merges a sampling-arm preset (`SAMPLING_ARM_CAPABILITY`/`SAMPLING_ARM_PRODUCTION`, or a
+    caller-built dict with the production arm's `None` placeholders filled in) with an explicit
+    seed -- the caller-supplied value, never a harness-chosen default (Decisions locked:
+    "seeded"). Returns a plain `{"temperature": ..., "top_p": ..., "top_k": ..., "seed": ...}`
+    dict whose keys match `_execute_streaming_request`'s sampling parameters exactly, suitable for
+    `**sampling_arm_payload(...)`-style unpacking into `needle_probe`/`run_quality_corpus` calls.
+    """
+    payload = dict(arm)
+    payload["seed"] = seed
+    return payload
+
+
+# ---------------------------------------------------------------------------------------------
 # Needle-in-haystack correctness probe
 # ---------------------------------------------------------------------------------------------
 
@@ -700,6 +756,11 @@ def needle_probe(
     timeout: float = 300,
     seed: Optional[int] = None,
     target_actual_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    top_k: Optional[float] = None,
+    sampler_seed: Optional[int] = None,
+    sampling_arm: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Formalizes the needle-in-haystack correctness probe both prior Ling plans hand-rolled ad
     hoc (runs/dispatch/wp-1-report.md, runs/dispatch/wp-2-report.md from
@@ -739,6 +800,22 @@ def needle_probe(
     When `target_actual_tokens` is not given (the default, `None`), behavior is byte-identical to
     before this parameter existed -- the existing `"moderate"`/`"near_ceiling"` size-handling
     paths are untouched, and `calibration_tolerance_met` is absent from the returned sample.
+
+    `temperature`/`top_p`/`top_k`/`sampler_seed`/`sampling_arm` (plan WP-1, "Pinned-sampling
+    plumbing"): threaded straight through to `_execute_streaming_request` (`sampler_seed` maps to
+    that function's `seed` parameter -- named differently here on purpose, see the deferred audit
+    pin below). All default `None`, so calling this exactly as before is byte-identical --
+    sampling stays unpinned unless a caller opts in. `sampling_arm` is a plain label
+    (`"capability"`/`"production"`/`None`) recorded in the sample for provenance; it does not
+    itself set temperature/top_p/top_k -- pass `**sampling_arm_payload(SAMPLING_ARM_CAPABILITY,
+    seed)` (renaming that dict's `seed` key to `sampler_seed` first) plus
+    `sampling_arm="capability"` to actually apply a preset.
+
+    **Separate seed fields (deferred audit pin, `quant-sweep-harness-and-instrument-v2.md` WP-1
+    execution brief)**: `seed` (this function's existing parameter, haystack generation/code
+    selection) and `sampler_seed` (new, the sampler's own `seed` field on the wire) are always
+    kept distinct in the returned sample -- `haystack_seed` and `sampler_seed` are two separate
+    keys, never one shared value, even when a caller happens to pass the same integer for both.
     """
     calibrated = target_actual_tokens is not None
     if calibrated:
@@ -771,12 +848,19 @@ def needle_probe(
             + "\n\nQuestion: what is the exact reference code given above? "
               "Reply with only the code, no other text."
         )
+        # sha256 of the assembled prompt text -- the haystack-by-reference field (plan Decisions
+        # locked: "v2 records store haystacks by construction reference ... never the full prompt
+        # text"). The full text itself is never persisted (see the module docstring above); this
+        # is the one derived value from it that IS persisted, letting a later consumer confirm a
+        # regenerated haystack (from seed_used/target_tokens/position_fraction) matches exactly.
+        prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
         result = _execute_streaming_request(
-            base_url, alias, _single_user_message(prompt), max_tokens, timeout=timeout
+            base_url, alias, _single_user_message(prompt), max_tokens, timeout=timeout,
+            temperature=temperature, top_p=top_p, top_k=top_k, seed=sampler_seed,
         )
-        return prompt, result
+        return prompt, prompt_sha256, result
 
-    prompt, result = _build_and_send(target_tokens)
+    prompt, prompt_sha256, result = _build_and_send(target_tokens)
 
     calibration_tolerance_met: Optional[bool] = None
     if calibrated:
@@ -788,7 +872,7 @@ def needle_probe(
         )
         if not tolerance_met and actual_prompt_tokens:
             target_tokens = int(target_tokens * target_actual_tokens / actual_prompt_tokens)
-            prompt, result = _build_and_send(target_tokens)
+            prompt, prompt_sha256, result = _build_and_send(target_tokens)
             actual_prompt_tokens = (result["usage"] or {}).get("prompt_tokens")
             tolerance_met = (
                 actual_prompt_tokens is not None
@@ -803,11 +887,34 @@ def needle_probe(
 
     sample = {
         "type": "needle_probe",
+        "schema_version": 2,
         "size": size,
         "target_tokens": target_tokens,
         "context_ceiling": context_ceiling,
         "position_fraction": position_fraction,
         "seed_used": effective_seed,
+        # Separate seed fields (deferred audit pin -- see needle_probe's docstring): haystack_seed
+        # is this same effective_seed value under its v2 field name; sampler_seed is the distinct
+        # wire-level sampler seed, never folded into one shared field even when a caller passes
+        # the same integer for both.
+        "haystack_seed": effective_seed,
+        "sampler_seed": sampler_seed,
+        "sampling_arm": sampling_arm,
+        "temperature": temperature,
+        "top_p": top_p,
+        "top_k": top_k,
+        # Haystack-by-reference fields (plan Decisions locked): the full haystack text is never
+        # stored (see this function's docstring); `haystack_sha256` plus (seed_used, target_tokens,
+        # position_fraction) above are what a later consumer needs to reproduce and verify it.
+        # `corpus_manifest_id` is `null` here by design -- this probe still uses the old word-soup
+        # timing-fixture-derived haystack (`_build_filler_text`), not WP-3's real coherent corpus,
+        # which is the only haystack source that has a manifest id.
+        "corpus_manifest_id": None,
+        "haystack_sha256": prompt_sha256,
+        # Per-trial classifier verdict (nullable now -- plan Deferred audit item: "the summary
+        # field is always present, null when no replicated correctness cells exist, never
+        # omitted"; the classifier itself lands in WP-3, this WP only reserves the field).
+        "classifier_verdict": None,
         "prompt_tokens": usage.get("prompt_tokens"),
         "expected_code": code,
         "correct": found,
@@ -894,10 +1001,23 @@ def run_quality_corpus(
     corpus: Optional[List[Dict[str, Any]]] = None,
     max_tokens: int = 768,
     timeout: float = 180,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    top_k: Optional[float] = None,
+    sampler_seed: Optional[int] = None,
+    sampling_arm: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Runs every fixed quality-corpus prompt once against `alias`. No automated judge --
     per Decisions locked, scoring stays manual/raw-capture this round; the per-answer rubric
-    fields are written as `null` placeholders for a human (or a later WP) to fill in."""
+    fields are written as `null` placeholders for a human (or a later WP) to fill in.
+
+    `temperature`/`top_p`/`top_k`/`sampler_seed`/`sampling_arm` (plan WP-1, "Pinned-sampling
+    plumbing"): threaded straight through to `_execute_streaming_request` for every corpus entry
+    (the whole corpus shares one sampling configuration per call -- per-entry overrides are not
+    needed here, unlike `needle_probe`'s per-call haystack seed). All default `None`; calling this
+    exactly as before is byte-identical. `sampling_arm` is a plain provenance label, same
+    semantics as in `needle_probe`.
+    """
     if corpus is None:
         corpus = load_quality_corpus()
 
@@ -907,7 +1027,10 @@ def run_quality_corpus(
         messages = entry.get("messages")
         if not messages:
             messages = _single_user_message(entry["prompt"])
-        result = _execute_streaming_request(base_url, alias, messages, max_tokens, timeout=timeout)
+        result = _execute_streaming_request(
+            base_url, alias, messages, max_tokens, timeout=timeout,
+            temperature=temperature, top_p=top_p, top_k=top_k, seed=sampler_seed,
+        )
         usage = result["usage"] or {}
 
         sentinel_correct = None
@@ -917,10 +1040,16 @@ def run_quality_corpus(
 
         sample = {
             "type": "quality_corpus_result",
+            "schema_version": 2,
             "id": entry["id"],
             "category": entry["category"],
             "sentinel": entry.get("sentinel", False),
             "sentinel_correct": sentinel_correct,
+            "sampler_seed": sampler_seed,
+            "sampling_arm": sampling_arm,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
             "prompt_tokens": usage.get("prompt_tokens"),
             "completion_tokens": usage.get("completion_tokens"),
             "finish_reason": result["finish_reason"],
@@ -1000,6 +1129,24 @@ def write_experiment_record(
 
     Computes the total projected on-disk size BEFORE writing anything; raises
     `SizeBudgetExceeded` instead of writing an over-budget experiment directory.
+
+    **Schema v2** (plan `quant-sweep-harness-and-instrument-v2.md` WP-1: "Record schema v2 in the
+    producer, from the start ... every record this plan's WPs write is v2-conformant from day
+    one"; frozen and documented as the versioned DB contract by WP-4, not here). Every call
+    unconditionally stamps `config["schema_version"] = 2` -- this producer no longer emits v1
+    records (pre-existing v1 records on disk are untouched; there is no version toggle). Two
+    record-level fields are guaranteed present via `setdefault` (so a caller that doesn't know
+    about them yet, e.g. a non-sweep `cmd_full` invocation, still gets a v2-conformant record):
+      - `config["sweep_cell"]`: the sweep-cell identity (cell_id/alias/server_flags snapshot) a
+        sweep-driven caller supplies directly in `config` before calling this; `None` for a record
+        this WP-1's own CLI (`full`) writes outside a sweep run.
+      - `config["wilson_summary"]`: **deferred audit item, pinned nullable-with-explicit-null**
+        (this WP's execution brief) -- always present as a key, `None` whenever the record has no
+        replicated correctness cells (n>=10 trials) to summarize with a Wilson interval. Never
+        omitted, and never silently absent.
+    Per-trial classifier-verdict and sampling-arm fields are NOT this function's concern -- they
+    live on the individual `samples` entries (`needle_probe`/`run_quality_corpus` already write
+    them per-sample; this function writes `samples` through to `samples.jsonl` unchanged).
     """
     base_dir = Path(base_dir) if base_dir else DEFAULT_RUNS_DIR
     lineage = config.get("lineage") or {}
@@ -1010,6 +1157,9 @@ def write_experiment_record(
     config = dict(config)
     config.setdefault("experiment_id", experiment_id)
     config.setdefault("timestamp", _utc_now_iso())
+    config["schema_version"] = 2
+    config.setdefault("sweep_cell", None)
+    config.setdefault("wilson_summary", None)
 
     prompts_text = _jsonl(prompts)
     completions_text = _jsonl(completions)

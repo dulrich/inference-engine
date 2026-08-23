@@ -1087,12 +1087,20 @@ class TestCLI(unittest.TestCase):
             self.assertEqual(payload["cell_count"], 4)
 
     def test_cmd_verify_reports_a_clean_error_when_verify_run_is_absent(self):
+        # verify_run.py exists since WP-4 landed, so the genuinely-absent-module state this test
+        # originally exercised (WP-1's dispatch-seam-only era) is no longer reachable on disk.
+        # Masking the module (`sys.modules[name] = None` makes `import verify_run` raise
+        # ImportError) keeps cmd_verify's clean-error path -- still real code -- covered without
+        # deleting verify_run.py. The landed seam's end-to-end success path is covered by
+        # test_verify_run.py's own `batch.main(["verify", ...])` test.
         import io
         from contextlib import redirect_stderr
+        from unittest import mock
 
         buf = io.StringIO()
-        with redirect_stderr(buf):
-            code = batch.main(["verify", "--run", "/tmp/does-not-matter"])
+        with mock.patch.dict(sys.modules, {"verify_run": None}):
+            with redirect_stderr(buf):
+                code = batch.main(["verify", "--run", "/tmp/does-not-matter"])
         self.assertEqual(code, 2)
         self.assertIn("verify_run.py not found", buf.getvalue())
 

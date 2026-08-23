@@ -607,9 +607,112 @@ python3 llama/bakeoff/batch.py verify --run <run-dir>
 
 `batch run --dry-run` resolves every cell and prints its `classify_fit()` classification (same
 shape as `sweep.py --dry-run`, one level up — queue-level, not spec-level) — touches no Docker,
-no state file, no container. `batch verify` is a dispatch seam only in this WP: it tries `import
-verify_run` (WP-4's module) and delegates to its `main()`; absent that module (true today), it
-prints a clear message to stderr and exits `2` — never a traceback.
+no state file, no container. `batch verify` is a dispatch seam only in `batch.py` itself: it
+tries `import verify_run` and delegates to its `main()`; absent that module it prints a clear
+message to stderr and exits `2` — never a traceback. **WP-4 lands `verify_run.py`** (below), so
+that absent-module path is now only reachable in a worktree/checkout that predates this section.
+
+## Verifier (`verify_run.py`)
+
+`plans/longcontext-pow2-overnight-campaign.md` WP-4. Post-queue mechanical verification over a
+night's already-written records and the batch runner's already-persisted queue state — the seam
+`batch verify --run <dir>` dispatches to (`batch.py cmd_verify`, unedited by this WP: it already
+calls `verify_run.main(["--run", <dir>])` and expects an int exit code). **No interpretation
+authority**: this module runs a fixed, named checklist and reports what it found; see
+`.claude/agents/verifier-bakeoff.md` below for the worker-tier agent built on top of it, which
+carries the same restriction.
+
+### Run-directory + queue-state conventions (this WP's own design call)
+
+WP-2's live battery hookup (not yet landed at WP-4 write time) is what will actually populate a
+directory shaped like this — WP-4 only defines, documents, and tests the shape it consumes:
+
+- `--run <dir>` — a directory whose immediate subdirectories are one-per-queue-cell, each the
+  standard four-file `run_harness.write_experiment_record` shape (`config.json`/`prompts.jsonl`/
+  `completions.jsonl`/`samples.jsonl`), subdirectory name == that cell's `cell_id`
+  (`experiment_id == cell_id` for every cell a batch queue runs).
+- `--state <path>` — optional explicit queue state-file path; when omitted, tried in order:
+  `<run-dir>/queue.state.json`, then `<run-dir's parent>/<run-dir's name>.state.json`
+  (sibling-of-run-dir, same shape `batch.default_state_path` uses for a queue file, applied here
+  to the run directory's own path). No match — state-derived checks degrade to `unknown`, never
+  silently skipped from the report.
+
+### Checklist
+
+Every item is one `{check, cell_id, expected, observed, verdict}` unit, `verdict` in
+`("pass", "fail", "unknown", "informational")`:
+
+- `records_present` — a records subdirectory exists for this cell; **required** (`fail` if
+  absent) for a `completed` cell, optional (`unknown` if absent) for any other state.
+- `schema_conformant` — `config.json` carries every frozen v2 top-level key (`schema_version`,
+  `experiment_id`, `timestamp`, `lineage`, `sweep_cell`, `wilson_summary`, `size_check`) plus
+  the full `run_harness.REQUIRED_LINEAGE_FIELDS` set, and every parsed `samples.jsonl` row
+  carries its type's required v2 fields (the full `longcontext_probe` field list transcribed
+  from `longcontext.run_cell`'s own sample dict; the `sampling_arm`/`temperature`/`top_p`/
+  `top_k`/`sampler_seed`/`classifier_verdict` v2 gains for `needle_probe`/
+  `quality_corpus_result`; `timing_round` only needs a `type` key — it never gained v2 fields).
+- `vram_arithmetic` — consumes `sweep.kv_bytes_per_token` (never reimplements the KV-bytes
+  formula) against the cell's declared KV arm (`-ctk`/`-ctv`/`-c` from the recorded
+  `sweep_cell.server_flags`) and geometry resolved from a recorded `sweep_cell.
+  synthetic_geometry` fixture block or a still-present `model_host_path` GGUF header (the same
+  live-header path `sweep.classify_fit` uses); compares `weights_bytes + kv_bytes_at_context`
+  against the recorded `vram.loaded_bytes - vram.baseline_bytes` delta within a generous
+  `[0.4x, 3.0x]` multiplicative band (`VRAM_ARITHMETIC_LOW_RATIO`/`_HIGH_RATIO`) — wide enough to
+  absorb `kv_bytes_per_token`'s own documented ~1.7x live MLA approximation error without
+  false-positiving, narrow enough to still catch a KV-type-scale-class mismatch (the "silent
+  wrong region" shape the campaign hunts, e.g. a quantized-KV cell whose measured delta actually
+  matches its f16 sibling's). `unknown` (never `fail`) whenever geometry can't be resolved.
+- `prompt_tokens_tolerance` — every `longcontext_probe`/`needle_probe` sample's recorded
+  `prompt_tokens` within ±10% of `target_tokens` (plan Test Plan's pinned tolerance).
+- `wilson_min_trials` — whenever `config.json`'s `wilson_summary` is non-null, its `n` is
+  `>= longcontext.MIN_TRIALS_FOR_WILSON` (consumed, never re-pinned as a second literal `10`).
+- `classifier_distribution` — always `informational`: a per-cell count of `classifier_verdict`
+  values — reported, never gated on, matching this README's own "never silently trusted... a
+  manual spot-check is expected practice" framing for classifier output (see the Degeneracy
+  classifier section below).
+- `abort_state` — one queue-level (`cell_id: null`) item: `fail` iff the queue state's
+  `queue_state` is `batch.QUEUE_ABORTED_HANG`, `unknown` iff no state file was found, else
+  `pass`; `observed` always lists every cell in `batch.ABORTED_HANG` state too, so an
+  `aborted-hang` queue is unmissable in both reports even before a reader reaches the per-cell
+  detail (both report writers put this check first).
+
+### Reports + exit codes
+
+Two reports are written into `--run <dir>`: `verify_report.json` (the full checklist item list
+plus a `summary` count) and `verify_report.md` (the same information for a human, with an
+`## ⚠ QUEUE ABORTED-HANG ⚠` banner first when applicable). Exit code: `0` — every item
+`pass`/`unknown`/`informational`; `1` — any item `fail` (this includes an `aborted-hang` queue,
+via `abort_state`); `2` — the run directory doesn't exist, or exists but yields nothing to check
+at all (no discoverable queue state file and no per-cell subdirectories) — "cannot verify",
+never silently reported as a clean `0`. Neither report is written when the run directory is
+entirely absent (nowhere to write them).
+
+### CLI
+
+```sh
+python3 llama/bakeoff/verify_run.py --run <run-dir> [--state <state.json>]
+python3 llama/bakeoff/batch.py verify --run <run-dir>            # same seam, via batch.py
+```
+
+### Worker-tier agent profile (`.claude/agents/verifier-bakeoff.md`)
+
+Plan Decisions locked: "Verification is mechanical: automated checks in the runner + a
+worker-tier Claude agent profile... with mechanical instructions for post-run triage." The
+installed profile runs `batch verify --run <dir>`, reads both reports, and files a summary of
+the machine-readable verdicts verbatim — flagging any `fail`/`aborted-hang` prominently — with
+explicit instructions never to reinterpret, soften, or override a check result.
+
+### Local-inference seam (designed, not built)
+
+Plan Decisions locked: "the design must leave a clean seam for replacing that agent with a
+local-inference verifier... once the quality bar is validated." Every checklist item already IS
+the self-contained `{check, cell_id, expected, observed, verdict}` unit a future local-model call
+would answer — none of the five keys are Claude-shaped prose. A future local-inference verifier
+(the GLiNER2-extract / bge-m3-similarity precedent from the Ling plan — a small always-resident
+CPU-tier model per `onnx/`, not a frontier agent) would consume exactly this module's JSON report
+and answer one narrow question per item ("does `observed` satisfy `expected`?") without ever
+touching the underlying records itself. That successor is out of scope here — `verify_run.py`
+only produces the report shape it would consume.
 
 ## Long-context correctness instrument v2 (`longcontext.py`)
 

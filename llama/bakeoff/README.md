@@ -611,12 +611,20 @@ Offline sanity check (touches no Docker/network/GPU, matching `sweep.py --dry-ru
 python3 llama/bakeoff/longcontext.py --dry-run --target-tokens 31000
 ```
 
-## Schema v2 (draft — frozen at WP-4)
+## Schema v2 (FROZEN 2026-08-23)
 
-`plans/quant-sweep-harness-and-instrument-v2.md` WP-1 makes the producer (`write_experiment_
-record`, `needle_probe`, `run_quality_corpus`) v2-conformant from day one; **WP-4 freezes and
-formally documents this as the versioned DB contract** `bench-results-db-and-dashboard`
-ingests — treat the field list below as the current producer shape, not yet the frozen contract.
+`plans/quant-sweep-harness-and-instrument-v2.md` WP-1 made the producer (`write_experiment_
+record`, `needle_probe`, `run_quality_corpus`) v2-conformant from day one; **WP-4 froze this
+field list as the versioned DB contract** the sibling `bench-results-db-and-dashboard` plan
+ingests. The freeze covers every field bullet below, including WP-3's `longcontext_probe`
+sample type. Conformance was verified at freeze time over every record this plan's WPs
+produced: `runs/bakeoff/wp1-smoke-cell-ling-q4km/` (config lineage keys, `sweep_cell`/
+`wilson_summary` presence, per-sample v2 fields, all four files parse clean) and a
+stub-driven `longcontext.run_cell` sample (all fields below present, seed fields distinct,
+JSON-serializable). Pre-existing v1 records on disk remain as-is — the DB plan ingests v2
+only (pinned there). **Changing or removing a frozen field is a schema-v3 event** (bump
+`schema_version`, document the migration here), never a silent edit; purely additive fields
+may append to v2 with a dated note in this section.
 
 - `config.json` gains `schema_version: 2` (unconditional — this producer no longer emits v1;
   pre-existing v1 records on disk are untouched), `sweep_cell` (the sweep-cell identity a
@@ -640,7 +648,7 @@ ingests — treat the field list below as the current producer shape, not yet th
   `classifier_shape`/`classifier_flags`/`trial_meta` — `corpus_manifest_id` is non-`null` here
   (`"gutenberg-longcontext-haystack-v1"`), the inverse of `needle_probe`'s always-`null` value,
   since this IS the corpus-backed instrument. See "Long-context correctness instrument v2" above
-  for the full field-by-field description; WP-4 folds this into the frozen schema-v2 field list.
+  for the full field-by-field description; this sample type is part of the frozen v2 contract.
 
 ### Sampling-arm presets
 

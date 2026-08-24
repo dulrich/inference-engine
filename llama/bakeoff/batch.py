@@ -241,7 +241,17 @@ def init_state(resolved_cells: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "queue_state": QUEUE_RUNNING,
         "created_at": _utc_now_iso(),
-        "cells": {c["cell_id"]: {"state": PENDING, "reason": None} for c in resolved_cells},
+        # WP-B: each cell's already-resolved `alias` (present on `resolved_cells` since before
+        # `compute_cell_id` ran, inside `resolve_cell` -- this is not new per-cell metadata, just
+        # a copy of an existing field, so cell_id computation is untouched) at the cell-entry TOP
+        # LEVEL (beside `state`/`reason`), so a reader (the dashboard) can alias-join every cell
+        # -- including a still-`pending` one -- without waiting for a `detail` to exist. An older
+        # state file written before this WP simply lacks the key; nothing here or elsewhere
+        # requires it on read.
+        "cells": {
+            c["cell_id"]: {"state": PENDING, "reason": None, "alias": c["alias"]}
+            for c in resolved_cells
+        },
     }
 
 
@@ -606,6 +616,8 @@ def write_cell_record(
     vram_baseline_bytes: Optional[int],
     vram_loaded_bytes: Optional[int],
     sampling_arm_effective: str,
+    vram_profile: Optional[str] = None,
+    response_caps: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """WP-5 glue: persists one live cell's battery output as a standard four-file
     `run_harness.write_experiment_record` directory under `records_dir/<cell_id>/` -- exactly the
@@ -623,6 +635,13 @@ def write_cell_record(
     `wilson_summary`: the first non-null per-task/position summary from the battery (Wilson
     intervals exist only where `n_trials >= longcontext.MIN_TRIALS_FOR_WILSON`); `None` for
     smoke-depth cells -- `write_experiment_record` keeps the key present either way.
+
+    WP-B (additive; `run_harness.write_experiment_record`'s `schema_version` stays 2): two
+    top-level self-description keys, both optional and defaulting to `None` for a caller that
+    doesn't supply them (`TestWriteCellRecord`'s direct positional calls, pre-WP-B) --
+    `vram_profile`, the effective `--vram-profile`/queue `vram_profile` string this cell ran
+    under, and `response_caps`, the response-length budget the battery actually enforced
+    (`{"default": <flat max_tokens>, "by_task": LONGCONTEXT_MAX_TOKENS_BY_TASK}`).
     """
     cell_id = cell["cell_id"]
     host_path = cell.get("model_host_path")
@@ -663,6 +682,8 @@ def write_cell_record(
             "after_teardown_bytes": None,
         },
         "wilson_summary": wilson_summary,
+        "vram_profile": vram_profile,
+        "response_caps": response_caps,
     }
     run_harness.write_experiment_record(
         cell_id, config, [], completions, samples, base_dir=records_dir,
@@ -677,6 +698,7 @@ def make_longcontext_cell_runner(
     max_tokens: int = 256,
     timeout: float = 300,
     records_dir: Optional[Path] = None,
+    vram_profile: Optional[str] = None,
 ) -> Callable[["sweep.ScratchServerHandle", Dict[str, Any]], CellOutcome]:
     """Builds the real live `cell_runner` for a `battery: [..., "needle"]` queue cell:
     `longcontext.run_live_battery`'s full task x position x trial sweep against `handle`'s live
@@ -717,10 +739,20 @@ def make_longcontext_cell_runner(
     before the battery ever runs -- `failed`, `correctness_failure=False`, matching
     `default_cell_runner`'s existing health-gate behavior exactly (never sends a single request to
     an unhealthy/unverified server).
+
+    WP-B: `vram_profile` (default `None`, matching every other optional collaborator here) is
+    the effective profile string for the run -- `cmd_run` resolves it the same way `run_queue`
+    does (`--vram-profile` override, else the queue's own `vram_profile`) before building this
+    runner, and it's threaded through unchanged into every `write_cell_record` call this runner
+    makes, alongside `response_caps` (`max_tokens` above + `LONGCONTEXT_MAX_TOKENS_BY_TASK`) --
+    both land as top-level `config.json` keys for a persisted record.
     """
     battery_fn = battery_fn or longcontext.run_live_battery
     production_sampling_fn = production_sampling_fn or sampling_table.production_sampling
     vram_used_bytes_fn = vram_used_bytes_fn or sweep.read_vram_used_bytes
+    # WP-B: fixed for the lifetime of this factory's runner (one `max_tokens` per `batch run`
+    # invocation) -- computed once here rather than per-cell inside `_runner`.
+    response_caps = {"default": max_tokens, "by_task": LONGCONTEXT_MAX_TOKENS_BY_TASK}
 
     def _runner(handle: "sweep.ScratchServerHandle", cell: Dict[str, Any]) -> CellOutcome:
         if not handle.healthy:
@@ -753,6 +785,8 @@ def make_longcontext_cell_runner(
                         vram_baseline_bytes=handle.vram_before_bytes,
                         vram_loaded_bytes=vram_after,
                         sampling_arm_effective=None,
+                        vram_profile=vram_profile,
+                        response_caps=response_caps,
                     ))
                     augmented["record_error"] = None
                 except Exception as exc:  # noqa: BLE001 -- record write must never fail a cell
@@ -823,6 +857,8 @@ def make_longcontext_cell_runner(
                 record_path = str(write_cell_record(
                     Path(records_dir), cell, battery_results,
                     handle.vram_before_bytes, vram_after_bytes, effective_arm,
+                    vram_profile=vram_profile,
+                    response_caps=response_caps,
                 ))
             except Exception as exc:
                 record_error = f"{type(exc).__name__}: {exc}"
@@ -1111,6 +1147,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     controller = None
     if not args.dry_run and not args.no_container_control:
         controller = ContainerController(container=args.container)
+    # WP-B: `make_longcontext_cell_runner` needs the effective `vram_profile` string to stamp
+    # into every record it writes, but `run_queue` (below) only resolves that value internally
+    # (`--vram-profile` override, else the queue's own `vram_profile`) after it has already
+    # loaded the queue file -- this cell_runner is built BEFORE that call, so the same
+    # resolution is repeated here from the queue file this CLI path is about to hand to
+    # `run_queue` anyway. A malformed queue file raises `QueueValidationError` here exactly as
+    # it would have inside `run_queue`, just slightly earlier.
+    effective_vram_profile = args.vram_profile or load_queue(Path(args.queue))["vram_profile"]
     try:
         result = run_queue(
             Path(args.queue),
@@ -1127,6 +1171,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             # is unaffected.
             cell_runner=make_longcontext_cell_runner(
                 records_dir=Path(args.records_dir) if args.records_dir else None,
+                vram_profile=effective_vram_profile,
             ),
             container_controller=controller,
             # WP-5: wire the real kernel-log hang rail for live (non-dry-run) invocations;

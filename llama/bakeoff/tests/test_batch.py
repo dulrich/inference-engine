@@ -291,6 +291,15 @@ class TestStateMachinePrimitives(unittest.TestCase):
         self.assertEqual(state["queue_state"], batch.QUEUE_RUNNING)
         self.assertTrue(all(cs["state"] == batch.PENDING for cs in state["cells"].values()))
 
+    def test_init_state_writes_alias_at_cell_entry_top_level(self):
+        # WP-B: every cell (including a still-`pending` one, before any run) is alias-joinable
+        # from the state file alone -- `alias` sits beside `state`/`reason`, not nested under
+        # `detail` (which doesn't exist yet for a pending cell).
+        resolved = batch.resolve_queue_cells(_minimal_queue())
+        state = batch.init_state(resolved)
+        for cell in resolved:
+            self.assertEqual(state["cells"][cell["cell_id"]]["alias"], cell["alias"])
+
     def test_apply_interrupted_rule_marks_running_as_failed_interrupted(self):
         resolved = batch.resolve_queue_cells(_minimal_queue())
         state = batch.init_state(resolved)
@@ -300,6 +309,14 @@ class TestStateMachinePrimitives(unittest.TestCase):
         self.assertEqual(changed, [crashed_id])
         self.assertEqual(state["cells"][crashed_id]["state"], batch.FAILED)
         self.assertEqual(state["cells"][crashed_id]["reason"], "interrupted")
+
+    def test_apply_interrupted_rule_preserves_alias(self):
+        resolved = batch.resolve_queue_cells(_minimal_queue())
+        state = batch.init_state(resolved)
+        crashed_id = resolved[0]["cell_id"]
+        state["cells"][crashed_id]["state"] = batch.RUNNING
+        batch.apply_interrupted_rule(state)
+        self.assertEqual(state["cells"][crashed_id]["alias"], resolved[0]["alias"])
 
     def test_apply_interrupted_rule_is_a_noop_when_nothing_is_running(self):
         resolved = batch.resolve_queue_cells(_minimal_queue())
@@ -321,6 +338,15 @@ class TestStateMachinePrimitives(unittest.TestCase):
         self.assertEqual(state["cells"][ids[2]]["state"], batch.PENDING)
         self.assertEqual(state["cells"][ids[3]]["state"], batch.PENDING)
         self.assertEqual(state["queue_state"], batch.QUEUE_RUNNING)
+
+    def test_re_arm_state_preserves_alias(self):
+        resolved = batch.resolve_queue_cells(_minimal_queue())
+        state = batch.init_state(resolved)
+        for cs in state["cells"].values():
+            cs["state"] = batch.FAILED
+        batch.re_arm_state(state)
+        for cell in resolved:
+            self.assertEqual(state["cells"][cell["cell_id"]]["alias"], cell["alias"])
 
     def test_save_and_load_state_round_trips(self):
         resolved = batch.resolve_queue_cells(_minimal_queue())
@@ -1220,6 +1246,79 @@ class TestWriteCellRecord(unittest.TestCase):
             self.assertIsNone(outcome.detail["record_error"])
             self.assertTrue((Path(outcome.detail["record_path"]) / "config.json").exists())
 
+    def test_config_carries_vram_profile_and_response_caps_when_supplied(self):
+        # WP-B item 2: record `config.json` gains top-level `vram_profile` + `response_caps`.
+        with tempfile.TemporaryDirectory() as tmp:
+            cell = dict(_longcontext_cell())
+            records_dir = Path(tmp) / "run-wp-b"
+            out = batch.write_cell_record(
+                records_dir, cell, self._battery_results(),
+                vram_baseline_bytes=1000, vram_loaded_bytes=9000,
+                sampling_arm_effective="capability",
+                vram_profile="desktop-shared",
+                response_caps={"default": 256, "by_task": {"multi_needle": 768}},
+            )
+            config = json.loads((out / "config.json").read_text())
+            self.assertEqual(config["vram_profile"], "desktop-shared")
+            self.assertEqual(
+                config["response_caps"], {"default": 256, "by_task": {"multi_needle": 768}},
+            )
+
+    def test_config_vram_profile_and_response_caps_default_to_none(self):
+        # Additive/backward-compatible: a caller (this WP's own earlier tests above) that omits
+        # the two new kwargs still gets a valid record, with the keys present but null.
+        with tempfile.TemporaryDirectory() as tmp:
+            cell = dict(_longcontext_cell())
+            records_dir = Path(tmp) / "run-wp-b-default"
+            out = batch.write_cell_record(
+                records_dir, cell, self._battery_results(),
+                vram_baseline_bytes=1000, vram_loaded_bytes=9000,
+                sampling_arm_effective="capability",
+            )
+            config = json.loads((out / "config.json").read_text())
+            self.assertIsNone(config["vram_profile"])
+            self.assertIsNone(config["response_caps"])
+
+    def test_needle_runner_threads_vram_profile_and_response_caps_into_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            battery_fn = _fake_battery_fn_factory(
+                {"single_needle": [_sample("single_needle", "correct", True)]},
+            )
+            runner = batch.make_longcontext_cell_runner(
+                battery_fn=battery_fn, vram_used_bytes_fn=lambda: 5000,
+                records_dir=Path(tmp) / "run-wp-b-runner",
+                vram_profile="headless",
+            )
+            outcome = runner(_handle(), _longcontext_cell())
+            config = json.loads(
+                (Path(outcome.detail["record_path"]) / "config.json").read_text()
+            )
+            self.assertEqual(config["vram_profile"], "headless")
+            self.assertEqual(
+                config["response_caps"],
+                {"default": 256, "by_task": batch.LONGCONTEXT_MAX_TOKENS_BY_TASK},
+            )
+
+    def test_deferred_vram_cell_record_also_carries_vram_profile_and_response_caps(self):
+        # The non-needle deferral path (default_cell_runner + augmented VRAM read-backs) writes
+        # through the same `write_cell_record` seam -- it must gain the two fields too.
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = batch.make_longcontext_cell_runner(
+                battery_fn=_fake_battery_fn_factory({}), vram_used_bytes_fn=lambda: 4321,
+                records_dir=Path(tmp) / "run-wp-b-vram-only",
+                vram_profile="desktop-shared",
+            )
+            cell = _longcontext_cell(battery=["vram"])
+            outcome = runner(_handle(vram_before=1000), cell)
+            config = json.loads(
+                (Path(outcome.detail["record_path"]) / "config.json").read_text()
+            )
+            self.assertEqual(config["vram_profile"], "desktop-shared")
+            self.assertEqual(
+                config["response_caps"],
+                {"default": 256, "by_task": batch.LONGCONTEXT_MAX_TOKENS_BY_TASK},
+            )
+
     def test_runner_record_write_failure_never_aborts_the_cell(self):
         with tempfile.TemporaryDirectory() as tmp:
             unwritable = Path(tmp) / "not-a-dir.txt"
@@ -1333,6 +1432,14 @@ class TestWp6ReArmCell(unittest.TestCase):
         self.assertEqual(len(changed), 1)
         self.assertEqual(state["cells"][changed[0]]["state"], batch.PENDING)
 
+    def test_re_arm_cells_preserves_alias(self):
+        # WP-B: `re_arm_cells` mutates `state`/`reason` in place -- the top-level `alias` set by
+        # `init_state` must survive a targeted re-arm untouched.
+        state, cells = self._state_and_cells()
+        target = cells[1]["cell_id"]
+        batch.re_arm_cells(state, [target], cells)
+        self.assertEqual(state["cells"][target]["alias"], cells[1]["alias"])
+
     def test_unknown_name_raises_instead_of_silently_re_arming_nothing(self):
         state, cells = self._state_and_cells()
         with self.assertRaises(batch.QueueValidationError):
@@ -1373,6 +1480,34 @@ class TestWp6QueueStateMismatch(unittest.TestCase):
                     vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
                 )
             self.assertIn("immutable", str(ctx.exception))
+
+
+class TestWpBOldStateWithoutAlias(unittest.TestCase):
+    """WP-B: `alias` at the cell-entry top level is new, additive state-file surface -- a state
+    file written before this WP (no `alias` key on any cell entry) must still load and run to
+    completion, never require the field on read."""
+
+    def test_old_state_without_alias_still_loads_and_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = _write_queue(tmp, _minimal_queue())
+            resolved = batch.resolve_queue_cells(_minimal_queue())
+            # Hand-built pre-WP-B state shape: `state`/`reason` only, no `alias` anywhere.
+            old_state = {
+                "queue_state": batch.QUEUE_RUNNING,
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "cells": {c["cell_id"]: {"state": batch.PENDING, "reason": None} for c in resolved},
+            }
+            batch.save_state(batch.default_state_path(queue_path), old_state)
+            result = batch.run_queue(
+                queue_path,
+                scratch_server_fn=fake_scratch_server_factory(),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
+                vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
+            )
+            self.assertEqual(result["queue_state"], batch.QUEUE_COMPLETED)
+            for cs in result["state"]["cells"].values():
+                self.assertEqual(cs["state"], batch.COMPLETED)
 
 
 if __name__ == "__main__":

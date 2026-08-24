@@ -150,12 +150,13 @@
 }
 
 .run-table-flags {
-  overflow: hidden;
-  max-width: 32ch;
+  /* Wrap, never ellipsize: classifier flag readouts are the evidence a run page exists to
+     show, and the earlier 32ch ellipsis truncation hid them (user feedback 2026-08-23). */
+  max-width: 40ch;
   color: var(--muted);
   font-size: 0.7rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 /* ---- Ladders / Long-context: the hf_repo / experiment picker field -------------------- */

@@ -216,7 +216,7 @@
                 <td class="run-table-num">{formatCount(trial.promptTokens)}</td>
                 <td class="run-table-num">{formatCount(trial.completionTokens)}</td>
                 <td>{trial.finishReason ?? "—"}</td>
-                <td class="run-table-flags">{formatClassifierFlags(flags) || "—"}</td>
+                <td class="run-table-flags" title={formatClassifierFlags(flags) || undefined}>{formatClassifierFlags(flags) || "—"}</td>
               </tr>
             {/each}
           </tbody>

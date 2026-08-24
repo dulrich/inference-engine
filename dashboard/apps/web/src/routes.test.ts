@@ -8,6 +8,7 @@ describe("tabToPath / runDetailPath", () => {
     expect(tabToPath("longcontext")).toBe("/longcontext");
     expect(tabToPath("fit")).toBe("/fit");
     expect(tabToPath("serving")).toBe("/serving");
+    expect(tabToPath("queue")).toBe("/queue");
   });
 
   test("runDetailPath encodes the experiment id", () => {
@@ -22,6 +23,7 @@ describe("parsePath", () => {
     expect(parsePath("/longcontext")).toEqual({ tab: "longcontext", matched: true });
     expect(parsePath("/fit")).toEqual({ tab: "fit", matched: true });
     expect(parsePath("/serving")).toEqual({ tab: "serving", matched: true });
+    expect(parsePath("/queue")).toEqual({ tab: "queue", matched: true });
   });
 
   test("resolves a run detail path", () => {

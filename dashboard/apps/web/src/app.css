@@ -7,7 +7,12 @@
  * WP-2 view CSS lives in three namespaced blocks: `.run-*` (shared by every view --
  * eyebrow ledes, empty/error states, the one table shape, the Runs list/detail), `.ladders-*`
  * (the model picker field), `.serving-*` (the alias/measured-cell cells). No new CSS custom
- * properties -- every color is a vendored Signalworks token. */
+ * properties -- every color is a vendored Signalworks token.
+ *
+ * WP-C (plan `bench-dashboard-run-context-surfacing.md` WP-C) adds two more: `.run-output-*`
+ * (the Runs detail output-length line, alongside the existing `.run-*` block) and `.queue-*`
+ * (the new Queue tab's per-queue status cards) -- same `.run-table`/`.pill` reuse, same
+ * `var(--...)` token discipline. */
 
 /* ---- Shared view chrome ------------------------------------------------- */
 
@@ -179,4 +184,66 @@
 
 .serving-measured-link:hover {
   text-decoration: underline;
+}
+
+/* ---- Runs detail: output-length line (WP-C) ------------------------------- */
+
+.run-output-length {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+  font-size: 0.82rem;
+}
+
+/* ---- Queue (WP-C) ----------------------------------------------------------- */
+
+.queue-generated {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.queue-card {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+  background: var(--panel);
+}
+
+.queue-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 6px;
+}
+
+.queue-card-name {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+}
+
+.queue-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.queue-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
 }

@@ -1,10 +1,12 @@
-// Hand-rolled path routing for the app's five views (Runs/Ladders/Long-context/Fit/
-// Serving) plus Runs' drill-down -- following `fleet-tools/model_scoreboard`'s own
-// `apps/web/src/routes.ts` precedent (pattern router, no dependency; the API's SPA
+// Hand-rolled path routing for the app's six views (Runs/Ladders/Long-context/Fit/
+// Serving/Queue) plus Runs' drill-down -- following `fleet-tools/model_scoreboard`'s
+// own `apps/web/src/routes.ts` precedent (pattern router, no dependency; the API's SPA
 // fallback, `apps/api/src/app.ts spaResponse`, makes every path here refresh-safe; History
-// API driven directly from App.svelte).
+// API driven directly from App.svelte). Queue (WP-C, plan
+// `bench-dashboard-run-context-surfacing.md` WP-C) is a read-only view over `GET
+// /api/queue` -- no drill-down path of its own.
 
-export type Tab = "runs" | "ladders" | "longcontext" | "fit" | "serving";
+export type Tab = "runs" | "ladders" | "longcontext" | "fit" | "serving" | "queue";
 
 const TAB_PATHS: Record<Tab, string> = {
   runs: "/",
@@ -12,6 +14,7 @@ const TAB_PATHS: Record<Tab, string> = {
   longcontext: "/longcontext",
   fit: "/fit",
   serving: "/serving",
+  queue: "/queue",
 };
 
 export function tabToPath(tab: Tab): string {

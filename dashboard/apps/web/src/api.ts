@@ -5,12 +5,14 @@ import {
   HealthResponseSchema,
   LadderRowSchema,
   MetricRowSchema,
+  QueueListResponseSchema,
   ServingResponseSchema,
   TrialRowSchema,
   type CurveSeries,
   type ExperimentSummary,
   type HealthResponse,
   type LadderRow,
+  type QueueListResponse,
   type ServingResponse,
 } from "@bench-dashboard/shared";
 import { z } from "zod";
@@ -68,4 +70,11 @@ export function getCurves(experimentId: string): Promise<CurveSeries> {
 
 export function getServing(): Promise<ServingResponse> {
   return getJson("/api/serving", ServingResponseSchema);
+}
+
+// `GET /api/queue` (WP-A) -- read-only queue/state visibility (WP-C Queue tab). Missing
+// `QUEUES_DIR` is a valid `{queues: []}` 200, not an error -- see `packages/shared/src/
+// queue.ts`.
+export function getQueue(): Promise<QueueListResponse> {
+  return getJson("/api/queue", QueueListResponseSchema);
 }

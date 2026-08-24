@@ -9,6 +9,8 @@
   import { getExperimentDetail, type ExperimentFullDetail } from "../api.ts";
   import { formatCount, formatGiB, formatMs, formatPct, formatShortHash, formatTimestamp, formatTokS } from "../lib/format.ts";
   import { extractClassifierFlags, formatClassifierFlags, verdictLabel, verdictPillClass } from "../lib/runs/verdict.ts";
+  import { flattenResponseCaps, summarizeCompletionTokens, summarizeFinishReasons } from "../lib/runs/outputLength.ts";
+  import { vramProfileLabel, vramProfilePillClass } from "../lib/profile.ts";
   import { guardedNavClick, runDetailPath, tabToPath } from "../routes.ts";
 
   let {
@@ -64,6 +66,23 @@
   const wilsonSummary = $derived(detail?.wilsonSummary ?? null);
   const vramMetrics = $derived((detail?.metrics ?? []).filter((m) => m.metricType.startsWith("vram_")));
   const timingMetrics = $derived((detail?.metrics ?? []).filter((m) => m.metricType === "timing_round"));
+
+  // WP-C run-context panels: serving config (server flags + battery + sampling arm),
+  // per-trial sampling columns (only rendered when at least one trial carries a sampling
+  // value -- most records don't), and the output-length line (response caps + completion-
+  // token stats + finish-reason counts).
+  const serverFlagEntries = $derived(Object.entries(detail?.sweepCell?.serverFlags ?? {}));
+  // `response_caps` is `{default: <n>, by_task: {<task>: <n>}}` (WP-B's stamp) — flattened
+  // to rows rather than `Object.entries`'d raw (which would render `by_task` as
+  // `[object Object]`).
+  const responseCapEntries = $derived(flattenResponseCaps(detail?.responseCaps ?? null));
+  const hasSamplingColumns = $derived(
+    (detail?.trials ?? []).some(
+      (t) => t.samplingArm !== null || t.temperature !== null || t.topP !== null || t.topK !== null,
+    ),
+  );
+  const completionTokenStats = $derived(summarizeCompletionTokens(detail?.trials ?? []));
+  const finishReasonCounts = $derived(summarizeFinishReasons(detail?.trials ?? []));
 </script>
 
 {#if runId !== undefined}
@@ -116,7 +135,76 @@
           <code>{detail.sweepCell.cellId}</code>
         </div>
       {/if}
+      <div class="field">
+        <span>VRAM profile</span>
+        <span class="pill {vramProfilePillClass(detail.vramProfile)}">{vramProfileLabel(detail.vramProfile)}</span>
+      </div>
     </section>
+
+    {#if serverFlagEntries.length > 0 || detail.battery !== null || detail.samplingArm !== null}
+      <h2>Serving config</h2>
+      <section class="run-meta-grid">
+        {#each serverFlagEntries as [flag, value] (flag)}
+          <div class="field">
+            <span><code>{flag}</code></span>
+            <span>{String(value)}</span>
+          </div>
+        {/each}
+        {#if detail.battery !== null}
+          <div class="field">
+            <span>Battery</span>
+            <span>
+              {#each detail.battery as task (task)}<span class="pill pill-tag">{task}</span>{/each}
+            </span>
+          </div>
+        {/if}
+        {#if detail.samplingArm !== null}
+          <div class="field">
+            <span>Sampling arm</span>
+            <span>{detail.samplingArm}</span>
+          </div>
+        {/if}
+      </section>
+    {/if}
+
+    {#if completionTokenStats !== null || responseCapEntries.length > 0 || finishReasonCounts.length > 0}
+      <h2>Output length</h2>
+      <p class="run-output-length">
+        {#if completionTokenStats}
+          completion tokens: min {formatCount(completionTokenStats.min)} &middot; mean {completionTokenStats.mean.toFixed(
+            1,
+          )} &middot; max {formatCount(completionTokenStats.max)} (n={completionTokenStats.count})
+        {:else}
+          completion tokens: <span class="run-table-muted">no trials carry a completion-token count</span>
+        {/if}
+      </p>
+      {#if finishReasonCounts.length > 0}
+        <p class="run-output-length">
+          finish reasons:
+          {#each finishReasonCounts as fr (fr.reason)}<span class="pill pill-tag">{fr.reason}: {fr.count}</span>{/each}
+        </p>
+      {/if}
+      {#if responseCapEntries.length > 0}
+        <div class="run-table-wrap">
+          <table class="run-table">
+            <thead>
+              <tr>
+                <th>Task</th>
+                <th class="run-table-num">Cap</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each responseCapEntries as row (row.task)}
+                <tr>
+                  <td>{row.task}</td>
+                  <td class="run-table-num">{formatCount(row.cap)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
+    {/if}
 
     {#if wilsonSummary}
       <h2>Wilson summary</h2>
@@ -195,6 +283,12 @@
               <th class="run-table-num">Prompt tok</th>
               <th class="run-table-num">Completion tok</th>
               <th>Finish</th>
+              {#if hasSamplingColumns}
+                <th>Sampling arm</th>
+                <th class="run-table-num">Temp</th>
+                <th class="run-table-num">Top-p</th>
+                <th class="run-table-num">Top-k</th>
+              {/if}
               <th>Flags</th>
             </tr>
           </thead>
@@ -216,6 +310,12 @@
                 <td class="run-table-num">{formatCount(trial.promptTokens)}</td>
                 <td class="run-table-num">{formatCount(trial.completionTokens)}</td>
                 <td>{trial.finishReason ?? "—"}</td>
+                {#if hasSamplingColumns}
+                  <td>{trial.samplingArm ?? "—"}</td>
+                  <td class="run-table-num">{trial.temperature === null ? "—" : trial.temperature.toFixed(2)}</td>
+                  <td class="run-table-num">{trial.topP === null ? "—" : trial.topP.toFixed(2)}</td>
+                  <td class="run-table-num">{formatCount(trial.topK)}</td>
+                {/if}
                 <td class="run-table-flags" title={formatClassifierFlags(flags) || undefined}>{formatClassifierFlags(flags) || "—"}</td>
               </tr>
             {/each}
@@ -255,6 +355,7 @@
             <span class="run-row-sub">{exp.lineage.hfRepo ?? "unknown repo"} &middot; {exp.lineage.filename ?? "unknown file"}</span>
           </div>
           <div class="run-row-meta">
+            <span class="pill {vramProfilePillClass(exp.vramProfile)}">{vramProfileLabel(exp.vramProfile)}</span>
             <span class="pill pill-tag">{exp.trialCount} trials</span>
             <span class="pill pill-tag">{exp.metricCount} metrics</span>
             {#if exp.hasWilsonSummary}<span class="pill pill-ok">Wilson</span>{/if}

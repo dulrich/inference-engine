@@ -9,12 +9,15 @@
   import LongContext from "./views/LongContext.svelte";
   import Fit from "./views/Fit.svelte";
   import Serving from "./views/Serving.svelte";
+  import Queue from "./views/Queue.svelte";
 
   // WP-2: the five real views (Runs/Ladders/Long-context/Fit/Serving) on top of the full
   // API WP-1 already ships. `experiments` is fetched ONCE here (App owns it, same shape as
   // model_scoreboard's App.svelte owning `catalog`) and passed down -- every view that needs
   // more (a ladder, a curve, a detail, the serving join) fetches that itself, keyed on
-  // `refreshToken` so a poll tick or manual refresh re-pulls it too.
+  // `refreshToken` so a poll tick or manual refresh re-pulls it too. WP-C adds a sixth,
+  // read-only Queue view over `GET /api/queue` -- it needs no `experiments` join, only
+  // `refreshToken` (same independent-fetch shape as Serving).
 
   const NAV_TABS: { tab: Tab; label: string }[] = [
     { tab: "runs", label: "Runs" },
@@ -22,6 +25,7 @@
     { tab: "longcontext", label: "Long-context" },
     { tab: "fit", label: "Fit" },
     { tab: "serving", label: "Serving" },
+    { tab: "queue", label: "Queue" },
   ];
 
   let activeTab = $state<Tab>("runs");
@@ -104,7 +108,9 @@
     <LongContext {experiments} {loading} {error} {refreshToken} />
   {:else if activeTab === "fit"}
     <Fit {experiments} {loading} {error} {refreshToken} />
-  {:else}
+  {:else if activeTab === "serving"}
     <Serving {experiments} {loading} {error} {refreshToken} onopenrun={goToRun} />
+  {:else}
+    <Queue {refreshToken} />
   {/if}
 </main>

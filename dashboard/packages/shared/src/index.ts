@@ -5,5 +5,6 @@ export * from "./health.ts";
 export * from "./ingestSummary.ts";
 export * from "./ladder.ts";
 export * from "./metric.ts";
+export * from "./queue.ts";
 export * from "./serving.ts";
 export * from "./trial.ts";

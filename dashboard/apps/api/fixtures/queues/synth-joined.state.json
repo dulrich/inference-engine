@@ -1,0 +1,41 @@
+{
+  "queue_state": "completed",
+  "created_at": "2026-08-23T22:53:08+00:00",
+  "updated_at": "2026-08-23T23:47:39+00:00",
+  "cells": {
+    "gemma-qat-c32768-f16-prod-ctkf16-ctvf16-faon-c32768-608a27f9": {
+      "alias": "gemma-qat-c32768-f16-prod",
+      "state": "completed",
+      "reason": null,
+      "detail": {
+        "alias": "gemma-qat-c32768-f16-prod",
+        "sampling_arm_requested": "production",
+        "sampling_arm_effective": "production"
+      }
+    },
+    "gemma-qat-c32768-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-74917c4b": {
+      "alias": "gemma-qat-c32768-q8q8-cap",
+      "state": "failed",
+      "reason": "needle_failure",
+      "detail": {
+        "alias": "gemma-qat-c32768-q8q8-cap",
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability"
+      }
+    },
+    "legacy-shape-cell-detail-alias-only-9999": {
+      "state": "running",
+      "reason": null,
+      "detail": {
+        "alias": "gemma-qat-detail-fallback",
+        "sampling_arm_requested": "production"
+      }
+    },
+    "orphan-state-entry-no-matching-queue-cell-1234": {
+      "alias": "gemma-qat-orphan-state-entry",
+      "state": "pending",
+      "reason": null,
+      "detail": {}
+    }
+  }
+}

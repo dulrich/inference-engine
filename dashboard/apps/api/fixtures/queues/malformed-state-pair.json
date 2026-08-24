@@ -1,0 +1,14 @@
+{
+  "queue_format": 1,
+  "vram_profile": "desktop-shared",
+  "deadline": "13:00",
+  "stop_policy": "pause-at-deadline",
+  "models": {},
+  "cells": [
+    {
+      "model": "gemma-4-12b-qat", "alias": "gemma-qat-c8192-f16-prod",
+      "c": 8192, "ctk": "f16", "ctv": "f16", "fa": "on",
+      "battery": ["needle"], "sampling_arm": "production", "trials": 1
+    }
+  ]
+}

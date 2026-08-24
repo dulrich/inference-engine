@@ -7,6 +7,7 @@ import { registerExperimentRoutes } from "./routes/experiments.ts";
 import { registerExportRoutes } from "./routes/export.ts";
 import { registerHealthRoutes } from "./routes/health.ts";
 import { registerLadderRoutes } from "./routes/ladders.ts";
+import { registerQueueRoutes } from "./routes/queue.ts";
 import { registerServingRoutes } from "./routes/serving.ts";
 
 // Fleet scaffold convention (model_scoreboard `app.ts`): the Hono app object only — no
@@ -21,6 +22,7 @@ registerLadderRoutes(app);
 registerCurveRoutes(app);
 registerServingRoutes(app);
 registerExportRoutes(app);
+registerQueueRoutes(app);
 
 /** Serves the built SPA: any path inside the web root that exists on disk is returned as
  * a file, anything else falls back to `index.html` so the client-side router owns it.

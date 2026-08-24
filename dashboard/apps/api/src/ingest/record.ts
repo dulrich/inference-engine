@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 
@@ -69,6 +70,9 @@ export interface NormalizedRecord {
   sweepAlias: string | null;
   sweepServerFlags: unknown | null;
   sweepCommand: string | null;
+  samplingArm: string | null;
+  battery: string[] | null;
+  vramProfile: string | null;
   wilsonSummary: unknown | null;
   rawConfig: unknown;
   rawPrompts: unknown[];
@@ -93,6 +97,13 @@ function asBoolean(value: unknown): boolean | null {
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+/** `sweep_cell.battery` — a task-name array (e.g. `["needle","vram"]`). Not a validated
+ * enum here (frozen-contract discipline elsewhere in this module: shape-check, never
+ * value-validate against a task list this ingest doesn't own). */
+function asStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.every((v) => typeof v === "string") ? (value as string[]) : null;
 }
 
 async function readJson(path: string): Promise<unknown> {
@@ -120,14 +131,27 @@ function normalizeSweepCell(config: Record<string, unknown>): {
   sweepAlias: string | null;
   sweepServerFlags: unknown | null;
   sweepCommand: string | null;
+  samplingArm: string | null;
+  battery: string[] | null;
 } {
   const cell = config.sweep_cell;
-  if (!isRecord(cell)) return { sweepCellId: null, sweepAlias: null, sweepServerFlags: null, sweepCommand: null };
+  if (!isRecord(cell)) {
+    return {
+      sweepCellId: null,
+      sweepAlias: null,
+      sweepServerFlags: null,
+      sweepCommand: null,
+      samplingArm: null,
+      battery: null,
+    };
+  }
   return {
     sweepCellId: asString(cell.cell_id),
     sweepAlias: asString(cell.alias),
     sweepServerFlags: cell.server_flags ?? null,
     sweepCommand: asString(cell.command),
+    samplingArm: asString(cell.sampling_arm),
+    battery: asStringArray(cell.battery),
   };
 }
 
@@ -259,6 +283,11 @@ export async function readRecordDir(dir: string): Promise<ReadRecordResult> {
     sweepAlias: sweep.sweepAlias,
     sweepServerFlags: sweep.sweepServerFlags,
     sweepCommand: sweep.sweepCommand,
+    samplingArm: sweep.samplingArm,
+    battery: sweep.battery,
+    // `vram_profile` — top-level on `config.json` (WP-B addition), absent on any record
+    // predating it. Never guessed from `sweep_cell` or elsewhere — absent stays NULL.
+    vramProfile: asString(config.vram_profile),
     // `wilson_summary` is always present as a KEY on a v2 record (frozen contract) but its
     // VALUE is legitimately `null` — `?? null` here is a default for an absent key on a
     // malformed record, not a stand-in for the frozen null.
@@ -272,13 +301,61 @@ export async function readRecordDir(dir: string): Promise<ReadRecordResult> {
   return { kind: "v2", record };
 }
 
-/** Every immediate subdirectory of `recordsDir` — the ingest CLI's scan list. Not
- * recursive: `runs/bakeoff/<experiment-id>/` is a flat, one-level layout (frozen
- * contract). Non-directory entries (stray files) are skipped, not counted as records. */
+function hasConfigJson(dir: string): boolean {
+  return existsSync(join(dir, "config.json"));
+}
+
+/** Every immediate subdirectory of `dir`, sorted. Non-directory entries (stray files) are
+ * skipped. Returns `[]` (never throws) for a `dir` that itself does not exist / is not
+ * readable — callers treat an unreadable batch-run candidate the same as one with no
+ * subdirectories at all (falls through to `invalid`, never crashes the scan). */
+async function immediateSubDirs(dir: string): Promise<string[]> {
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(dir, entry.name))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/** Two-level-aware scan of `recordsDir` (WP-A: `plans/bench-dashboard-run-context-
+ * surfacing.md` WP-A). Every first-level entry is classified independently:
+ *
+ * - Contains `config.json` directly → a record dir (the original flat contract,
+ *   preserved verbatim — `readRecordDir` classifies it `v2`/`v1`/`invalid` as before).
+ * - Does NOT contain `config.json`, but at least one of ITS immediate subdirs does → a
+ *   batch run dir (e.g. `runs/bakeoff/wp5-validation/<cell-id>/config.json`, live
+ *   example — not depended on by tests, which build their own fixtures). Every immediate
+ *   subdir of a batch run dir is scanned as a record dir in its own right — exactly one
+ *   extra level, matching the flat contract's own invalid/v1/v2 classification for each
+ *   (a subdir among them that itself lacks `config.json` still becomes `invalid`, same
+ *   as it would in a flat layout).
+ * - Neither → the first-level dir itself is returned as-is; `readRecordDir` then
+ *   classifies it `invalid` (missing `config.json`) exactly as the pre-two-level
+ *   contract did. This is also the terminal case for anything nested deeper than one
+ *   extra level: a third level of `config.json` is never discovered (`immediateSubDirs`
+ *   only ever looks one level below the first-level entry).
+ */
 export async function listRecordDirs(recordsDir: string): Promise<string[]> {
   const entries = await readdir(recordsDir, { withFileTypes: true });
-  return entries
+  const topDirs = entries
     .filter((entry) => entry.isDirectory())
     .map((entry) => join(recordsDir, entry.name))
     .sort();
+
+  const result: string[] = [];
+  for (const dir of topDirs) {
+    if (hasConfigJson(dir)) {
+      result.push(dir);
+      continue;
+    }
+    const subDirs = await immediateSubDirs(dir);
+    const isBatchRunDir = subDirs.some((sub) => hasConfigJson(sub));
+    if (isBatchRunDir) result.push(...subDirs);
+    else result.push(dir);
+  }
+  return result;
 }

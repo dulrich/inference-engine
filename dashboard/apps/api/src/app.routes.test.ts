@@ -98,6 +98,19 @@ describe("GET /api/serving", () => {
   });
 });
 
+describe("GET /api/queue", () => {
+  // Route-wiring smoke test only — `routes/queue.test.ts` covers `buildQueueListResponse`
+  // itself (joined/unjoined/malformed/missing-dir) directly, sidestepping `config.ts`'s
+  // shared-across-test-files singleton. This just confirms `registerQueueRoutes` is
+  // actually reached (registered before the SPA wildcard) and returns the wire shape.
+  test("is registered and returns the {queues, generatedAt} wire shape", async () => {
+    const { status, body } = await getJson<{ queues: unknown[]; generatedAt: string }>("/api/queue");
+    expect(status).toBe(200);
+    expect(Array.isArray(body.queues)).toBe(true);
+    expect(typeof body.generatedAt).toBe("string");
+  });
+});
+
 describe("GET /api/export/scoreboard-capture", () => {
   test("envelope marks stability \"experimental\" and passes through raw records", async () => {
     const { status, body } = await getJson<{

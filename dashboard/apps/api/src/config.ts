@@ -27,4 +27,11 @@ export const config = {
   // test sets this explicitly to a fixture path (brief's hard constraint: tests never
   // depend on the real file being mounted).
   llamaConfigPath: process.env.LLAMA_CONFIG_PATH ?? join(import.meta.dir, "../../../../llama/config.yaml"),
+
+  // `GET /api/queue`'s read-only source: `llama/bakeoff/queues/*.json` + sibling
+  // `*.state.json` files (WP-A). Unlike `recordsDir`/`llamaConfigPath` above, this
+  // defaults to the CONTAINER mount path (`fleet-tools/compose.fleet.yml`'s
+  // `…/llama/bakeoff/queues:/queues:ro` + `QUEUES_DIR=/queues`, WP-D), not a repo-relative
+  // dev-convenience path — every test sets this explicitly to a fixture path.
+  queuesDir: process.env.QUEUES_DIR ?? "/queues",
 };

@@ -1,0 +1,1 @@
+{"type": "sampling_echo_check", "schema_version": 2, "trial": 0, "sampling_arm": "production", "temperature": 0.9, "top_p": 0.95, "top_k": 40, "sampler_seed": 12345, "haystack_seed": null, "corpus_manifest_id": null, "haystack_sha256": null, "classifier_verdict": null, "prompt_tokens": 30, "completion_tokens": 40, "finish_reason": "length"}

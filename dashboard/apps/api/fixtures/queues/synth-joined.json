@@ -1,0 +1,36 @@
+{
+  "queue_format": 1,
+  "vram_profile": "desktop-shared",
+  "deadline": "13:00",
+  "stop_policy": "pause-at-deadline",
+  "models": {
+    "gemma-4-12b-qat": {
+      "model_host_path": "/srv/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+      "model_container_path": "/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+      "server_flags": {"--jinja": true},
+      "model_family": "gemma4"
+    }
+  },
+  "cells": [
+    {
+      "model": "gemma-4-12b-qat", "alias": "gemma-qat-c32768-f16-prod",
+      "c": 32768, "ctk": "f16", "ctv": "f16", "fa": "on",
+      "battery": ["needle"], "sampling_arm": "production", "trials": 3
+    },
+    {
+      "model": "gemma-4-12b-qat", "alias": "gemma-qat-c32768-q8q8-cap",
+      "c": 32768, "ctk": "q8_0", "ctv": "q8_0", "fa": "on",
+      "battery": ["needle"], "sampling_arm": "capability", "trials": 3
+    },
+    {
+      "model": "gemma-4-12b-qat", "alias": "gemma-qat-detail-fallback",
+      "c": 8192, "ctk": "f16", "ctv": "f16", "fa": "on",
+      "battery": ["needle"], "sampling_arm": "production", "trials": 1
+    },
+    {
+      "model": "gemma-4-12b-qat", "alias": "gemma-qat-unmatched",
+      "c": 16384, "ctk": "f16", "ctv": "f16", "fa": "off",
+      "battery": ["needle"], "sampling_arm": "production", "trials": 1
+    }
+  ]
+}

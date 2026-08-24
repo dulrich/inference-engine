@@ -30,6 +30,9 @@ interface ExperimentRow {
   sweep_server_flags: string | null;
   sweep_command: string | null;
   wilson_summary_json: string | null;
+  sampling_arm: string | null;
+  battery_json: string | null;
+  vram_profile: string | null;
   raw_config_json: string;
   raw_prompts_json: string;
   raw_completions_json: string;
@@ -105,6 +108,9 @@ function rowToSummary(row: ExperimentRow): ExperimentSummary {
             command: row.sweep_command,
           },
     hasWilsonSummary: row.wilson_summary_json !== null,
+    samplingArm: row.sampling_arm,
+    battery: row.battery_json ? (JSON.parse(row.battery_json) as string[]) : null,
+    vramProfile: row.vram_profile,
     trialCount: row.trial_count ?? 0,
     metricCount: row.metric_count ?? 0,
   };
@@ -159,8 +165,9 @@ function rowToMetric(row: MetricTableRow): MetricRow {
 const SUMMARY_COLUMNS = `
   e.id, e.schema_version, e.description, e.timestamp, e.hf_repo, e.hf_revision, e.filename,
   e.file_size, e.sha256, e.llama_cpp_build, e.sweep_cell_id, e.sweep_alias,
-  e.sweep_server_flags, e.sweep_command, e.wilson_summary_json, e.raw_config_json,
-  e.raw_prompts_json, e.raw_completions_json, e.ingested_at,
+  e.sweep_server_flags, e.sweep_command, e.wilson_summary_json, e.sampling_arm,
+  e.battery_json, e.vram_profile, e.raw_config_json, e.raw_prompts_json,
+  e.raw_completions_json, e.ingested_at,
   (SELECT COUNT(*) FROM trials t WHERE t.experiment_id = e.id) AS trial_count,
   (SELECT COUNT(*) FROM metrics m WHERE m.experiment_id = e.id) AS metric_count
 `;
@@ -177,9 +184,10 @@ export function replaceExperiment(record: NormalizedRecord): void {
         INSERT INTO experiments (
           id, schema_version, description, timestamp, hf_repo, hf_revision, filename,
           file_size, sha256, llama_cpp_build, sweep_cell_id, sweep_alias,
-          sweep_server_flags, sweep_command, wilson_summary_json, raw_config_json,
-          raw_prompts_json, raw_completions_json, ingested_at
-        ) VALUES (?, 2, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          sweep_server_flags, sweep_command, wilson_summary_json, sampling_arm,
+          battery_json, vram_profile, raw_config_json, raw_prompts_json,
+          raw_completions_json, ingested_at
+        ) VALUES (?, 2, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       r.id,
@@ -196,6 +204,9 @@ export function replaceExperiment(record: NormalizedRecord): void {
       r.sweepServerFlags === null ? null : JSON.stringify(r.sweepServerFlags),
       r.sweepCommand,
       r.wilsonSummary === null ? null : JSON.stringify(r.wilsonSummary),
+      r.samplingArm,
+      r.battery === null ? null : JSON.stringify(r.battery),
+      r.vramProfile,
       JSON.stringify(r.rawConfig),
       JSON.stringify(r.rawPrompts),
       JSON.stringify(r.rawCompletions),
@@ -319,12 +330,24 @@ export function listExperimentSummaries(): ExperimentSummary[] {
   return rows.map(rowToSummary);
 }
 
+/** `response_caps` (the `LONGCONTEXT_MAX_TOKENS_BY_TASK` map + default cap, WP-B) has no
+ * `experiments` column of its own — detail-only, parsed straight from `raw_config_json`
+ * at read time rather than promoted/reconciled like `sampling_arm`/`battery_json`/
+ * `vram_profile` (Decisions locked: DB is derived state, `raw_config_json` is the one
+ * copy of "everything this schema doesn't name"). Absent key or non-object value -> null. */
+function responseCapsFromRawConfig(rawConfigJson: string): Record<string, unknown> | null {
+  const config = JSON.parse(rawConfigJson) as Record<string, unknown>;
+  const caps = config.response_caps;
+  return typeof caps === "object" && caps !== null && !Array.isArray(caps) ? (caps as Record<string, unknown>) : null;
+}
+
 export function getExperimentDetail(id: string): ExperimentDetail | undefined {
   const row = db.query(`SELECT ${SUMMARY_COLUMNS} FROM experiments e WHERE e.id = ?`).get(id) as ExperimentRow | null;
   if (!row) return undefined;
   return {
     ...rowToSummary(row),
     wilsonSummary: row.wilson_summary_json ? (JSON.parse(row.wilson_summary_json) as ExperimentDetail["wilsonSummary"]) : null,
+    responseCaps: responseCapsFromRawConfig(row.raw_config_json),
   };
 }
 

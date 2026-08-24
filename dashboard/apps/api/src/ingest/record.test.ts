@@ -92,3 +92,82 @@ describe("listRecordDirs", () => {
     expect(names.sort()).toEqual(["fixture-v1-legacy", "fixture-v2-full", "fixture-v2-smoke-cell"]);
   });
 });
+
+// Two-level ingest (WP-A, `plans/bench-dashboard-run-context-surfacing.md` WP-A): a
+// first-level dir with `config.json` stays a flat record dir; a first-level dir WITHOUT
+// one, whose immediate subdirs have it, is a batch run dir whose subdirs are scanned
+// instead (exactly one extra level, mirroring `runs/bakeoff/wp5-validation/<cell-id>/` —
+// not depended on here, this fixture tree mirrors its shape); a dir with neither stays
+// itself (and downstream `readRecordDir` classifies it `invalid`, unchanged).
+describe("listRecordDirs: two-level (batch run dir) scan", () => {
+  const TWO_LEVEL_DIR = join(import.meta.dir, "../../fixtures/records-two-level");
+
+  test("scans flat-record, batch-run's two cell subdirs, and neither-dir/nested-too-deep as themselves", async () => {
+    const dirs = await listRecordDirs(TWO_LEVEL_DIR);
+    const relative = dirs.map((d) => d.slice(TWO_LEVEL_DIR.length + 1)).sort();
+    expect(relative).toEqual(["batch-run/cell-a", "batch-run/cell-b", "flat-record", "neither-dir", "nested-too-deep"]);
+  });
+
+  test("a flat record dir (config.json at first level) is returned as itself, not expanded", async () => {
+    const dirs = await listRecordDirs(TWO_LEVEL_DIR);
+    expect(dirs).toContain(join(TWO_LEVEL_DIR, "flat-record"));
+  });
+
+  test("a batch run dir's cell subdirs are returned individually, never the batch dir itself", async () => {
+    const dirs = await listRecordDirs(TWO_LEVEL_DIR);
+    expect(dirs).not.toContain(join(TWO_LEVEL_DIR, "batch-run"));
+    expect(dirs).toContain(join(TWO_LEVEL_DIR, "batch-run", "cell-a"));
+    expect(dirs).toContain(join(TWO_LEVEL_DIR, "batch-run", "cell-b"));
+  });
+
+  test("a dir with neither config.json nor a config.json-bearing subdir is returned as itself (invalid downstream)", async () => {
+    const dirs = await listRecordDirs(TWO_LEVEL_DIR);
+    expect(dirs).toContain(join(TWO_LEVEL_DIR, "neither-dir"));
+    const result = await readRecordDir(join(TWO_LEVEL_DIR, "neither-dir"));
+    expect(result.kind).toBe("invalid");
+  });
+
+  test("nested-deeper-is-ignored: a config.json three levels down is never discovered", async () => {
+    const dirs = await listRecordDirs(TWO_LEVEL_DIR);
+    // `nested-too-deep/inner/deeper/config.json` exists, but `nested-too-deep`'s own
+    // immediate subdir (`inner`) has no config.json directly -- never classified batch.
+    expect(dirs).toContain(join(TWO_LEVEL_DIR, "nested-too-deep"));
+    expect(dirs).not.toContain(join(TWO_LEVEL_DIR, "nested-too-deep", "inner"));
+    expect(dirs).not.toContain(join(TWO_LEVEL_DIR, "nested-too-deep", "inner", "deeper"));
+    const result = await readRecordDir(join(TWO_LEVEL_DIR, "nested-too-deep"));
+    expect(result.kind).toBe("invalid");
+  });
+});
+
+// Ingest population (WP-A item 3): sweep_cell.sampling_arm/battery and top-level
+// vram_profile normalize onto the record; absent stays null (existing flat fixtures,
+// which predate this WP, cover the absent case without modification).
+describe("readRecordDir: sampling_arm/battery/vram_profile population", () => {
+  const PROJECTIONS_DIR = join(import.meta.dir, "../../fixtures/records-projections");
+
+  test("populates samplingArm/battery/vramProfile when present on the record", async () => {
+    const result = await readRecordDir(join(PROJECTIONS_DIR, "fixture-v2-battery"));
+    expect(result.kind).toBe("v2");
+    if (result.kind !== "v2") throw new Error("unreachable");
+    expect(result.record.samplingArm).toBe("production");
+    expect(result.record.battery).toEqual(["needle", "vram"]);
+    expect(result.record.vramProfile).toBe("desktop-shared");
+  });
+
+  test("absent sweep_cell (fixture-v2-full: sweep_cell itself null) stays null throughout", async () => {
+    const result = await readRecordDir(join(FIXTURES_DIR, "fixture-v2-full"));
+    if (result.kind !== "v2") throw new Error("unreachable");
+    expect(result.record.samplingArm).toBeNull();
+    expect(result.record.battery).toBeNull();
+    expect(result.record.vramProfile).toBeNull();
+  });
+
+  test("present sweep_cell but absent sampling_arm/battery sub-fields (fixture-v2-smoke-cell) stays null", async () => {
+    const result = await readRecordDir(join(FIXTURES_DIR, "fixture-v2-smoke-cell"));
+    if (result.kind !== "v2") throw new Error("unreachable");
+    expect(result.record.sweepCellId).not.toBeNull(); // sweep_cell IS present on this fixture
+    expect(result.record.samplingArm).toBeNull();
+    expect(result.record.battery).toBeNull();
+    expect(result.record.vramProfile).toBeNull();
+  });
+});

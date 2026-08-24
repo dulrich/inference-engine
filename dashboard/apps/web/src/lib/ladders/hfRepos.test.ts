@@ -11,6 +11,9 @@ function experiment(id: string, hfRepo: string | null): ExperimentSummary {
     lineage: { hfRepo, hfRevision: null, filename: null, fileSize: null, sha256: null, llamaCppBuild: null },
     sweepCell: null,
     hasWilsonSummary: false,
+    samplingArm: null,
+    battery: null,
+    vramProfile: null,
     trialCount: 0,
     metricCount: 0,
   };

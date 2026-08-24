@@ -57,14 +57,24 @@ export const ExperimentSummarySchema = z.object({
   lineage: LineageSchema,
   sweepCell: SweepCellSchema,
   hasWilsonSummary: z.boolean(),
+  // WP-A run-context surfacing (`plans/bench-dashboard-run-context-surfacing.md` WP-A):
+  // `sweep_cell.sampling_arm`, `sweep_cell.battery`, top-level `vram_profile` — nullable,
+  // absent on any record predating this WP (never backfilled/guessed).
+  samplingArm: z.string().nullable(),
+  battery: z.array(z.string()).nullable(),
+  vramProfile: z.string().nullable(),
   trialCount: z.number().int().nonnegative(),
   metricCount: z.number().int().nonnegative(),
 });
 export type ExperimentSummary = z.infer<typeof ExperimentSummarySchema>;
 
 /** `GET /api/experiments/:id` detail — the summary plus every trial/metric row and the
- * raw wilson summary object (drill-down view). */
+ * raw wilson summary object (drill-down view). `responseCaps` (WP-A, detail only — no
+ * `experiments` column of its own, parsed from `raw_config_json.response_caps` at read
+ * time) is the `LONGCONTEXT_MAX_TOKENS_BY_TASK` map + default cap WP-B stamps into
+ * `config.json`; absent/non-object -> null. */
 export const ExperimentDetailSchema = ExperimentSummarySchema.extend({
   wilsonSummary: WilsonSummarySchema,
+  responseCaps: z.record(z.string(), z.unknown()).nullable(),
 });
 export type ExperimentDetail = z.infer<typeof ExperimentDetailSchema>;

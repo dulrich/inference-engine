@@ -1,0 +1,30 @@
+{
+  "description": "Fixture v2 record carrying sampling_arm/battery/vram_profile/response_caps for WP-A projection tests.",
+  "lineage": {
+    "hf_repo": "example-org/Example-Battery-GGUF",
+    "hf_revision": null,
+    "filename": "Example-Battery-Q4_K_M.gguf",
+    "file_size": 42,
+    "sha256": null,
+    "llama_cpp_build": "b10534"
+  },
+  "sweep_cell": {
+    "cell_id": "fixture-cell-battery",
+    "alias": "fixture-alias-battery",
+    "server_flags": {"-c": 32768},
+    "command": "llama-server -m /models/example-org/Example-Battery-GGUF/Example-Battery-Q4_K_M.gguf -c 32768",
+    "sampling_arm": "production",
+    "battery": ["needle", "vram"]
+  },
+  "vram_profile": "desktop-shared",
+  "response_caps": {"needle": 4096, "default": 2048},
+  "experiment_id": "fixture-v2-battery",
+  "timestamp": "2026-08-23T00:00:00+00:00",
+  "schema_version": 2,
+  "wilson_summary": null,
+  "size_check": {
+    "total_bytes": 500,
+    "limit_bytes": 26214400,
+    "within_budget": true
+  }
+}

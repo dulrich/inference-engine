@@ -6,6 +6,7 @@ import {
   ExperimentSummarySchema,
   HealthResponseSchema,
   LadderRowSchema,
+  QueueListResponseSchema,
   ServingResponseSchema,
   TrialRowSchema,
 } from "./index.ts";
@@ -36,6 +37,9 @@ describe("ExperimentSummarySchema", () => {
       command: "llama-server ...",
     },
     hasWilsonSummary: false,
+    samplingArm: "production",
+    battery: ["needle", "vram"],
+    vramProfile: "desktop-shared",
     trialCount: 3,
     metricCount: 3,
   };
@@ -48,16 +52,26 @@ describe("ExperimentSummarySchema", () => {
     expect(() => ExperimentSummarySchema.parse({ ...valid, sweepCell: null })).not.toThrow();
   });
 
+  test("accepts null samplingArm/battery/vramProfile (absent on any record predating WP-A)", () => {
+    expect(() =>
+      ExperimentSummarySchema.parse({ ...valid, samplingArm: null, battery: null, vramProfile: null }),
+    ).not.toThrow();
+  });
+
   test("rejects a summary missing lineage", () => {
     const invalid: Record<string, unknown> = { ...valid };
     delete invalid.lineage;
     expect(() => ExperimentSummarySchema.parse(invalid)).toThrow();
   });
 
-  test("ExperimentDetailSchema extends the summary with a nullable wilsonSummary", () => {
-    const detail = { ...valid, wilsonSummary: { n: 30, k: 0, rate: 0, sided: "one", confidence: 0.95, lower: null, upper: 0.08 } };
+  test("ExperimentDetailSchema extends the summary with a nullable wilsonSummary and responseCaps", () => {
+    const detail = {
+      ...valid,
+      wilsonSummary: { n: 30, k: 0, rate: 0, sided: "one", confidence: 0.95, lower: null, upper: 0.08 },
+      responseCaps: { needle: 4096, default: 2048 },
+    };
     expect(() => ExperimentDetailSchema.parse(detail)).not.toThrow();
-    expect(() => ExperimentDetailSchema.parse({ ...valid, wilsonSummary: null })).not.toThrow();
+    expect(() => ExperimentDetailSchema.parse({ ...valid, wilsonSummary: null, responseCaps: null })).not.toThrow();
   });
 });
 
@@ -155,5 +169,84 @@ describe("HealthResponseSchema", () => {
   test("requires status to be exactly \"ok\"", () => {
     expect(() => HealthResponseSchema.parse({ status: "ok", experimentCount: 0 })).not.toThrow();
     expect(() => HealthResponseSchema.parse({ status: "degraded", experimentCount: 0 })).toThrow();
+  });
+});
+
+describe("QueueListResponseSchema", () => {
+  test("round-trips a joined queue entry plus an error entry in the same response", () => {
+    const response = {
+      generatedAt: "2026-08-23T00:00:00Z",
+      queues: [
+        {
+          name: "wp5-validation",
+          queueState: "completed",
+          deadline: "13:00",
+          vramProfile: "desktop-shared",
+          cellCounts: { pending: 0, running: 0, completed: 2, failed: 3, "skipped-propagated": 0, "aborted-hang": 0 },
+          cells: [
+            {
+              alias: "gemma-qat-c32768-f16-prod",
+              model: "gemma-4-12b-qat",
+              c: 32768,
+              ctk: "f16",
+              ctv: "f16",
+              fa: "on",
+              samplingArm: "production",
+              trials: 3,
+              state: "completed",
+              reason: null,
+            },
+          ],
+        },
+        { name: "malformed-truncated", error: "Unexpected end of JSON input" },
+      ],
+    };
+    expect(() => QueueListResponseSchema.parse(response)).not.toThrow();
+  });
+
+  test("accepts an all-null cellCounts (no state file) and a null queueState", () => {
+    const entry = {
+      name: "no-state-queue",
+      queueState: null,
+      deadline: "02:00",
+      vramProfile: "headless",
+      cellCounts: { pending: null, running: null, completed: null, failed: null, "skipped-propagated": null, "aborted-hang": null },
+      cells: [],
+    };
+    expect(() => QueueListResponseSchema.parse({ generatedAt: "2026-08-23T00:00:00Z", queues: [entry] })).not.toThrow();
+  });
+
+  test("rejects an unknown cell state", () => {
+    const badResponse = {
+      generatedAt: "2026-08-23T00:00:00Z",
+      queues: [
+        {
+          name: "bad",
+          queueState: null,
+          deadline: null,
+          vramProfile: null,
+          cellCounts: { pending: 0, running: 0, completed: 0, failed: 0, "skipped-propagated": 0, "aborted-hang": 0 },
+          cells: [
+            {
+              alias: "a",
+              model: null,
+              c: null,
+              ctk: null,
+              ctv: null,
+              fa: null,
+              samplingArm: null,
+              trials: null,
+              state: "not-a-real-state",
+              reason: null,
+            },
+          ],
+        },
+      ],
+    };
+    expect(() => QueueListResponseSchema.parse(badResponse)).toThrow();
+  });
+
+  test("empty queues array (missing/empty QUEUES_DIR) round-trips", () => {
+    expect(() => QueueListResponseSchema.parse({ generatedAt: "2026-08-23T00:00:00Z", queues: [] })).not.toThrow();
   });
 });

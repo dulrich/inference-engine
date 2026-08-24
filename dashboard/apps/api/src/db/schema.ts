@@ -5,6 +5,17 @@ import type { Database } from "bun:sqlite";
 // history this codebase has none of yet). `applySchema` is `CREATE TABLE IF NOT EXISTS`
 // throughout, so it is safe to call on every process boot and every test's temp database.
 //
+// One exception (WP-A, `plans/bench-dashboard-run-context-surfacing.md`): `CREATE TABLE
+// IF NOT EXISTS` never alters an existing table, so three columns added to `experiments`
+// after this table's original baseline (`sampling_arm`, `battery_json`, `vram_profile`)
+// need a GUARDED reconciliation step — `PRAGMA table_info` + `ALTER TABLE ... ADD COLUMN`
+// for whichever of the three a given database file is still missing (cycle-1 audit B3:
+// `--rebuild` alone only deletes rows, it never alters columns, so a pre-existing DB file
+// left untouched by this step would 500 on the very first `INSERT` naming a column that
+// doesn't exist yet). Idempotent both ways: a brand-new database gets the columns added
+// right after its `CREATE TABLE` runs; a pre-existing one gets exactly the columns it's
+// missing and no more on every subsequent boot.
+//
 // Four tables (brief's File scope, apps/api bullet):
 //
 // - `experiments` — one row per `runs/bakeoff/<experiment-id>/config.json`, schema-v2 only
@@ -32,6 +43,27 @@ import type { Database } from "bun:sqlite";
 // transaction (`ingest/run.ts`), not by per-row upsert keys — simplest correct answer for
 // a derived table whose row set is wholly owned by one experiment_id at a time.
 
+/** Nullable `experiments` columns this WP promotes (`sampling_arm` from `sweep_cell.
+ * sampling_arm`, `battery_json` from `sweep_cell.battery` (JSON-stringified), `vram_profile`
+ * from top-level `config.vram_profile`) — the guarded `ALTER TABLE` reconciliation list. */
+const RECONCILED_EXPERIMENTS_COLUMNS: readonly { name: string; ddlType: string }[] = [
+  { name: "sampling_arm", ddlType: "TEXT" },
+  { name: "battery_json", ddlType: "TEXT" },
+  { name: "vram_profile", ddlType: "TEXT" },
+];
+
+/** `PRAGMA table_info(experiments)` + `ALTER TABLE ... ADD COLUMN` for each column in
+ * `RECONCILED_EXPERIMENTS_COLUMNS` the table doesn't already have. Safe to call on every
+ * boot: a column already present is left untouched, never re-added (that would throw). */
+function reconcileExperimentsColumns(db: Database): void {
+  const existing = new Set((db.query(`PRAGMA table_info(experiments)`).all() as { name: string }[]).map((c) => c.name));
+  for (const column of RECONCILED_EXPERIMENTS_COLUMNS) {
+    if (!existing.has(column.name)) {
+      db.exec(`ALTER TABLE experiments ADD COLUMN ${column.name} ${column.ddlType}`);
+    }
+  }
+}
+
 export function applySchema(db: Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS experiments (
@@ -57,6 +89,7 @@ export function applySchema(db: Database): void {
     )
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_experiments_hf_repo ON experiments(hf_repo)`);
+  reconcileExperimentsColumns(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS trials (

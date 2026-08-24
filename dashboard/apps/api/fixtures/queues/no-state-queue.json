@@ -1,0 +1,14 @@
+{
+  "queue_format": 1,
+  "vram_profile": "headless",
+  "deadline": "02:00",
+  "stop_policy": "pause-at-deadline",
+  "models": {},
+  "cells": [
+    {
+      "model": "ling-3-tiny-q4km", "alias": "ling-c32768-f16-prod",
+      "c": 32768, "ctk": "f16", "ctv": "f16", "fa": "on",
+      "battery": ["needle"], "sampling_arm": "production", "trials": 3
+    }
+  ]
+}

@@ -539,6 +539,11 @@ State file: JSON, sibling of the queue file by default (`<queue>.state.json` —
 transition. Per-cell states: `pending` / `running` / `completed` / `failed` /
 `skipped-propagated` / `aborted-hang`. Queue-level states: `running` / `paused-resumable` /
 `completed` / `aborted-hang` (the last two are terminal — `TERMINAL_QUEUE_STATES`).
+Each cell entry also carries the cell's `alias` at its top level (written by `init_state`,
+preserved by every transition — `bench-dashboard-run-context-surfacing` plan) so external
+readers (the Bench Dashboard's read-only `GET /api/queue`) can join queue cells to state
+entries without reimplementing the `cell_id` hash; state files predating the field stay
+valid (never required on read — such cells simply render unjoined).
 
 - **Past the deadline**: no new cell launches; queue → `paused-resumable`. Already-running or
   already-terminal cells are untouched; every still-`pending` cell stays `pending` for the next
@@ -631,6 +636,13 @@ handle, without the real battery existing yet.
 python3 llama/bakeoff/batch.py run --queue <queue.json> [--vram-profile desktop-shared|headless] [--dry-run] [--re-arm] [--re-arm-cell <cell_id-or-alias>]... [--scratch-container <name>] [--records-dir <run-dir>]
 python3 llama/bakeoff/batch.py verify --run <run-dir>
 ```
+
+With `--records-dir`, each live cell's persisted record `config.json` carries two additive
+self-description keys (`bench-dashboard-run-context-surfacing` plan; `schema_version` stays 2):
+`vram_profile` — the effective `--vram-profile`/queue value the cell ran under — and
+`response_caps` — `{"default": <flat max_tokens>, "by_task": <LONGCONTEXT_MAX_TOKENS_BY_TASK>}`,
+the response-length budget the battery actually enforced. Both `null` on records written by
+callers that don't supply them; absent entirely on records predating the plan (never backfilled).
 
 `batch run --dry-run` resolves every cell and prints its `classify_fit()` classification (same
 shape as `sweep.py --dry-run`, one level up — queue-level, not spec-level) — touches no Docker,

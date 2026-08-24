@@ -51,7 +51,30 @@ export const QueueCellSchema = z.object({
 });
 export type QueueCell = z.infer<typeof QueueCellSchema>;
 
-/** A successfully read+joined queue. */
+/** Per-queue ETA (`plans/bench-dashboard-polish.md` WP-2) — derived API-side from
+ * consecutive-cell-record-timestamp deltas under `runs/bakeoff/<queueStem>/<cell-dir>/
+ * config.json` (`apps/api/src/queue/eta.ts`), never from anything the browser reads
+ * itself. `basis: null` (with `medianCellMinutes`/`estimatedMinutesRemaining`/
+ * `cellsPerHour`/`sampleSize` all `null` alongside it) means "no timing basis yet" — the
+ * null-honest state the UI renders as a quiet note, never an error. `remainingCells` is
+ * computed straight from `cellCounts` (`pending + running`) independently of whether any
+ * timing basis exists — it's a cell count, not a derived time estimate, so it's populated
+ * whenever a sibling state file is, even with zero timing data. */
+export const QueueEtaSchema = z.object({
+  remainingCells: z.number().int().nonnegative().nullable(),
+  medianCellMinutes: z.number().nullable(),
+  estimatedMinutesRemaining: z.number().nullable(),
+  cellsPerHour: z.number().nullable(),
+  basis: z.enum(["current-run", "prior-runs"]).nullable(),
+  sampleSize: z.number().int().nonnegative().nullable(),
+});
+export type QueueEta = z.infer<typeof QueueEtaSchema>;
+
+/** A successfully read+joined queue. `eta` is `.optional()` for the same reason `control`
+ * below is: the API always sends the key (`routes/queue.ts` populates it on every push),
+ * but this schema is also `.parse()`d against pre-WP-2 literals in shared/schema round-trip
+ * tests that predate the field — `.optional()` keeps those parseable (never a breaking
+ * change) exactly like `QueueListResponseSchema.control`'s own precedent. */
 export const QueueEntrySchema = z.object({
   name: z.string(),
   queueState: QueueStateSchema.nullable(),
@@ -59,14 +82,20 @@ export const QueueEntrySchema = z.object({
   vramProfile: z.string().nullable(),
   cellCounts: QueueCellCountsSchema,
   cells: z.array(QueueCellSchema),
+  eta: QueueEtaSchema.optional(),
 });
 export type QueueEntry = z.infer<typeof QueueEntrySchema>;
 
 /** A queue or its sibling state file that failed to parse — the route reports this queue
- * entry with a reason instead of ever 500ing the whole route over one bad file. */
+ * entry with a reason instead of ever 500ing the whole route over one bad file. `eta` is
+ * `null` here (not a null-filled `QueueEtaSchema` object): there is no queue/cell data at
+ * all to derive even `remainingCells` from, unlike the "known cells, no timing basis yet"
+ * case on `QueueEntrySchema` above. `.optional()` for the same pre-WP-2-literal backward
+ * compatibility reason as `QueueEntrySchema.eta`. */
 export const QueueErrorEntrySchema = z.object({
   name: z.string(),
   error: z.string(),
+  eta: z.null().optional(),
 });
 export type QueueErrorEntry = z.infer<typeof QueueErrorEntrySchema>;
 

@@ -4,6 +4,7 @@ import type { CellState, ControlSection, QueueListItem, QueueListResponse, Queue
 import { ControlSectionSchema } from "@bench-dashboard/shared";
 import type { Hono } from "hono";
 import { config } from "../config.ts";
+import { computeEtaForQueue } from "../queue/eta.ts";
 
 // `GET /api/queue` (WP-A) — enumerates `*.json` queue files in `config.queuesDir`
 // (skipping `*.state.json`), joins each against its sibling `<stem>.state.json` by
@@ -17,6 +18,17 @@ import { config } from "../config.ts";
 // and is composed into the wire response by `registerQueueRoutes` below, independently of
 // `buildQueueListResponse` itself (so every existing `buildQueueListResponse` test/caller
 // keeps working unchanged: `control` is additive, never required).
+//
+// `eta` (WP-2, `plans/bench-dashboard-polish.md`) is computed INSIDE
+// `buildQueueListResponse` itself, per successful queue entry, via `../queue/eta.ts`'s
+// `computeEtaForQueue` — unlike `control` above it can't be composed on afterward as a
+// top-level field, because it lands on each individual queue entry. `recordsDir`/`control`
+// are both optional trailing parameters (default `undefined`/`null`) precisely so every
+// existing single-argument `buildQueueListResponse(queuesDir)` call site (this file's own
+// test suite) keeps compiling and passing unchanged: omitting `recordsDir` skips the eta
+// fs read entirely (`computeEtaForQueue`'s own "recordsDir: null -> no I/O" contract) and
+// still yields a fully-shaped `eta` object (remainingCells populated from cellCounts,
+// every timing field null) rather than an absent field.
 
 const KNOWN_CELL_STATES: readonly CellState[] = [
   "pending",
@@ -160,7 +172,11 @@ const NULL_CELL_COUNTS: Record<CellState, number | null> = {
  * single process-wide `bun test` run shares that module across every test FILE, not just
  * within one — a per-scenario `QUEUES_DIR` env override only reliably wins if that
  * scenario's file happens to be the first anywhere in the run to import `config.ts`). */
-export async function buildQueueListResponse(queuesDir: string): Promise<QueueListResponse> {
+export async function buildQueueListResponse(
+  queuesDir: string,
+  recordsDir?: string,
+  control?: ControlSection | null,
+): Promise<QueueListResponse> {
   const generatedAt = new Date().toISOString();
 
   let fileNames: string[];
@@ -200,16 +216,28 @@ export async function buildQueueListResponse(queuesDir: string): Promise<QueueLi
         };
       });
 
+      const cellCounts = stateFile ? stateFile.counts : NULL_CELL_COUNTS;
+      // Both keys are always null together (no state file) or both always numeric
+      // (state file present, `parseStateFile`'s `counts` starts every key at 0) — this
+      // check is just defensive, never actually a partial-null case in practice.
+      const remainingCells = cellCounts.pending !== null && cellCounts.running !== null ? cellCounts.pending + cellCounts.running : null;
+      // `control.live.startedAt` only applies to the ONE queue `control.live.queueStem`
+      // currently names — every other queue passes `null` and falls to `"prior-runs"`
+      // (or `null` basis with no data at all).
+      const liveStartedAt = control?.live && control.live.queueStem === stem ? control.live.startedAt : null;
+      const eta = await computeEtaForQueue({ recordsDir: recordsDir ?? null, queueStem: stem, remainingCells, liveStartedAt });
+
       queues.push({
         name: stem,
         queueState: stateFile?.queueState ?? null,
         deadline: queueFile.deadline,
         vramProfile: queueFile.vramProfile,
-        cellCounts: stateFile ? stateFile.counts : NULL_CELL_COUNTS,
+        cellCounts,
         cells,
+        eta,
       });
     } catch (error) {
-      queues.push({ name: stem, error: error instanceof Error ? error.message : String(error) });
+      queues.push({ name: stem, error: error instanceof Error ? error.message : String(error), eta: null });
     }
   }
 
@@ -284,8 +312,11 @@ export async function buildControlSection(controlHostDir: string | undefined): P
 
 export function registerQueueRoutes(app: Hono): void {
   app.get("/api/queue", async (c) => {
-    const response = await buildQueueListResponse(config.queuesDir);
+    // `control` is built first here (reordered from its original position) — WP-2's `eta`
+    // needs `control.live` to decide, per queue, whether that queue is the one currently
+    // live (`liveStartedAt` above); `control` itself doesn't depend on the queue list.
     const control = await buildControlSection(config.controlHostDir);
+    const response = await buildQueueListResponse(config.queuesDir, config.recordsDir, control);
     return c.json({ ...response, control });
   });
 }

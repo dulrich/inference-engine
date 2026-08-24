@@ -13,6 +13,7 @@
   import type { ControlSection, QueueEntry, QueueErrorEntry, QueueListItem } from "@bench-dashboard/shared";
   import { getQueue, postControlArm, postControlCancel, postControlDisarm, postControlStart, postControlStop } from "../api.ts";
   import { cellStateLabel, cellStatePillClass, queueStateLabel, queueStatePillClass } from "../lib/queue/status.ts";
+  import { formatQueueEtaLine } from "../lib/queue/eta.ts";
   import {
     armedLabel,
     armedPillClass,
@@ -358,6 +359,7 @@
           </div>
           <div class="queue-card-meta">
             <span>Deadline: {item.deadline ?? "—"}</span>
+            <span class="queue-eta-line">{formatQueueEtaLine(item.eta)}</span>
           </div>
           <div class="queue-counts">
             {#each CELL_COUNT_ORDER as state (state)}

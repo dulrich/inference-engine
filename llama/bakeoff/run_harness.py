@@ -686,6 +686,54 @@ def calibrate_chars_per_token(
     return real_prompt_tokens / probe_tokens
 
 
+def tokenize_count(base_url: str, text: str, timeout: float = 60) -> int:
+    """Live-measures `text`'s real token count against `base_url`'s live llama-server via
+    `POST /tokenize`, body `{"content": text}`.
+
+    Verified premise (plan `bakeoff-transport-taxonomy-and-prompt-fit.md` WP-2 brief,
+    orchestrator, live, 2026-08-24): this stack's `llama-server` -- both the published router
+    and the bakeoff scratch server spawned directly on port 8899, the same binary -- answers
+    that request with `{"tokens": [...]}`. Counts the raw text only, never the chat-templated
+    prompt (callers absorb template + needle/question overhead with their own fixed margin, not
+    by second-guessing this function).
+
+    Body-probed, never status-code-probed (root `AGENTS.md` / `llama/AGENTS.md`: "probe by
+    response body, never status code" -- the exact LM-Studio-style false-capable-response shape
+    this repo has been burned by before, an HTTP 200 whose body doesn't carry what the caller
+    assumed). A response that isn't a dict with a `tokens` list -- including a 200 with the
+    wrong shape -- raises, it is never silently treated as "zero tokens" or any other guessed
+    value.
+
+    Stdlib urllib only, matching `_execute_streaming_request`'s transport conventions (no new
+    deps). Raises (does not catch-and-default) on any transport failure or body-shape mismatch,
+    mirroring `calibrate_chars_per_token`'s raise-don't-default posture just above -- a prompt-fit
+    measurement that silently defaults to "it fits" is exactly the bug class this WP exists to
+    close.
+    """
+    url = f"{base_url}/tokenize"
+    payload = {"content": text}
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=data, headers={"Content-Type": "application/json"}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw_body = resp.read()
+    except (urllib.error.URLError, OSError) as exc:
+        raise RuntimeError(f"tokenize_count: request to {url} failed: {exc}") from exc
+    try:
+        obj = json.loads(raw_body.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"tokenize_count: response from {url} was not valid JSON: {exc}") from exc
+    tokens = obj.get("tokens") if isinstance(obj, dict) else None
+    if not isinstance(tokens, list):
+        raise RuntimeError(
+            f"tokenize_count: response from {url} carried no `tokens` list (body-shape check, "
+            f"probe by body never status code -- see this function's docstring) -- got {obj!r}"
+        )
+    return len(tokens)
+
+
 # ---------------------------------------------------------------------------------------------
 # Pinned-sampling arm presets (plan `quant-sweep-harness-and-instrument-v2.md`, Decisions locked:
 # "Sampling is pinned everywhere: every correctness-bearing request carries explicit

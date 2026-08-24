@@ -610,6 +610,30 @@ LONGCONTEXT_BATTERY_ITEM = "needle"
 # budget; every other task keeps the flat `max_tokens` default.
 LONGCONTEXT_MAX_TOKENS_BY_TASK = {"multi_needle": 768}
 
+# WP-2 (transport-taxonomy-and-prompt-fit, plan `plans/bakeoff-transport-taxonomy-and-prompt-fit.
+# md`): fixed constant absorbing chat-template overhead PLUS needle/question insertion --
+# `run_harness.tokenize_count` counts the raw haystack text, never the chat-templated prompt that
+# actually goes on the wire, so this margin stands in for that difference (plan Assumptions:
+# "tens of tokens each; 512 is deliberately generous").
+TEMPLATE_MARGIN = 512
+
+
+def _prompt_fit_budget(context: int, max_tokens: int) -> int:
+    """One conservative scalar token budget for the live prompt-fit shrink loop
+    (`longcontext._assemble_haystack_fit`, wired in by `make_longcontext_cell_runner`'s
+    `_runner`): `context` (the cell's own `-c`) minus the LARGEST response cap this battery run
+    could enforce (the flat `max_tokens` this factory was built with, or any
+    `LONGCONTEXT_MAX_TOKENS_BY_TASK` override) minus `TEMPLATE_MARGIN`.
+
+    One scalar budget, not a per-task one, is a deliberate simplification (WP-2 brief: "one
+    conservative scalar budget is fine; per-task budgets are optional if the plumbing stays
+    clean") -- using the LARGEST response cap across every task in the battery keeps the
+    governing invariant true for every task, not just the flat-capped ones: no prompt this
+    battery run sends may ever exceed `context - response_cap_for_its_task - TEMPLATE_MARGIN`.
+    """
+    response_cap = max([max_tokens, *LONGCONTEXT_MAX_TOKENS_BY_TASK.values()])
+    return context - response_cap - TEMPLATE_MARGIN
+
 
 def write_cell_record(
     records_dir: Path,
@@ -818,6 +842,18 @@ def make_longcontext_cell_runner(
         target_tokens = max(1, int(context * run_harness.NEEDLE_NEAR_CEILING_FRACTION))
         family = cell.get("model_family")
 
+        # WP-2 (transport-taxonomy-and-prompt-fit): live prompt-fit budget + a tokenize_fn bound
+        # to THIS cell's live scratch server (`handle.base_url`) -- wired through the same
+        # battery-call seam that already passes `chars_per_token` below. `run_harness.tokenize_
+        # count` raises (never silently defaults) on a transport failure or a body that doesn't
+        # carry a `tokens` list; the try/except around `battery_fn` just below is what turns that
+        # -- or a `longcontext.HaystackOverBudgetError` -- into an honest `battery_error` failed
+        # cell, never a silently-sent over-ceiling prompt.
+        token_budget = _prompt_fit_budget(context, max_tokens)
+
+        def _tokenize_fn(text: str, _base_url: str = handle.base_url) -> int:
+            return run_harness.tokenize_count(_base_url, text)
+
         effective_arm = sampling_arm
         fallback_reason: Optional[str] = None
         if sampling_arm == "production":
@@ -846,6 +882,12 @@ def make_longcontext_cell_runner(
                 # WP-6 (WP-5 punt): multi_needle needs more response budget than the flat cap
                 # under the verbose production arm -- see LONGCONTEXT_MAX_TOKENS_BY_TASK.
                 max_tokens_by_task=LONGCONTEXT_MAX_TOKENS_BY_TASK,
+                # WP-2 (transport-taxonomy-and-prompt-fit): live prompt-fit shrink loop inputs,
+                # passed unconditionally through this seam exactly like `chars_per_token` above --
+                # any `battery_fn` test double this module's own tests inject must accept these
+                # two keyword args (default-valued, so a fake free to ignore them never breaks).
+                tokenize_fn=_tokenize_fn,
+                token_budget=token_budget,
             )
         except Exception as exc:  # pragma: no cover -- defensive: an unexpected transport/battery
             # exception never propagates out and aborts the whole queue; it becomes an ordinary

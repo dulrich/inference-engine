@@ -815,6 +815,96 @@ def _require_pinned_sampling(sampling_arm: Optional[str], sampling_payload: Opti
             )
 
 
+# ---------------------------------------------------------------------------------------------
+# Prompt-fit shrink loop (plan `bakeoff-transport-taxonomy-and-prompt-fit.md` WP-2). Even with a
+# per-model measured `chars_per_token` (WP-6), a single haystack's real on-wire token count still
+# varies trial to trial -- the residual this WP closes by measuring against the LIVE server's own
+# tokenizer and deterministically re-assembling (never silently truncating or sending over-
+# ceiling) whenever a caller opts in by supplying both `tokenize_fn` and `token_budget`.
+# ---------------------------------------------------------------------------------------------
+
+# Plan-pinned bound: the first assembly plus up to 2 shrink retries, never more (WP-2 brief,
+# Change 2: "bounded loop, <= 3 total assemblies").
+MAX_HAYSTACK_ASSEMBLIES = 3
+
+# Scale the next attempt's target slightly UNDER the arithmetic budget/measured ratio so ordinary
+# assembly-to-assembly noise (a different book mix at the smaller target, sentence-boundary
+# snapping, etc.) doesn't land the very next attempt right back over budget.
+HAYSTACK_SHRINK_SAFETY_FACTOR = 0.98
+
+
+class HaystackOverBudgetError(RuntimeError):
+    """Raised by `_assemble_haystack_fit` when a haystack is still measured over `token_budget`
+    after `MAX_HAYSTACK_ASSEMBLIES` deterministic shrink attempts. The caller (`run_cell`) lets
+    this propagate -- a cell must fail loudly (surfacing as `batch.py`'s `battery_error` failed-
+    cell disposition) rather than ever silently send an over-ceiling prompt to the server."""
+
+
+class HaystackFit(NamedTuple):
+    haystack: HaystackAssembly
+    rng: random.Random
+    measured_tokens: Optional[int]
+    shrink_attempts: int
+
+
+def _assemble_haystack_fit(
+    haystack_seed: int,
+    target_tokens: int,
+    manifest: Optional[Dict[str, Any]],
+    chars_per_token: Optional[float],
+    tokenize_fn: Optional[Callable[[str], int]],
+    token_budget: Optional[int],
+) -> HaystackFit:
+    """Assembles one trial's haystack and, when `tokenize_fn`/`token_budget` are both supplied,
+    measures it against the live server's own tokenizer and deterministically shrinks it until it
+    fits.
+
+    When either `tokenize_fn` or `token_budget` is `None`, this is exactly today's single-
+    assembly behavior byte-for-byte: `assemble_haystack` is called once, and the returned `rng`
+    is the SAME instance it consumed -- untouched and ready for `task.build_trial` to keep
+    consuming in the established order. `measured_tokens`/`shrink_attempts` come back `None`/`0`
+    so `run_cell` knows not to record the new `trial_meta` keys at all in that mode.
+
+    When both are supplied and the first assembly measures over `token_budget`, this
+    re-assembles from a FRESH `random.Random(haystack_seed)` (never continuing to draw from the
+    already-consumed rng) with the target token count scaled by
+    `(token_budget / measured) * HAYSTACK_SHRINK_SAFETY_FACTOR`, then re-measures -- up to
+    `MAX_HAYSTACK_ASSEMBLIES` total assemblies. Determinism is preserved because every attempt
+    re-seeds from the identical `haystack_seed`: replaying the same `(cell_id, trial_index)`
+    against the same tokenize responses always performs the identical attempt sequence and lands
+    on the identical final haystack text, live server or offline test alike -- no wall-clock,
+    `os.urandom`, or dict-order dependence anywhere in this loop.
+
+    Raises `HaystackOverBudgetError` if the haystack is still over `token_budget` after
+    `MAX_HAYSTACK_ASSEMBLIES` assemblies. A `tokenize_fn` transport failure (or any other
+    exception it raises) propagates as-is -- the same raise-don't-default posture
+    `run_harness.tokenize_count`/`calibrate_chars_per_token` already carry.
+    """
+    rng = random.Random(haystack_seed)
+    haystack = assemble_haystack(rng, target_tokens, manifest=manifest, chars_per_token=chars_per_token)
+    if tokenize_fn is None or token_budget is None:
+        return HaystackFit(haystack, rng, None, 0)
+
+    measured = tokenize_fn(haystack.text)
+    assemblies = 1
+    current_target_tokens = target_tokens
+    while measured > token_budget:
+        if assemblies >= MAX_HAYSTACK_ASSEMBLIES:
+            raise HaystackOverBudgetError(
+                f"haystack still over budget after {assemblies} assemblies "
+                f"(measured={measured}, token_budget={token_budget}, haystack_seed={haystack_seed})"
+            )
+        scale = (token_budget / measured) * HAYSTACK_SHRINK_SAFETY_FACTOR
+        current_target_tokens = max(1, int(current_target_tokens * scale))
+        rng = random.Random(haystack_seed)
+        haystack = assemble_haystack(
+            rng, current_target_tokens, manifest=manifest, chars_per_token=chars_per_token
+        )
+        measured = tokenize_fn(haystack.text)
+        assemblies += 1
+    return HaystackFit(haystack, rng, measured, assemblies - 1)
+
+
 def run_cell(
     request_fn: RequestFn,
     task: Task,
@@ -829,6 +919,8 @@ def run_cell(
     haystack_structure: str = HAYSTACK_STRUCTURE_COHERENT,
     wilson_sided: str = "two",
     chars_per_token: Optional[float] = None,
+    tokenize_fn: Optional[Callable[[str], int]] = None,
+    token_budget: Optional[int] = None,
 ) -> CellResult:
     """Runs one (task, position_fraction) cell for `n_trials` distinct `haystack_seed`s,
     emitting schema-v2 `longcontext_probe` samples/completions and (for `n_trials >=
@@ -859,6 +951,14 @@ def run_cell(
 
     Per Req 5, this function reports ONE cell only -- never averages across positions or tasks;
     see `run_position_sweep` for driving the 3-position sweep without merging the results.
+
+    `tokenize_fn`/`token_budget` (plan `bakeoff-transport-taxonomy-and-prompt-fit.md` WP-2):
+    optional prompt-fit collaborators -- see `_assemble_haystack_fit`. When either is omitted
+    (the default), haystack assembly is exactly today's single-attempt behavior, byte-for-byte.
+    When both are supplied, every trial's haystack is measured against the live server's own
+    tokenizer before being sent and deterministically shrunk if it's over `token_budget`; the
+    effective measured token count and shrink-attempt count are recorded as additive
+    `trial_meta` keys (`haystack_measured_tokens`/`haystack_shrink_attempts`) only in that mode.
     """
     _require_pinned_sampling(sampling_arm, sampling_payload)
     manifest = manifest or load_corpus_manifest()
@@ -870,16 +970,23 @@ def run_cell(
     for trial_index in range(n_trials):
         haystack_seed = derive_trial_seed(cell_id, trial_index, "haystack")
         sampler_seed = derive_trial_seed(cell_id, trial_index, "sampler")
-        rng = random.Random(haystack_seed)
 
         # WP-6 recalibration (WP-5 finding: the static CHARS_PER_TOKEN_ESTIMATE oversizes real
         # Gutenberg-corpus prompts by a measured +11-17% per family -- at 512k that overshoot
         # would overflow `-c`). `chars_per_token`, when supplied by the caller (a queue's
         # per-model measured value), replaces the static estimate for haystack sizing only; the
         # real on-wire count is still always read back from `usage.prompt_tokens`, never assumed.
-        haystack = assemble_haystack(
-            rng, target_tokens, manifest=manifest, chars_per_token=chars_per_token
+        # WP-2 (transport-taxonomy-and-prompt-fit): when `tokenize_fn`/`token_budget` are both
+        # supplied, `_assemble_haystack_fit` additionally measures against the live server's own
+        # tokenizer and deterministically shrinks until the haystack fits -- see that function's
+        # docstring for the determinism argument. `fit.rng` is the SAME instance the accepted
+        # assembly consumed (fresh-seeded for that attempt), continued below exactly as the
+        # single-attempt convention always has.
+        fit = _assemble_haystack_fit(
+            haystack_seed, target_tokens, manifest, chars_per_token, tokenize_fn, token_budget,
         )
+        haystack = fit.haystack
+        rng = fit.rng
         trial = task.build_trial(haystack.text, position_fraction, rng)
 
         trial_sampling = dict(sampling_payload)
@@ -924,6 +1031,16 @@ def run_cell(
         usage = result.get("usage") or {}
         prompt_sha256 = hashlib.sha256(trial.prompt.encode("utf-8")).hexdigest()
 
+        # WP-2 (transport-taxonomy-and-prompt-fit): additive-only `trial_meta` keys, recorded ONLY
+        # when the fit-check path actually ran (`tokenize_fn`/`token_budget` both supplied) --
+        # `trial.meta` is passed through completely unmodified otherwise, keeping today's emitted
+        # `trial_meta` byte-for-byte when this WP's collaborators aren't in play.
+        trial_meta = trial.meta
+        if tokenize_fn is not None and token_budget is not None:
+            trial_meta = dict(trial.meta)
+            trial_meta["haystack_measured_tokens"] = fit.measured_tokens
+            trial_meta["haystack_shrink_attempts"] = fit.shrink_attempts
+
         sample = {
             "type": "longcontext_probe",
             "schema_version": 2,
@@ -943,7 +1060,7 @@ def run_cell(
             "top_k": trial_sampling.get("top_k"),
             "haystack_sha256": prompt_sha256,
             "expected": trial.expected if isinstance(trial.expected, (str, int, float, type(None))) else list(trial.expected),
-            "trial_meta": trial.meta,
+            "trial_meta": trial_meta,
             "correct": correct,
             "classifier_verdict": classifier.verdict,
             "classifier_shape": classifier.shape,
@@ -1064,6 +1181,8 @@ def run_live_battery(
     request_fn: Optional[RequestFn] = None,
     chars_per_token: Optional[float] = None,
     max_tokens_by_task: Optional[Dict[str, int]] = None,
+    tokenize_fn: Optional[Callable[[str], int]] = None,
+    token_budget: Optional[int] = None,
 ) -> Dict[str, Dict[float, CellResult]]:
     """The live entry point: drives the FULL battery -- every task in `tasks` (default `TASKS`,
     all three battery tasks) x every position in `positions` (default `POSITION_FRACTIONS`) x
@@ -1079,6 +1198,13 @@ def run_live_battery(
     position loop and its returned shape without a network call; the real live default is built
     from `base_url`/`alias`/`timeout` via `build_live_request_fn` exactly as an orchestrator would
     call this live).
+
+    `tokenize_fn`/`token_budget` (plan `bakeoff-transport-taxonomy-and-prompt-fit.md` WP-2):
+    forwarded verbatim to every `run_position_sweep`/`run_cell` call this function makes -- see
+    `run_cell`'s docstring for the fit-check behavior. Both default to `None` (today's behavior,
+    unmodified); `batch.make_longcontext_cell_runner` is the real caller that supplies both, built
+    from `run_harness.tokenize_count` bound to the live scratch server and a budget derived from
+    the cell's own `-c` and response caps.
 
     Returns `{task_name: {position_fraction: CellResult}}` -- never merges/averages across task
     or position (Req 5, inherited unchanged from `run_position_sweep`); a caller wanting one
@@ -1098,6 +1224,7 @@ def run_live_battery(
             effective_request_fn, task, f"{cell_id_prefix}-{task_name}", target_tokens,
             sampling_arm, sampling_payload, positions=positions, n_trials=n_trials,
             max_tokens=task_max_tokens, manifest=manifest, chars_per_token=chars_per_token,
+            tokenize_fn=tokenize_fn, token_budget=token_budget,
         )
     return results
 

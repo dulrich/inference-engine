@@ -592,14 +592,20 @@ def _fake_battery_fn_factory(samples_by_task):
     calls = []
 
     def _fn(base_url, alias, cell_id_prefix, target_tokens, sampling_arm, sampling_payload,
-             n_trials=10, max_tokens=256, timeout=300, chars_per_token=None,
-             max_tokens_by_task=None):
+            n_trials=10, max_tokens=256, timeout=300, chars_per_token=None,
+            max_tokens_by_task=None, tokenize_fn=None, token_budget=None):
+        # WP-2 (transport-taxonomy-and-prompt-fit): `tokenize_fn`/`token_budget` are the new
+        # prompt-fit collaborators `_runner` now passes through this seam unconditionally
+        # (same as `chars_per_token`) -- accepted and recorded here so pre-WP-2 tests that never
+        # asserted on them keep passing unmodified, and `TestBudgetArithmeticThroughBatteryFn`
+        # below can assert the exact values `_runner` computed.
         calls.append({
             "base_url": base_url, "alias": alias, "cell_id_prefix": cell_id_prefix,
             "target_tokens": target_tokens, "sampling_arm": sampling_arm,
             "sampling_payload": dict(sampling_payload), "n_trials": n_trials,
             "chars_per_token": chars_per_token,
             "max_tokens_by_task": dict(max_tokens_by_task) if max_tokens_by_task else None,
+            "tokenize_fn": tokenize_fn, "token_budget": token_budget,
         })
         out = {}
         for task_name, samples in samples_by_task.items():
@@ -849,6 +855,68 @@ class TestLongcontextCellRunner(unittest.TestCase):
         runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn, vram_used_bytes_fn=lambda: 0)
         outcome = runner(_handle(), _longcontext_cell())
         self.assertEqual(outcome.status, "completed")
+
+
+# -------------------------------------------------------------------------------------------
+# Prompt-fit budget + tokenize_fn wiring (plan `bakeoff-transport-taxonomy-and-prompt-fit.md`
+# WP-2, Change 3) -- `_prompt_fit_budget`'s pure arithmetic, plus proof that `_runner` threads
+# both `token_budget` and a `tokenize_fn` bound to `handle.base_url` through the same
+# `battery_fn` seam that already carries `chars_per_token`. No live network anywhere here:
+# `run_harness.tokenize_count` itself is monkeypatched in the one test that calls through the
+# closure `_runner` builds.
+# -------------------------------------------------------------------------------------------
+
+
+class TestPromptFitBudget(unittest.TestCase):
+    def test_budget_is_context_minus_largest_response_cap_minus_margin(self):
+        # max_tokens (256) < LONGCONTEXT_MAX_TOKENS_BY_TASK["multi_needle"] (768) -- the larger
+        # of the two wins (one conservative scalar budget, brief-pinned).
+        budget = batch._prompt_fit_budget(context=32768, max_tokens=256)
+        self.assertEqual(budget, 32768 - 768 - batch.TEMPLATE_MARGIN)
+
+    def test_budget_uses_flat_max_tokens_when_it_exceeds_every_task_override(self):
+        budget = batch._prompt_fit_budget(context=8192, max_tokens=2000)
+        self.assertEqual(budget, 8192 - 2000 - batch.TEMPLATE_MARGIN)
+
+    def test_budget_scales_with_context(self):
+        small = batch._prompt_fit_budget(context=8192, max_tokens=256)
+        large = batch._prompt_fit_budget(context=32768, max_tokens=256)
+        self.assertLess(small, large)
+        self.assertEqual(large - small, 32768 - 8192)
+
+
+class TestLongcontextCellRunnerPromptFitWiring(unittest.TestCase):
+    def test_token_budget_and_tokenize_fn_reach_battery_fn(self):
+        battery_fn = _fake_battery_fn_factory({"single_needle": [_sample("single_needle", "correct", True)]})
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn, max_tokens=256)
+        runner(_handle(), _longcontext_cell(context=32768))
+        call = battery_fn.calls[0]
+        self.assertEqual(call["token_budget"], 32768 - 768 - batch.TEMPLATE_MARGIN)
+        self.assertTrue(callable(call["tokenize_fn"]))
+
+    def test_tokenize_fn_closure_calls_run_harness_tokenize_count_against_handle_base_url(self):
+        battery_fn = _fake_battery_fn_factory({"single_needle": [_sample("single_needle", "correct", True)]})
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        handle = _handle(base_url="http://fake-bridge:9001")
+        runner(handle, _longcontext_cell())
+        tokenize_fn = battery_fn.calls[0]["tokenize_fn"]
+
+        captured = {}
+        orig = run_harness.tokenize_count
+
+        def fake_tokenize_count(base_url, text):
+            captured["base_url"] = base_url
+            captured["text"] = text
+            return 42
+
+        run_harness.tokenize_count = fake_tokenize_count
+        try:
+            result = tokenize_fn("some haystack text")
+        finally:
+            run_harness.tokenize_count = orig
+        self.assertEqual(result, 42)
+        self.assertEqual(captured["base_url"], "http://fake-bridge:9001")
+        self.assertEqual(captured["text"], "some haystack text")
 
 
 # -------------------------------------------------------------------------------------------

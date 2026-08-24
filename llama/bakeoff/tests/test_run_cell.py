@@ -570,5 +570,101 @@ class TestRunPositionSweep(unittest.TestCase):
                 self.assertTrue(sample["correct"], f"{task_name}: stub should always answer correctly")
 
 
+class TestWp2PromptFitShrinkLoop(unittest.TestCase):
+    """Plan `bakeoff-transport-taxonomy-and-prompt-fit.md` WP-2: `run_cell`'s optional
+    `tokenize_fn`/`token_budget` collaborators (`_assemble_haystack_fit`) -- live-tokenize the
+    assembled haystack and deterministically shrink it before `task.build_trial` ever runs.
+    Every `tokenize_fn` here is a pure stubbed hook (ignores its `text` argument, returns
+    canned values) -- no network anywhere in this suite."""
+
+    def setUp(self):
+        self.task = longcontext.SingleNeedleTask()
+        self.payload = run_harness.sampling_arm_payload(run_harness.SAMPLING_ARM_CAPABILITY, seed=999)
+
+    @staticmethod
+    def _queue_tokenize_fn(values):
+        """A `tokenize_fn` stub returning successive entries of `values` on each call (clamped
+        to the last entry once exhausted) -- lets a test pin exactly how many assemblies the
+        shrink loop performs without needing to reason about the real corpus's char/token
+        ratio."""
+        values = list(values)
+        state = {"n": 0}
+
+        def fn(text):
+            idx = min(state["n"], len(values) - 1)
+            state["n"] += 1
+            return values[idx]
+
+        return fn
+
+    def test_fit_first_try_records_zero_shrink_attempts(self):
+        result = longcontext.run_cell(
+            _make_correct_request_fn(self.task), self.task, "cell-fit-first-try", 0.45, 2000,
+            sampling_arm="capability", sampling_payload=self.payload, n_trials=3,
+            tokenize_fn=self._queue_tokenize_fn([500]), token_budget=1000,
+        )
+        self.assertEqual(len(result.samples), 3)
+        for sample in result.samples:
+            self.assertEqual(sample["trial_meta"]["haystack_shrink_attempts"], 0)
+            self.assertEqual(sample["trial_meta"]["haystack_measured_tokens"], 500)
+
+    def test_shrink_converges_deterministically_across_reruns(self):
+        def _run():
+            return longcontext.run_cell(
+                _make_correct_request_fn(self.task), self.task, "cell-shrink-converges", 0.45, 2000,
+                sampling_arm="capability", sampling_payload=self.payload, n_trials=1,
+                tokenize_fn=self._queue_tokenize_fn([5000, 800]), token_budget=1000,
+            )
+
+        sample_a = _run().samples[0]
+        sample_b = _run().samples[0]
+        self.assertEqual(sample_a["trial_meta"]["haystack_shrink_attempts"], 1)
+        self.assertEqual(sample_a["trial_meta"]["haystack_measured_tokens"], 800)
+        # Determinism: an identical stubbed tokenize sequence against the same haystack_seed
+        # replays the identical attempt sequence and lands on the identical final haystack text
+        # -- `haystack_sha256` (the emitted prompt's hash, needle+question included) is the
+        # existing proof point for that; `trial_meta` matching too proves the shrink bookkeeping
+        # itself is a pure function of the inputs, not incidentally order- or state-dependent.
+        self.assertEqual(sample_a["haystack_sha256"], sample_b["haystack_sha256"])
+        self.assertEqual(sample_a["trial_meta"], sample_b["trial_meta"])
+
+    def test_shrink_exhausted_raises_loudly_never_sends_over_budget_prompt(self):
+        calls = []
+
+        def failing_request_fn(prompt, max_tokens, sampling):
+            calls.append(prompt)  # should never be reached
+            return _make_correct_request_fn(self.task)(prompt, max_tokens, sampling)
+
+        always_over = self._queue_tokenize_fn([99999])  # never fits, regardless of assembly
+        with self.assertRaises(longcontext.HaystackOverBudgetError):
+            longcontext.run_cell(
+                failing_request_fn, self.task, "cell-shrink-exhausted", 0.45, 2000,
+                sampling_arm="capability", sampling_payload=self.payload, n_trials=1,
+                tokenize_fn=always_over, token_budget=1000,
+            )
+        self.assertEqual(calls, [])  # the over-budget prompt is never sent to request_fn
+
+    def test_tokenize_fn_none_preserves_todays_behavior_byte_for_byte(self):
+        result = longcontext.run_cell(
+            _make_correct_request_fn(self.task), self.task, "cell-no-fit-check", 0.45, 2000,
+            sampling_arm="capability", sampling_payload=self.payload, n_trials=1,
+        )
+        sample = result.samples[0]
+        self.assertNotIn("haystack_measured_tokens", sample["trial_meta"])
+        self.assertNotIn("haystack_shrink_attempts", sample["trial_meta"])
+        self.assertEqual(sample["trial_meta"], {"expected_code": sample["expected"]})
+
+    def test_tokenize_fn_transport_failure_propagates_never_silently_treated_as_fitting(self):
+        def failing_tokenize_fn(text):
+            raise RuntimeError("tokenize_count: request to http://fake/tokenize failed: refused")
+
+        with self.assertRaises(RuntimeError):
+            longcontext.run_cell(
+                _make_correct_request_fn(self.task), self.task, "cell-tokenize-transport-fail",
+                0.45, 2000, sampling_arm="capability", sampling_payload=self.payload, n_trials=1,
+                tokenize_fn=failing_tokenize_fn, token_budget=1000,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -651,6 +651,119 @@ tries `import verify_run` and delegates to its `main()`; absent that module it p
 message to stderr and exits `2` — never a traceback. **WP-4 lands `verify_run.py`** (below), so
 that absent-module path is now only reachable in a worktree/checkout that predates this section.
 
+## Scheduling -- host control plane (`control_dispatcher.py`, `run-window.sh`)
+
+`plans/bakeoff-queue-control-plane.md` WP-3. Files-only, minutely host dispatcher, no persistent
+supervisor daemon: a dashboard/API-written drop-box of intent files is turned into effects and
+durable evidence by `control_dispatcher.py dispatch`, a one-pass-per-invocation cron job. The
+GPU-owning run itself (manual or nightly) is executed by `run-window.sh`, extracted from the
+former (fatter) `cron-nightly.sh`, which is now a thin arm-gated shim over it. **No live
+Docker/GPU operation happens in this module's own test suite** -- every process/Docker-touching
+collaborator (`launch_fn`, `find_pid_fn`, `teardown_fn`, `router_start_fn`, `probe_cron_lock_fn`,
+`boot_id_fn`, `pgid_alive_fn`) is injectable, same pattern as `batch.py`/`sweep.py`.
+
+### State-dir layout
+
+```
+~/.local/state/inference-bakeoff/       (override: env BAKEOFF_STATE_DIR / --state-dir)
+  cron.lock                      # THE run lock (admission); flock target for run-window.sh
+  dispatch.lock                  # dispatcher self-serialization (hygiene, not admission)
+  control/
+    requests/                    #   drop-box: mounted rw in the dashboard container
+      <request-id>.json          #     intent, written ONCE by the API -- read-only here
+    stop-requested.<inv-id>      #   target-bound stop marker
+    host/                        #   host-written; mounted ro in the dashboard container
+      armed                      #     marker file: presence = nightly armed (fail-closed)
+      claims/<request-id>.json   #     durable claim, written BEFORE launch
+      results/<invocation-id>.json # wrapper-owned launch/exit evidence
+      actions/<request-id>.json  #     pre-effect evidence for stop/cancel
+      dispositions/<id>.json     #     terminal request record (retained indefinitely)
+      live.json                  #     wrapper-published liveness + phase
+      last-run.json              #     dispatcher-composed (sole writer)
+      status.json                #     dispatcher digest each pass -- the API's read surface
+```
+
+The queues dir (`llama/bakeoff/queues/`, used to validate a `start` request's `queue_stem`) is
+also overridable (env `BAKEOFF_QUEUES_DIR` / `--queues-dir`) so every test in
+`tests/test_control_dispatcher.py`/`tests/test_run_window*.py` runs entirely inside a tempdir --
+never the real state dir above.
+
+### Dispatcher cadence and the six phases
+
+`control_dispatcher.py dispatch` is intended to run every minute under `flock -n dispatch.lock`
+(self-serialization hygiene only -- if a prior pass is still running, the new one quietly skips;
+this is NOT the admission mechanism). Each pass, in order: (1) **ingest** -- hardened, fail-closed
+parsing of the drop-box (basename grammar, `O_NOFOLLOW` open, an 8 KiB size bound, body/basename
+id agreement, schema validation); a non-matching basename (including the API's own transient
+`.`-prefixed `*.tmp` exclusive-creation files) is ignored and counted, never dispositioned; a
+matching-but-invalid request is dispositioned `rejected(malformed)`; (2) **act** -- `arm`/`disarm`
+flip the `armed` marker; `stop` and `cancel` write pre-effect evidence before their effect, and a
+crash mid-act resumes from that recorded evidence on the next pass rather than re-deriving
+anything; `start` probes `cron.lock` non-blocking, writes a claim, and detach-launches
+`run-window.sh` via `setsid`; (3) **terminalize from evidence** -- a claimed request only becomes
+`launch-failed` once the evidence (or its absence past a 5-minute grace) says so, never from bare
+elapsed time; (4) **liveness/janitor** -- process-group truth (a wrapper pid alone is never run
+liveness; `batch.py` survives as a detached child by design), with workload-aware crash recovery
+(orphan scratch-server teardown, then router restart, then `last-run.json` composed `crashed`,
+then `live.json` removed); (5) **publish `status.json`** (atomic temp+rename) -- the exact shape
+is pinned by the LANDED dashboard API reader (`dashboard/apps/api/src/routes/queue.ts`
+`buildControlSection` + `dashboard/packages/shared/src/control.ts`); (6) **prune** -- drop-box
+requests/results/actions older than 30 days, and stop markers naming no-longer-live invocations;
+`claims/` and `dispositions/` are retained forever (the audit record).
+
+### Arm/disarm semantics
+
+The nightly is **fail-closed**: `cron-nightly.sh` checks for `control/host/armed` and exits 0
+(logging `disarmed`) without touching Docker or the queue if it's absent. Only the dispatcher
+writes/removes that marker, driven by an `arm`/`disarm` control request (`POST
+/api/control/{arm,disarm}` once the dashboard is wired, or a hand-placed request file for manual
+testing). Disarming mid-run has no effect on an already-live run -- the gate is invocation-time
+only; `stop` is the tool for a live run.
+
+### The crontab line (installed by the operator, currently DISARMED)
+
+Same convention as the pre-control-plane install (`llama/README.md`'s own Scheduling section) --
+the crontab entry itself is unchanged in shape, but it **drops its own outer `flock`**: the
+wrapper now owns `cron.lock` for the run's whole process-group lifetime, so a second `flock`
+around the crontab line would just be redundant serialization at the wrong layer.
+
+```cron
+0 23 * * * llama/bakeoff/cron-nightly.sh >> ~/.local/state/inference-bakeoff/cron.log 2>&1
+```
+
+Installing this line is WP-6's job, done with the user present -- this repo never installs a
+crontab on its own. Until WP-6 lands it, the nightly simply never fires; once installed, it stays
+governed by the `armed` marker above (currently absent -- nothing runs until an explicit `arm`).
+
+### Manual-window flow
+
+A manual start (`POST /api/control/start {queueStem, minutes}` once the dashboard API is wired,
+or a hand-placed `req-<id>.json` request) is picked up by the next dispatcher pass: claimed, then
+`run-window.sh <queue> --minutes <N> --request-id <request-id>` is detach-launched via `setsid`.
+`--minutes` becomes `batch.py run --deadline-minutes N` -- an invocation-scoped override of the
+queue file's own `HH:MM` deadline; the queue file itself is never rewritten. A `stop` request
+against a verified-live run creates a target-bound marker (`stop-requested.<invocation-id>`) that
+the wrapper clears at its own next window start and `batch.py` consumes at the next cell boundary
+(pause-resumable) -- delivered, not necessarily honored immediately: "effect is
+pause-after-current-cell, or a no-op if the run completes first."
+
+### Crash-recovery behavior an operator sees
+
+Operator-visible truth keys off **verified liveness first, queue state second** (queue state is a
+*disposition*, never liveness). A live, verified run shows `running` regardless of what the queue
+state file happens to say (a `paused-resumable` queue with a verified-alive process group is
+still shown `running` -- liveness wins). A dead process group with `live.json` still present is
+recovered by the janitor -- surviving scratch-server workload torn down, router container
+restarted, then `last-run.json` composed `disposition:"crashed"` and `live.json` removed; the next
+window's own interrupted-cell rule marks the in-flight cell `failed`/`interrupted` and NEVER
+silently re-runs it. A wrapper that dies while its `batch.py` child is still running is shown
+`running (wrapper lost)` -- an anomaly, not a crash; `stop` stays admissible since `batch.py`
+(the marker consumer) is the survivor. `last-run.json`'s own `disposition` is `clean` (both exit
+codes 0 -- a deadline/stop pause is a normal exit-0 outcome, not an attention condition on its
+own), `needs-attention` (any other exit-code combination, or very rarely a late launch-evidence
+anomaly attached to an already-terminalized request), or `crashed` (janitor-composed only, never
+from a `stage:"exited"` result).
+
 ## Verifier (`verify_run.py`)
 
 `plans/longcontext-pow2-overnight-campaign.md` WP-4. Post-queue mechanical verification over a

@@ -721,19 +721,27 @@ def make_longcontext_cell_runner(
     other battery item (`vram`/`timing`/`quality`) gets the WP-1 startup-verification-only
     disposition, same as before this WP existed.
 
-    **CellOutcome mapping** (brief-pinned, exact strings): the battery completing with no
-    degenerate sample and no `wrong`-verdict `single_needle`/`multi_needle` sample -> `completed`.
-    ANY sample classified `degenerate` anywhere in the battery -> `failed`,
-    `correctness_failure=True`, `reason="degenerate"` (checked FIRST -- garbage generation is the
-    more specific, higher-priority signal). Otherwise, ANY `single_needle`/`multi_needle` sample
+    **CellOutcome mapping** (brief-pinned, exact strings; REORDERED by the transport-failure-
+    taxonomy WP -- `plans/bakeoff-transport-taxonomy-and-prompt-fit.md` WP-1 -- see that plan's
+    Context for the production miscount this fixes): ANY sample whose `success` is `False`
+    anywhere in the battery (a transport/HTTP failure -- `longcontext.run_cell` records
+    `classifier_verdict: "transport"` for these directly, bypassing the classifier, never a
+    correctness verdict) -> `failed`, `correctness_failure=False`, `reason="transport_error"`.
+    Checked FIRST, ahead of the correctness checks below (defense in depth: a transport fact
+    says nothing about whether the model would have answered correctly, so it must never be
+    shadowed by -- or itself shadow into -- a `degenerate`/`needle_failure` verdict, and must
+    never arm skip-propagation). Otherwise, `has_degenerate`/`has_needle_failure` below are each
+    computed only over samples with `success is not False` (defense in depth again, same
+    invariant from the predicate side): ANY such sample classified `degenerate` -> `failed`,
+    `correctness_failure=True`, `reason="degenerate"` (the more specific, higher-priority
+    correctness signal). Otherwise, ANY `success`-true `single_needle`/`multi_needle` sample
     whose `classifier_verdict == "wrong"` (a coherent-but-incorrect literal-recall miss --
     deliberately NOT `truncated(benign)`, which `classify_trial`'s own docstring says is not
     degeneracy evidence, and deliberately scoped to the two NIAH-style needle tasks, not
     `passage_qa`'s NoLiMa-class non-literal recall -- this module's own interpretive call, see the
-    WP-2 report) -> `failed`, `correctness_failure=True`, `reason="needle_failure"`. Neither, but
-    some sample's `success` is `False` (a transport/HTTP failure) -> `failed`,
-    `correctness_failure=False`, `reason="transport_error"`. Both of these exact reason strings
-    are `CORRECTNESS_FAILURE_REASONS` above -- `propagate_skips` (WP-1, unmodified) keys off
+    WP-2 report) -> `failed`, `correctness_failure=True`, `reason="needle_failure"`. None of the
+    above -> `completed`. `"degenerate"`/`"needle_failure"` (never `"transport_error"`) are
+    `CORRECTNESS_FAILURE_REASONS` above -- `propagate_skips` (WP-1, unmodified) keys off
     `correctness_failure`, not the reason string itself, but the string is kept in that pinned
     vocabulary for a downstream reader (verify_run.py, WP-4) to match against.
 
@@ -871,15 +879,28 @@ def make_longcontext_cell_runner(
             for cell_result in per_position.values()
             for sample in cell_result.samples
         ]
-        has_degenerate = any(s.get("classifier_verdict") == "degenerate" for s in all_samples)
+        has_transport_failure = any(s.get("success") is False for s in all_samples)
+        # Transport-failure-taxonomy WP (defense in depth -- either this filter or the
+        # transport-precedence reorder in the return ladder below already fixes the observed
+        # miscount on its own; both land): a transport/HTTP-failed sample (`success is False`)
+        # never carries a correctness-taxonomy verdict (`longcontext.run_cell` records
+        # `classifier_verdict: "transport"` for it directly, bypassing the classifier), but
+        # these two predicates are re-scoped to `success is not False` samples anyway, so even
+        # an older-schema record (pre-this-WP, a success=False row still tagged `wrong`/
+        # `degenerate`) can never trip a correctness-failure outcome.
+        has_degenerate = any(
+            s.get("classifier_verdict") == "degenerate"
+            for s in all_samples
+            if s.get("success") is not False
+        )
         has_needle_failure = any(
             s.get("classifier_verdict") == "wrong"
             for task_name, per_position in battery_results.items()
             if task_name in ("single_needle", "multi_needle")
             for cell_result in per_position.values()
             for s in cell_result.samples
+            if s.get("success") is not False
         )
-        has_transport_failure = any(s.get("success") is False for s in all_samples)
 
         summaries = {
             f"{task_name}@{position_fraction:.2f}": cell_result.summary
@@ -901,12 +922,12 @@ def make_longcontext_cell_runner(
             "record_error": record_error,
         }
 
+        if has_transport_failure:
+            return CellOutcome("failed", "transport_error", False, detail)
         if has_degenerate:
             return CellOutcome("failed", "degenerate", True, detail)
         if has_needle_failure:
             return CellOutcome("failed", "needle_failure", True, detail)
-        if has_transport_failure:
-            return CellOutcome("failed", "transport_error", False, detail)
         return CellOutcome("completed", None, False, detail)
 
     return _runner
@@ -1227,6 +1248,58 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 1 if result["queue_state"] == QUEUE_ABORTED_HANG else 0
 
 
+def cmd_re_arm(args: argparse.Namespace) -> int:
+    """`batch.py re-arm`: standalone, state-only re-arm (transport-failure-taxonomy WP,
+    `plans/bakeoff-transport-taxonomy-and-prompt-fit.md` WP-1 -- Decisions locked: "a new
+    standalone re-arm path that mutates queue state WITHOUT starting a window"). Reuses the
+    existing `re_arm_state` (all-non-completed)/`re_arm_cells` (targeted) helpers `run_queue`'s
+    own `--re-arm`/`--re-arm-cell` flags already call, persisted via the same `save_state` atomic-
+    write path `cmd_run`'s `run_queue` call uses. Deliberately never touches containers, locks,
+    marker files, or `journalctl` -- no `ContainerController`, no `scratch_server_fn`, no
+    `hang_check_fn` are constructed or invoked anywhere in this path; it only loads the queue
+    (to resolve `--cell` aliases), loads the state file, mutates it in memory, and writes it back.
+
+    `--cell` (repeatable): targeted form, exactly the named cells (`re_arm_cells` -- raises
+    `QueueValidationError`, reported here as a clean exit-2 error, on an unknown cell_id/alias;
+    nothing is re-armed or written on that path -- the raise happens before `save_state`).
+    Omitted: the all-non-completed form (`re_arm_state`) -- every cell not already `completed`
+    goes back to `pending`; "affected" here is computed from the PRE-mutation snapshot (every
+    cell whose state was not `COMPLETED`), matching `re_arm_state`'s own documented behavior.
+
+    Prints a small JSON object (`{"re_armed": [...], "queue_state": ...}`, matching `cmd_run`'s
+    own `json.dumps(result, indent=2, ...)` output style) and exits 0. A missing state file (no
+    `batch run` has ever been invoked for this queue) is a clean, explicit stderr message and
+    exit 2, never a bare traceback.
+    """
+    queue_path = Path(args.queue)
+    queue = load_queue(queue_path)
+    resolved_cells = resolve_queue_cells(queue)
+
+    state_path = Path(args.state) if args.state else default_state_path(queue_path)
+    state = load_state(state_path)
+    if state is None:
+        print(
+            f"batch re-arm: no state file found at {state_path} -- nothing to re-arm yet "
+            f"(a queue's state file is created by its first 'batch run' invocation)",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.cell:
+        try:
+            affected = re_arm_cells(state, list(args.cell), resolved_cells)
+        except QueueValidationError as exc:
+            print(f"batch re-arm: {exc}", file=sys.stderr)
+            return 2
+    else:
+        affected = [cid for cid, cs in state["cells"].items() if cs["state"] != COMPLETED]
+        re_arm_state(state)
+
+    save_state(state_path, state)
+    print(json.dumps({"re_armed": affected, "queue_state": state["queue_state"]}, indent=2, sort_keys=False))
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """`batch verify --run <dir>`: dispatch seam only in this WP -- `verify_run.py` is WP-4's
     module. A clean, explicit error (never a traceback) if it isn't present yet."""
@@ -1307,6 +1380,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_verify = sub.add_parser("verify", help="delegate to verify_run.py (WP-4)")
     p_verify.add_argument("--run", required=True)
     p_verify.set_defaults(func=cmd_verify)
+
+    p_re_arm = sub.add_parser(
+        "re-arm",
+        help="state-only re-arm (transport-failure-taxonomy WP): mutate a queue's state file "
+        "back to pending WITHOUT starting a window -- never touches containers/locks/markers",
+    )
+    p_re_arm.add_argument("--queue", required=True)
+    p_re_arm.add_argument("--state", default=None, help="override the default sibling state-file path")
+    p_re_arm.add_argument(
+        "--cell", action="append", default=[], metavar="CELL_ID_OR_ALIAS",
+        help="re-arm exactly this cell (repeatable) -- matches a state cell_id or a queue "
+        "alias, errors on a name that matches neither; omit for the all-non-completed form "
+        "(every cell not already completed goes back to pending)",
+    )
+    p_re_arm.set_defaults(func=cmd_re_arm)
 
     return parser
 

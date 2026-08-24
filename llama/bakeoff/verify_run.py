@@ -65,9 +65,14 @@ verdict}` unit, `verdict` in `VERDICTS = ("pass", "fail", "unknown", "informatio
    being claimed), its `n` is >= `longcontext.MIN_TRIALS_FOR_WILSON` (consumed, never
    re-pinned as a second literal `10`).
 6. `classifier_distribution` -- always `informational`: a per-cell count of
-   `classifier_verdict` values across that cell's samples (`longcontext.VERDICTS`) -- reported,
-   never gated on, matching the README's "never silently trusted... a manual spot-check is
-   expected practice" framing for classifier output.
+   `classifier_verdict` values across that cell's samples (`longcontext.VERDICTS`, plus the
+   caller-assigned `"transport"` value `longcontext.run_cell` records directly for `success=
+   False` trials -- outside `classify_trial`, hence outside `longcontext.VERDICTS` itself; this
+   check's counting is fully generic over whatever `classifier_verdict` strings actually appear,
+   so `transport` surfaces as its own bucket automatically, never folded into another bucket and
+   never crashing on an unrecognized value) -- reported, never gated on, matching the README's
+   "never silently trusted... a manual spot-check is expected practice" framing for classifier
+   output.
 7. `abort_state` -- one queue-level (`cell_id: null`) item: `fail` iff the queue state's
    `queue_state` is `batch.QUEUE_ABORTED_HANG`, `unknown` iff no state file was found, else
    `pass`; `observed` always lists every individual cell in `batch.ABORTED_HANG` state too, so
@@ -434,6 +439,11 @@ def check_wilson_min_trials(cell_id: str, config: Optional[Dict[str, Any]]) -> D
 
 
 def check_classifier_distribution(cell_id: str, samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Informational-only per-cell count of `classifier_verdict` values. Deliberately generic --
+    counts whatever verdict strings actually appear rather than enumerating a fixed taxonomy, so
+    `"transport"` (assigned by `longcontext.run_cell` directly for `success=False` trials, never
+    by `classify_trial`, hence not in `longcontext.VERDICTS`) surfaces as its own bucket exactly
+    like `correct`/`wrong`/`degenerate`/`truncated(benign)` -- never folded, never a KeyError."""
     counts: Dict[str, int] = {}
     for s in samples:
         verdict = s.get("classifier_verdict")

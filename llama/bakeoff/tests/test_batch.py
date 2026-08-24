@@ -717,6 +717,50 @@ class TestLongcontextCellRunner(unittest.TestCase):
         self.assertEqual(outcome.reason, "transport_error")
         self.assertFalse(outcome.correctness_failure)
 
+    def test_transport_failure_on_needle_task_never_becomes_needle_failure(self):
+        # Regression (transport-failure-taxonomy WP, plan Context): the observed production
+        # miscount -- an HTTP-400-failed single_needle/multi_needle trial reads (on an
+        # old-schema or otherwise stale record) as classifier_verdict="wrong", which pre-fix
+        # fell through to needle_failure and armed skip-propagation on a transport fact.
+        # `longcontext.run_cell` no longer emits this shape at all (Change 1), but this
+        # predicate-filtering (Change 2, defense in depth) means even a record shaped like this
+        # can never trip needle_failure.
+        battery_fn = _fake_battery_fn_factory({
+            "single_needle": [_sample("single_needle", "wrong", False, success=False)],
+        })
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(), _longcontext_cell())
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.reason, "transport_error")
+        self.assertFalse(outcome.correctness_failure)
+
+    def test_transport_failure_takes_priority_over_degenerate(self):
+        # Reorder regression: a genuine degenerate sample (success=True) coexisting with a
+        # transport-failed sample (success=False) in the same battery must report the transport
+        # fact FIRST -- never mask it behind (or be masked by) a correctness verdict.
+        battery_fn = _fake_battery_fn_factory({
+            "passage_qa": [_sample("passage_qa", "degenerate", False)],
+            "single_needle": [_sample("single_needle", "wrong", False, success=False)],
+        })
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(), _longcontext_cell())
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.reason, "transport_error")
+        self.assertFalse(outcome.correctness_failure)
+
+    def test_needle_failure_still_fires_on_a_genuine_wrong_from_a_successful_trial(self):
+        # Sanity check that Change 2's success-filtering doesn't over-suppress: a real,
+        # successfully-transported wrong needle answer with NO transport failures anywhere in
+        # the battery still reports needle_failure exactly as before this WP.
+        battery_fn = _fake_battery_fn_factory({
+            "single_needle": [_sample("single_needle", "wrong", False, success=True)],
+        })
+        runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
+        outcome = runner(_handle(), _longcontext_cell())
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.reason, "needle_failure")
+        self.assertTrue(outcome.correctness_failure)
+
     def test_capability_arm_uses_capability_preset(self):
         battery_fn = _fake_battery_fn_factory({"single_needle": [_sample("single_needle", "correct", True)]})
         runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
@@ -1681,6 +1725,117 @@ class TestWpBOldStateWithoutAlias(unittest.TestCase):
             self.assertEqual(result["queue_state"], batch.QUEUE_COMPLETED)
             for cs in result["state"]["cells"].values():
                 self.assertEqual(cs["state"], batch.COMPLETED)
+
+
+class TestCmdReArm(unittest.TestCase):
+    """Transport-failure-taxonomy WP (`plans/bakeoff-transport-taxonomy-and-prompt-fit.md`
+    WP-1), Change 4: standalone `batch.py re-arm` -- pure state-file mutation, never a window,
+    never a container/lock/journal side effect."""
+
+    def _seeded_state(self, tmp):
+        queue = _minimal_queue()
+        queue_path = _write_queue(tmp, queue)
+        cells = batch.resolve_queue_cells(queue)
+        state = batch.init_state(cells)
+        # cell 0: completed: cell 1: failed; cell 2: skipped-propagated; cell 3: left pending.
+        ids = [c["cell_id"] for c in cells]
+        state["cells"][ids[0]]["state"] = batch.COMPLETED
+        state["cells"][ids[1]]["state"] = batch.FAILED
+        state["cells"][ids[1]]["reason"] = "needle_failure"
+        state["cells"][ids[2]]["state"] = batch.SKIPPED_PROPAGATED
+        state["cells"][ids[2]]["reason"] = "propagated from failing cell x"
+        state["queue_state"] = batch.QUEUE_ABORTED_HANG
+        batch.save_state(batch.default_state_path(queue_path), state)
+        return queue_path, cells, ids
+
+    def test_no_state_file_errors_cleanly(self):
+        import io
+        from contextlib import redirect_stderr
+
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = _write_queue(tmp, _minimal_queue())
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                code = batch.main(["re-arm", "--queue", str(queue_path)])
+            self.assertEqual(code, 2)
+            self.assertIn("no state file found", buf.getvalue())
+
+    def test_targeted_re_arm_touches_only_named_cells(self):
+        import io
+        from contextlib import redirect_stdout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path, cells, ids = self._seeded_state(tmp)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = batch.main(
+                    ["re-arm", "--queue", str(queue_path), "--cell", ids[1], "--cell", ids[2]]
+                )
+            self.assertEqual(code, 0)
+            payload = json.loads(buf.getvalue())
+            self.assertEqual(set(payload["re_armed"]), {ids[1], ids[2]})
+            self.assertEqual(payload["queue_state"], batch.QUEUE_RUNNING)
+
+            reloaded = batch.load_state(batch.default_state_path(queue_path))
+            self.assertEqual(reloaded["cells"][ids[1]]["state"], batch.PENDING)
+            self.assertIsNone(reloaded["cells"][ids[1]]["reason"])
+            self.assertEqual(reloaded["cells"][ids[2]]["state"], batch.PENDING)
+            # completed cell (not named) untouched
+            self.assertEqual(reloaded["cells"][ids[0]]["state"], batch.COMPLETED)
+            self.assertEqual(reloaded["queue_state"], batch.QUEUE_RUNNING)
+
+    def test_all_form_re_arms_every_non_completed_cell(self):
+        import io
+        from contextlib import redirect_stdout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path, cells, ids = self._seeded_state(tmp)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = batch.main(["re-arm", "--queue", str(queue_path)])
+            self.assertEqual(code, 0)
+            payload = json.loads(buf.getvalue())
+            self.assertEqual(set(payload["re_armed"]), {ids[1], ids[2], ids[3]})
+
+            reloaded = batch.load_state(batch.default_state_path(queue_path))
+            self.assertEqual(reloaded["cells"][ids[0]]["state"], batch.COMPLETED)  # untouched
+            for cid in (ids[1], ids[2], ids[3]):
+                self.assertEqual(reloaded["cells"][cid]["state"], batch.PENDING)
+            self.assertEqual(reloaded["queue_state"], batch.QUEUE_RUNNING)
+
+    def test_unknown_cell_name_errors_cleanly_and_writes_nothing(self):
+        import io
+        from contextlib import redirect_stderr
+
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path, cells, ids = self._seeded_state(tmp)
+            state_path = batch.default_state_path(queue_path)
+            before = state_path.read_text(encoding="utf-8")
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                code = batch.main(["re-arm", "--queue", str(queue_path), "--cell", "no-such-cell"])
+            self.assertEqual(code, 2)
+            self.assertIn("no-such-cell", buf.getvalue())
+            self.assertEqual(state_path.read_text(encoding="utf-8"), before)  # byte-untouched
+
+    def test_re_arm_never_invokes_subprocess(self):
+        # Proves the "never touches containers, locks, or journalctl" invariant at the
+        # subprocess level -- ContainerController.stop/start and poll_journal_for_hang both go
+        # through batch.subprocess.run; re-arm must never reach either.
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path, cells, ids = self._seeded_state(tmp)
+            buf = io.StringIO()
+            with mock.patch.object(
+                batch.subprocess, "run",
+                side_effect=AssertionError("re-arm must never call subprocess.run"),
+            ):
+                with redirect_stdout(buf):
+                    code = batch.main(["re-arm", "--queue", str(queue_path), "--cell", ids[1]])
+            self.assertEqual(code, 0)
 
 
 if __name__ == "__main__":

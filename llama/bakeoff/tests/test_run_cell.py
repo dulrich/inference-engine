@@ -243,6 +243,79 @@ class TestReasoningChannelFallbackScoring(unittest.TestCase):
         self.assertTrue(sample["classifier_flags"]["scored_on_reasoning_channel"])
 
 
+class TestTransportFailureTaxonomy(unittest.TestCase):
+    """Transport-failure-taxonomy WP (`plans/bakeoff-transport-taxonomy-and-prompt-fit.md`
+    WP-1, Change 1): a `success=False` trial (an HTTP/transport failure -- empty channels, null
+    `finish_reason`) must never be run through `classify_trial` and must never carry a
+    correctness-taxonomy verdict -- it gets `classifier_verdict: "transport"` directly, always,
+    regardless of what its (irrelevant) channel content happens to look like."""
+
+    def setUp(self):
+        self.task = longcontext.SingleNeedleTask()
+        self.payload = run_harness.sampling_arm_payload(run_harness.SAMPLING_ARM_CAPABILITY, seed=999)
+
+    @staticmethod
+    def _transport_failure_request_fn(reasoning_text="", finish_reason=None):
+        def request_fn(prompt, max_tokens, sampling):
+            return {
+                "success": False, "error": "HTTPError: HTTP Error 400: Bad Request",
+                "content_text": "", "reasoning_text": reasoning_text,
+                "finish_reason": finish_reason, "usage": {}, "wall_seconds": 0.7,
+                "t0_iso": "2026-08-24T20:03:13+00:00",
+            }
+        return request_fn
+
+    def test_failed_trial_carries_transport_verdict_never_wrong(self):
+        result = longcontext.run_cell(
+            self._transport_failure_request_fn(), self.task, "cell-transport", 0.45, 2000,
+            sampling_arm="capability", sampling_payload=self.payload, n_trials=1,
+        )
+        sample = result.samples[0]
+        self.assertEqual(sample["classifier_verdict"], "transport")
+        self.assertNotEqual(sample["classifier_verdict"], "wrong")
+        self.assertIsNone(sample["classifier_shape"])
+        self.assertEqual(sample["classifier_flags"], {})
+        self.assertFalse(sample["correct"])
+        self.assertEqual(sample["success"], False)
+        self.assertEqual(sample["error"], "HTTPError: HTTP Error 400: Bad Request")
+
+    def test_reasoning_channel_fallback_never_fires_for_a_failed_trial(self):
+        # Same shape that triggers the fallback for a SUCCESSFUL trial (empty content, non-empty
+        # reasoning carrying the right answer, finish_reason 'stop') -- but success=False must
+        # short-circuit before that logic ever runs, so this stays 'transport', never 'correct'.
+        code = "FL3-VERTEX-6907"
+        result = longcontext.run_cell(
+            self._transport_failure_request_fn(
+                reasoning_text=f"The reference code is {code}.", finish_reason="stop",
+            ),
+            self.task, "cell-transport-reasoning", 0.45, 2000,
+            sampling_arm="capability", sampling_payload=self.payload, n_trials=1,
+        )
+        sample = result.samples[0]
+        self.assertEqual(sample["classifier_verdict"], "transport")
+        self.assertFalse(sample["correct"])
+
+    def test_mixed_battery_classifies_each_trial_independently(self):
+        calls = {"n": 0}
+
+        def request_fn(prompt, max_tokens, sampling):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {
+                    "success": False, "error": "HTTPError: HTTP Error 400: Bad Request",
+                    "content_text": "", "reasoning_text": "", "finish_reason": None,
+                    "usage": {}, "wall_seconds": 0.7, "t0_iso": "2026-08-24T20:03:13+00:00",
+                }
+            return _make_correct_request_fn(self.task)(prompt, max_tokens, sampling)
+
+        result = longcontext.run_cell(
+            request_fn, self.task, "cell-mixed", 0.45, 2000,
+            sampling_arm="capability", sampling_payload=self.payload, n_trials=2,
+        )
+        self.assertEqual(result.samples[0]["classifier_verdict"], "transport")
+        self.assertEqual(result.samples[1]["classifier_verdict"], "correct")
+
+
 class TestLiveEntryPoint(unittest.TestCase):
     """WP-2's live entry point (`build_live_request_fn`/`run_live_battery`). Never opens a
     socket: `build_live_request_fn`'s own tests monkeypatch `run_harness._execute_streaming_

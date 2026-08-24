@@ -378,6 +378,21 @@ class TestClassifierDistribution(unittest.TestCase):
         item = verify_run.check_classifier_distribution("c", samples)
         self.assertEqual(item["observed"], {})
 
+    def test_transport_verdict_buckets_on_its_own_never_folded_or_crashing(self):
+        # Transport-failure-taxonomy WP (WP-1, Change 3): "transport" is assigned by
+        # longcontext.run_cell directly (outside classify_trial, hence outside
+        # longcontext.VERDICTS) -- this check must still surface it as its own bucket, never
+        # fold it into another verdict and never raise on an unrecognized value.
+        samples = [
+            _lc_sample("c", 0, classifier_verdict="correct"),
+            _lc_sample("c", 1, classifier_verdict="transport"),
+            _lc_sample("c", 2, classifier_verdict="transport"),
+            _lc_sample("c", 3, classifier_verdict="wrong"),
+        ]
+        item = verify_run.check_classifier_distribution("c", samples)
+        self.assertEqual(item["verdict"], "informational")
+        self.assertEqual(item["observed"], {"correct": 1, "transport": 2, "wrong": 1})
+
 
 # -------------------------------------------------------------------------------------------
 # check_abort_state

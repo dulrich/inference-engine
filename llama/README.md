@@ -132,20 +132,20 @@ Exits non-zero on any failed check.
 ## Scheduling — nightly bake-off queue window (first fleet scheduling install)
 
 The fleet's first standing schedule, set by `plans/longcontext-pow2-overnight-campaign.md`
-WP-6 as a **user-confirmed convention**: a user-crontab entry invoking the batch runner under
-`flock` (the glibc-upgrade plan left cron-vs-timers-vs-sidecar unresolved; this decides it —
-cron, user crontab, `flock`-guarded). The installed line (times are the **host's local**
-clock; the queue file's own `deadline` is **UTC** — see `llama/bakeoff/README.md`):
+WP-6 as a **user-confirmed convention**: cron, user crontab (the glibc-upgrade plan left
+cron-vs-timers-vs-sidecar unresolved; this decided it). The mechanism was superseded by the
+control plane (`plans/bakeoff-queue-control-plane.md`, 2026-08-24): the canonical crontab
+lines — a minutely dispatcher plus the nightly, which **drops the old outer `flock`**
+(`run-window.sh` now owns `cron.lock` for the run's whole process-group lifetime) — live in
+`llama/bakeoff/README.md`'s "Scheduling" section, the single home for them. Times are the
+**host's local** clock; the queue file's own `deadline` is **UTC**.
 
-```cron
-0 23 * * * flock -n ~/.local/state/inference-bakeoff/cron.lock llama/bakeoff/cron-nightly.sh >> ~/.local/state/inference-bakeoff/cron.log 2>&1
-```
-
-**Currently DISARMED** (2026-08-23, user decision): the line above sits commented out in the
-crontab because 23:00 is often still active work time and not every night should run. Re-arm by
-uncommenting it — or, once the dashboard's queue start/stop + manual "dedicated inference mode
-for `<t>`" control lands (the planned successor mechanism), through that instead. The ladder
-queue itself is untouched and fully pending; the wrapper resumes it whenever it next fires.
+**Current install state (2026-08-24)**: the dispatcher minutely line is installed; the
+`0 23` nightly line is **deliberately not installed** — pending manual runs through the
+dashboard's control panel first — and is doubly gated even once installed: `cron-nightly.sh`
+is fail-closed on the `control/host/armed` marker, currently absent (arm/disarm via the
+dashboard, `POST /api/control/{arm,disarm}`). The ladder queue itself is untouched and fully
+pending; the wrapper resumes it whenever a window next fires.
 
 - `llama/bakeoff/cron-nightly.sh` owns the whole night: creates/starts the `bakeoff-scratch`
   sibling container if needed, runs `batch run` on `llama/bakeoff/queues/ladder-v1.json`
@@ -155,8 +155,10 @@ queue itself is untouched and fully pending; the wrapper resumes it whenever it 
   nights by design: each night resumes pending cells, pauses at the queue's UTC deadline
   (`13:00` UTC = 07:00 local — this host is `America/Mexico_City`, permanent UTC-6, no DST),
   and no-ops once terminal.
-- `flock -n` serializes the runner against itself only; **GPU exclusivity against the router
-  is batch.py's own container stop/start**, a deliberately separate mechanism.
+- The wrapper's `cron.lock` flock serializes the runner against itself only; **GPU
+  exclusivity against the router is batch.py's own container stop/start**, a deliberately
+  separate mechanism. (`deep-health-check.sh` reads that same lock as its stand-down
+  signal — see below.)
 - The log's `NEEDS-ATTENTION:` lines are the operator contract: a hang-abort, a
   failed/interrupted cell (crash recovery marks these and NEVER silently re-runs them — re-arm
   deliberately with `batch run --re-arm-cell <cell>`), or verify findings. `batch verify`
@@ -191,21 +193,23 @@ llama/deep-health-check.sh                                   # default target :4
 llama/deep-health-check.sh --url http://127.0.0.1:4811 --model bge-small
 ```
 
-**Scheduling is deliberately not wired up yet.** The recommended line, once cron scheduling is
-approved, is:
+**Installed 2026-08-24** (user crontab), closing the outage-detection gap the August
+incident exposed:
 
 ```
-17 * * * * mkdir -p $HOME/.local/state/inference-engine && llama/deep-health-check.sh >>$HOME/.local/state/inference-engine/deep-health-check.log 2>&1
+19 * * * * mkdir -p $HOME/.local/state/inference-engine && llama/deep-health-check.sh >>$HOME/.local/state/inference-engine/deep-health-check.log 2>&1
 ```
 
-Hourly — the interval must exceed the 1800s `ttl` above so every run is a genuine cold spawn.
-It logs under `$HOME/.local/state` rather than `/var/log`, which is root-owned on this box: a
-user crontab redirecting into an unwritable directory fails *before* the script runs, which
-would leave this guardrail silently dead — the same shape of bug it exists to detect.
-**This line is not currently installed anywhere** (no crontab entry, no systemd timer, no
-compose sidecar). Until it is, the outage-detection gap the August incident exposed is still
-open: `deep-health-check.sh` only runs when a human runs it by hand. That gap being
-undocumented is how the last one lasted 30 hours — it is documented here on purpose.
+Hourly — the interval must exceed the 1800s `ttl` above so every run is a genuine cold
+spawn. `:19`, not the originally-recommended `:17`, because the container-image security
+scan fires at `:17` (user decision 2026-08-24 — don't stack an image scan and a cold GGUF
+spawn on the same minute); still off the top of the hour to avoid herding. It logs under
+`$HOME/.local/state` rather than `/var/log`, which is root-owned on this box: a user
+crontab redirecting into an unwritable directory fails *before* the script runs, which
+would leave this guardrail silently dead — the same shape of bug it exists to detect. The
+script is **bake-off-window aware**: a live run window `docker stop`s the router for the
+whole window, so the check test-and-releases the window's own `cron.lock` first and SKIPs
+(exit 0, no alarm) while it's held — an intentionally-stopped router is not an outage.
 
 ## The llvmpipe trap
 

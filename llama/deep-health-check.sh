@@ -34,13 +34,14 @@
 # script exists to close is still open: nothing runs it unless a human does. See
 # llama/README.md's "Deep health check" section. When it is wired up, the recommended line is:
 #
-#   17 * * * * mkdir -p $HOME/.local/state/inference-engine && llama/deep-health-check.sh >>$HOME/.local/state/inference-engine/deep-health-check.log 2>&1
+#   19 * * * * mkdir -p $HOME/.local/state/inference-engine && llama/deep-health-check.sh >>$HOME/.local/state/inference-engine/deep-health-check.log 2>&1
 #
 # Logs under $HOME/.local/state, NOT /var/log: this is a user crontab, /var/log is root-owned
 # here, and a redirection into an unwritable directory fails before the script is ever exec'd —
 # which would make this guardrail silently not run, the exact failure class it exists to catch.
 #
-# Hourly, and off the top of the hour on purpose (:17) to avoid herding with other jobs. The
+# Hourly, and off the top of the hour on purpose (:19 — :17 belongs to the image security
+# scan; user decision 2026-08-24) to avoid herding with other jobs. The
 # interval MUST exceed config.yaml's `ttl: 1800` (30 min) for bge-small, or the previous run's
 # request would keep resetting the idle timer and every "cold spawn" would actually hit an
 # already-warm process — proving nothing. Hourly clears that ttl with margin.

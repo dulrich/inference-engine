@@ -720,20 +720,27 @@ writes/removes that marker, driven by an `arm`/`disarm` control request (`POST
 testing). Disarming mid-run has no effect on an already-live run -- the gate is invocation-time
 only; `stop` is the tool for a live run.
 
-### The crontab line (installed by the operator, currently DISARMED)
+### The crontab lines (installed by the operator, currently DISARMED)
 
-Same convention as the pre-control-plane install (`llama/README.md`'s own Scheduling section) --
-the crontab entry itself is unchanged in shape, but it **drops its own outer `flock`**: the
-wrapper now owns `cron.lock` for the run's whole process-group lifetime, so a second `flock`
-around the crontab line would just be redundant serialization at the wrong layer.
+Two lines. The **dispatcher** runs minutely -- it is the control plane's only pump (ingest,
+act, terminalize, janitor, status publish, prune); without it, requests sit `pending` forever
+and `status.json` goes stale (>180 s triggers the dashboard's control-offline banner). It
+self-serializes with a non-blocking `flock` on `dispatch.lock`, so overlapping firings are
+harmless. The **nightly** keeps the pre-control-plane convention (`llama/README.md`'s own
+Scheduling section) but **drops its own outer `flock`**: the wrapper now owns `cron.lock` for
+the run's whole process-group lifetime, so a second `flock` around the crontab line would just
+be redundant serialization at the wrong layer.
 
 ```cron
+* * * * * python3 llama/bakeoff/control_dispatcher.py dispatch >> ~/.local/state/inference-bakeoff/dispatch.log 2>&1
 0 23 * * * llama/bakeoff/cron-nightly.sh >> ~/.local/state/inference-bakeoff/cron.log 2>&1
 ```
 
-Installing this line is WP-6's job, done with the user present -- this repo never installs a
-crontab on its own. Until WP-6 lands it, the nightly simply never fires; once installed, it stays
-governed by the `armed` marker above (currently absent -- nothing runs until an explicit `arm`).
+Installing these lines is WP-6's job, done with the user present -- this repo never installs a
+crontab on its own. Until WP-6 lands them, the nightly simply never fires; once installed, it
+stays governed by the `armed` marker above (currently absent -- nothing runs until an explicit
+`arm`). The dispatcher line is safe to run while disarmed: with no requests and no live run,
+a pass only refreshes `status.json`.
 
 ### Manual-window flow
 

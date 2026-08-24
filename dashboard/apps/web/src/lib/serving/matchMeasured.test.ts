@@ -9,7 +9,14 @@ function servingAlias(overrides: Partial<ServingAlias>): ServingAlias {
     aliases: ["some-alias"],
     ttl: 1800,
     checkEndpoint: "/health",
-    flags: { contextLength: null, kvCacheTypeK: null, kvCacheTypeV: null, flashAttention: null, gpuLayers: null },
+    flags: {
+      contextLength: null,
+      kvCacheTypeK: null,
+      kvCacheTypeV: null,
+      flashAttention: null,
+      gpuLayers: null,
+      allFlags: [],
+    },
     ...overrides,
   };
 }

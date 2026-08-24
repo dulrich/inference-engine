@@ -39,6 +39,25 @@ models:
     ttl: 1800
     checkEndpoint: /health
 
+  # `allFlags` (WP-1) edge cases: a boolean flag immediately followed by another flag
+  # (`--jinja`), and flag values that must NOT be mistaken for flags themselves -- a
+  # negative integer (`-1`) and a decimal (`0.8`), per `FLAG_TOKEN`'s "dash(es) then a
+  # letter" test in `llamaConfig.ts`.
+  fixture-flags-edge:
+    name: "Fixture edge-case flags"
+    aliases:
+      - fixture-flags-edge
+    cmd: |
+      /usr/local/bin/llama-server
+      --host 0.0.0.0 --port ${PORT}
+      -m /models/example-org/fixture-edge-gguf/fixture-edge.gguf
+      --jinja
+      --temp 0.8
+      --top-p -1
+      -ngl 99
+    ttl: 1800
+    checkEndpoint: /health
+
   # No `aliases:` -- must be FILTERED OUT of `GET /api/serving`'s response (not reachable
   # by any consumer, so not a "served alias").
   fixture-unaliased:

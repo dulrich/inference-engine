@@ -16,7 +16,11 @@
  *
  * WP-5 (plan `bakeoff-queue-control-plane.md` WP-5) adds `.control-*` (the Queue tab's
  * control panel) -- layout/spacing only, same `.field`/`.run-meta-grid`/`.run-table`/`.pill`/
- * `.btn-*` reuse as every other view (CC-15: never a bare button/select/input rule here). */
+ * `.btn-*` reuse as every other view (CC-15: never a bare button/select/input rule here).
+ *
+ * WP-1 (plan `bench-dashboard-polish.md` WP-1) extends `.serving-*` with the per-row full-
+ * config expand -- the toggle itself is a plain `.btn-secondary` (no new button rule), the
+ * expanded panel reuses `.run-table`/`.run-table-muted` for the flag/value list. */
 
 /* ---- Shared view chrome ------------------------------------------------- */
 
@@ -188,6 +192,24 @@
 
 .serving-measured-link:hover {
   text-decoration: underline;
+}
+
+/* ---- Serving: per-row full-config expand (WP-1) ---------------------------- */
+
+.serving-flags-row td {
+  padding: 10px 10px 14px;
+  background: var(--panel);
+}
+
+.serving-flags-table {
+  max-width: 480px;
+  margin-top: 4px;
+}
+
+.serving-flags-table th,
+.serving-flags-table td {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
 }
 
 /* ---- Runs detail: output-length line (WP-C) ------------------------------- */

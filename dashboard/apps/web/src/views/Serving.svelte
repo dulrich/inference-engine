@@ -7,6 +7,7 @@
   import type { ExperimentSummary } from "@bench-dashboard/shared";
   import { getServing } from "../api.ts";
   import { matchServingToMeasured } from "../lib/serving/matchMeasured.ts";
+  import { expandToggleLabel, flagValueClass, formatFlagValue, toggleExpandedRow } from "../lib/serving/expand.ts";
   import { guardedNavClick, runDetailPath } from "../routes.ts";
   import { formatCount } from "../lib/format.ts";
 
@@ -28,6 +29,15 @@
   let rows = $state<ReturnType<typeof matchServingToMeasured>>([]);
   let servingLoading = $state(false);
   let servingError = $state("");
+
+  // Per-row expand/collapse for the full serving config (WP-1) -- collapsed by default,
+  // keyed by `modelKey` (same key the `{#each}` below uses). `lib/serving/expand.ts` owns
+  // the toggle logic and the CC-04 label pair as plain, tested functions.
+  let expandedRows = $state<Set<string>>(new Set());
+
+  function toggleRow(modelKey: string) {
+    expandedRows = toggleExpandedRow(expandedRows, modelKey);
+  }
 
   async function loadServing(exps: ExperimentSummary[]) {
     servingLoading = true;
@@ -81,6 +91,7 @@
           <th>KV V</th>
           <th>FA</th>
           <th>Measured cell</th>
+          <th>Config</th>
         </tr>
       </thead>
       <tbody>
@@ -105,7 +116,42 @@
                 <span class="run-table-muted">no measurement yet</span>
               {/if}
             </td>
+            <td>
+              <button
+                class="btn-secondary"
+                aria-expanded={expandedRows.has(row.alias.modelKey)}
+                onclick={() => toggleRow(row.alias.modelKey)}
+              >
+                {expandToggleLabel(expandedRows.has(row.alias.modelKey))}
+              </button>
+            </td>
           </tr>
+          {#if expandedRows.has(row.alias.modelKey)}
+            <tr class="serving-flags-row">
+              <td colspan="8">
+                {#if row.alias.flags.allFlags.length === 0}
+                  <p class="run-table-muted">No flags found in the served command.</p>
+                {:else}
+                  <table class="run-table serving-flags-table">
+                    <thead>
+                      <tr>
+                        <th>Flag</th>
+                        <th>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each row.alias.flags.allFlags as entry, index (index)}
+                        <tr>
+                          <td><code>{entry.flag}</code></td>
+                          <td class={flagValueClass(entry.value)}>{formatFlagValue(entry.value)}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                {/if}
+              </td>
+            </tr>
+          {/if}
         {/each}
       </tbody>
     </table>

@@ -28,9 +28,55 @@ describe("readServingConfig", () => {
       kvCacheTypeV: "q4_0",
       flashAttention: "on",
       gpuLayers: 99,
+      allFlags: [
+        { flag: "--host", value: "0.0.0.0" },
+        { flag: "--port", value: "${PORT}" },
+        { flag: "-m", value: "/models/example-org/fixture-chat-gguf/fixture-chat-Q4_K_M.gguf" },
+        { flag: "-c", value: "32768" },
+        { flag: "-ctk", value: "q4_0" },
+        { flag: "-ctv", value: "q4_0" },
+        { flag: "-fa", value: "on" },
+        { flag: "-ngl", value: "99" },
+      ],
     });
     expect(chat?.ttl).toBe(1800);
     expect(chat?.checkEndpoint).toBe("/health");
+  });
+
+  test("allFlags: ordering preserved, macro-expanded flags included, pre-flag binary token excluded, trailing boolean flag", async () => {
+    const response = await readServingConfig(FIXTURE_PATH);
+    const embed = response.models.find((m) => m.modelKey === "fixture-embed-f16");
+    // The macro (`${llama_server_common}`) expands to `/usr/local/bin/llama-server --host
+    // 0.0.0.0 --port ${PORT} -ngl 99 -c 8192 -b 8192 -ub 8192`; the model's own cmd then
+    // appends `-m <path>` and a trailing boolean `--embeddings` (no token follows it at
+    // all -- the other boolean sub-case from `fixture-flags-edge`, where a boolean flag is
+    // instead followed immediately by another flag).
+    expect(embed?.flags.allFlags).toEqual([
+      { flag: "--host", value: "0.0.0.0" },
+      { flag: "--port", value: "${PORT}" },
+      { flag: "-ngl", value: "99" },
+      { flag: "-c", value: "8192" },
+      { flag: "-b", value: "8192" },
+      { flag: "-ub", value: "8192" },
+      { flag: "-m", value: "/models/example-org/fixture-embed-gguf/fixture-embed-f16.gguf" },
+      { flag: "--embeddings", value: null },
+    ]);
+    // The binary path itself (before the first flag) is never a flag/value pair.
+    expect(embed?.flags.allFlags.some((entry) => entry.flag.includes("llama-server"))).toBe(false);
+  });
+
+  test("allFlags: negative number and decimal are values (never mistaken for flags), boolean flag followed by another flag", async () => {
+    const response = await readServingConfig(FIXTURE_PATH);
+    const edge = response.models.find((m) => m.modelKey === "fixture-flags-edge");
+    expect(edge?.flags.allFlags).toEqual([
+      { flag: "--host", value: "0.0.0.0" },
+      { flag: "--port", value: "${PORT}" },
+      { flag: "-m", value: "/models/example-org/fixture-edge-gguf/fixture-edge.gguf" },
+      { flag: "--jinja", value: null },
+      { flag: "--temp", value: "0.8" },
+      { flag: "--top-p", value: "-1" },
+      { flag: "-ngl", value: "99" },
+    ]);
   });
 
   test("filters out a model with no aliases (brief's \"filtered\" pin)", async () => {

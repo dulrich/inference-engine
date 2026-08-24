@@ -407,6 +407,66 @@ class TestRunLiveBattery(unittest.TestCase):
             )
 
 
+class TestWp6HaystackCalibrationAndTaskCaps(unittest.TestCase):
+    """WP-6 (WP-5 findings): per-model `chars_per_token` haystack sizing and the per-task
+    response-token override, threaded through the live entry point."""
+
+    @staticmethod
+    def _capturing_request_fn(captured):
+        def request_fn(prompt, max_tokens, sampling):
+            captured.append({"prompt_chars": len(prompt), "max_tokens": max_tokens})
+            return {
+                "success": True, "error": None, "content_text": "x", "reasoning_text": "",
+                "finish_reason": "stop", "usage": {"prompt_tokens": 10}, "wall_seconds": 0.01,
+                "t0_iso": "2026-08-23T00:00:00+00:00",
+            }
+        return request_fn
+
+    def test_chars_per_token_scales_the_assembled_haystack(self):
+        task = longcontext.SingleNeedleTask()
+        payload = run_harness.sampling_arm_payload(run_harness.SAMPLING_ARM_CAPABILITY, seed=1)
+        sizes = {}
+        for cpt in (None, 2.0):
+            captured = []
+            longcontext.run_cell(
+                self._capturing_request_fn(captured), task, "cpt-cell", 0.45, 2000,
+                "capability", payload, n_trials=1, chars_per_token=cpt,
+            )
+            sizes[cpt] = captured[0]["prompt_chars"]
+        # Default sizing targets 2000 * 4.5 = 9000 chars; cpt=2.0 targets 4000. The needle and
+        # question add a fixed overhead to both, so assert the ratio band rather than exact chars.
+        self.assertLess(sizes[2.0], sizes[None])
+        ratio = sizes[2.0] / sizes[None]
+        self.assertLess(abs(ratio - (2.0 / run_harness.CHARS_PER_TOKEN_ESTIMATE)), 0.15)
+
+    def test_max_tokens_by_task_overrides_only_the_named_task(self):
+        payload = run_harness.sampling_arm_payload(run_harness.SAMPLING_ARM_CAPABILITY, seed=1)
+        seen = []
+
+        def request_fn(prompt, max_tokens, sampling):
+            seen.append(max_tokens)
+            return {
+                "success": True, "error": None, "content_text": "x", "reasoning_text": "",
+                "finish_reason": "stop", "usage": {"prompt_tokens": 10}, "wall_seconds": 0.01,
+                "t0_iso": "2026-08-23T00:00:00+00:00",
+            }
+
+        results = longcontext.run_live_battery(
+            "http://unused:1", "unused-alias", "cap-cell", 2000,
+            "capability", payload, n_trials=1, request_fn=request_fn,
+            tasks={
+                "single_needle": longcontext.SingleNeedleTask(),
+                "multi_needle": longcontext.MultiNeedleTask(),
+            },
+            positions=(0.45,),
+            max_tokens=256, max_tokens_by_task={"multi_needle": 768},
+        )
+        self.assertEqual(set(results.keys()), {"single_needle", "multi_needle"})
+        # Task iteration order is the tasks-dict order: single_needle first (256), then
+        # multi_needle (768), one request each (1 trial x 1 position).
+        self.assertEqual(seen, [256, 768])
+
+
 class TestRunPositionSweep(unittest.TestCase):
     def test_never_averages_across_positions(self):
         task = longcontext.SingleNeedleTask()

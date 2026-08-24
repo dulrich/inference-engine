@@ -129,6 +129,33 @@ omitted.
 
 Exits non-zero on any failed check.
 
+## Scheduling — nightly bake-off queue window (first fleet scheduling install)
+
+The fleet's first standing schedule, set by `plans/longcontext-pow2-overnight-campaign.md`
+WP-6 as a **user-confirmed convention**: a user-crontab entry invoking the batch runner under
+`flock` (the glibc-upgrade plan left cron-vs-timers-vs-sidecar unresolved; this decides it —
+cron, user crontab, `flock`-guarded). The installed line (times are the **host's local**
+clock; the queue file's own `deadline` is **UTC** — see `llama/bakeoff/README.md`):
+
+```cron
+0 23 * * * flock -n ~/.local/state/inference-bakeoff/cron.lock llama/bakeoff/cron-nightly.sh >> ~/.local/state/inference-bakeoff/cron.log 2>&1
+```
+
+- `llama/bakeoff/cron-nightly.sh` owns the whole night: creates/starts the `bakeoff-scratch`
+  sibling container if needed, runs `batch run` on `llama/bakeoff/queues/ladder-v1.json`
+  (batch.py itself stops the router for the window and restarts it on every exit path), copies
+  the queue state into the run dir, then runs `batch verify` — persisting
+  `verify_report.{json,md}` (audit M2's run-then-verify pairing). The queue spans multiple
+  nights by design: each night resumes pending cells, pauses at the queue's UTC deadline
+  (`13:00` UTC = 07:00 local — this host is `America/Mexico_City`, permanent UTC-6, no DST),
+  and no-ops once terminal.
+- `flock -n` serializes the runner against itself only; **GPU exclusivity against the router
+  is batch.py's own container stop/start**, a deliberately separate mechanism.
+- The log's `NEEDS-ATTENTION:` lines are the operator contract: a hang-abort, a
+  failed/interrupted cell (crash recovery marks these and NEVER silently re-runs them — re-arm
+  deliberately with `batch run --re-arm-cell <cell>`), or verify findings. `batch verify`
+  exiting 1 means honest findings in the reports, not breakage.
+
 ## Deep health check
 
 `smoke-inference.sh` is a point-in-time check you run by hand. `deep-health-check.sh` is a

@@ -118,6 +118,12 @@ def validate_queue(queue: Dict[str, Any]) -> None:
         missing = [k for k in ("model_container_path", "server_flags") if k not in entry]
         if missing:
             raise QueueValidationError(f"models[{model_id!r}] missing required key(s): {missing}")
+        # WP-6: optional per-model measured haystack-sizing ratio (WP-5 calibration finding).
+        cpt = entry.get("chars_per_token")
+        if cpt is not None and (not isinstance(cpt, (int, float)) or isinstance(cpt, bool) or cpt <= 0):
+            raise QueueValidationError(
+                f"models[{model_id!r}] chars_per_token {cpt!r} must be a positive number when present"
+            )
     cells = queue.get("cells")
     if not isinstance(cells, list) or not cells:
         raise QueueValidationError("queue has no non-empty 'cells' list")
@@ -192,6 +198,11 @@ def resolve_cell(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]) -> Di
     cell["_queue_model_id"] = abbreviated["model"]
     cell["_sampling_arm"] = abbreviated["sampling_arm"]
     cell["_trials"] = abbreviated["trials"]
+    # WP-6: queue-only metadata (underscore-prefixed, same contract as `_sampling_arm` --
+    # never passed to sweep.py, and deliberately NOT part of the normalized cell, so adding or
+    # tuning a model's measured `chars_per_token` never changes any cell_id). A haystack-sizing
+    # knob is a measurement-accuracy fact, not a cell-identity fact.
+    cell["_chars_per_token"] = model_entry.get("chars_per_token")
     return cell
 
 
@@ -276,6 +287,33 @@ def re_arm_state(state: Dict[str, Any]) -> None:
             cs["state"] = PENDING
             cs["reason"] = None
     state["queue_state"] = QUEUE_RUNNING
+
+
+def re_arm_cells(
+    state: Dict[str, Any], names: List[str], resolved_cells: List[Dict[str, Any]]
+) -> List[str]:
+    """`--re-arm-cell <cell_id-or-alias>` (WP-6; WP-5 punt): the targeted, per-cell counterpart
+    to the all-or-nothing `re_arm_state` -- exactly the surgical state-file hand-edit WP-5's
+    attended run performed three times, made a first-class knob. Each named cell (matched by
+    `cell_id` or queue `alias`) goes back to `pending` regardless of its current terminal state
+    (including `completed` -- an operator explicitly naming a cell wants it re-run), and the
+    queue state resets to `running`. Unknown names raise `QueueValidationError` -- a typo must
+    never silently re-arm nothing. Returns the affected cell_ids."""
+    by_alias = {c["alias"]: c["cell_id"] for c in resolved_cells}
+    changed = []
+    for name in names:
+        cell_id = name if name in state["cells"] else by_alias.get(name)
+        if cell_id is None or cell_id not in state["cells"]:
+            raise QueueValidationError(
+                f"--re-arm-cell {name!r} matches no cell_id or alias in this queue's state"
+            )
+        cs = state["cells"][cell_id]
+        cs["state"] = PENDING
+        cs["reason"] = None
+        changed.append(cell_id)
+    if changed:
+        state["queue_state"] = QUEUE_RUNNING
+    return changed
 
 
 CORRECTNESS_FAILURE_REASONS = ("degenerate", "needle_failure")
@@ -553,6 +591,13 @@ def default_cell_runner(handle: "sweep.ScratchServerHandle", cell: Dict[str, Any
 # dropped.
 LONGCONTEXT_BATTERY_ITEM = "needle"
 
+# WP-6 (WP-5 punt, measured): the flat 256-token response cap is too tight for multi_needle
+# under the verbose production arm (temp 1.0) -- gemma f16's multi_needle went 0/9
+# all-`truncated(benign)` in WP-5's attended run while single_needle at the same cap scored
+# 8/9. multi_needle asks the model to enumerate SEVERAL recalled values, so it gets 3x the
+# budget; every other task keeps the flat `max_tokens` default.
+LONGCONTEXT_MAX_TOKENS_BY_TASK = {"multi_needle": 768}
+
 
 def write_cell_record(
     records_dir: Path,
@@ -750,6 +795,13 @@ def make_longcontext_cell_runner(
                 handle.base_url, cell["alias"], cell["cell_id"], target_tokens,
                 effective_arm, sampling_payload, n_trials=trials,
                 max_tokens=max_tokens, timeout=timeout,
+                # WP-6: per-model measured haystack-sizing ratio (WP-5 calibration finding --
+                # the static estimate oversizes real prompts by +11-17%; at 512k that would
+                # overflow `-c`). None falls back to the static estimate inside longcontext.
+                chars_per_token=cell.get("_chars_per_token"),
+                # WP-6 (WP-5 punt): multi_needle needs more response budget than the flat cap
+                # under the verbose production arm -- see LONGCONTEXT_MAX_TOKENS_BY_TASK.
+                max_tokens_by_task=LONGCONTEXT_MAX_TOKENS_BY_TASK,
             )
         except Exception as exc:  # pragma: no cover -- defensive: an unexpected transport/battery
             # exception never propagates out and aborts the whole queue; it becomes an ordinary
@@ -802,6 +854,7 @@ def make_longcontext_cell_runner(
             "production_sampling_fallback_reason": fallback_reason,
             "model_family": family,
             "target_tokens": target_tokens,
+            "chars_per_token": cell.get("_chars_per_token"),
             "vram_before_bytes": handle.vram_before_bytes,
             "vram_after_bytes": vram_after_bytes,
             "sample_count": len(all_samples),
@@ -850,6 +903,7 @@ def run_queue(
     vram_profile: Optional[str] = None,
     dry_run: bool = False,
     re_arm: bool = False,
+    re_arm_cell_names: Optional[List[str]] = None,
     cell_runner: Optional[Callable[["sweep.ScratchServerHandle", Dict[str, Any]], CellOutcome]] = None,
     container_controller: Optional[ContainerController] = None,
     hang_check_fn: Optional[Callable[[], Optional[str]]] = None,
@@ -889,17 +943,33 @@ def run_queue(
     existing = load_state(state_path)
     if existing is not None:
         state = existing
-        if state["queue_state"] in TERMINAL_QUEUE_STATES and not re_arm:
+        # WP-6 (WP-2 punt): the state machine keys everything by cell_id, so a queue file
+        # edited AFTER its state file exists (cell added/removed, or any server-flag change --
+        # cell_ids hash the flags dict) would otherwise surface as a bare KeyError deep in the
+        # cell loop. Fail loudly, up front, with the operator's actual options.
+        state_ids = set(state["cells"])
+        queue_ids = {c["cell_id"] for c in resolved_cells}
+        if state_ids != queue_ids:
+            raise QueueValidationError(
+                f"queue {queue_path} no longer matches its state file {state_path} "
+                f"(cells only in state: {sorted(state_ids - queue_ids)}; only in queue: "
+                f"{sorted(queue_ids - state_ids)}) -- a queue file is immutable once its state "
+                f"exists; move the edited queue to a new file (fresh state) or delete/archive "
+                f"the stale state file deliberately"
+            )
+        if state["queue_state"] in TERMINAL_QUEUE_STATES and not re_arm and not re_arm_cell_names:
             return {
                 "noop": True,
                 "queue_state": state["queue_state"],
                 "message": (
                     f"queue {queue_path} is already terminal ({state['queue_state']!r}); "
-                    f"pass --re-arm to run it again"
+                    f"pass --re-arm (or --re-arm-cell) to run it again"
                 ),
             }
         if re_arm:
             re_arm_state(state)
+        if re_arm_cell_names:
+            re_arm_cells(state, list(re_arm_cell_names), resolved_cells)
     else:
         state = init_state(resolved_cells)
 
@@ -1048,6 +1118,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             vram_profile=args.vram_profile,
             dry_run=args.dry_run,
             re_arm=args.re_arm,
+            re_arm_cell_names=args.re_arm_cell or None,
             # WP-2: the real CLI-driven path always runs the longcontext-aware cell runner (it
             # defers to `default_cell_runner` per-cell for anything not a `"needle"`-battery
             # cell -- see `make_longcontext_cell_runner`'s docstring). `run_queue`'s own internal
@@ -1111,6 +1182,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--vram-profile", choices=sweep.VRAM_PROFILES, default=None)
     p_run.add_argument("--dry-run", action="store_true")
     p_run.add_argument("--re-arm", action="store_true")
+    p_run.add_argument(
+        "--re-arm-cell", action="append", default=[], metavar="CELL_ID_OR_ALIAS",
+        help="re-arm exactly this cell (repeatable) -- the targeted counterpart to the "
+        "all-or-nothing --re-arm; matches a state cell_id or a queue alias, errors on a "
+        "name that matches neither",
+    )
     p_run.add_argument("--state", default=None, help="override the default sibling state-file path")
     p_run.add_argument("--container", default=sweep.DEFAULT_CONTAINER_NAME)
     p_run.add_argument(

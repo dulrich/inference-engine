@@ -1,0 +1,738 @@
+{
+  "queue_format": 1,
+  "vram_profile": "desktop-shared",
+  "deadline": "13:00",
+  "stop_policy": "pause-at-deadline",
+  "models": {
+    "gemma-4-12b-qat": {
+      "model_host_path": "/srv/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+      "model_container_path": "/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+      "server_flags": {
+        "--jinja": true
+      },
+      "model_family": "gemma4",
+      "chars_per_token": 4.3
+    },
+    "qwen36-a3b-q4": {
+      "model_host_path": "/srv/models/unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+      "model_container_path": "/models/unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+      "server_flags": {
+        "--jinja": true,
+        "-ncmoe": 32
+      },
+      "model_family": "qwen35moe",
+      "chars_per_token": 4.0,
+      "kv_attention_layers": 10,
+      "gpu_weights_bytes": 6620000000
+    },
+    "ling-3-tiny-q4km": {
+      "model_host_path": "/srv/models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q4_K_M.gguf",
+      "model_container_path": "/models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q4_K_M.gguf",
+      "server_flags": {
+        "--jinja": true
+      },
+      "model_family": "bailingmoe3",
+      "chars_per_token": 4.2
+    },
+    "nemotron-3-nano-4b": {
+      "model_host_path": "/srv/models/lmstudio-community/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf",
+      "model_container_path": "/models/lmstudio-community/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf",
+      "server_flags": {
+        "--jinja": true
+      },
+      "model_family": "nemotron_h",
+      "chars_per_token": 4.17
+    }
+  },
+  "cells": [
+    {
+      "model": "gemma-4-12b-qat",
+      "alias": "gemma-c32k-f16-capa",
+      "c": 32768,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "gemma-4-12b-qat",
+      "alias": "gemma-c32k-f16-prod",
+      "c": 32768,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "production",
+      "trials": 3
+    },
+    {
+      "model": "gemma-4-12b-qat",
+      "alias": "gemma-c32k-q4q4-cap",
+      "c": 32768,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "qwen36-a3b-q4",
+      "alias": "qwen-c32k-f16-capa",
+      "c": 32768,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "qwen36-a3b-q4",
+      "alias": "qwen-c32k-f16-prod",
+      "c": 32768,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "production",
+      "trials": 3
+    },
+    {
+      "model": "qwen36-a3b-q4",
+      "alias": "qwen-c32k-q8q8-cap",
+      "c": 32768,
+      "ctk": "q8_0",
+      "ctv": "q8_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "qwen36-a3b-q4",
+      "alias": "qwen-c32k-q4q4-cap",
+      "c": 32768,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "ling-3-tiny-q4km",
+      "alias": "ling-c32k-f16-capa",
+      "c": 32768,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "ling-3-tiny-q4km",
+      "alias": "ling-c32k-f16-prod",
+      "c": 32768,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "production",
+      "trials": 3
+    },
+    {
+      "model": "ling-3-tiny-q4km",
+      "alias": "ling-c32k-q8q8-cap",
+      "c": 32768,
+      "ctk": "q8_0",
+      "ctv": "q8_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "ling-3-tiny-q4km",
+      "alias": "ling-c32k-q4q4-cap",
+      "c": 32768,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "nemotron-3-nano-4b",
+      "alias": "nemotron-c32k-f16-capa",
+      "c": 32768,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "nemotron-3-nano-4b",
+      "alias": "nemotron-c32k-q8q8-cap",
+      "c": 32768,
+      "ctk": "q8_0",
+      "ctv": "q8_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "nemotron-3-nano-4b",
+      "alias": "nemotron-c32k-q4q4-cap",
+      "c": 32768,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "gemma-4-12b-qat",
+      "alias": "gemma-c64k-f16-capa",
+      "c": 65536,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "gemma-4-12b-qat",
+      "alias": "gemma-c64k-f16-prod",
+      "c": 65536,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "production",
+      "trials": 3
+    },
+    {
+      "model": "gemma-4-12b-qat",
+      "alias": "gemma-c64k-q4q4-cap",
+      "c": 65536,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "qwen36-a3b-q4",
+      "alias": "qwen-c64k-f16-capa",
+      "c": 65536,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "qwen36-a3b-q4",
+      "alias": "qwen-c64k-f16-prod",
+      "c": 65536,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "production",
+      "trials": 3
+    },
+    {
+      "model": "qwen36-a3b-q4",
+      "alias": "qwen-c64k-q8q8-cap",
+      "c": 65536,
+      "ctk": "q8_0",
+      "ctv": "q8_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "qwen36-a3b-q4",
+      "alias": "qwen-c64k-q4q4-cap",
+      "c": 65536,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "ling-3-tiny-q4km",
+      "alias": "ling-c64k-f16-capa",
+      "c": 65536,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "ling-3-tiny-q4km",
+      "alias": "ling-c64k-f16-prod",
+      "c": 65536,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "production",
+      "trials": 3
+    },
+    {
+      "model": "ling-3-tiny-q4km",
+      "alias": "ling-c64k-q8q8-cap",
+      "c": 65536,
+      "ctk": "q8_0",
+      "ctv": "q8_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "ling-3-tiny-q4km",
+      "alias": "ling-c64k-q4q4-cap",
+      "c": 65536,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "nemotron-3-nano-4b",
+      "alias": "nemotron-c64k-f16-capa",
+      "c": 65536,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "nemotron-3-nano-4b",
+      "alias": "nemotron-c64k-q8q8-cap",
+      "c": 65536,
+      "ctk": "q8_0",
+      "ctv": "q8_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "nemotron-3-nano-4b",
+      "alias": "nemotron-c64k-q4q4-cap",
+      "c": 65536,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "gemma-4-12b-qat",
+      "alias": "gemma-c128k-f16-capa",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "gemma-4-12b-qat",
+      "alias": "gemma-c128k-f16-prod",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "production",
+      "trials": 3
+    },
+    {
+      "model": "gemma-4-12b-qat",
+      "alias": "gemma-c128k-q4q4-cap",
+      "c": 131072,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "qwen36-a3b-q4",
+      "alias": "qwen-c128k-f16-capa",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "qwen36-a3b-q4",
+      "alias": "qwen-c128k-f16-prod",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "production",
+      "trials": 3
+    },
+    {
+      "model": "qwen36-a3b-q4",
+      "alias": "qwen-c128k-q8q8-cap",
+      "c": 131072,
+      "ctk": "q8_0",
+      "ctv": "q8_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "qwen36-a3b-q4",
+      "alias": "qwen-c128k-q4q4-cap",
+      "c": 131072,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "ling-3-tiny-q4km",
+      "alias": "ling-c128k-f16-capa",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "ling-3-tiny-q4km",
+      "alias": "ling-c128k-f16-prod",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "production",
+      "trials": 3
+    },
+    {
+      "model": "ling-3-tiny-q4km",
+      "alias": "ling-c128k-q8q8-cap",
+      "c": 131072,
+      "ctk": "q8_0",
+      "ctv": "q8_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "ling-3-tiny-q4km",
+      "alias": "ling-c128k-q4q4-cap",
+      "c": 131072,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "nemotron-3-nano-4b",
+      "alias": "nemotron-c128k-f16-capa",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "nemotron-3-nano-4b",
+      "alias": "nemotron-c128k-q8q8-cap",
+      "c": 131072,
+      "ctk": "q8_0",
+      "ctv": "q8_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "nemotron-3-nano-4b",
+      "alias": "nemotron-c128k-q4q4-cap",
+      "c": 131072,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "gemma-4-12b-qat",
+      "alias": "gemma-c256k-f16-capa",
+      "c": 262144,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "gemma-4-12b-qat",
+      "alias": "gemma-c256k-f16-prod",
+      "c": 262144,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "production",
+      "trials": 3
+    },
+    {
+      "model": "gemma-4-12b-qat",
+      "alias": "gemma-c256k-q4q4-cap",
+      "c": 262144,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "qwen36-a3b-q4",
+      "alias": "qwen-c256k-q8q8-cap",
+      "c": 262144,
+      "ctk": "q8_0",
+      "ctv": "q8_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "qwen36-a3b-q4",
+      "alias": "qwen-c256k-q4q4-cap",
+      "c": 262144,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "nemotron-3-nano-4b",
+      "alias": "nemotron-c256k-f16-capa",
+      "c": 262144,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "nemotron-3-nano-4b",
+      "alias": "nemotron-c256k-q8q8-cap",
+      "c": 262144,
+      "ctk": "q8_0",
+      "ctv": "q8_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "nemotron-3-nano-4b",
+      "alias": "nemotron-c256k-q4q4-cap",
+      "c": 262144,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "nemotron-3-nano-4b",
+      "alias": "nemotron-c512k-f16-capa",
+      "c": 524288,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "nemotron-3-nano-4b",
+      "alias": "nemotron-c512k-q8q8-cap",
+      "c": 524288,
+      "ctk": "q8_0",
+      "ctv": "q8_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "nemotron-3-nano-4b",
+      "alias": "nemotron-c512k-q4q4-cap",
+      "c": 524288,
+      "ctk": "q4_0",
+      "ctv": "q4_0",
+      "fa": "on",
+      "battery": [
+        "needle"
+      ],
+      "sampling_arm": "capability",
+      "trials": 3
+    }
+  ]
+}

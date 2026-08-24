@@ -816,6 +816,7 @@ def run_cell(
     manifest: Optional[Dict[str, Any]] = None,
     haystack_structure: str = HAYSTACK_STRUCTURE_COHERENT,
     wilson_sided: str = "two",
+    chars_per_token: Optional[float] = None,
 ) -> CellResult:
     """Runs one (task, position_fraction) cell for `n_trials` distinct `haystack_seed`s,
     emitting schema-v2 `longcontext_probe` samples/completions and (for `n_trials >=
@@ -859,7 +860,14 @@ def run_cell(
         sampler_seed = derive_trial_seed(cell_id, trial_index, "sampler")
         rng = random.Random(haystack_seed)
 
-        haystack = assemble_haystack(rng, target_tokens, manifest=manifest)
+        # WP-6 recalibration (WP-5 finding: the static CHARS_PER_TOKEN_ESTIMATE oversizes real
+        # Gutenberg-corpus prompts by a measured +11-17% per family -- at 512k that overshoot
+        # would overflow `-c`). `chars_per_token`, when supplied by the caller (a queue's
+        # per-model measured value), replaces the static estimate for haystack sizing only; the
+        # real on-wire count is still always read back from `usage.prompt_tokens`, never assumed.
+        haystack = assemble_haystack(
+            rng, target_tokens, manifest=manifest, chars_per_token=chars_per_token
+        )
         trial = task.build_trial(haystack.text, position_fraction, rng)
 
         trial_sampling = dict(sampling_payload)
@@ -1028,6 +1036,8 @@ def run_live_battery(
     timeout: float = 300,
     manifest: Optional[Dict[str, Any]] = None,
     request_fn: Optional[RequestFn] = None,
+    chars_per_token: Optional[float] = None,
+    max_tokens_by_task: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Dict[float, CellResult]]:
     """The live entry point: drives the FULL battery -- every task in `tasks` (default `TASKS`,
     all three battery tasks) x every position in `positions` (default `POSITION_FRACTIONS`) x
@@ -1053,10 +1063,15 @@ def run_live_battery(
     tasks = tasks or TASKS
     results: Dict[str, Dict[float, CellResult]] = {}
     for task_name, task in tasks.items():
+        # WP-6 (WP-5 punt): a per-task response-token override -- the verbose production arm
+        # (temp 1.0) needs more than the flat 256-token cap to enumerate multi_needle's several
+        # answers (gemma f16's multi_needle went 0/9 all-`truncated(benign)` in WP-5). The flat
+        # `max_tokens` stays the default for any task without an override.
+        task_max_tokens = (max_tokens_by_task or {}).get(task_name, max_tokens)
         results[task_name] = run_position_sweep(
             effective_request_fn, task, f"{cell_id_prefix}-{task_name}", target_tokens,
             sampling_arm, sampling_payload, positions=positions, n_trials=n_trials,
-            max_tokens=max_tokens, manifest=manifest,
+            max_tokens=task_max_tokens, manifest=manifest, chars_per_token=chars_per_token,
         )
     return results
 

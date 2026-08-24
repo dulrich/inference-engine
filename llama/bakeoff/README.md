@@ -473,13 +473,15 @@ resolve against the queue's own `models:` map, so one queue file is one reproduc
 {
   "queue_format": 1,
   "vram_profile": "desktop-shared",
-  "deadline": "07:00",
+  "deadline": "13:00",
   "stop_policy": "pause-at-deadline",
   "models": {
     "gemma-4-12b-qat": {
       "model_host_path": "/srv/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
       "model_container_path": "/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
-      "server_flags": {"--jinja": true}
+      "server_flags": {"--jinja": true},
+      "model_family": "gemma4",
+      "chars_per_token": 4.3
     }
   },
   "cells": [
@@ -494,7 +496,17 @@ resolve against the queue's own `models:` map, so one queue file is one reproduc
 
 - `models` — model id → `{model_host_path, model_container_path, server_flags (base flags,
   e.g. `-ncmoe`/`--jinja`), gpu_weights_bytes (optional placement override), kv_attention_layers
-  (optional), swa_layer_spec (optional)}`.
+  (optional), swa_layer_spec (optional), model_family (optional — production-sampling lookup),
+  chars_per_token (optional — WP-6)}`.
+- `chars_per_token` (optional, positive number) — the model family's MEASURED haystack-sizing
+  ratio, replacing the static `CHARS_PER_TOKEN_ESTIMATE` (4.5) for this model's needle cells.
+  WP-5's attended run measured the static estimate oversizing real Gutenberg-corpus prompts by
+  +11–17% per family (nemotron hit ~0.99×`-c` at 64k; at 512k that overshoot would overflow the
+  context). Values are derived from measured `prompt_tokens / target_tokens` distributions in
+  committed records (midrange-centered so the observed band sits inside verify_run's ±10%
+  tolerance): `runs/bakeoff/wp5-validation` gives gemma4 4.3, bailingmoe3 4.2, nemotron_h 4.17;
+  qwen35moe is unmeasured and starts at a conservative 4.0. Deliberately NOT part of the cell
+  identity: adding or tuning it never changes any `cell_id`.
 - `cells` — an ORDERED list of abbreviated cells `{model, alias, c, ctk, ctv, fa, battery,
   sampling_arm, trials}`. `resolve_cell()`/`resolve_queue_cells()` merge each abbreviated cell's
   `c`/`ctk`/`ctv`/`fa` onto its model's base `server_flags`, producing the normalized cell shape
@@ -503,10 +515,19 @@ resolve against the queue's own `models:` map, so one queue file is one reproduc
   `cell_id` is a validation error, never a silent merge.
 - `vram_profile` — `"desktop-shared"` or `"headless"` (see VRAM budget profiles above); the CLI's
   `--vram-profile` flag, if given, overrides the queue file's own value.
-- `deadline` — an `"HH:MM"` wall-clock cutoff, recomputed fresh relative to EACH invocation's own
-  start time (`compute_deadline_dt`): the next occurrence of that time at or after the
-  invocation started (today if still ahead, tomorrow if already passed today) — an overnight
-  queue spanning multiple nights gets a fresh deadline each night, by design.
+- `deadline` — an `"HH:MM"` **UTC** wall-clock cutoff (WP-5 finding #4: `run_queue`'s clock is
+  `datetime.now(timezone.utc)`, so a deadline authored in local time fires hours off — this
+  host is `America/Mexico_City`, permanent UTC-6 with no DST since 2022, so 07:00 local is
+  always `"13:00"`). Recomputed fresh relative to EACH
+  invocation's own start time (`compute_deadline_dt`): the next occurrence of that time at or
+  after the invocation started (today if still ahead, tomorrow if already passed today) — an
+  overnight queue spanning multiple nights gets a fresh deadline each night, by design.
+- **A queue file is immutable once its state file exists.** Cell identity is the `cell_id` hash
+  over the resolved flags, so ANY edit that adds/removes a cell or changes a server flag makes
+  the queue and its sibling state disagree; `batch run` then refuses with a
+  `QueueValidationError` naming the divergent cell_ids (WP-6; previously a bare `KeyError`).
+  Move an edited queue to a new file (fresh state) or delete/archive the stale state file
+  deliberately.
 - `stop_policy` — currently only `"pause-at-deadline"` is implemented (validated, not just
   accepted-and-ignored) — a required, explicit field so a queue author never wonders what happens
   at a missed deadline; reserved for a future hard-stop policy without a queue-format bump.
@@ -529,6 +550,12 @@ transition. Per-cell states: `pending` / `running` / `completed` / `failed` /
   `aborted-hang`, AND `pending`) resets to `pending`; queue state resets to `running`. A full
   retry of everything that didn't already succeed — a `completed` cell's record is never
   re-run.
+- **`--re-arm-cell <cell_id-or-alias>`** (repeatable, WP-6): the targeted counterpart — resets
+  exactly the named cells to `pending` (including a `completed` cell an operator explicitly
+  names) and the queue state to `running`, leaving every other cell untouched. A name matching
+  neither a state `cell_id` nor a queue `alias` is an error, never a silent no-op. This is the
+  first-class version of the surgical state-file hand-edit WP-5's attended run performed three
+  times.
 - **Interrupted cell**: a cell found `running` at the START of an invocation means the previous
   invocation crashed mid-cell (a clean exit always leaves a cell in a terminal per-cell state) —
   it's marked `failed`/`interrupted` immediately, before anything else happens, and is never
@@ -601,7 +628,7 @@ handle, without the real battery existing yet.
 ### CLI
 
 ```sh
-python3 llama/bakeoff/batch.py run --queue <queue.json> [--vram-profile desktop-shared|headless] [--dry-run] [--re-arm]
+python3 llama/bakeoff/batch.py run --queue <queue.json> [--vram-profile desktop-shared|headless] [--dry-run] [--re-arm] [--re-arm-cell <cell_id-or-alias>]... [--scratch-container <name>] [--records-dir <run-dir>]
 python3 llama/bakeoff/batch.py verify --run <run-dir>
 ```
 
@@ -1005,8 +1032,9 @@ may append to v2 with a dated note in this section.
 - **WP-3 adds a new sample `type`, `"longcontext_probe"`** (`longcontext.run_cell`), carrying
   every field above PLUS `task`/`cell_id`/`trial_index`/`haystack_structure`/`haystack_book_ids`/
   `classifier_shape`/`classifier_flags`/`trial_meta` — `corpus_manifest_id` is non-`null` here
-  (`"gutenberg-longcontext-haystack-v1"`), the inverse of `needle_probe`'s always-`null` value,
-  since this IS the corpus-backed instrument. See "Long-context correctness instrument v2" above
+  (`"gutenberg-longcontext-haystack-v2"` since WP-3 made the v2 manifest the default; v1 stays
+  on disk for reproducing pre-WP-3 records), the inverse of `needle_probe`'s always-`null`
+  value, since this IS the corpus-backed instrument. See "Long-context correctness instrument v2" above
   for the full field-by-field description; this sample type is part of the frozen v2 contract.
 
 ### Sampling-arm presets

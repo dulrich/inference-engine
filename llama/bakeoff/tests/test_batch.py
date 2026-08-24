@@ -557,11 +557,14 @@ def _fake_battery_fn_factory(samples_by_task):
     calls = []
 
     def _fn(base_url, alias, cell_id_prefix, target_tokens, sampling_arm, sampling_payload,
-             n_trials=10, max_tokens=256, timeout=300):
+             n_trials=10, max_tokens=256, timeout=300, chars_per_token=None,
+             max_tokens_by_task=None):
         calls.append({
             "base_url": base_url, "alias": alias, "cell_id_prefix": cell_id_prefix,
             "target_tokens": target_tokens, "sampling_arm": sampling_arm,
             "sampling_payload": dict(sampling_payload), "n_trials": n_trials,
+            "chars_per_token": chars_per_token,
+            "max_tokens_by_task": dict(max_tokens_by_task) if max_tokens_by_task else None,
         })
         out = {}
         for task_name, samples in samples_by_task.items():
@@ -1240,6 +1243,136 @@ class TestWp5CliArgs(unittest.TestCase):
         args = parser.parse_args(["run", "--queue", "q.json"])
         self.assertIsNone(args.scratch_container)
         self.assertIsNone(args.records_dir)
+
+
+class TestWp6CharsPerToken(unittest.TestCase):
+    """WP-6: per-model measured `chars_per_token` (WP-5 haystack-calibration finding)."""
+
+    def test_validate_queue_rejects_non_positive_or_non_numeric(self):
+        for bad in (0, -1.5, "4.2", True):
+            queue = _minimal_queue()
+            queue["models"]["model-a"]["chars_per_token"] = bad
+            with self.assertRaises(batch.QueueValidationError):
+                batch.validate_queue(queue)
+
+    def test_validate_queue_accepts_positive_float_and_absence(self):
+        queue = _minimal_queue()
+        batch.validate_queue(queue)  # absent everywhere: fine
+        queue["models"]["model-a"]["chars_per_token"] = 4.24
+        batch.validate_queue(queue)  # present and positive: fine
+
+    def test_resolved_cell_carries_ratio_without_changing_cell_id(self):
+        plain = batch.resolve_queue_cells(_minimal_queue())
+        queue = _minimal_queue()
+        queue["models"]["model-a"]["chars_per_token"] = 4.24
+        with_ratio = batch.resolve_queue_cells(queue)
+        for before, after in zip(plain, with_ratio):
+            # The knob is sizing metadata, never cell identity: same cell_id either way.
+            self.assertEqual(before["cell_id"], after["cell_id"])
+        for cell in with_ratio:
+            self.assertEqual(cell["_chars_per_token"], 4.24)  # every cell is model-a's
+        for cell in plain:
+            self.assertIsNone(cell["_chars_per_token"])  # absent in the registry -> None
+
+    def test_runner_forwards_ratio_and_task_caps_to_battery_and_detail(self):
+        battery_fn = _fake_battery_fn_factory({
+            "single_needle": [_sample("single_needle", "correct", True)],
+        })
+        runner = batch.make_longcontext_cell_runner(
+            battery_fn=battery_fn, vram_used_bytes_fn=lambda: 5000,
+        )
+        cell = _longcontext_cell()
+        cell["_chars_per_token"] = 4.06
+        outcome = runner(_handle(), cell)
+        self.assertEqual(outcome.status, "completed")
+        self.assertEqual(battery_fn.calls[0]["chars_per_token"], 4.06)
+        self.assertEqual(
+            battery_fn.calls[0]["max_tokens_by_task"], batch.LONGCONTEXT_MAX_TOKENS_BY_TASK
+        )
+        self.assertEqual(outcome.detail["chars_per_token"], 4.06)
+
+    def test_runner_forwards_none_when_queue_carries_no_ratio(self):
+        battery_fn = _fake_battery_fn_factory({
+            "single_needle": [_sample("single_needle", "correct", True)],
+        })
+        runner = batch.make_longcontext_cell_runner(
+            battery_fn=battery_fn, vram_used_bytes_fn=lambda: 5000,
+        )
+        outcome = runner(_handle(), _longcontext_cell())  # helper carries no _chars_per_token
+        self.assertEqual(outcome.status, "completed")
+        self.assertIsNone(battery_fn.calls[0]["chars_per_token"])
+        self.assertIsNone(outcome.detail["chars_per_token"])
+
+
+class TestWp6ReArmCell(unittest.TestCase):
+    """WP-6: targeted per-cell re-arm (`--re-arm-cell`, the WP-5 hand-edit made first-class)."""
+
+    def _state_and_cells(self):
+        cells = batch.resolve_queue_cells(_minimal_queue())
+        state = batch.init_state(cells)
+        for cs in state["cells"].values():
+            cs["state"] = batch.COMPLETED
+        state["queue_state"] = batch.QUEUE_COMPLETED
+        return state, cells
+
+    def test_re_arms_named_cell_by_cell_id_and_resets_queue_state(self):
+        state, cells = self._state_and_cells()
+        target = cells[1]["cell_id"]
+        changed = batch.re_arm_cells(state, [target], cells)
+        self.assertEqual(changed, [target])
+        self.assertEqual(state["cells"][target]["state"], batch.PENDING)
+        self.assertEqual(state["queue_state"], batch.QUEUE_RUNNING)
+        # every other cell untouched
+        for cell_id, cs in state["cells"].items():
+            if cell_id != target:
+                self.assertEqual(cs["state"], batch.COMPLETED)
+
+    def test_re_arms_by_queue_alias(self):
+        state, cells = self._state_and_cells()
+        changed = batch.re_arm_cells(state, ["model-a-c65k-f16"], cells)
+        self.assertEqual(len(changed), 1)
+        self.assertEqual(state["cells"][changed[0]]["state"], batch.PENDING)
+
+    def test_unknown_name_raises_instead_of_silently_re_arming_nothing(self):
+        state, cells = self._state_and_cells()
+        with self.assertRaises(batch.QueueValidationError):
+            batch.re_arm_cells(state, ["no-such-cell"], cells)
+
+    def test_cli_re_arm_cell_is_repeatable(self):
+        parser = batch.build_arg_parser()
+        args = parser.parse_args(
+            ["run", "--queue", "q.json", "--re-arm-cell", "a", "--re-arm-cell", "b"]
+        )
+        self.assertEqual(args.re_arm_cell, ["a", "b"])
+
+
+class TestWp6QueueStateMismatch(unittest.TestCase):
+    """WP-6 (WP-2 punt): a queue file edited after its state file exists fails loudly with a
+    QueueValidationError, never a bare KeyError from the cell loop."""
+
+    def test_edited_queue_with_existing_state_raises_clear_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = _write_queue(tmp, _minimal_queue())
+            batch.run_queue(
+                queue_path,
+                scratch_server_fn=fake_scratch_server_factory(),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
+                vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
+            )
+            edited = _minimal_queue()
+            edited["cells"][0]["c"] = 131072  # changes that cell's cell_id
+            edited_path = _write_queue(tmp, edited)  # same path: same sibling state file
+            with self.assertRaises(batch.QueueValidationError) as ctx:
+                batch.run_queue(
+                    edited_path,
+                    re_arm=True,  # even an explicit re-arm never bridges a mismatched queue
+                    scratch_server_fn=fake_scratch_server_factory(),
+                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                    vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
+                    vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
+                )
+            self.assertIn("immutable", str(ctx.exception))
 
 
 if __name__ == "__main__":

@@ -75,6 +75,23 @@ done
 
 note() { echo "[deep-health-check] $*"; }
 
+# Bakeoff-window guard: a live bake-off run window `docker stop`s the router container for the
+# whole window (batch.py's GPU maintenance window -- scratch servers run in a sibling container),
+# so probing :4811 mid-window is guaranteed to read as an outage that isn't one. The window's
+# whole lifetime is exactly the span its wrapper (llama/bakeoff/run-window.sh) holds an exclusive
+# flock on cron.lock, so "can I take the lock?" IS "is the router intentionally down?". The probe
+# takes and releases it instantly (`true`) rather than holding it for the check's duration --
+# holding it would make a concurrently-starting window's own `flock -n` read busy and get its
+# start request `rejected(busy)`, a user-visible false rejection; the cost of instant release is
+# a benign TOCTOU (a window starting mid-check), which the single-retry tolerance below absorbs.
+# Skip is exit 0 on purpose: an intentionally-stopped router is not an alarm.
+BAKEOFF_CRON_LOCK="${BAKEOFF_CRON_LOCK:-${HOME}/.local/state/inference-bakeoff/cron.lock}"
+if [ -e "${BAKEOFF_CRON_LOCK}" ] && command -v flock >/dev/null 2>&1 \
+	&& ! flock -n "${BAKEOFF_CRON_LOCK}" true 2>/dev/null; then
+	note "SKIP: bake-off run window live (cron.lock held) -- router is intentionally stopped for the window"
+	exit 0
+fi
+
 # 150s: llama-swap's own healthCheckTimeout (config.yaml) bounds a cold spawn's wait at 120s,
 # so the curl timeout must exceed that or a genuine, healthy cold start reads as a false alarm.
 MAX_TIME=150

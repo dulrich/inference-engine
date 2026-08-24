@@ -1,11 +1,14 @@
 import { z } from "zod";
+import { ControlSectionSchema } from "./control.ts";
 
 // `GET /api/queue` (WP-A, `plans/bench-dashboard-run-context-surfacing.md` WP-A) — a
 // read-only view over `llama/bakeoff/queues/*.json` (queue definitions) joined against
 // their sibling `<stem>.state.json` (batch.py's live/terminal run state) BY ALIAS
-// (Decisions locked: "no TypeScript reimplementation of the Python cell-id hash"). This
-// plan adds no control endpoints — every field here is read-only, reflecting files
-// `batch.py`/its wrapper own; the dashboard never writes queue or state files.
+// (Decisions locked: "no TypeScript reimplementation of the Python cell-id hash"). Every
+// field here except `control` is read-only, reflecting files `batch.py`/its wrapper own —
+// the dashboard never writes queue or state files. `control` (WP-4,
+// `plans/bakeoff-queue-control-plane.md`) is the one addition: an optional, independently
+// null-honest section over the host control plane, added below.
 
 /** Cell state batch.py can leave a cell in (`<stem>.state.json` `cells[cellId].state`). */
 export const CellStateSchema = z.enum(["pending", "running", "completed", "failed", "skipped-propagated", "aborted-hang"]);
@@ -71,9 +74,17 @@ export const QueueListItemSchema = z.union([QueueEntrySchema, QueueErrorEntrySch
 export type QueueListItem = z.infer<typeof QueueListItemSchema>;
 
 /** `GET /api/queue` response. Missing/empty `QUEUES_DIR` -> `{queues: []}` (200, never an
- * error — no queues configured is a valid, common state, not a failure). */
+ * error — no queues configured is a valid, common state, not a failure).
+ *
+ * `control` (cycle-1 M4, WP-4): `QueueListResponseSchema` is a CLOSED zod object, so this
+ * field must be declared here explicitly — omitting it silently strips `control` from
+ * every parse, including on the web client. `.nullable().optional()`: `null` when the
+ * control plane is unset/unreachable/unparseable (the API always sends the key once
+ * `control.ts` support lands), `undefined` only for responses built before this field
+ * existed (kept parseable, never a breaking change). */
 export const QueueListResponseSchema = z.object({
   queues: z.array(QueueListItemSchema),
   generatedAt: z.string(),
+  control: ControlSectionSchema.nullable().optional(),
 });
 export type QueueListResponse = z.infer<typeof QueueListResponseSchema>;

@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { QueueEntry, QueueErrorEntry, QueueListItem } from "@bench-dashboard/shared";
-import { buildQueueListResponse } from "./queue.ts";
+import { buildControlSection, buildQueueListResponse } from "./queue.ts";
 
 // Tests `buildQueueListResponse` directly over an explicit `queuesDir` — NOT through
 // `registerQueueRoutes`/`config.queuesDir`/`QUEUES_DIR`. `config.ts` is a singleton
@@ -15,6 +15,41 @@ import { buildQueueListResponse } from "./queue.ts";
 // actually wired into `app.ts` before the SPA wildcard.
 
 const FIXTURES_DIR = join(import.meta.dir, "../../fixtures/queues");
+const CONTROL_FIXTURES_DIR = join(import.meta.dir, "../../fixtures/control");
+
+function makeControlHostDir(prefix: string): string {
+  return mkdtempSync(join(tmpdir(), `bench-dashboard-control-${prefix}-`));
+}
+
+function writeStatus(dir: string, body: Record<string, unknown>): void {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "status.json"), JSON.stringify(body));
+}
+
+function validStatusBody(generatedAt: string): Record<string, unknown> {
+  return {
+    generated_at: generatedAt,
+    armed: true,
+    live: { request_id: "req-20260823T000000Z-0123456789abcdef", queue_stem: "ladder-v1", phase: "running", started_at: generatedAt },
+    last_run: {
+      request_id: "req-20260822T230000Z-fedcba9876543210",
+      ended_at: "2026-08-22T23:59:00Z",
+      run_exit: 0,
+      verify_exit: 0,
+      disposition: "clean",
+    },
+    anomalies: [],
+    requests: [
+      {
+        request_id: "req-20260823T000000Z-0123456789abcdef",
+        action: "start",
+        state: "running",
+        reason: null,
+        requested_at: generatedAt,
+      },
+    ],
+  };
+}
 
 function isEntry(item: QueueListItem): item is QueueEntry {
   return !("error" in item);
@@ -194,5 +229,73 @@ describe("buildQueueListResponse: fixtures/queues", () => {
       if (!entry || !isEntry(entry)) throw new Error("synth-joined should still parse fine alongside malformed siblings");
       expect(entry.queueState).toBe("completed");
     });
+  });
+});
+
+describe("buildControlSection", () => {
+  test("undefined controlHostDir (CONTROL_HOST_DIR unset) -> null, no I/O attempted", async () => {
+    expect(await buildControlSection(undefined)).toBeNull();
+  });
+
+  test("controlHostDir set but the directory does not exist on disk -> null", async () => {
+    const missing = join(makeControlHostDir("missing-parent"), "does-not-exist");
+    expect(await buildControlSection(missing)).toBeNull();
+  });
+
+  test("controlHostDir exists but status.json is missing -> null", async () => {
+    const dir = makeControlHostDir("no-status-file");
+    expect(await buildControlSection(dir)).toBeNull();
+  });
+
+  test("unparseable JSON in status.json -> null", async () => {
+    expect(await buildControlSection(join(CONTROL_FIXTURES_DIR, "malformed-json"))).toBeNull();
+  });
+
+  test("valid JSON but schema-invalid status.json -> null", async () => {
+    expect(await buildControlSection(join(CONTROL_FIXTURES_DIR, "schema-invalid"))).toBeNull();
+  });
+
+  test("a fresh, valid status.json populates the section with stale:false", async () => {
+    const dir = makeControlHostDir("fresh");
+    const generatedAt = new Date().toISOString();
+    writeStatus(dir, validStatusBody(generatedAt));
+
+    const section = await buildControlSection(dir);
+    expect(section).not.toBeNull();
+    if (!section) throw new Error("expected a populated control section");
+    expect(section.stale).toBe(false);
+    expect(section.armed).toBe(true);
+    expect(section.statusGeneratedAt).toBe(generatedAt);
+    expect(section.live).toEqual({ requestId: "req-20260823T000000Z-0123456789abcdef", queueStem: "ladder-v1", phase: "running", startedAt: generatedAt });
+    expect(section.lastRun).toEqual({
+      requestId: "req-20260822T230000Z-fedcba9876543210",
+      endedAt: "2026-08-22T23:59:00Z",
+      runExit: 0,
+      verifyExit: 0,
+      disposition: "clean",
+    });
+    expect(section.requests).toHaveLength(1);
+    expect(section.requests[0]).toMatchObject({ action: "start", state: "running" });
+  });
+
+  test("an old generated_at (older than 180s, 3x the minutely dispatcher period) -> stale:true", async () => {
+    const dir = makeControlHostDir("stale");
+    const oldGeneratedAt = new Date(Date.now() - 10 * 60_000).toISOString(); // 10 minutes ago
+    writeStatus(dir, validStatusBody(oldGeneratedAt));
+
+    const section = await buildControlSection(dir);
+    expect(section).not.toBeNull();
+    expect(section?.stale).toBe(true);
+  });
+
+  test("null live/lastRun round-trip as null, not dropped", async () => {
+    const dir = makeControlHostDir("idle");
+    writeStatus(dir, { generated_at: new Date().toISOString(), armed: false, live: null, last_run: null, anomalies: [], requests: [] });
+
+    const section = await buildControlSection(dir);
+    expect(section).not.toBeNull();
+    expect(section?.live).toBeNull();
+    expect(section?.lastRun).toBeNull();
+    expect(section?.armed).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { CellState, QueueListItem, QueueListResponse, QueueState } from "@bench-dashboard/shared";
+import type { CellState, ControlSection, QueueListItem, QueueListResponse, QueueState } from "@bench-dashboard/shared";
+import { ControlSectionSchema } from "@bench-dashboard/shared";
 import type { Hono } from "hono";
 import { config } from "../config.ts";
 
@@ -9,6 +10,13 @@ import { config } from "../config.ts";
 // alias, and returns a read-only summary. Never a route-wide 500: a missing/empty queues
 // dir is `{queues: []}` (200), and a malformed queue/state file reports that ONE queue
 // entry with an `error` field rather than failing the whole response (brief's pin).
+//
+// `buildControlSection` (WP-4, `plans/bakeoff-queue-control-plane.md`) lives in this same
+// file beside `buildQueueListResponse` — same seam pattern (explicit dir argument, never
+// `config` directly, so tests aren't fighting the process-wide `config.ts` singleton) —
+// and is composed into the wire response by `registerQueueRoutes` below, independently of
+// `buildQueueListResponse` itself (so every existing `buildQueueListResponse` test/caller
+// keeps working unchanged: `control` is additive, never required).
 
 const KNOWN_CELL_STATES: readonly CellState[] = [
   "pending",
@@ -208,6 +216,76 @@ export async function buildQueueListResponse(queuesDir: string): Promise<QueueLi
   return { queues, generatedAt };
 }
 
+// ---- `control` section (WP-4): `<CONTROL_HOST_DIR>/status.json` ("control-status-v1",
+// snake_case) -> `ControlSection` (camelCase). Field-level renaming only — TYPE
+// validation is `ControlSectionSchema.safeParse` itself below, so "schema-invalid" and
+// "wrong field types" collapse to the exact same `null` outcome (the brief's pin: missing
+// env, missing dir, missing file, unparseable JSON, or schema-invalid all -> `null`,
+// honest, never a 500).
+
+/** 3x the minutely dispatcher period (plan "Staleness contract"). */
+const CONTROL_STALE_THRESHOLD_MS = 180_000;
+
+function projectControlLive(raw: unknown): unknown {
+  if (raw === null || raw === undefined) return null;
+  if (!isRecord(raw)) return raw; // let the schema reject the wrong shape
+  return { requestId: raw.request_id, queueStem: raw.queue_stem, phase: raw.phase, startedAt: raw.started_at };
+}
+
+function projectControlLastRun(raw: unknown): unknown {
+  if (raw === null || raw === undefined) return null;
+  if (!isRecord(raw)) return raw;
+  return {
+    requestId: raw.request_id,
+    endedAt: raw.ended_at,
+    runExit: raw.run_exit,
+    verifyExit: raw.verify_exit,
+    disposition: raw.disposition,
+  };
+}
+
+function projectControlRequestDigest(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  return { requestId: raw.request_id, action: raw.action, state: raw.state, reason: raw.reason, requestedAt: raw.requested_at };
+}
+
+/** Reads+projects `<controlHostDir>/status.json` into the wire `ControlSection`.
+ * `undefined` `controlHostDir` (env unset) short-circuits to `null` before any I/O.
+ * `stale` is computed here, at read time, from `generated_at` vs "now" — never trusted
+ * from the file itself (the dispatcher writes `generated_at`, not `stale`). */
+export async function buildControlSection(controlHostDir: string | undefined): Promise<ControlSection | null> {
+  if (!controlHostDir) return null;
+
+  let raw: unknown;
+  try {
+    raw = await readJsonFile(join(controlHostDir, "status.json"));
+  } catch {
+    // Missing dir, missing file, or unparseable JSON — all honest `null`.
+    return null;
+  }
+  if (!isRecord(raw)) return null;
+
+  const generatedAtMs = typeof raw.generated_at === "string" ? Date.parse(raw.generated_at) : Number.NaN;
+  const stale = !Number.isFinite(generatedAtMs) || Date.now() - generatedAtMs > CONTROL_STALE_THRESHOLD_MS;
+
+  const candidate = {
+    statusGeneratedAt: raw.generated_at,
+    stale,
+    armed: raw.armed,
+    live: projectControlLive(raw.live),
+    lastRun: projectControlLastRun(raw.last_run),
+    anomalies: raw.anomalies,
+    requests: Array.isArray(raw.requests) ? raw.requests.map(projectControlRequestDigest) : raw.requests,
+  };
+
+  const parsed = ControlSectionSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : null;
+}
+
 export function registerQueueRoutes(app: Hono): void {
-  app.get("/api/queue", async (c) => c.json(await buildQueueListResponse(config.queuesDir)));
+  app.get("/api/queue", async (c) => {
+    const response = await buildQueueListResponse(config.queuesDir);
+    const control = await buildControlSection(config.controlHostDir);
+    return c.json({ ...response, control });
+  });
 }

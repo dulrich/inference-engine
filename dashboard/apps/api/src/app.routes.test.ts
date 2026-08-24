@@ -109,6 +109,60 @@ describe("GET /api/queue", () => {
     expect(Array.isArray(body.queues)).toBe(true);
     expect(typeof body.generatedAt).toBe("string");
   });
+
+  // WP-4: this file never sets `CONTROL_HOST_DIR` (no other test file in this `bun test`
+  // process does either, since `routes/queue.test.ts`/`routes/control.test.ts` exercise
+  // `buildControlSection`/the record functions directly over explicit dirs, bypassing
+  // `config.ts` entirely) — so `config.controlHostDir` stays `undefined` for this whole
+  // run, and the wire response must carry an honest `control: null`, never omit the key.
+  test("control section is null (CONTROL_HOST_DIR unset) but the key is present on the wire", async () => {
+    const { body } = await getJson<{ control: unknown }>("/api/queue");
+    expect("control" in body).toBe(true);
+    expect(body.control).toBeNull();
+  });
+});
+
+describe("POST /api/control/*", () => {
+  // Route-wiring smoke test only — `routes/control.test.ts` covers
+  // `recordSimpleAction`/`recordStartAction`/`recordCancelAction` directly over explicit
+  // dirs. `CONTROL_REQUESTS_DIR` is unset for this whole `bun test` process (see the
+  // `GET /api/queue` control-null test above), so every one of these must 503 with a
+  // body naming the missing config — confirming `registerControlRoutes` is actually
+  // reached (registered before the SPA wildcard), not that mutation "works" here.
+  test("POST /api/control/arm is registered and 503s with a body naming CONTROL_REQUESTS_DIR", async () => {
+    const response = await app.request("/api/control/arm", { method: "POST" });
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain("CONTROL_REQUESTS_DIR");
+  });
+
+  test("POST /api/control/disarm is registered and 503s", async () => {
+    const response = await app.request("/api/control/disarm", { method: "POST" });
+    expect(response.status).toBe(503);
+  });
+
+  test("POST /api/control/stop is registered and 503s", async () => {
+    const response = await app.request("/api/control/stop", { method: "POST" });
+    expect(response.status).toBe(503);
+  });
+
+  test("POST /api/control/start is registered and 503s (unconfigured wins over body validation)", async () => {
+    const response = await app.request("/api/control/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ queueStem: "ladder-v1", minutes: 120 }),
+    });
+    expect(response.status).toBe(503);
+  });
+
+  test("POST /api/control/cancel is registered and 503s", async () => {
+    const response = await app.request("/api/control/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetRequestId: "req-20260823T000000Z-0123456789abcdef" }),
+    });
+    expect(response.status).toBe(503);
+  });
 });
 
 describe("GET /api/export/scoreboard-capture", () => {

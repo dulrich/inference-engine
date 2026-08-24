@@ -34,4 +34,13 @@ export const config = {
   // `…/llama/bakeoff/queues:/queues:ro` + `QUEUES_DIR=/queues`, WP-D), not a repo-relative
   // dev-convenience path — every test sets this explicitly to a fixture path.
   queuesDir: process.env.QUEUES_DIR ?? "/queues",
+
+  // Control plane (WP-4, `plans/bakeoff-queue-control-plane.md`) — both optional, and
+  // BOTH left `undefined` (never defaulted, unlike the paths above) when unset: absence
+  // is the pinned "control features off" signal (`control: null` on `GET /api/queue`,
+  // `POST /api/control/*` 503). `CONTROL_REQUESTS_DIR` — rw drop-box, mounted
+  // `…/control/requests:/control/requests` (WP-6). `CONTROL_HOST_DIR` — ro host-written
+  // dir containing `status.json`, mounted `…/control/host:/control/host:ro` (WP-6).
+  controlRequestsDir: process.env.CONTROL_REQUESTS_DIR,
+  controlHostDir: process.env.CONTROL_HOST_DIR,
 };

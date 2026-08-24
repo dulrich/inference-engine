@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join, normalize, sep } from "node:path";
 import { Hono } from "hono";
 import { config } from "./config.ts";
+import { registerControlRoutes } from "./routes/control.ts";
 import { registerCurveRoutes } from "./routes/curves.ts";
 import { registerExperimentRoutes } from "./routes/experiments.ts";
 import { registerExportRoutes } from "./routes/export.ts";
@@ -23,6 +24,7 @@ registerCurveRoutes(app);
 registerServingRoutes(app);
 registerExportRoutes(app);
 registerQueueRoutes(app);
+registerControlRoutes(app);
 
 /** Serves the built SPA: any path inside the web root that exists on disk is returned as
  * a file, anything else falls back to `index.html` so the client-side router owns it.

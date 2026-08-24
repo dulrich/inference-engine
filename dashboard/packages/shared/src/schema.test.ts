@@ -249,4 +249,70 @@ describe("QueueListResponseSchema", () => {
   test("empty queues array (missing/empty QUEUES_DIR) round-trips", () => {
     expect(() => QueueListResponseSchema.parse({ generatedAt: "2026-08-23T00:00:00Z", queues: [] })).not.toThrow();
   });
+
+  // cycle-1 M4 regression test: `control` MUST be declared on `QueueListResponseSchema`
+  // itself (a closed zod object) or it is silently stripped by every parse, including on
+  // the web client — this is exactly the failure mode the finding named.
+  test("keeps a populated `control` section through a round-trip (cycle-1 M4)", () => {
+    const response = {
+      generatedAt: "2026-08-23T00:00:00Z",
+      queues: [],
+      control: {
+        statusGeneratedAt: "2026-08-23T00:00:00Z",
+        stale: false,
+        armed: true,
+        live: { requestId: "req-20260823T000000Z-0123456789abcdef", queueStem: "ladder-v1", phase: "running", startedAt: "2026-08-23T00:00:00Z" },
+        lastRun: {
+          requestId: "req-20260822T230000Z-fedcba9876543210",
+          endedAt: "2026-08-22T23:59:00Z",
+          runExit: 0,
+          verifyExit: 0,
+          disposition: "clean" as const,
+        },
+        anomalies: ["late-launch-after-terminal"],
+        requests: [
+          {
+            requestId: "req-20260823T000000Z-0123456789abcdef",
+            action: "start" as const,
+            state: "running" as const,
+            reason: null,
+            requestedAt: "2026-08-23T00:00:00Z",
+          },
+        ],
+      },
+    };
+    const parsed = QueueListResponseSchema.parse(response);
+    expect(parsed.control).not.toBeNull();
+    expect(parsed.control).toEqual(response.control);
+  });
+
+  test("accepts a null `control` (control plane unset/unreachable)", () => {
+    expect(() =>
+      QueueListResponseSchema.parse({ generatedAt: "2026-08-23T00:00:00Z", queues: [], control: null }),
+    ).not.toThrow();
+  });
+
+  test("still round-trips with `control` entirely absent (pre-WP-4 responses stay parseable)", () => {
+    const parsed = QueueListResponseSchema.parse({ generatedAt: "2026-08-23T00:00:00Z", queues: [] });
+    expect(parsed.control).toBeUndefined();
+  });
+
+  test("rejects an unknown request state inside `control.requests`", () => {
+    const badResponse = {
+      generatedAt: "2026-08-23T00:00:00Z",
+      queues: [],
+      control: {
+        statusGeneratedAt: "2026-08-23T00:00:00Z",
+        stale: false,
+        armed: false,
+        live: null,
+        lastRun: null,
+        anomalies: [],
+        requests: [
+          { requestId: "req-20260823T000000Z-0123456789abcdef", action: "start", state: "not-a-real-state", reason: null, requestedAt: "2026-08-23T00:00:00Z" },
+        ],
+      },
+    };
+    expect(() => QueueListResponseSchema.parse(badResponse)).toThrow();
+  });
 });

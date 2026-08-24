@@ -1,4 +1,5 @@
 export * from "./capture.ts";
+export * from "./control.ts";
 export * from "./curve.ts";
 export * from "./experiment.ts";
 export * from "./health.ts";

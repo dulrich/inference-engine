@@ -141,6 +141,12 @@ clock; the queue file's own `deadline` is **UTC** — see `llama/bakeoff/README.
 0 23 * * * flock -n ~/.local/state/inference-bakeoff/cron.lock llama/bakeoff/cron-nightly.sh >> ~/.local/state/inference-bakeoff/cron.log 2>&1
 ```
 
+**Currently DISARMED** (2026-08-23, user decision): the line above sits commented out in the
+crontab because 23:00 is often still active work time and not every night should run. Re-arm by
+uncommenting it — or, once the dashboard's queue start/stop + manual "dedicated inference mode
+for `<t>`" control lands (the planned successor mechanism), through that instead. The ladder
+queue itself is untouched and fully pending; the wrapper resumes it whenever it next fires.
+
 - `llama/bakeoff/cron-nightly.sh` owns the whole night: creates/starts the `bakeoff-scratch`
   sibling container if needed, runs `batch run` on `llama/bakeoff/queues/ladder-v1.json`
   (batch.py itself stops the router for the window and restarts it on every exit path), copies

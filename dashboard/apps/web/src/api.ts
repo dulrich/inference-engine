@@ -8,6 +8,9 @@ import {
   QueueListResponseSchema,
   ServingResponseSchema,
   TrialRowSchema,
+  type ControlAcceptedResponse,
+  type ControlCancelRequest,
+  type ControlStartRequest,
   type CurveSeries,
   type ExperimentSummary,
   type HealthResponse,
@@ -16,6 +19,7 @@ import {
   type ServingResponse,
 } from "@bench-dashboard/shared";
 import { z } from "zod";
+import { parseControlActionResponse } from "./lib/queue/control.ts";
 
 // The fetch seam for every view (WP-2 builds on top of the routes WP-1 already ships:
 // `/api/experiments`, `/api/experiments/:id`, `/api/ladders/*`, `/api/curves/:id`,
@@ -77,4 +81,44 @@ export function getServing(): Promise<ServingResponse> {
 // queue.ts`.
 export function getQueue(): Promise<QueueListResponse> {
   return getJson("/api/queue", QueueListResponseSchema);
+}
+
+// `POST /api/control/*` (WP-4/WP-5, `plans/bakeoff-queue-control-plane.md`) -- each route
+// only ever RECORDS a request into the host dispatcher's drop-box; `accepted: true` means
+// *recorded*, never *executed* (see `packages/shared/src/control.ts`'s own header comment).
+// Response parsing/error-extraction is `parseControlActionResponse`
+// (`lib/queue/control.ts`) so it's unit-testable without mocking `fetch`; this wrapper is
+// the thin fetch-plumbing seam only, same division as `getJson` above.
+async function postControlAction(path: string, body?: unknown): Promise<ControlAcceptedResponse> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const json = await response.json().catch(() => null);
+  const outcome = parseControlActionResponse(response.status, json);
+  if (!outcome.ok || outcome.accepted === null) {
+    throw new Error(outcome.error ?? `${path}: HTTP ${response.status}`);
+  }
+  return outcome.accepted;
+}
+
+export function postControlArm(): Promise<ControlAcceptedResponse> {
+  return postControlAction("/api/control/arm");
+}
+
+export function postControlDisarm(): Promise<ControlAcceptedResponse> {
+  return postControlAction("/api/control/disarm");
+}
+
+export function postControlStart(body: ControlStartRequest): Promise<ControlAcceptedResponse> {
+  return postControlAction("/api/control/start", body);
+}
+
+export function postControlStop(): Promise<ControlAcceptedResponse> {
+  return postControlAction("/api/control/stop");
+}
+
+export function postControlCancel(body: ControlCancelRequest): Promise<ControlAcceptedResponse> {
+  return postControlAction("/api/control/cancel", body);
 }

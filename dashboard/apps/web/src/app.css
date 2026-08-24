@@ -12,7 +12,11 @@
  * WP-C (plan `bench-dashboard-run-context-surfacing.md` WP-C) adds two more: `.run-output-*`
  * (the Runs detail output-length line, alongside the existing `.run-*` block) and `.queue-*`
  * (the new Queue tab's per-queue status cards) -- same `.run-table`/`.pill` reuse, same
- * `var(--...)` token discipline. */
+ * `var(--...)` token discipline.
+ *
+ * WP-5 (plan `bakeoff-queue-control-plane.md` WP-5) adds `.control-*` (the Queue tab's
+ * control panel) -- layout/spacing only, same `.field`/`.run-meta-grid`/`.run-table`/`.pill`/
+ * `.btn-*` reuse as every other view (CC-15: never a bare button/select/input rule here). */
 
 /* ---- Shared view chrome ------------------------------------------------- */
 
@@ -246,4 +250,76 @@
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 10px;
+}
+
+/* ---- Queue: control panel (WP-5) -------------------------------------------- */
+
+.control-panel {
+  max-width: 70ch;
+  margin: 16px 0 24px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+  background: var(--panel);
+}
+
+.control-panel h2 {
+  margin: 0 0 6px;
+}
+
+.control-panel h3 {
+  margin: 18px 0 6px;
+  font-size: 0.85rem;
+}
+
+.control-stale-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.control-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.control-start-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.control-start-form .field {
+  min-width: 180px;
+}
+
+.control-feedback {
+  margin: 10px 0 0;
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.control-feedback-message {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.control-anomalies ul {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.control-anomaly {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--text);
+  font-size: 0.8rem;
 }

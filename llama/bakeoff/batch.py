@@ -291,12 +291,14 @@ def re_arm_state(state: Dict[str, Any]) -> None:
     """`--re-arm`: every cell not already `completed` goes back to `pending` (this includes
     `failed`, `skipped-propagated`, and `aborted-hang` cells -- a full retry of everything that
     didn't succeed), and the queue state resets to `running`. A `completed` cell's record already
-    exists and is never re-run by a re-arm."""
+    exists and is never re-run by a re-arm. A `paused_reason` left over from a prior deadline/stop
+    pause is cleared (popped) -- it no longer describes anything once the queue is re-armed."""
     for cs in state["cells"].values():
         if cs["state"] != COMPLETED:
             cs["state"] = PENDING
             cs["reason"] = None
     state["queue_state"] = QUEUE_RUNNING
+    state.pop("paused_reason", None)
 
 
 def re_arm_cells(
@@ -949,6 +951,8 @@ def run_queue(
     scratch_server_fn: Optional[Callable[..., Any]] = None,
     port: int = 8899,
     container: str = sweep.DEFAULT_CONTAINER_NAME,
+    stop_marker_path: Optional[Path] = None,
+    deadline_minutes: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Runs (or resumes, or no-ops on, or re-arms) one queue. Returns a plain result dict; never
     raises for an ordinary cell failure (that's recorded in the state file) -- it DOES raise
@@ -958,6 +962,14 @@ def run_queue(
     Every collaborator is injectable with a safe (offline, no-op, or real-but-never-exercised-by-
     tests) default -- see each parameter's own default and the module docstring's "no live
     operation happens unless explicitly supplied" invariant.
+
+    `stop_marker_path` (control-plane WP-2): a wrapper/dispatcher-owned marker file checked at
+    each cell boundary, beside the deadline check -- present -> consumed (unlinked) and the
+    queue pauses resumable with `paused_reason:"stop-requested"`. Marker-absent is zero behavior
+    change; `stop_marker_path=None` makes zero stat calls (no start-of-run stale-clear here --
+    that's the wrapper's job, plan cycle-1 B1). `deadline_minutes` (also WP-2): when given,
+    overrides the queue file's HH:MM `deadline` with `start_dt + timedelta(minutes=N)` for this
+    invocation only -- the queue file itself stays immutable (req 7).
     """
     queue_path = Path(queue_path)
     queue = load_queue(queue_path)
@@ -975,6 +987,7 @@ def run_queue(
         return _dry_run_report(queue, resolved_cells, effective_vram_profile, vram_total_bytes_fn, vram_used_bytes_fn)
 
     state_path = Path(state_path) if state_path else default_state_path(queue_path)
+    stop_marker_path = Path(stop_marker_path) if stop_marker_path is not None else None
 
     existing = load_state(state_path)
     if existing is not None:
@@ -1021,15 +1034,26 @@ def run_queue(
     old_handlers = _install_signal_traps()
     try:
         start_dt = now_fn()
-        deadline_dt = compute_deadline_dt(queue["deadline"], start_dt)
+        if deadline_minutes is not None:
+            deadline_dt = start_dt + timedelta(minutes=deadline_minutes)
+        else:
+            deadline_dt = compute_deadline_dt(queue["deadline"], start_dt)
 
         for cell in resolved_cells:
             cs = state["cells"][cell["cell_id"]]
             if cs["state"] != PENDING:
                 continue
 
+            if stop_marker_path is not None and stop_marker_path.exists():
+                stop_marker_path.unlink()
+                state["queue_state"] = QUEUE_PAUSED_RESUMABLE
+                state["paused_reason"] = "stop-requested"
+                save_state(state_path, state)
+                break
+
             if now_fn() >= deadline_dt:
                 state["queue_state"] = QUEUE_PAUSED_RESUMABLE
+                state["paused_reason"] = "deadline"
                 save_state(state_path, state)
                 break
 
@@ -1076,7 +1100,12 @@ def run_queue(
                     propagate_skips(resolved_cells, state, cell["cell_id"])
             save_state(state_path, state)
         else:
-            # Loop completed without `break` -- every cell reached a terminal per-cell state.
+            # Loop completed without `break` -- every cell reached a terminal per-cell state. A
+            # stop marker that arrived during the final cell is consumed here (unlinked) but
+            # otherwise inert -- the run was already finishing, so the queue still completes
+            # (req 6: "pause-after-current-cell or no-op if the run completes first").
+            if stop_marker_path is not None and stop_marker_path.exists():
+                stop_marker_path.unlink()
             state["queue_state"] = QUEUE_COMPLETED
             save_state(state_path, state)
     finally:
@@ -1186,6 +1215,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             # the whole window; the default (scratch == router container) survives only for
             # dry-run/test paths that never stop anything.
             container=args.scratch_container or args.container,
+            stop_marker_path=Path(args.stop_marker) if args.stop_marker else None,
+            deadline_minutes=args.deadline_minutes,
         )
     except _GracefulExit as exc:
         print(f"batch run interrupted: {exc}", file=sys.stderr)
@@ -1212,6 +1243,15 @@ def cmd_verify(args: argparse.Namespace) -> int:
         print("verify_run module has no main() entrypoint -- cannot delegate", file=sys.stderr)
         return 2
     return verify_run.main(["--run", args.run])
+
+
+def _positive_int(value: str) -> int:
+    """`argparse` `type=` for `--deadline-minutes`: rejects N <= 0 with the standard argparse
+    error path (usage message + exit 2), never a bare `ValueError` traceback."""
+    n = int(value)
+    if n <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {value!r}")
+    return n
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -1249,6 +1289,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_run.add_argument(
         "--no-container-control", action="store_true",
         help="skip stop/start of the llama container around the run (manual/testing use only)",
+    )
+    p_run.add_argument(
+        "--stop-marker", default=None, metavar="PATH",
+        help="control-plane WP-2: path to a marker file checked at each cell boundary -- if "
+        "present, it's consumed (unlinked) and the queue pauses resumable with "
+        "paused_reason='stop-requested'; absent by default (zero behavior change)",
+    )
+    p_run.add_argument(
+        "--deadline-minutes", type=_positive_int, default=None, metavar="N",
+        help="control-plane WP-2: override the queue file's HH:MM deadline with "
+        "start + N minutes for this invocation only (the manual-window mechanism; the queue "
+        "file's own deadline stays untouched); N must be a positive integer",
     )
     p_run.set_defaults(func=cmd_run)
 

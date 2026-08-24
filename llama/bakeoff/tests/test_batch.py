@@ -339,6 +339,15 @@ class TestStateMachinePrimitives(unittest.TestCase):
         self.assertEqual(state["cells"][ids[3]]["state"], batch.PENDING)
         self.assertEqual(state["queue_state"], batch.QUEUE_RUNNING)
 
+    def test_re_arm_state_clears_paused_reason(self):
+        # control-plane WP-2: a `paused_reason` left over from a prior deadline/stop pause no
+        # longer describes anything once the queue is re-armed -- must be popped, not left stale.
+        resolved = batch.resolve_queue_cells(_minimal_queue())
+        state = batch.init_state(resolved)
+        state["paused_reason"] = "stop-requested"
+        batch.re_arm_state(state)
+        self.assertNotIn("paused_reason", state)
+
     def test_re_arm_state_preserves_alias(self):
         resolved = batch.resolve_queue_cells(_minimal_queue())
         state = batch.init_state(resolved)
@@ -1093,6 +1102,170 @@ class TestBudgetArithmeticInRunQueue(unittest.TestCase):
                     vram_used_bytes_fn=lambda: int(3.3 * sweep.GIB),
                     container_controller=FakeContainerController(),
                 )
+
+
+# -------------------------------------------------------------------------------------------
+# Control-plane WP-2: --stop-marker, --deadline-minutes, paused_reason
+# -------------------------------------------------------------------------------------------
+
+
+class TestControlWp2StopMarkerAndDeadline(unittest.TestCase):
+    """plans/bakeoff-queue-control-plane.md WP-2 -- no live Docker/GPU here either; the marker
+    is a plain tempdir file the fake `cell_runner` touches as a side effect, exactly mimicking
+    what the (untested-here) wrapper would do from outside the process."""
+
+    def _run(self, queue, tmp, **kwargs):
+        queue_path = _write_queue(tmp, queue)
+        defaults = dict(
+            scratch_server_fn=fake_scratch_server_factory(),
+            now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+            vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
+            vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
+        )
+        defaults.update(kwargs)
+        return queue_path, batch.run_queue(queue_path, **defaults)
+
+    def test_marker_created_after_first_cell_pauses_at_next_boundary(self):
+        # Marker appears (from the runner's side effect) once cell 1 of 4 finishes -- the check
+        # is at the TOP of the loop, so it fires at the next boundary, before cell 2 starts.
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = _minimal_queue()
+            resolved = batch.resolve_queue_cells(queue)
+            first_id = resolved[0]["cell_id"]
+            marker_path = Path(tmp) / "stop.marker"
+
+            def runner(handle, cell):
+                if cell["cell_id"] == first_id:
+                    marker_path.write_text("stop")
+                return batch.CellOutcome("completed")
+
+            _, result = self._run(queue, tmp, cell_runner=runner, stop_marker_path=marker_path)
+            self.assertEqual(result["queue_state"], batch.QUEUE_PAUSED_RESUMABLE)
+            self.assertEqual(result["state"]["paused_reason"], "stop-requested")
+            self.assertFalse(marker_path.exists())  # consumed (unlinked)
+            cells = result["state"]["cells"]
+            self.assertEqual(cells[first_id]["state"], batch.COMPLETED)
+            for cell in resolved[1:]:
+                self.assertEqual(cells[cell["cell_id"]]["state"], batch.PENDING)
+
+    def test_marker_created_during_last_cell_is_consumed_but_run_still_completes(self):
+        # Marker appears during the FINAL cell -- by the time the loop would check it again,
+        # there's no next cell; the marker is consumed in the completion `else` branch and the
+        # queue still reaches `completed` (req 6: inert when the run finishes first).
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = _minimal_queue()
+            resolved = batch.resolve_queue_cells(queue)
+            last_id = resolved[-1]["cell_id"]
+            marker_path = Path(tmp) / "stop.marker"
+
+            def runner(handle, cell):
+                if cell["cell_id"] == last_id:
+                    marker_path.write_text("stop")
+                return batch.CellOutcome("completed")
+
+            _, result = self._run(queue, tmp, cell_runner=runner, stop_marker_path=marker_path)
+            self.assertEqual(result["queue_state"], batch.QUEUE_COMPLETED)
+            self.assertFalse(marker_path.exists())  # consumed (unlinked)
+            self.assertNotIn("paused_reason", result["state"])
+            self.assertTrue(all(
+                cs["state"] == batch.COMPLETED for cs in result["state"]["cells"].values()
+            ))
+
+    def test_marker_absent_at_configured_path_is_a_noop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            marker_path = Path(tmp) / "never-created.marker"
+            _, result = self._run(_minimal_queue(), tmp, stop_marker_path=marker_path)
+            self.assertEqual(result["queue_state"], batch.QUEUE_COMPLETED)
+            self.assertNotIn("paused_reason", result["state"])
+
+    def test_stop_marker_path_none_behaves_identically_to_omitting_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, result = self._run(_minimal_queue(), tmp, stop_marker_path=None)
+            self.assertEqual(result["queue_state"], batch.QUEUE_COMPLETED)
+            self.assertTrue(all(
+                cs["state"] == batch.COMPLETED for cs in result["state"]["cells"].values()
+            ))
+
+    def test_deadline_minutes_overrides_queue_deadline_and_wins(self):
+        # The queue's own HH:MM deadline ("23:59") is nowhere near tripping; only the
+        # --deadline-minutes override (30 minutes past a 01:00 start) can be responsible for the
+        # pause the sequenced clock (jumping to 02:00 on the per-cell check) then trips.
+        with tempfile.TemporaryDirectory() as tmp:
+            spawned = []
+            _, result = self._run(
+                _minimal_queue(deadline="23:59"), tmp,
+                scratch_server_fn=fake_scratch_server_factory(spawned=spawned),
+                now_fn=sequenced_now_fn(
+                    datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc),
+                    datetime(2026, 8, 23, 2, 0, tzinfo=timezone.utc),
+                ),
+                deadline_minutes=30,
+            )
+            self.assertEqual(result["queue_state"], batch.QUEUE_PAUSED_RESUMABLE)
+            self.assertEqual(result["state"]["paused_reason"], "deadline")
+            self.assertEqual(spawned, [])
+
+    def test_paused_reason_deadline_recorded_and_cleared_by_re_arm(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, result = self._run(
+                _minimal_queue(deadline="00:30"), tmp,
+                now_fn=sequenced_now_fn(
+                    datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc),
+                    datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc),
+                ),
+            )
+            self.assertEqual(result["queue_state"], batch.QUEUE_PAUSED_RESUMABLE)
+            self.assertEqual(result["state"]["paused_reason"], "deadline")
+            state = result["state"]
+            batch.re_arm_state(state)
+            self.assertNotIn("paused_reason", state)
+            self.assertEqual(state["queue_state"], batch.QUEUE_RUNNING)
+
+
+class TestControlWp2CliArgs(unittest.TestCase):
+    def test_stop_marker_and_deadline_minutes_default_to_none(self):
+        parser = batch.build_arg_parser()
+        args = parser.parse_args(["run", "--queue", "q.json"])
+        self.assertIsNone(args.stop_marker)
+        self.assertIsNone(args.deadline_minutes)
+
+    def test_deadline_minutes_parses_a_positive_int(self):
+        parser = batch.build_arg_parser()
+        args = parser.parse_args(["run", "--queue", "q.json", "--deadline-minutes", "45"])
+        self.assertEqual(args.deadline_minutes, 45)
+
+    def test_deadline_minutes_rejects_non_positive(self):
+        parser = batch.build_arg_parser()
+        for bad in ("0", "-5"):
+            with self.assertRaises(SystemExit):
+                parser.parse_args(["run", "--queue", "q.json", "--deadline-minutes", bad])
+
+    def test_cmd_run_forwards_stop_marker_and_deadline_minutes_to_run_queue(self):
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = _write_queue(tmp, _minimal_queue())
+            marker_path = Path(tmp) / "stop.marker"
+            captured = {}
+
+            def _fake_run_queue(*args, **kwargs):
+                captured.update(kwargs)
+                return {"noop": True, "queue_state": batch.QUEUE_COMPLETED}
+
+            buf = io.StringIO()
+            with mock.patch("batch.run_queue", side_effect=_fake_run_queue):
+                with redirect_stdout(buf):
+                    code = batch.main([
+                        "run", "--queue", str(queue_path),
+                        "--stop-marker", str(marker_path),
+                        "--deadline-minutes", "60",
+                        "--no-container-control",
+                    ])
+            self.assertEqual(code, 0)
+            self.assertEqual(captured["stop_marker_path"], marker_path)
+            self.assertEqual(captured["deadline_minutes"], 60)
 
 
 # -------------------------------------------------------------------------------------------

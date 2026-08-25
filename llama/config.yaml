@@ -49,6 +49,18 @@
 #                                         is what makes serving these vectors from llama.cpp
 #                                         instead of sentence-transformers safe — enrich has no
 #                                         embedding-space guard of its own.
+#   (model keys)      Open WebUI          per-model settings (capability toggles, description)
+#                                         in Open WebUI's own config DB, keyed by `/v1/models`
+#                                         `id` — which llama-swap sets to the model KEY, not the
+#                                         alias (aliases ride in `meta.llamaswap.aliases`).
+#                                         Synced by the capability-sync script
+#                                         (plans/capability-surfacing-and-local-agent-endpoints.md
+#                                         WP-3). A key rename orphans that model's Open WebUI
+#                                         settings until the next sync — keys are therefore
+#                                         rename-sensitive for this consumer, though re-syncable
+#                                         (unlike the stored-alias consumers above, whose state
+#                                         is NOT regenerable). Capability field contract:
+#                                         docs/model-capabilities.md.
 #
 # The onnx tier next door keeps its own registry with the same rules and the same header:
 # `onnx/models.yaml` (aliases `gliner2-base`, `gliner2-pii`).
@@ -169,6 +181,19 @@ models:
     name: "BGE-M3 embedding (f16)"
     aliases:
       - bge-m3
+    # Capability metadata contract: docs/model-capabilities.md (field names/semantics normative
+    # there; llama-swap surfaces this block verbatim under `meta.llamaswap` in /v1/models).
+    metadata:
+      context_length: 8192
+      input_modalities: ["text"]
+      output_modalities: ["embedding"]
+      tool_calling: false
+      reasoning: "none"
+      serving:
+        quant: "F16"
+        kv_cache_type: "f16"
+        flash_attention: false
+        mtp: false
     cmd: |
       ${llama_server_common}
       -m /models/CompendiumLabs/bge-m3-gguf/bge-m3-f16.gguf
@@ -180,6 +205,17 @@ models:
     name: "BGE reranker v2 m3 (Q8_0)"
     aliases:
       - bge-reranker-v2
+    metadata:
+      context_length: 8192
+      input_modalities: ["text"]
+      output_modalities: ["score"]
+      tool_calling: false
+      reasoning: "none"
+      serving:
+        quant: "Q8_0"
+        kv_cache_type: "f16"
+        flash_attention: false
+        mtp: false
     cmd: |
       ${llama_server_common}
       -m /models/gpustack/bge-reranker-v2-m3-GGUF/bge-reranker-v2-m3-Q8_0.gguf
@@ -200,6 +236,17 @@ models:
     name: "BGE small en v1.5 embedding (f16, 384d)"
     aliases:
       - bge-small
+    metadata:
+      context_length: 8192
+      input_modalities: ["text"]
+      output_modalities: ["embedding"]
+      tool_calling: false
+      reasoning: "none"
+      serving:
+        quant: "F16"
+        kv_cache_type: "f16"
+        flash_attention: false
+        mtp: false
     cmd: |
       ${llama_server_common}
       -m /models/CompendiumLabs/bge-small-en-v1.5-gguf/bge-small-en-v1.5-f16.gguf
@@ -225,6 +272,17 @@ models:
     name: "NVIDIA Nemotron 3 Nano 4B (UD-Q4_K_XL)"
     aliases:
       - nemotron-4b
+    metadata:
+      context_length: 131072
+      input_modalities: ["text"]
+      output_modalities: ["text"]
+      tool_calling: true
+      reasoning: "request-controllable"
+      serving:
+        quant: "UD-Q4_K_XL"
+        kv_cache_type: "f16"
+        flash_attention: false
+        mtp: false
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-UD-Q4_K_XL.gguf
@@ -257,6 +315,17 @@ models:
     name: "Ling-3.0-tiny (UD-Q4_K_XL)"
     aliases:
       - ling-3-tiny-ud-q4-xl
+    metadata:
+      context_length: 131072
+      input_modalities: ["text"]
+      output_modalities: ["text"]
+      tool_calling: true
+      reasoning: "request-controllable"
+      serving:
+        quant: "UD-Q4_K_XL"
+        kv_cache_type: "f16"
+        flash_attention: false
+        mtp: false
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q4_K_XL.gguf
@@ -269,6 +338,17 @@ models:
     name: "Ling-3.0-tiny (UD-Q6_K_XL)"
     aliases:
       - ling-3-tiny-ud-q6-xl
+    metadata:
+      context_length: 131072
+      input_modalities: ["text"]
+      output_modalities: ["text"]
+      tool_calling: true
+      reasoning: "request-controllable"
+      serving:
+        quant: "UD-Q6_K_XL"
+        kv_cache_type: "f16"
+        flash_attention: false
+        mtp: false
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q6_K_XL.gguf
@@ -281,6 +361,17 @@ models:
     name: "Ling-3.0-tiny (Q8_0)"
     aliases:
       - ling-3-tiny-q8
+    metadata:
+      context_length: 131072
+      input_modalities: ["text"]
+      output_modalities: ["text"]
+      tool_calling: true
+      reasoning: "request-controllable"
+      serving:
+        quant: "Q8_0"
+        kv_cache_type: "f16"
+        flash_attention: false
+        mtp: false
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q8_0.gguf
@@ -307,6 +398,17 @@ models:
     name: "Gemma 4 12B it QAT (UD-Q4_K_XL)"
     aliases:
       - gemma-4-12b-qat
+    metadata:
+      context_length: 131072
+      input_modalities: ["text", "image"]
+      output_modalities: ["text"]
+      tool_calling: true
+      reasoning: "request-controllable"
+      serving:
+        quant: "UD-Q4_K_XL"
+        kv_cache_type: "f16"
+        flash_attention: false
+        mtp: true
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf
@@ -337,6 +439,19 @@ models:
     name: "Qwen3.6 35B A3B (UD-Q4_K_XL)"
     aliases:
       - qwen36-a3b
+    metadata:
+      context_length: 131072
+      input_modalities: ["text"]
+      output_modalities: ["text"]
+      tool_calling: true
+      reasoning: "request-controllable"
+      serving:
+        quant: "UD-Q4_K_XL"
+        kv_cache_type: "f16"
+        flash_attention: false
+        mtp: true
+        moe_cpu_offload_layers: 32
+        ubatch: 2048
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
@@ -374,6 +489,17 @@ models:
     name: "Qwen3.8 27B (UD-IQ3_XXS)"
     aliases:
       - qwen38-27b-iq3xxs
+    metadata:
+      context_length: 131072
+      input_modalities: ["text"]
+      output_modalities: ["text"]
+      tool_calling: true
+      reasoning: "request-controllable"
+      serving:
+        quant: "UD-IQ3_XXS"
+        kv_cache_type: "q4_0"
+        flash_attention: true
+        mtp: false
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_XXS.gguf
@@ -429,6 +555,17 @@ models:
     name: "Qwen3.8 27B (UD-IQ3_S)"
     aliases:
       - qwen38-27b-iq3s
+    metadata:
+      context_length: 131072
+      input_modalities: ["text"]
+      output_modalities: ["text"]
+      tool_calling: true
+      reasoning: "request-controllable"
+      serving:
+        quant: "UD-IQ3_S"
+        kv_cache_type: "q4_0"
+        flash_attention: true
+        mtp: false
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf
@@ -444,6 +581,17 @@ models:
     name: "Qwen3.8 27B (UD-Q3_K_XL)"
     aliases:
       - qwen38-27b-q3kxl
+    metadata:
+      context_length: 65536
+      input_modalities: ["text"]
+      output_modalities: ["text"]
+      tool_calling: true
+      reasoning: "request-controllable"
+      serving:
+        quant: "UD-Q3_K_XL"
+        kv_cache_type: "q4_0"
+        flash_attention: true
+        mtp: false
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q3_K_XL.gguf

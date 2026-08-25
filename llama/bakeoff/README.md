@@ -1177,7 +1177,7 @@ produced: `runs/bakeoff/wp1-smoke-cell-ling-q4km/` (config lineage keys, `sweep_
 `wilson_summary` presence, per-sample v2 fields, all four files parse clean) and a
 stub-driven `longcontext.run_cell` sample (all fields below present, seed fields distinct,
 JSON-serializable). Pre-existing v1 records on disk remain as-is — the DB plan ingests v2
-only (pinned there). **Changing or removing a frozen field is a schema-v3 event** (bump
+only (pinned there), with one narrow, allowlisted exception (`plans/bakeoff-timing-records-and-estimates.md` WP-4): a pre-v2 record dir whose `samples.jsonl` contains `timing_round` rows gets those rows — and ONLY those — ingested under explicit `schema_origin: "v1-timing"` provenance (selection is content-based, never a name glob); every other kind of legacy content stays un-ingested. **Changing or removing a frozen field is a schema-v3 event** (bump
 `schema_version`, document the migration here), never a silent edit; purely additive fields
 may append to v2 with a dated note in this section.
 

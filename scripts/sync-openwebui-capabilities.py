@@ -8,22 +8,30 @@ WebUI stores its per-model rows under (see the consumer-registry row in `llama/c
 header).
 
 Target: Open WebUI's admin "Models" API (`/api/v1/models/*`, live-verified 2026-08-24 against
-v0.11.0). This script owns exactly three sub-fields of a model's stored `meta`, and only those —
-everything else already present on a row (name, params, access_grants, other capability toggles
-a human set, tool ids, default features, ...) is read back and round-tripped unchanged, because
-Open WebUI's update route replaces `name`/`meta`/`params` wholesale rather than patching:
+v0.11.0). This script owns exactly three sub-fields of a model's stored `meta`, plus the
+allowlisted numeric sampling keys inside `params` (added by
+`plans/overnight-test-matrix-redesign.md` WP-5) — and only those. Everything else already
+present on a row (name, the rest of `params`, access_grants, other capability toggles a human
+set, tool ids, default features, ...) is read back and round-tripped unchanged, because Open
+WebUI's update route replaces `name`/`meta`/`params` wholesale rather than patching:
 
   * `meta.capabilities.vision`      <- bool, `"image" in input_modalities`
   * `meta.description`              <- human summary (name + tool calling + reasoning level +
                                         quant/KV/flash-attention/MTP + context length)
   * `meta.llamaswap.context_length` <- int, `meta.llamaswap.context_length` on the router
+  * `params.<SAMPLING_PARAM_KEYS>`  <- per-key merge from `meta.llamaswap.sampling` on the
+                                        router (only the numeric allowlist below; `sampling.source`
+                                        is router metadata only and is never written to `params`;
+                                        every other `params` key on the row is human-owned and
+                                        round-trips untouched)
 
 Rows Open WebUI has never seen (no admin has opened/customized that model yet) don't exist in
 its DB at all — this script creates them via `POST .../create` with a minimal body (id, the
-router's display name, and the three managed fields; `params: {}`). Existing rows are merge-
-updated via `POST .../model/update`. A router id with no live counterpart (a retired/renamed
-model key — see the alias-contract discussion in `llama/config.yaml`'s header) is reported and
-left untouched; this script never deletes.
+router's display name, the three managed `meta` fields, and `params` seeded with whatever
+allowlisted sampling keys the router model carries — `{}` for a model with no sampling block).
+Existing rows are merge-updated via `POST .../model/update`. A router id with no live
+counterpart (a retired/renamed model key — see the alias-contract discussion in
+`llama/config.yaml`'s header) is reported and left untouched; this script never deletes.
 
 Credentials: `OPENWEBUI_URL` and `OPENWEBUI_API_KEY` come from the environment (or the
 `--openwebui-url`/`--openwebui-key` flags) — there is no default and nothing is ever written to
@@ -47,6 +55,20 @@ from typing import Any, Dict, List, Optional, Tuple
 
 DEFAULT_ROUTER_URL = "http://127.0.0.1:4811"
 REQUEST_TIMEOUT_S = 15
+
+# The only `meta.llamaswap.sampling` keys this script ever writes into an Open WebUI model
+# row's `params`. Explicit allowlist (plans/overnight-test-matrix-redesign.md WP-5, audit E-4
+# pin): `sampling.source` is a router-metadata provenance citation, never a serving parameter,
+# and must never appear here -- a literal "map every sampling key" implementation would write
+# an invalid `params.source`, which is exactly the defect this allowlist exists to prevent.
+SAMPLING_PARAM_KEYS = (
+    "temperature",
+    "top_p",
+    "top_k",
+    "min_p",
+    "presence_penalty",
+    "repetition_penalty",
+)
 
 
 class SyncError(RuntimeError):
@@ -161,10 +183,17 @@ def build_description(entry: Dict[str, Any]) -> str:
 
 def compute_desired(entry: Dict[str, Any]) -> Dict[str, Any]:
     ls = entry.get("meta", {}).get("llamaswap", {})
+    sampling = ls.get("sampling") or {}
     return {
         "vision": "image" in ls.get("input_modalities", []),
         "description": build_description(entry),
         "context_length": ls.get("context_length"),
+        # Allowlist filter: only the numeric sampling keys, never `source` (audit E-4 pin). A
+        # model with no `sampling` block (embed/rerank) yields {} here, so it is a no-op on the
+        # params side below.
+        "sampling_params": {
+            key: sampling[key] for key in SAMPLING_PARAM_KEYS if key in sampling
+        },
     }
 
 
@@ -177,10 +206,13 @@ def plan_change(
     """Return (action, field_diffs, request_body) for one model.
 
     action is "create", "update", or "noop". field_diffs is a list of (field, old, new) for
-    only the three managed sub-fields that differ. request_body is the full JSON body to send
-    to Open WebUI's create/update route if applying (unmodified fields round-tripped verbatim
-    from `existing`).
+    only the managed sub-fields that differ: the three `meta` fields, plus one entry per
+    allowlisted sampling key (`params.<key>`) whose value changed. request_body is the full
+    JSON body to send to Open WebUI's create/update route if applying (unmodified fields
+    round-tripped verbatim from `existing`, including every non-allowlisted `params` key).
     """
+    sampling_params: Dict[str, Any] = desired["sampling_params"]
+
     if existing is None:
         body = {
             "id": router_id,
@@ -190,19 +222,23 @@ def plan_change(
                 "capabilities": {"vision": desired["vision"]},
                 "llamaswap": {"context_length": desired["context_length"]},
             },
-            "params": {},
+            "params": dict(sampling_params),
         }
         diffs = [
             ("meta.capabilities.vision", None, desired["vision"]),
             ("meta.description", None, desired["description"]),
             ("meta.llamaswap.context_length", None, desired["context_length"]),
         ]
+        for key, value in sampling_params.items():
+            diffs.append((f"params.{key}", None, value))
         return "create", diffs, body
 
-    # Round-trip every existing field; only touch the three we own.
+    # Round-trip every existing field; only touch the three `meta` fields and the allowlisted
+    # sampling keys in `params` that we own.
     meta = dict(existing.get("meta") or {})
     capabilities = dict(meta.get("capabilities") or {})
     llamaswap = dict(meta.get("llamaswap") or {})
+    params = dict(existing.get("params") or {})
 
     diffs: List[Tuple[str, Any, Any]] = []
     old_vision = capabilities.get("vision")
@@ -216,6 +252,12 @@ def plan_change(
         diffs.append(
             ("meta.llamaswap.context_length", old_context_length, desired["context_length"])
         )
+    # Per-key merge: only keys present in the router's sampling block are compared/written;
+    # every other existing `params` key (human-owned) is never inspected or touched.
+    for key, value in sampling_params.items():
+        old_value = params.get(key)
+        if old_value != value:
+            diffs.append((f"params.{key}", old_value, value))
 
     if not diffs:
         return "noop", diffs, {}
@@ -225,12 +267,13 @@ def plan_change(
     meta["description"] = desired["description"]
     llamaswap["context_length"] = desired["context_length"]
     meta["llamaswap"] = llamaswap
+    params.update(sampling_params)
 
     body = {
         "id": existing["id"],
         "name": existing.get("name"),
         "meta": meta,
-        "params": existing.get("params") or {},
+        "params": params,
     }
     if existing.get("base_model_id") is not None:
         body["base_model_id"] = existing["base_model_id"]

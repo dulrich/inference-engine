@@ -2265,5 +2265,109 @@ class TestBtreTimingBatteryItem(unittest.TestCase):
         self.assertEqual(round_fn.calls, [])
 
 
+class TestWp2SpecDecode(unittest.TestCase):
+    """WP-2 (plans/overnight-test-matrix-redesign.md): the base-vs-MTP axis, the additive
+    optional abbreviated-cell key `spec_decode: "base" | "mtp"`."""
+
+    def _mtp_queue(self, **cell_overrides):
+        queue = _minimal_queue()
+        queue["models"]["model-mtp"] = {
+            "model_container_path": "/models/mtp/model-mtp.gguf",
+            "server_flags": {
+                "-ngl": 99,
+                "-md": "/models/mtp/model-mtp-draft.gguf",
+                "--spec-type": "draft-mtp",
+            },
+        }
+        cell = {
+            "model": "model-mtp", "alias": "model-mtp-c32k-f16", "c": 32768,
+            "ctk": "f16", "ctv": "f16", "fa": "on", "battery": ["vram"],
+            "sampling_arm": "capability", "trials": 3,
+        }
+        cell.update(cell_overrides)
+        queue["cells"] = [cell]
+        return queue
+
+    # -- resolve_cell: base strips, mtp asserts/passes, absent is a no-op ------------------
+
+    def test_base_strips_md_and_spec_type_from_a_registry_entry_carrying_both(self):
+        resolved = batch.resolve_queue_cells(self._mtp_queue(spec_decode="base"))[0]
+        self.assertNotIn("-md", resolved["server_flags"])
+        self.assertNotIn("--spec-type", resolved["server_flags"])
+        self.assertEqual(resolved["spec_decode"], "base")
+
+    def test_mtp_passes_through_untouched_when_registry_carries_spec_type(self):
+        resolved = batch.resolve_queue_cells(self._mtp_queue(spec_decode="mtp"))[0]
+        self.assertEqual(resolved["server_flags"]["--spec-type"], "draft-mtp")
+        self.assertEqual(resolved["server_flags"]["-md"], "/models/mtp/model-mtp-draft.gguf")
+        self.assertEqual(resolved["spec_decode"], "mtp")
+
+    def test_mtp_raises_when_registry_entry_carries_no_spec_type(self):
+        queue = self._mtp_queue(spec_decode="mtp")
+        queue["models"]["model-mtp"]["server_flags"] = {"-ngl": 99}  # no MTP flags at all
+        with self.assertRaises(batch.QueueValidationError):
+            batch.resolve_queue_cells(queue)
+
+    def test_absent_key_is_a_no_op_byte_identical_to_recomputed_cell_id(self):
+        resolved = batch.resolve_queue_cells(self._mtp_queue())[0]  # no spec_decode key
+        self.assertIsNone(resolved["spec_decode"])
+        # The registry's MTP flags survive untouched -- absence means "as-is", never a strip.
+        self.assertEqual(resolved["server_flags"]["-md"], "/models/mtp/model-mtp-draft.gguf")
+        self.assertEqual(resolved["server_flags"]["--spec-type"], "draft-mtp")
+        # Same recompute-and-compare shape as the `model`/`chars_per_token` precedents: identity
+        # is exactly what `sweep.compute_cell_id` derives from `server_flags` alone.
+        self.assertEqual(sweep.compute_cell_id(resolved), resolved["cell_id"])
+
+    def test_base_and_mtp_arms_of_the_same_cell_produce_distinct_cell_ids(self):
+        base_cell = batch.resolve_queue_cells(self._mtp_queue(spec_decode="base"))[0]
+        mtp_cell = batch.resolve_queue_cells(self._mtp_queue(spec_decode="mtp"))[0]
+        self.assertNotEqual(base_cell["cell_id"], mtp_cell["cell_id"])
+
+    # -- validate_queue: malformed values only ----------------------------------------------
+
+    def test_validate_queue_rejects_malformed_values(self):
+        for bad in ("draft", 1, None):
+            queue = self._mtp_queue()
+            queue["cells"][0]["spec_decode"] = bad  # present (even as explicit null) but bad
+            with self.assertRaises(batch.QueueValidationError):
+                batch.validate_queue(queue)
+
+    def test_validate_queue_accepts_base_mtp_and_absence(self):
+        batch.validate_queue(self._mtp_queue())  # absent entirely: fine
+        batch.validate_queue(self._mtp_queue(spec_decode="base"))
+        batch.validate_queue(self._mtp_queue(spec_decode="mtp"))
+
+    # -- write_cell_record: sweep_cell.spec_decode round-trips, nullable --------------------
+
+    def _one_task_battery_results(self):
+        return {"single_needle": {0.45: longcontext.CellResult(
+            samples=[_sample("single_needle", "correct", True)], completions=[], summary=None,
+        )}}
+
+    def test_record_round_trip_persists_spec_decode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for value in ("base", "mtp", None):
+                cell = dict(_longcontext_cell())
+                cell["spec_decode"] = value
+                out = batch.write_cell_record(
+                    Path(tmp) / f"run-{value}", cell, self._one_task_battery_results(),
+                    vram_baseline_bytes=1, vram_loaded_bytes=2,
+                    sampling_arm_effective="capability",
+                )
+                config = json.loads((out / "config.json").read_text())
+                self.assertEqual(config["sweep_cell"]["spec_decode"], value)
+
+    def test_record_defaults_to_none_when_cell_never_declared_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = batch.write_cell_record(
+                Path(tmp) / "run", dict(_longcontext_cell()), self._one_task_battery_results(),
+                vram_baseline_bytes=1, vram_loaded_bytes=2,
+                sampling_arm_effective="capability",
+            )
+            config = json.loads((out / "config.json").read_text())
+            self.assertIn("spec_decode", config["sweep_cell"])  # key present, not just absent
+            self.assertIsNone(config["sweep_cell"]["spec_decode"])
+
+
 if __name__ == "__main__":
     unittest.main()

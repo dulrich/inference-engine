@@ -511,11 +511,26 @@ resolve against the queue's own `models:` map, so one queue file is one reproduc
   qwen35moe is unmeasured and starts at a conservative 4.0. Deliberately NOT part of the cell
   identity: adding or tuning it never changes any `cell_id`.
 - `cells` — an ORDERED list of abbreviated cells `{model, alias, c, ctk, ctv, fa, battery,
-  sampling_arm, trials}`. `resolve_cell()`/`resolve_queue_cells()` merge each abbreviated cell's
-  `c`/`ctk`/`ctv`/`fa` onto its model's base `server_flags`, producing the normalized cell shape
-  `sweep.py` expects (`normalize_cell`'s contract — see "Spec format" above), and compute each
-  cell's `cell_id` (`sweep.compute_cell_id`); two queue entries resolving to a colliding
-  `cell_id` is a validation error, never a silent merge.
+  sampling_arm, trials, spec_decode (optional — WP-2)}`. `resolve_cell()`/`resolve_queue_cells()`
+  merge each abbreviated cell's `c`/`ctk`/`ctv`/`fa` onto its model's base `server_flags`,
+  producing the normalized cell shape `sweep.py` expects (`normalize_cell`'s contract — see "Spec
+  format" above), and compute each cell's `cell_id` (`sweep.compute_cell_id`); two queue entries
+  resolving to a colliding `cell_id` is a validation error, never a silent merge.
+- `spec_decode` (optional per-cell string, `"base"` | `"mtp"` — 2026-08-25,
+  `plans/overnight-test-matrix-redesign.md` WP-2) — the base-vs-MTP axis. `resolve_cell` applies
+  it to the merged `server_flags` BEFORE `normalize_cell`/`compute_cell_id`, so a base arm and an
+  mtp arm of the same served config resolve to distinct `cell_id`s (identity is a hash over
+  `server_flags`, among other things — see `compute_cell_id` above): `"mtp"` requires the cell's
+  model registry entry to already carry `--spec-type` in its base `server_flags` — `resolve_cell`
+  raises `QueueValidationError` ("a cell cannot ask for MTP a registry entry doesn't define")
+  when it doesn't; `"base"` strips `-md` and `--spec-type` from the merged flags, so a queue can
+  run the "no draft sidecar" comparison arm against an MTP-serving model's own registry entry,
+  with no second model entry needed. **Absent is the default and every pre-WP-2 queue file's only
+  state** — "registry `server_flags` as-is", byte-identical behavior; `queue_format` stays 1.
+  `validate_queue` rejects only a malformed PRESENT value (anything other than `"base"`/`"mtp"`,
+  including an explicit JSON `null`) — the MTP-flags assertion needs the model registry, so it
+  lives in `resolve_cell` instead. Recorded verbatim as `sweep_cell.spec_decode` in the cell's
+  `config.json` (`None` when the cell never declared it) — schema-v2 additive, no version bump.
 - `vram_profile` — `"desktop-shared"` or `"headless"` (see VRAM budget profiles above); the CLI's
   `--vram-profile` flag, if given, overrides the queue file's own value.
 - `deadline` — an `"HH:MM"` **UTC** wall-clock cutoff (WP-5 finding #4: `run_queue`'s clock is

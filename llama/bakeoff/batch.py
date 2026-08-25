@@ -106,6 +106,13 @@ _REQUIRED_ABBREVIATED_CELL_KEYS = (
     "model", "alias", "c", "ctk", "ctv", "fa", "battery", "sampling_arm", "trials",
 )
 
+# WP-2 (overnight-test-matrix-redesign): the base-vs-MTP axis. Additive optional abbreviated-
+# cell key, `queue_format` stays 1 -- `validate_queue` below only rejects a PRESENT-but-malformed
+# value; absence means "registry server_flags as-is" (every pre-WP-2 queue file byte-identical in
+# behavior). The actual strip/assert against a model's server_flags happens in `resolve_cell`,
+# not here -- this module-level check has no registry to assert against yet.
+SPEC_DECODE_VALUES = ("base", "mtp")
+
 
 def validate_queue(queue: Dict[str, Any]) -> None:
     if queue.get("queue_format") != QUEUE_FORMAT_VERSION:
@@ -155,6 +162,16 @@ def validate_queue(queue: Dict[str, Any]) -> None:
             raise QueueValidationError(
                 f"cells[{idx}] {TIMING_ROUNDS_CELL_KEY} {rounds!r} must be a positive integer when present"
             )
+        # WP-2 (overnight-test-matrix-redesign): reject only a malformed PRESENT value -- unlike
+        # `timing_rounds` above, an explicit JSON `null` counts as "present but not base/mtp" and
+        # is rejected too (checked via key membership, not `.get()`, so a present-and-None value
+        # is distinguished from an absent key -- both `.get()` to `None` in Python, but only the
+        # absent case is the documented "registry flags as-is" no-op).
+        if "spec_decode" in cell and cell["spec_decode"] not in SPEC_DECODE_VALUES:
+            raise QueueValidationError(
+                f"cells[{idx}] spec_decode {cell['spec_decode']!r} must be one of "
+                f"{SPEC_DECODE_VALUES} when present"
+            )
 
 
 def load_queue(queue_path: Path) -> Dict[str, Any]:
@@ -176,6 +193,23 @@ def resolve_cell(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]) -> Di
     flags["-ctk"] = abbreviated["ctk"]
     flags["-ctv"] = abbreviated["ctv"]
     flags["-fa"] = abbreviated["fa"]
+    # WP-2 (overnight-test-matrix-redesign): the base-vs-MTP axis, applied to `flags` BEFORE
+    # `raw`/`normalize_cell`/`compute_cell_id` -- so a base vs mtp arm of the same served config
+    # flows into `cell_id` naturally (identity is a hash over `server_flags`, among other things;
+    # see `sweep.compute_cell_id`). `validate_queue` already rejected any value other than
+    # "base"/"mtp"/absent by the time a queue reaches here.
+    spec_decode = abbreviated.get("spec_decode")
+    if spec_decode == "mtp":
+        if "--spec-type" not in flags:
+            raise QueueValidationError(
+                f"cell {abbreviated.get('alias')!r} asks for spec_decode='mtp' but its "
+                f"registry entry's server_flags carry no '--spec-type' -- a cell cannot ask "
+                f"for MTP a registry entry doesn't define"
+            )
+    elif spec_decode == "base":
+        flags.pop("-md", None)
+        flags.pop("--spec-type", None)
+    # else: absent/None -- no-op, registry server_flags as-is (every pre-WP-2 queue unaffected).
 
     raw: Dict[str, Any] = {
         "alias": abbreviated["alias"],
@@ -223,6 +257,11 @@ def resolve_cell(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]) -> Di
     # cell runs is a measurement-depth fact, not a cell-identity fact, exactly like
     # `_chars_per_token`.
     cell[TIMING_ROUNDS_CELL_KEY] = abbreviated.get(TIMING_ROUNDS_CELL_KEY)
+    # WP-2: un-prefixed and set AFTER `compute_cell_id`, same pattern as `model` above -- the
+    # arm already shaped `cell_id` via `server_flags` a few lines up, so recording which arm this
+    # is a second time here is a record-carrying fact, not an identity fact. `None` when the cell
+    # never declared it (`write_cell_record` persists this verbatim as `sweep_cell.spec_decode`).
+    cell["spec_decode"] = spec_decode
     return cell
 
 
@@ -751,6 +790,12 @@ def write_cell_record(
       AFTER the battery's own rows -- how the `"timing"` battery item's `timing_round` rows reach
       the same record as the needle arm's `longcontext_probe` rows, without either arm needing to
       know the other's result shape.
+
+    **WP-2 of `overnight-test-matrix-redesign.md`** (additive again; `schema_version` stays 2):
+    `sweep_cell["spec_decode"]` -- `"base"` / `"mtp"` / `None`, read straight off `cell.get(
+    "spec_decode")` (`resolve_cell` sets it un-prefixed, after `compute_cell_id`, exactly like
+    `model` above). `None` for any cell that never declared the base-vs-MTP axis, including every
+    record written before this WP.
     """
     cell_id = cell["cell_id"]
     host_path = cell.get("model_host_path")
@@ -792,6 +837,11 @@ def write_cell_record(
             # either era records the same identity. `None` when neither is present -- never a
             # guess derived from the alias (aliases and model keys are separate vocabularies).
             "model": cell.get("model") or cell.get("_queue_model_id"),
+            # WP-2 (overnight-test-matrix-redesign): the base-vs-MTP arm this cell resolved to
+            # (`resolve_cell` sets `spec_decode` un-prefixed, after `compute_cell_id`, same
+            # convention as `model` above). `None` for a cell that never declared the axis --
+            # schema-v2 additive, never a guess.
+            "spec_decode": cell.get("spec_decode"),
         },
         "vram": {
             "baseline_bytes": vram_baseline_bytes,

@@ -23,6 +23,15 @@ deliberately omitted rather than filled with a guessed/server-default top_k.
 
 Zero new runtime dependencies: stdlib-only (a plain `Dict[str, Dict[str, float]]` table), matching
 every other module in this package.
+
+Consumer-facing sibling: `metadata.sampling` in `llama/config.yaml` (`plans/overnight-test-matrix-
+redesign.md` WP-1) is the same research surfaced to `/v1/models` consumers (Open WebUI,
+obsidian-crucible), spec'd in `docs/model-capabilities.md`. It is per-key optional rather than this
+module's all-or-nothing triple (nemotron-4b there carries `temperature`/`top_p` with no `top_k`,
+matching this module's own do-not-invent omission), and it also carries `min_p`/`presence_penalty`/
+`repetition_penalty`/`source` keys this module's interface does not model. Same-edit drift rule:
+for the keys both homes carry (`temperature`, `top_p`, `top_k`), an edit to either home's value
+updates the other in the same change; a key only one home carries is not drift.
 """
 
 from __future__ import annotations

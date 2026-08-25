@@ -5,28 +5,34 @@ import type { Database } from "bun:sqlite";
 // history this codebase has none of yet). `applySchema` is `CREATE TABLE IF NOT EXISTS`
 // throughout, so it is safe to call on every process boot and every test's temp database.
 //
-// One exception (WP-A, `plans/bench-dashboard-run-context-surfacing.md`): `CREATE TABLE
-// IF NOT EXISTS` never alters an existing table, so three columns added to `experiments`
-// after this table's original baseline (`sampling_arm`, `battery_json`, `vram_profile`)
-// need a GUARDED reconciliation step — `PRAGMA table_info` + `ALTER TABLE ... ADD COLUMN`
-// for whichever of the three a given database file is still missing (cycle-1 audit B3:
-// `--rebuild` alone only deletes rows, it never alters columns, so a pre-existing DB file
-// left untouched by this step would 500 on the very first `INSERT` naming a column that
-// doesn't exist yet). Idempotent both ways: a brand-new database gets the columns added
-// right after its `CREATE TABLE` runs; a pre-existing one gets exactly the columns it's
-// missing and no more on every subsequent boot.
+// One exception (WP-A, `plans/bench-dashboard-run-context-surfacing.md`; extended WP-4,
+// `plans/bakeoff-timing-records-and-estimates.md`): `CREATE TABLE IF NOT EXISTS` never
+// alters an existing table, so columns added to `experiments` after this table's original
+// baseline (`sampling_arm`, `battery_json`, `vram_profile`, `schema_origin`) need a GUARDED
+// reconciliation step — `PRAGMA table_info` + `ALTER TABLE ... ADD COLUMN` for whichever a
+// given database file is still missing (cycle-1 audit B3: `--rebuild` alone only deletes
+// rows, it never alters columns, so a pre-existing DB file left untouched by this step
+// would 500 on the very first `INSERT` naming a column that doesn't exist yet). Idempotent
+// both ways: a brand-new database gets the columns added right after its `CREATE TABLE`
+// runs; a pre-existing one gets exactly the columns it's missing and no more on every
+// subsequent boot.
 //
 // Four tables (brief's File scope, apps/api bullet):
 //
-// - `experiments` — one row per `runs/bakeoff/<experiment-id>/config.json`, schema-v2 only
-//   (v1 is skipped by the ingest CLI, never reaches this table). Every frozen field the
-//   config.json carries maps to a named column (lineage's six keys, `sweep_cell`,
+// - `experiments` — one row per `runs/bakeoff/<experiment-id>/config.json`, schema-v2 by
+//   default, plus (WP-4) the allowlisted pre-v2 timing-only side door — either way, every
+//   row's provenance is explicit in `schema_origin` (`'v2'` default / `'v1-timing'`), never
+//   inferred from `schema_version` (which every row here reads `2`, a `replaceExperiment`
+//   write-path artifact — see `ingest/record.ts readLegacyTimingRecord`). Every frozen field
+//   the config.json carries maps to a named column (lineage's six keys, `sweep_cell`,
 //   `wilson_summary`); `raw_config_json` keeps the FULL original object — nothing this
 //   schema doesn't name is ever lost. `raw_prompts_json`/`raw_completions_json` hold the
 //   parsed `prompts.jsonl`/`completions.jsonl` arrays verbatim (samples.jsonl's own
 //   verbatim reconstruction comes from `trials.raw_json`, ordered by `line_index`) — so
 //   `GET /api/export/scoreboard-capture`'s raw pass-through is servable from the DB alone,
-//   with no live re-read of `runs/bakeoff/` at request time.
+//   with no live re-read of `runs/bakeoff/` at request time. A `v1-timing` row's
+//   `raw_prompts_json`/`raw_completions_json` are always `'[]'` — the side door never reads
+//   those files, only `samples.jsonl`'s `timing_round` rows.
 // - `trials` — one row per `samples.jsonl` line, any `type` (frozen contract: "type is
 //   data, not an enum ingest validates against"). `raw_json` is the full original line;
 //   the named columns are a best-effort projection so listing/filtering doesn't require
@@ -45,11 +51,22 @@ import type { Database } from "bun:sqlite";
 
 /** Nullable `experiments` columns this WP promotes (`sampling_arm` from `sweep_cell.
  * sampling_arm`, `battery_json` from `sweep_cell.battery` (JSON-stringified), `vram_profile`
- * from top-level `config.vram_profile`) — the guarded `ALTER TABLE` reconciliation list. */
+ * from top-level `config.vram_profile`) — the guarded `ALTER TABLE` reconciliation list.
+ *
+ * `schema_origin` (WP-4, `plans/bakeoff-timing-records-and-estimates.md`): provenance for
+ * the pre-v2 timing-only ingest side door (`ingest/run.ts`) — `'v2'` (the `DEFAULT`, so
+ * every row `replaceExperiment` (`db/experiments.ts`, unowned by this WP) already writes,
+ * past and future, reads back `'v2'` without that function ever naming the column) or
+ * `'v1-timing'` (set by one explicit follow-up `UPDATE` in `ingest/run.ts`, the sole writer
+ * of that value, immediately after the same record's `replaceExperiment` insert). NOT NULL
+ * with a DDL default (not merely nullable, unlike its two siblings above) specifically so a
+ * pre-existing DB file's reconciled rows read `'v2'`, never `NULL` — "existing rows
+ * unaffected (default provenance = v2)" is a value guarantee, not just a schema one. */
 const RECONCILED_EXPERIMENTS_COLUMNS: readonly { name: string; ddlType: string }[] = [
   { name: "sampling_arm", ddlType: "TEXT" },
   { name: "battery_json", ddlType: "TEXT" },
   { name: "vram_profile", ddlType: "TEXT" },
+  { name: "schema_origin", ddlType: "TEXT NOT NULL DEFAULT 'v2'" },
 ];
 
 /** `PRAGMA table_info(experiments)` + `ALTER TABLE ... ADD COLUMN` for each column in

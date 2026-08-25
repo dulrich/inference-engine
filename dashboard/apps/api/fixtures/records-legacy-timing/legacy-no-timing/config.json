@@ -1,0 +1,14 @@
+{
+  "alias": "fixture-legacy-no-timing-alias",
+  "base_url": "http://127.0.0.1:4811/v1",
+  "lineage": {
+    "hf_repo": "example-org/Example-LegacyNoTiming-GGUF",
+    "hf_revision": "2222222222222222222222222222222222222222",
+    "llama_cpp_build": "b10480",
+    "filename": "Example-LegacyNoTiming-Q4_K_XL.gguf",
+    "file_size": 1111111,
+    "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "experiment_id": "legacy-no-timing",
+  "timestamp": "2026-06-01T00:00:00+00:00"
+}

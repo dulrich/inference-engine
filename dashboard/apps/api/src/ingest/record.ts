@@ -301,6 +301,108 @@ export async function readRecordDir(dir: string): Promise<ReadRecordResult> {
   return { kind: "v2", record };
 }
 
+export type ReadLegacyTimingResult =
+  | { kind: "v1-timing"; record: NormalizedRecord }
+  | { kind: "v1" }
+  | { kind: "invalid"; reason: string };
+
+/** Legacy dirs commonly carry alias/identity as a top-level `config.alias` key (pre-v2
+ * shape — `sweep_cell` did not exist yet), never a `sweep_cell.alias`; the latter is
+ * checked too, defensively, for any straggler dir already close to the v2 transition.
+ * Absent/odd either way returns `null` — the caller's `id` (dir basename) is the identity
+ * that always survives (frozen brief pin: "ingest under its dir-derived identity"). */
+function legacyAlias(config: Record<string, unknown>): string | null {
+  const topLevel = asString(config.alias);
+  if (topLevel !== null) return topLevel;
+  const cell = config.sweep_cell;
+  return isRecord(cell) ? asString(cell.alias) : null;
+}
+
+/** The WP-4 allowlisted timing-only ingest side door
+ * (`plans/bakeoff-timing-records-and-estimates.md`) for pre-v2 (`schema_version !== 2`)
+ * record dirs. `readRecordDir` above classifies every such dir `v1` and returns before
+ * ever reading `samples.jsonl` (`:245` — the v2 gate stays byte-identical for every OTHER
+ * purpose); this function is the only place a v1 dir's `samples.jsonl` is read, and it
+ * reuses this module's existing machinery (`normalizeTimingMetric`, the `asString`/
+ * `isRecord`/`readJson`/`readJsonl` primitives) rather than a second, parallel
+ * normalization path.
+ *
+ * Selection is content-based — does `samples.jsonl` contain at least one `timing_round`
+ * row? — never a `*-full` directory-name glob (two of the twelve qualifying legacy dirs on
+ * disk, `qwen38-27b-iq3s-kv-e-alt-q4q4-c120000` and `wp1-dry-run-nemotron-4b`, don't match
+ * that suffix). A dir with `timing_round` rows contributes ONLY those rows as `metrics` —
+ * `trials` is always `[]` (no needle/sample/curve/quality content from a legacy dir, ever),
+ * `wilsonSummary`/`samplingArm`/`battery`/`vramProfile`/`sweepServerFlags`/`sweepCommand`/
+ * `sweepCellId` are always `null` (those are v2-only or quality-adjacent concepts this side
+ * door does not resurrect), and `rawPrompts`/`rawCompletions` are always `[]` (this
+ * function never reads `prompts.jsonl`/`completions.jsonl` — out of scope for a
+ * timing-only door). `schemaVersion: 2` on the returned record is a `replaceExperiment`
+ * write-path artifact (that function hardcodes `schema_version = 2` for every row it
+ * writes, `db/experiments.ts`) — never a claim the source directory declared v2 on disk;
+ * true provenance is the caller's separate `schema_origin` write (`ingest/run.ts`,
+ * `db/schema.ts`). */
+export async function readLegacyTimingRecord(dir: string): Promise<ReadLegacyTimingResult> {
+  const id = basename(dir);
+  const configPath = join(dir, "config.json");
+
+  let config: unknown;
+  try {
+    config = await readJson(configPath);
+  } catch (error) {
+    return { kind: "invalid", reason: `config.json: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  if (!isRecord(config)) return { kind: "invalid", reason: "config.json is not a JSON object" };
+  // A real v2 record is `readRecordDir`'s business, never this side door's.
+  if (config.schema_version === 2) return { kind: "v1" };
+
+  const samplesPath = join(dir, "samples.jsonl");
+  if (!existsSync(samplesPath)) return { kind: "v1" };
+
+  let samplesRaw: unknown[];
+  try {
+    samplesRaw = await readJsonl(samplesPath);
+  } catch (error) {
+    return { kind: "invalid", reason: error instanceof Error ? error.message : String(error) };
+  }
+
+  const metrics: NormalizedMetric[] = [];
+  samplesRaw.forEach((row, lineIndex) => {
+    const type = isRecord(row) ? asString(row.type) : null;
+    if (type === "timing_round") metrics.push(normalizeTimingMetric(row, lineIndex));
+  });
+  // No timing_round rows -- fully skipped, same outcome as if this side door didn't exist.
+  if (metrics.length === 0) return { kind: "v1" };
+
+  const lineage = isRecord(config.lineage) ? config.lineage : {};
+
+  const record: NormalizedRecord = {
+    id,
+    schemaVersion: 2,
+    description: asString(config.description),
+    timestamp: asString(config.timestamp),
+    hfRepo: asString(lineage.hf_repo),
+    hfRevision: asString(lineage.hf_revision),
+    filename: asString(lineage.filename),
+    fileSize: asNumber(lineage.file_size),
+    sha256: asString(lineage.sha256),
+    llamaCppBuild: asString(lineage.llama_cpp_build),
+    sweepCellId: null,
+    sweepAlias: legacyAlias(config),
+    sweepServerFlags: null,
+    sweepCommand: null,
+    samplingArm: null,
+    battery: null,
+    vramProfile: null,
+    wilsonSummary: null,
+    rawConfig: config,
+    rawPrompts: [],
+    rawCompletions: [],
+    trials: [],
+    metrics,
+  };
+  return { kind: "v1-timing", record };
+}
+
 function hasConfigJson(dir: string): boolean {
   return existsSync(join(dir, "config.json"));
 }

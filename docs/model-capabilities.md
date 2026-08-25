@@ -7,6 +7,7 @@ Landed by `plans/capability-surfacing-and-local-agent-endpoints.md` WP-1 (canary
 ## Ground rules
 
 - **Every value must be derivable from, and equal to, the served configuration** — the `cmd:` flags and the live-verified records in `llama/config.yaml`'s own comments. A capability block is a projection of serving facts, never an aspiration. If a `cmd:` changes (context, KV type, MTP, vision), its metadata block changes in the same edit.
+- **`sampling` is the sole advisory-provenance exception to the projection principle above** (`plans/overnight-test-matrix-redesign.md` WP-1, audit B-1). Every other field in this doc is a projection of the served `cmd:` — `sampling` is not: its values are the model publisher's own card-stated sampling recommendation (HF model card / `generation_config.json`), carried here so `/v1/models` consumers get a correct default without re-deriving it per model. `sampling` values change only when a re-verified card source changes them — never as a side effect of a `cmd:` edit (context bump, KV type, MTP) — and the do-not-invent rule applies without exception: a key absent from a model's `sampling` block means the card is silent on it, never "0" or a server default. `sampling` is per-key optional (unlike `llama/bakeoff/sampling_table.py`'s harness-side all-or-nothing triple) — a model may carry a partial recommendation (e.g. `temperature`/`top_p` with no `top_k`) because a partial consumer default is still useful. `sampling_table.py` and `metadata.sampling` are two homes for the same underlying research and carry a same-edit drift rule: for the keys both homes carry (`temperature`, `top_p`, `top_k`), an edit to either home's value updates the other in the same change; a key only one home carries (e.g. `min_p`, `presence_penalty`, `repetition_penalty`, `source` here; the harness table carries none of those) is not drift.
 - **Semantics are server-path facts, not model-quality claims.** Fields describe what this serving path accepts and does, verified by response body where noted. Task-level *quality* (e.g. tool-call reliability under agentic load) is explicitly out of scope — that is the bake-off harness's and the Forge eval successor plan's territory.
 - **Ids vs aliases**: `/v1/models` `id` is the config model **key**; the append-only alias contract lives on `meta.llamaswap.aliases`. Consumers that persist per-model state should prefer aliases where they can choose; consumers that key by `id` (Open WebUI) are recorded in the consumer registry header of `llama/config.yaml`.
 - **Enum evolution is append-only**: new levels/values may be added; existing ones are never renamed or repurposed. Per-model *values* are facts and change when a re-verified serving change lands.
@@ -26,8 +27,15 @@ Landed by `plans/capability-surfacing-and-local-agent-endpoints.md` WP-1 (canary
 | `serving.mtp` | bool | Speculative multi-token prediction active (`--spec-type draft-mtp`, sidecar `-md` or embedded heads). Lossless (target-verified) — consumers may ignore it functionally; it is a throughput fact. |
 | `serving.moe_cpu_offload_layers` | int (optional) | `-ncmoe` value when present — routed-expert weights of the first N layers held in CPU RAM. |
 | `serving.ubatch` | int (optional) | Per-model `-ub` override when present (prefill micro-batch; qwen36's PCIe-streaming amortization). |
+| `sampling.temperature` | float (optional) | Card-recommended sampling temperature. Chat models only; absent means the card is silent, never "0" or a server default. |
+| `sampling.top_p` | float (optional) | Card-recommended nucleus-sampling `top_p`. |
+| `sampling.top_k` | int (optional) | Card-recommended `top_k`. |
+| `sampling.min_p` | float (optional) | Card-recommended `min_p`. |
+| `sampling.presence_penalty` | float (optional) | Card-recommended presence penalty. |
+| `sampling.repetition_penalty` | float (optional) | Card-recommended repetition penalty. |
+| `sampling.source` | string | Mandatory when `sampling` is present: the HF model-card/`generation_config.json` URL plus the research date the values were verified against. |
 
-Optional `serving.*` keys appear only when the underlying flag is present — absence means "macro default", never "unknown".
+Optional `serving.*` keys appear only when the underlying flag is present — absence means "macro default", never "unknown". Optional `sampling.*` keys appear only when the model's HF card states that value — absence means "card silent", never "unknown" or a server default (see the `sampling` advisory-exception ground rule above); `sampling.source` is mandatory whenever any other `sampling.*` key is present, and the whole block is absent on non-chat (embed/rerank) models.
 
 ## `reasoning` support levels
 

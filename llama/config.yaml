@@ -283,6 +283,14 @@ models:
         kv_cache_type: "f16"
         flash_attention: false
         mtp: false
+      # Card states two temperatures -- 1.0 for reasoning tasks (used here; nemotron-4b serves
+      # general chat/reasoning traffic on this fleet) and 0.6 for tool calling. The tool-calling
+      # value is not modeled as a metadata key (this consumer default targets reasoning tasks) --
+      # recorded here so the card fact isn't lost; source below carries both.
+      sampling:
+        temperature: 1.0
+        top_p: 0.95
+        source: "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16 (researched 2026-08-23)"
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-UD-Q4_K_XL.gguf
@@ -326,6 +334,11 @@ models:
         kv_cache_type: "f16"
         flash_attention: false
         mtp: false
+      sampling:
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 20
+        source: "https://huggingface.co/inclusionAI/Ling-3.0-tiny (researched 2026-08-23)"
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q4_K_XL.gguf
@@ -349,6 +362,11 @@ models:
         kv_cache_type: "f16"
         flash_attention: false
         mtp: false
+      sampling:
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 20
+        source: "https://huggingface.co/inclusionAI/Ling-3.0-tiny (researched 2026-08-23)"
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q6_K_XL.gguf
@@ -372,6 +390,11 @@ models:
         kv_cache_type: "f16"
         flash_attention: false
         mtp: false
+      sampling:
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 20
+        source: "https://huggingface.co/inclusionAI/Ling-3.0-tiny (researched 2026-08-23)"
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q8_0.gguf
@@ -409,6 +432,11 @@ models:
         kv_cache_type: "f16"
         flash_attention: false
         mtp: true
+      sampling:
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 64
+        source: "https://huggingface.co/google/gemma-4-12B-it (researched 2026-08-23)"
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf
@@ -452,6 +480,14 @@ models:
         mtp: true
         moe_cpu_offload_layers: 32
         ubatch: 2048
+      sampling:
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 1.5
+        repetition_penalty: 1.0
+        source: "https://huggingface.co/Qwen/Qwen3.6-35B-A3B (researched 2026-08-23)"
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
@@ -500,6 +536,14 @@ models:
         kv_cache_type: "q4_0"
         flash_attention: true
         mtp: false
+      sampling:
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 0.0
+        repetition_penalty: 1.0
+        source: "https://huggingface.co/Qwen/Qwen3.8-27B (researched 2026-08-23)"
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_XXS.gguf
@@ -566,6 +610,14 @@ models:
         kv_cache_type: "q4_0"
         flash_attention: true
         mtp: false
+      sampling:
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 0.0
+        repetition_penalty: 1.0
+        source: "https://huggingface.co/Qwen/Qwen3.8-27B (researched 2026-08-23)"
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf
@@ -592,6 +644,14 @@ models:
         kv_cache_type: "q4_0"
         flash_attention: true
         mtp: false
+      sampling:
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 0.0
+        repetition_penalty: 1.0
+        source: "https://huggingface.co/Qwen/Qwen3.8-27B (researched 2026-08-23)"
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q3_K_XL.gguf

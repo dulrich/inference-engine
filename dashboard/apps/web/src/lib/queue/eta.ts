@@ -49,3 +49,14 @@ export function formatQueueEtaLine(eta: QueueEta | null | undefined): string {
   const sampleSize = eta.sampleSize ?? 0;
   return `~${eta.cellsPerHour.toFixed(1)} cells/hour · est. ${formatMinutesAsHm(eta.estimatedMinutesRemaining)} remaining (basis: ${etaBasisLabel(eta.basis)}, n=${sampleSize})`;
 }
+
+/** Forward-framed complement to `formatQueueEtaLine` (spec example: `"≈5 cells in the
+ * next 60 min"`) -- floors `cellsPerHour * minutes / 60`, never rounds up, so the figure
+ * reads as "at least this many". Returns `null` (caller renders nothing) whenever `eta`
+ * itself is `null`/`undefined` or `cellsPerHour` is null/non-finite -- same null-honest
+ * discipline as the rest of this file: no rate means no estimate, never a fabricated 0. */
+export function formatNextWindowEstimate(eta: QueueEta | null | undefined, minutes = 60): string | null {
+  if (eta == null || eta.cellsPerHour === null || !Number.isFinite(eta.cellsPerHour)) return null;
+  const cells = Math.floor((eta.cellsPerHour * minutes) / 60);
+  return `≈${cells} cells in the next ${minutes} min`;
+}

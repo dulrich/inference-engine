@@ -13,7 +13,7 @@
   import type { ControlSection, QueueEntry, QueueErrorEntry, QueueListItem } from "@bench-dashboard/shared";
   import { getQueue, postControlArm, postControlCancel, postControlDisarm, postControlStart, postControlStop } from "../api.ts";
   import { cellStateLabel, cellStatePillClass, queueStateLabel, queueStatePillClass } from "../lib/queue/status.ts";
-  import { formatQueueEtaLine } from "../lib/queue/eta.ts";
+  import { formatNextWindowEstimate, formatQueueEtaLine } from "../lib/queue/eta.ts";
   import {
     armedLabel,
     armedPillClass,
@@ -351,6 +351,7 @@
           <p class="error-text">{item.error}</p>
         </div>
       {:else}
+        {@const nextWindowEstimate = formatNextWindowEstimate(item.eta)}
         <div class="queue-card">
           <div class="queue-card-header">
             <span class="queue-card-name">{item.name}</span>
@@ -360,6 +361,9 @@
           <div class="queue-card-meta">
             <span>Deadline: {item.deadline ?? "—"}</span>
             <span class="queue-eta-line">{formatQueueEtaLine(item.eta)}</span>
+            {#if nextWindowEstimate !== null}
+              <span class="queue-eta-line">{nextWindowEstimate}</span>
+            {/if}
           </div>
           <div class="queue-counts">
             {#each CELL_COUNT_ORDER as state (state)}

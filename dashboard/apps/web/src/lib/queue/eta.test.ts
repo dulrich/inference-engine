@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { QueueEta } from "@bench-dashboard/shared";
-import { ETA_NO_DATA_NOTE, etaBasisLabel, formatMinutesAsHm, formatQueueEtaLine } from "./eta.ts";
+import { ETA_NO_DATA_NOTE, etaBasisLabel, formatMinutesAsHm, formatNextWindowEstimate, formatQueueEtaLine } from "./eta.ts";
 
 function eta(overrides: Partial<QueueEta> = {}): QueueEta {
   return {
@@ -84,5 +84,32 @@ describe("formatQueueEtaLine", () => {
   test("sampleSize null renders n=0 rather than n=null", () => {
     const line = formatQueueEtaLine(eta({ sampleSize: null }));
     expect(line).toContain("n=0");
+  });
+});
+
+describe("formatNextWindowEstimate", () => {
+  test("null eta (error entry) -> null, render nothing", () => {
+    expect(formatNextWindowEstimate(null)).toBeNull();
+    expect(formatNextWindowEstimate(undefined)).toBeNull();
+  });
+
+  test("cellsPerHour null -> null, never a fabricated 0", () => {
+    expect(formatNextWindowEstimate(eta({ cellsPerHour: null }))).toBeNull();
+  });
+
+  test("zero cellsPerHour is real data, not missing data -> renders ≈0", () => {
+    expect(formatNextWindowEstimate(eta({ cellsPerHour: 0 }))).toBe("≈0 cells in the next 60 min");
+  });
+
+  test("fractional cellsPerHour floors, never rounds up", () => {
+    expect(formatNextWindowEstimate(eta({ cellsPerHour: 5.9 }))).toBe("≈5 cells in the next 60 min");
+  });
+
+  test("normal case at the default 60-minute window", () => {
+    expect(formatNextWindowEstimate(eta({ cellsPerHour: 5 }))).toBe("≈5 cells in the next 60 min");
+  });
+
+  test("non-default window scales the count and the label", () => {
+    expect(formatNextWindowEstimate(eta({ cellsPerHour: 6 }), 30)).toBe("≈3 cells in the next 30 min");
   });
 });

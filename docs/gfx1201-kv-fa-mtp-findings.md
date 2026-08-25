@@ -57,7 +57,7 @@ Reading:
 - **Lossless by construction** (target-verified speculation): per-backend output was byte-length-identical off↔on at temp 0 (±a few chars on HIP from batched-verification numerics). MTP therefore needs no quality gate — only a VRAM and throughput decision.
 - **HIP gains more from MTP than Vulkan** (+68% vs +35%) — verification batches are pp-shaped work, which is HIP's stronger axis on this model — but Vulkan stays the absolute winner (48.9 vs 40.2).
 - **Cost is VRAM**: ~+2.25 GiB (both backends) for the MTP draft context at `-c 8192`; expect it to scale with context.
-- **Model availability is the constraint**: the unsloth Qwen3.8-27B quants are the *only* local GGUFs carrying MTP heads. The bloomer010 Ling-3.0-tiny conversion **stripped** the nextn tensors its upstream family advertises — a conversion-quality criterion to check before downloading any future MoE/MTP-family GGUF (30-second header scan: `head -c 32M file.gguf | strings | grep nextn`).
+- **Model availability is the constraint**: the unsloth Qwen3.8-27B quants are the *only* local GGUFs carrying MTP heads. *(Corrected 2026-08-25: the spike originally attributed Ling-3.0-tiny's missing heads to the bloomer010 conversion — wrong. Upstream `inclusionAI/Ling-3.0-tiny` itself ships `num_nextn_predict_layers: 0`; the tiny checkpoint never had MTP heads, so no conversion can provide them. Larger Ling siblings do carry them.)* Availability is per-checkpoint *and* per-conversion — e.g. unsloth publishes Qwen3.6-35B-A3B in two repos, plain and `-MTP-GGUF` (heads preserved); our on-disk qwen36-a3b files are the plain variant. Check before downloading any MoE/MTP-family GGUF (30-second header scan: `head -c 32M file.gguf | strings | grep nextn`).
 
 ## Stability
 
@@ -83,7 +83,7 @@ Concrete recommendation for the next queue design: no KV-type sweep (settled neg
 
 1. **Production stays Vulkan + f16 KV** (contract + now measured twice). Nothing in this spike changes a production alias.
 2. **MTP is the first recipe lever worth a production experiment** when an MTP-capable model earns a serving slot (today: Qwen3.8-27B, not currently an alias; its 3.1-bpw quant + MTP context fits in ~13.7 GiB). Any such experiment is its own plan (alias-contract care, VRAM fit at real context).
-3. **Header-scan new GGUFs for nextn tensors before download decisions** — conversions differ (unsloth kept them, bloomer010 stripped them), and the delta is a free +35% decode.
+3. **Header-scan new GGUFs for nextn tensors before download decisions** — availability differs per checkpoint (Ling-3.0-tiny has none upstream) and per conversion (unsloth ships separate `-MTP-GGUF` repos), and the delta is a free +35% decode.
 4. Re-evaluate triggers unchanged from spike 1 (Qwen3.8-class `-ncmoe` MoE → HIP experiment; vLLM native gfx1201 kernels → gateway leg).
 
 Raw results: `runs/rocm-spike/results/kv-*`, `mtp-*` (scratch); snapshot + WP reports archived in archive-repo under `inference-engine/gfx1201-kv-fa-mtp-spike/`.

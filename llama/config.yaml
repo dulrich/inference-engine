@@ -31,6 +31,12 @@
 #                        never reuse it for different backing weights (append-only contract).
 #   nemotron-4b       obsidian-crucible   vault data.json provider modelId (chat)
 #                     seven-afterlives    same as gemma-4-12b
+#                     ── 2026-08-25 weights upgrade (user-directed, same alias,
+#                        plans/long-context-serving-default.md WP-2): backing file swapped
+#                        lmstudio-community Q4_K_M → unsloth UD-Q4_K_XL (same base model,
+#                        same wire behavior — deliberately NOT the gemma-style
+#                        remove+new-alias path). Model key renamed to match the quant
+#                        (key had no consumer; the alias is what consumers store).
 #   bge-small         news-ingestion      Postgres `PRIMARY KEY (event_id, model)` in the
 #                                         `crisis24_enrich` schema. The wire alias and the
 #                                         stored id DIFFER on purpose: `bge-small` on the wire,
@@ -215,14 +221,14 @@ models:
   # completion budget on reasoning_content and returns empty `content`.
   # gemma-4-12B-it-Q4_K_M (alias `gemma-4-12b`) was removed here 2026-08-25 — see the tombstone
   # in the consumer-registry header above. `gemma-4-12b-qat` below is the replacement.
-  nemotron-3-nano-4B-Q4_K_M:
-    name: "NVIDIA Nemotron 3 Nano 4B (Q4_K_M)"
+  nemotron-3-nano-4B-UD-Q4_K_XL:
+    name: "NVIDIA Nemotron 3 Nano 4B (UD-Q4_K_XL)"
     aliases:
       - nemotron-4b
     cmd: |
       ${llama_server_chat_common}
-      -m /models/lmstudio-community/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf
-      -c 32768
+      -m /models/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-UD-Q4_K_XL.gguf
+      -c 131072
       --jinja
     ttl: 1800
     checkEndpoint: /health
@@ -307,7 +313,7 @@ models:
       --mmproj /models/unsloth/gemma-4-12B-it-qat-GGUF/mmproj-BF16.gguf
       -md /models/unsloth/gemma-4-12B-it-qat-GGUF/mtp-gemma-4-12B-it.gguf
       --spec-type draft-mtp
-      -c 32768
+      -c 131072
       --jinja
     ttl: 1800
     checkEndpoint: /health
@@ -336,7 +342,8 @@ models:
       -m /models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
       -ncmoe 32
       --spec-type draft-mtp
-      -c 100000
+      -c 131072
+      -ub 2048
       --jinja
     ttl: 1800
     checkEndpoint: /health
@@ -486,13 +493,22 @@ groups:
   #   SWA-aware KV ≈ 1.12 GiB / 1.21 GB → weights+KV ≈ 8.0 GiB / 8.6 GB. Comfortably under BOTH
   #   the nameplate total and the measured ~12.8 GiB free-now, leaving ~4.8 GiB for the
   #   compute/graph buffer even on this desktop-shared host.
-  # - NVIDIA-Nemotron-3-Nano-4B-Q4_K_M (IN, small/fast option): weights 2,837,072,896 B =
-  #   2.64 GiB / 2.84 GB. `nemotron_h` is a hybrid Mamba/attention architecture — only 4 of its
-  #   42 layers are real attention (head_count_kv=8, head dim 128); the other 38 are SSM/conv
-  #   state layers whose per-token state is ~constant in sequence length, not a KV cache in the
-  #   usual sense, and this arch carries no sliding_window metadata. Even treating all 4 attention
-  #   layers as full-context at -c 32768, KV ≈ 0.5 GiB / 0.54 GB → weights+KV ≈ 3.14 GiB / 3.37 GB.
-  #   Trivially safe under any VRAM figure in play here.
+  # - NVIDIA-Nemotron-3-Nano-4B-UD-Q4_K_XL (IN, small/fast option; weights upgraded 2026-08-25
+  #   from lmstudio Q4_K_M — see the registry note, plans/long-context-serving-default.md WP-2):
+  #   weights 3,133,118,624 B = 2.92 GiB / 3.13 GB. `nemotron_h` is a hybrid Mamba/attention
+  #   architecture — only 4 of its 42 layers are real attention (head_count_kv=8, head dim 128,
+  #   blocks 12/17/24/32); the other 38 are SSM/conv state layers whose per-token state is
+  #   ~constant in sequence length, not a KV cache in the usual sense, and this arch carries no
+  #   sliding_window metadata. KV ≈ 16 KiB/token (4 layers × 8 heads × 256 dims × f16).
+  #   Live-measured 2026-08-25 at the landed -c 131072: total footprint ≈5.5 GB used
+  #   (weights+KV+buffers), >9 GB free — needle-at-depth recall exact at a real 117,982-token
+  #   prompt (90% fill), prefill 2,353 t/s. 256k VALID: at -c 262144 footprint ≈7.9 GB,
+  #   >7 GB free, recall exact at a real 234,542-token prompt (89.5%), prefill 1,649 t/s —
+  #   262144 is a valid config for this alias; 131072 is the serving default per plan. The GGUF
+  #   header claims context_length=1048576 (both lmstudio and unsloth conversions); the NVIDIA
+  #   base config says max_position_embeddings=262144 — targets clamped to the smaller. Note:
+  #   this model routinely returns its answer in `reasoning_content` with empty `content` on
+  #   terse factual asks — count both channels before calling a response empty.
   # - gemma-4-26B-A4B-it-QAT-Q4_0 (OUT — for now): weights 14,439,362,752 B = 13.45 GiB /
   #   14.44 GB. That number ALONE already exceeds the measured ~12.8 GiB free-now on this
   #   desktop-shared host, before any KV cache or compute/graph buffer is added. Even against the
@@ -516,7 +532,7 @@ groups:
     members:
       # gemma-4-12B-it-Q4_K_M removed 2026-08-25 (see the tombstone in the registry header);
       # its historical fit-math record above is retained as-is.
-      - nemotron-3-nano-4B-Q4_K_M
+      - nemotron-3-nano-4B-UD-Q4_K_XL
 
   # ── ling-bakeoff — Ling-3.0-tiny quant bake-off, testing only, canary-first (see
   # plans/ling-3-tiny-bakeoff-and-gpu-hang-watchdog.md). Same shape as `chat` above:
@@ -701,6 +717,19 @@ groups:
   # ~1.5 GiB gate, no -c step-down needed. Chat probe body-verified MTP engaged: draft_n=36,
   # draft_n_accepted=29 (0.81), 81.9 tok/s tg. Vision probe (generated solid-red PNG,
   # reasoning_effort "none"): correct one-word description, body-verified.
+  # ── Long-context landing (host-verified 2026-08-25, plans/long-context-serving-default.md
+  # WP-2) ── `-c` 32768 → 131072 (serving default), f16 KV, vision (--mmproj) + MTP (-md)
+  # resident throughout — no capability was dropped to buy context. Live numbers:
+  # - 131072 landing: footprint ≈11.5 GB (12.37 GB used vs 0.89 GB baseline), 4.4 GiB free at
+  #   peak. Needle-at-depth recall exact at a real 118,135-token prompt (90% fill), draft
+  #   acceptance 0.86, prefill 897 t/s (2.3 min), tg 90 t/s. Vision re-verified at this config
+  #   (solid-red PNG, reasoning_effort "none" → "Red", body-verified).
+  # - 262144 (256k test point): VALID AND FITS — the plan's expected f16 fit-fail did NOT
+  #   materialize (the ≈8 GiB KV extrapolation was pessimistic; SWA-aware allocation is
+  #   lighter). Recall exact at a real 234,066-token prompt (89.3%), MTP acceptance 0.79,
+  #   prefill 576 t/s (6.8 min), peak 15.09 GB used → 1.87 GiB free — passes the ~1.5 GiB gate
+  #   solo, BUT leaves ~0.7 GB with crucible's bge-m3 co-resident (the qwen36 lesson), so
+  #   131072 stays the default; 262144 is a user-selectable valid config for this alias.
   gemma-qat-bakeoff:
     swap: true
     exclusive: true
@@ -782,6 +811,26 @@ groups:
   # ≈29-30 tok/s pre-MTP at the same -ncmoe 32 placement — the batched-verification
   # amortization of CPU-expert streaming, even better at short generations than the spike's
   # +64% figure at -c 8192).
+  #
+  # ── Long-context landing (host-verified 2026-08-25, plans/long-context-serving-default.md
+  # WP-2) ── `-c` 100000 → 131072 (serving default) + per-model `-ub 2048` override (last flag
+  # wins over the macro's `-ub 512`). All numbers below live-measured on this host:
+  # - 131072 landing: footprint 12.38 GB used vs 0.89 GB baseline (≈11.5 GB), 4.4 GiB free at
+  #   peak (VRAM flat load→post-probe: KV + draft context + compute buffer pre-allocated).
+  #   Needle-at-depth recall exact at a real 118,026-token prompt (90% fill), draft acceptance
+  #   0.85-0.87, tg ≈46-55 t/s unchanged by -ub.
+  # - `-ub 2048` (user-directed experiment, plan rev 2): prefill 321.5 → 745.4 t/s at 6.5k
+  #   (2.32x) and 270.6 → 600.0 t/s at 118k (2.22x; 7.3 → 3.3 min wall), for +1.0 GB compute
+  #   buffer (12.38 → 13.38 GB used, 3.46 GiB free — gate holds). Mechanism confirmed: with
+  #   -ncmoe 32, prefill streams CPU-resident expert weights over PCIe once per micro-batch;
+  #   a 4x micro-batch amortizes each transfer across 4x tokens. Decode untouched (token-at-a-
+  #   time). Dense/GPU-resident models have no streaming to amortize — override is qwen36-only.
+  # - 262144 (256k test point): functionally VALID — recall exact at a real 234,971-token
+  #   prompt (89.6%), MTP engaged (acceptance 0.87), no collapse — but fit-FAILS the ~1.5 GiB
+  #   gate: footprint ≈14.7 GB, ≈1.05 GiB free solo (interpolated max passing -c ≈ ~240k, not
+  #   live-verified), and crucible's bge-m3 spawning beside it took the card to 16.92/17.10 GB
+  #   (~175 MB free) — no margin for the embed family that co-runs in practice. Prefill 232 t/s
+  #   (16.9 min) at -ub 512. 131072 stays the default per plan.
   #
   # WP-4 step 5 (host-verified 2026-08-21): config B propagated to UD-Q5_K_XL (`-ncmoe 34`) and
   # UD-Q6_K_XL (`-ncmoe 35`), each recomputed from that file's own tensor-level GGUF math. Both

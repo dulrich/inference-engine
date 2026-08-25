@@ -186,7 +186,9 @@ fi
 # emits `content` — a smaller budget (16 was the value that first exposed this at cutover)
 # yields an empty `content` and a false FAIL even though the model answered correctly. Only
 # `content` is asserted non-empty here; `reasoning_content` (if present) is not inspected.
-CHAT_ALIASES="gemma-4-12b nemotron-4b"
+# gemma-4-12b → gemma-4-12b-qat 2026-08-25: the non-QAT alias was removed from serving
+# (plans/mtp-serving-rollout.md WP-2); the QAT entry is its chat+vision+MTP replacement.
+CHAT_ALIASES="gemma-4-12b-qat nemotron-4b"
 for chat_alias in $CHAT_ALIASES; do
 	note "checking POST /v1/chat/completions (model=$chat_alias) ..."
 	chat_json=$(curl -s --max-time 120 "$URL/v1/chat/completions" \

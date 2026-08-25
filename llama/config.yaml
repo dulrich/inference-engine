@@ -22,6 +22,13 @@
 #   gemma-4-12b       obsidian-crucible   vault data.json provider modelId (chat, vision)
 #                     seven-afterlives    --llm-model launch flag + docs/llm-disclosure.md
 #                                         backend entry (optional validated backend)
+#                     ── TOMBSTONE: REMOVED FROM SERVING 2026-08-25 (user-directed,
+#                        plans/mtp-serving-rollout.md WP-2) — an explicit removal decision, NOT a
+#                        silent repoint. The consumers above still store `gemma-4-12b` and will
+#                        error until the user repoints them to `gemma-4-12b-qat` (now the full
+#                        replacement: chat + vision + MTP — see its entry below); tracked in
+#                        INITIATIVE.md "# Blocked on User". The alias name stays reserved forever —
+#                        never reuse it for different backing weights (append-only contract).
 #   nemotron-4b       obsidian-crucible   vault data.json provider modelId (chat)
 #                     seven-afterlives    same as gemma-4-12b
 #   bge-small         news-ingestion      Postgres `PRIMARY KEY (event_id, model)` in the
@@ -42,9 +49,11 @@
 #
 # ── Bake-off / testing aliases (no external consumer yet) ──────────────────────────────────────
 #
-# `ling-3-tiny-q4-m`, `ling-3-tiny-ud-q4-xl`, `ling-3-tiny-ud-q6-xl`, `ling-3-tiny-q8` (the
-# `ling-bakeoff` group below) — four quants of Ling-3.0-tiny (bloomer010/Ling-3.0-tiny-GGUF,
-# BailingMoE3 architecture) added for an internal bake-off, not yet adopted by any consumer. Not
+# `ling-3-tiny-ud-q4-xl`, `ling-3-tiny-ud-q6-xl`, `ling-3-tiny-q8` (the `ling-bakeoff` group
+# below) — quants of Ling-3.0-tiny (bloomer010/Ling-3.0-tiny-GGUF, BailingMoE3 architecture)
+# added for an internal bake-off, not yet adopted by any consumer. Originally four quants;
+# `ling-3-tiny-q4-m` (Q4_K_M) was removed from serving 2026-08-25 (user-directed,
+# plans/mtp-serving-rollout.md WP-2: serve only the dynamic 4-bit/6-bit + the Q8_0 reference). Not
 # a full registry row above because there is nothing to protect yet — these are still subject to
 # rename/removal without the append-only consumer-registry guarantee until a consumer actually
 # adopts one. Move whichever quant wins the bake-off into the table above (with its own row) if
@@ -59,10 +68,11 @@
 # plans/serving-harness-round-2.md WP-2 as a new no-consumer-yet testing alias, deliberately NOT
 # a repoint of the live `gemma-4-12b` alias above (append-only contract; a same-alias
 # backing-weights swap would be a silent, consumer-facing behavior change — see that plan's
-# Decisions locked). Text-only: unsloth's repo also publishes `mmproj-*`/`mtp-*` files
-# (vision/speculative-decoding) but neither is in this WP's scope — the live `gemma-4-12b` alias
-# already covers vision, and this addition is scoped to the bake-off harness's own (text-only)
-# cold/warm/hot + quality-corpus measurement, not a capability upgrade.
+# Decisions locked). Upgraded 2026-08-25 (plans/mtp-serving-rollout.md WP-2, after the
+# user-directed removal of `gemma-4-12b`): now the full replacement — `--mmproj` (vision, the
+# repo's own mmproj-BF16) and `-md` + `--spec-type draft-mtp` (the repo's 0.24 GiB MTP sidecar,
+# lossless target-verified speculative decode measured +66% tg on this card at temp 0). Still
+# awaiting the user-side consumer repoint recorded in the `gemma-4-12b` tombstone above.
 #
 # `qwen36-a3b` (the `qwen36-a3b-bakeoff` group below) — unsloth/Qwen3.6-35B-A3B-GGUF (`qwen35moe`
 # architecture: a hybrid of attention + SSM/recurrent layers, 256 fine-grained routed experts +
@@ -76,9 +86,15 @@
 # the group's own fit-math comment below for the full placement-search record. `-c 100000`: the
 # live-verified "useful long-context target" test point from the plan's own scope, not this
 # model's real ceiling (GGUF header reports `qwen35moe.context_length=262144`) — not pushed
-# further this WP, matching "push further only if cheap and justified." `qwen36-a3b-q5` /
-# `qwen36-a3b-q6` (UD-Q5_K_XL / UD-Q6_K_XL) propagate config B's placement policy upward per WP-4
-# step 5 (`-ncmoe` adjusted per quant's own measured routed-expert tensor size, not re-searched).
+# further this WP, matching "push further only if cheap and justified."
+# Recipe change 2026-08-25 (plans/mtp-serving-rollout.md WP-2): `qwen36-a3b` repointed to the
+# unsloth Qwen3.6-35B-A3B-MTP-GGUF variant (same UD quant recipe + embedded `blk.40.nextn.*` MTP
+# heads) with `--spec-type draft-mtp` — measured +64% tg (29.0 → 47.6 t/s at `-ncmoe 32`),
+# lossless/target-verified; bake-off records from before this date measured the plain non-MTP
+# file. `qwen36-a3b-q5` / `qwen36-a3b-q6` (UD-Q5_K_XL / UD-Q6_K_XL, config B propagated per WP-4
+# step 5: `-ncmoe 34`/`-ncmoe 35`) were REMOVED from serving the same date (user-directed: hold
+# on Q4 only; their MTP-variant downloads were cancelled) — testing-only aliases, no consumer;
+# re-adding them later is a download + config re-add on ask.
 #
 # `qwen38-27b-iq3xxs` / `qwen38-27b-iq3s` / `qwen38-27b-q3kxl` (the `qwen38-27b-bakeoff` group
 # below) — unsloth/Qwen3.8-27B-GGUF (`qwen35` architecture: a DENSE sibling of Qwen3.6-35B-A3B's
@@ -197,19 +213,8 @@ models:
   # is 167 MiB of extra VRAM, noise against the fit math below. Vision requests from Crucible
   # carry `reasoning_effort: "none"`, a correctness requirement: without it the model spends the
   # completion budget on reasoning_content and returns empty `content`.
-  gemma-4-12B-it-Q4_K_M:
-    name: "Gemma 4 12B it (Q4_K_M)"
-    aliases:
-      - gemma-4-12b
-    cmd: |
-      ${llama_server_chat_common}
-      -m /models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf
-      --mmproj /models/lmstudio-community/gemma-4-12B-it-GGUF/mmproj-gemma-4-12B-it-BF16.gguf
-      -c 32768
-      --jinja
-    ttl: 1800
-    checkEndpoint: /health
-
+  # gemma-4-12B-it-Q4_K_M (alias `gemma-4-12b`) was removed here 2026-08-25 — see the tombstone
+  # in the consumer-registry header above. `gemma-4-12b-qat` below is the replacement.
   nemotron-3-nano-4B-Q4_K_M:
     name: "NVIDIA Nemotron 3 Nano 4B (Q4_K_M)"
     aliases:
@@ -237,21 +242,11 @@ models:
   # guess. Landed after live needle-in-haystack probes at moderate (32768) and near-ceiling
   # (~110-120K token) prompt sizes confirmed both correct recall and safe VRAM headroom; see the
   # `ling-bakeoff` group's fit-math comment below for the live numbers. No `--draft`/`-md`/
-  # speculative-decoding flag on any entry: upstream reports MTP-adjacent Vulkan/RADV hangs for
-  # this architecture family, and the plan's canary-first risk posture keeps that code path
-  # untouched pending a separate, user-approved follow-up.
-  Ling-3.0-tiny-Q4_K_M:
-    name: "Ling-3.0-tiny (Q4_K_M)"
-    aliases:
-      - ling-3-tiny-q4-m
-    cmd: |
-      ${llama_server_chat_common}
-      -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q4_K_M.gguf
-      -c 131072
-      --jinja
-    ttl: 1800
-    checkEndpoint: /health
-
+  # speculative-decoding flag on any entry — settled 2026-08-25 (gfx1201-kv-fa-mtp spike
+  # research, docs/gfx1201-kv-fa-mtp-findings.md): Ling-3.0-tiny ships NO MTP heads upstream
+  # (`inclusionAI/Ling-3.0-tiny` config.json: `num_nextn_predict_layers: 0` — not a conversion
+  # strip), so MTP is impossible for this model, not merely deferred. The Q4_K_M entry (alias
+  # `ling-3-tiny-q4-m`) was removed the same date — see the bake-off registry comment above.
   Ling-3.0-tiny-UD-Q4_K_XL:
     name: "Ling-3.0-tiny (UD-Q4_K_XL)"
     aliases:
@@ -294,6 +289,14 @@ models:
   # quantization); `-c 32768` and `--jinja` match that alias's own config exactly (same family,
   # no separate context-ceiling investigation in this round — that's Ling-3.0-tiny's own history,
   # not repeated here). No `--mmproj`: text-only for this WP, per the registry comment above.
+  # Upgraded 2026-08-25 (plans/mtp-serving-rollout.md WP-2; see the registry comment above):
+  # `--mmproj` (vision — the QAT repo's own mmproj-BF16, verified clip vision-encoder header,
+  # byte-exact vs the HF listing; vision requests need `reasoning_effort: "none"` exactly as the
+  # removed `gemma-4-12b` alias did) and `-md` + `--spec-type draft-mtp` (the repo's 253 MB MTP
+  # sidecar; measured 62.8 → 104.3 t/s tg, +66%, acceptance 0.61–0.72, lossless at temp 0; the
+  # sidecar logs one benign `[spec] failed to measure draft model memory` warning before loading
+  # fine). VRAM fit re-verified live at this entry's real `-c 32768` on landing — see the
+  # `gemma-qat-bakeoff` group comment below.
   gemma-4-12B-it-qat-UD-Q4_K_XL:
     name: "Gemma 4 12B it QAT (UD-Q4_K_XL)"
     aliases:
@@ -301,6 +304,9 @@ models:
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf
+      --mmproj /models/unsloth/gemma-4-12B-it-qat-GGUF/mmproj-BF16.gguf
+      -md /models/unsloth/gemma-4-12B-it-qat-GGUF/mtp-gemma-4-12B-it.gguf
+      --spec-type draft-mtp
       -c 32768
       --jinja
     ttl: 1800
@@ -312,48 +318,24 @@ models:
   # tensors GPU-resident via the macro's own `-ngl 99`) is the winning placement from the live
   # A/B/C search — see the `qwen36-a3b-bakeoff` group comment below for the full record and the
   # registry comment above for why A and C were rejected.
+  # Recipe change 2026-08-25 (plans/mtp-serving-rollout.md WP-2): `-m` repointed from the plain
+  # Qwen3.6-35B-A3B-GGUF file to the MTP-GGUF variant (same unsloth UD-Q4_K_XL recipe + embedded
+  # `blk.40.nextn.*` heads, verified by header scan) with `--spec-type draft-mtp` — embedded-heads
+  # MTP, no sidecar needed. Measured at `-ncmoe 32`: 29.0 → 47.6 t/s tg (+64%), acceptance
+  # 0.65–0.78, lossless at temp 0; batched verification amortizes the per-token CPU-expert
+  # streaming that dominates this `-ncmoe` split's decode cost. VRAM fit re-verified live at this
+  # entry's real `-c 100000` on landing — see the group comment below. The UD-Q5_K_XL/UD-Q6_K_XL
+  # entries that used to follow this one were removed the same date (see the registry comment
+  # above — user-directed hold on Q4 only).
   Qwen3.6-35B-A3B-UD-Q4_K_XL:
     name: "Qwen3.6 35B A3B (UD-Q4_K_XL)"
     aliases:
       - qwen36-a3b
     cmd: |
       ${llama_server_chat_common}
-      -m /models/unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+      -m /models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
       -ncmoe 32
-      -c 100000
-      --jinja
-    ttl: 1800
-    checkEndpoint: /health
-
-  # UD-Q5_K_XL / UD-Q6_K_XL: WP-4 step 5, propagating config B's placement policy upward rather
-  # than re-running the full A/B/C search per quant (Decisions locked). `-ncmoe` adjusted per
-  # quant via the same exact tensor-level GGUF math (stdlib struct parse of each file's own
-  # tensor-info table, fetched via an HTTP range request before the full download completed):
-  # Q5_K_XL's routed-expert weights average ~597.6 MiB/layer (vs Q4's ~491.8 MiB/layer), Q6_K_XL's
-  # ~728.9 MiB/layer — both scaled to keep GPU-resident routed-expert VRAM in the same ~6.1-6.4 GiB
-  # band as Q4's config B (non-expert weights are quant-count-identical at 2.494 GiB across all
-  # three — only the routed-expert tensors change size with quant).
-  Qwen3.6-35B-A3B-UD-Q5_K_XL:
-    name: "Qwen3.6 35B A3B (UD-Q5_K_XL)"
-    aliases:
-      - qwen36-a3b-q5
-    cmd: |
-      ${llama_server_chat_common}
-      -m /models/unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf
-      -ncmoe 34
-      -c 100000
-      --jinja
-    ttl: 1800
-    checkEndpoint: /health
-
-  Qwen3.6-35B-A3B-UD-Q6_K_XL:
-    name: "Qwen3.6 35B A3B (UD-Q6_K_XL)"
-    aliases:
-      - qwen36-a3b-q6
-    cmd: |
-      ${llama_server_chat_common}
-      -m /models/unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q6_K_XL.gguf
-      -ncmoe 35
+      --spec-type draft-mtp
       -c 100000
       --jinja
     ttl: 1800
@@ -532,7 +514,8 @@ groups:
     exclusive: true
     persistent: false
     members:
-      - gemma-4-12B-it-Q4_K_M
+      # gemma-4-12B-it-Q4_K_M removed 2026-08-25 (see the tombstone in the registry header);
+      # its historical fit-math record above is retained as-is.
       - nemotron-3-nano-4B-Q4_K_M
 
   # ── ling-bakeoff — Ling-3.0-tiny quant bake-off, testing only, canary-first (see
@@ -685,7 +668,8 @@ groups:
     exclusive: true
     persistent: false
     members:
-      - Ling-3.0-tiny-Q4_K_M
+      # Ling-3.0-tiny-Q4_K_M removed 2026-08-25 (user-directed quant reduction — see the
+      # bake-off registry comment); its historical fit-math records above are retained as-is.
       - Ling-3.0-tiny-UD-Q4_K_XL
       - Ling-3.0-tiny-UD-Q6_K_XL
       - Ling-3.0-tiny-Q8_0
@@ -708,6 +692,15 @@ groups:
   # budget. Full results (timing table, needle/quality-corpus findings, an open question about
   # the cold/warm TTFT gap vs. the poller's own model_load_seconds reading):
   # docs/gemma-4-12b-qat-bakeoff-results.md.
+  #
+  # ── MTP + vision fit re-verification (host-verified 2026-08-25, plans/mtp-serving-rollout.md
+  # WP-2, at this entry's real -c 32768) ── baseline 818,458,624 B / 0.76 GiB (desktop only);
+  # after cold load + chat probe: 10,450,456,576 B / 9.73 GiB → footprint ≈8.97 GiB
+  # (weights 6.26 + mmproj 0.16 + MTP sidecar & draft context + KV + buffers); after vision
+  # probe: 10,458,386,432 B (stable — buffers pre-allocated). Free ≈6.2 GiB, well over the
+  # ~1.5 GiB gate, no -c step-down needed. Chat probe body-verified MTP engaged: draft_n=36,
+  # draft_n_accepted=29 (0.81), 81.9 tok/s tg. Vision probe (generated solid-red PNG,
+  # reasoning_effort "none"): correct one-word description, body-verified.
   gemma-qat-bakeoff:
     swap: true
     exclusive: true
@@ -779,6 +772,17 @@ groups:
   # GGUF header) — not pushed further this WP per "push further only if cheap and justified."
   # Full results (timing, needle/quality-corpus detail): docs/qwen36-35b-a3b-bakeoff-results.md.
   #
+  # ── MTP fit re-verification (host-verified 2026-08-25, plans/mtp-serving-rollout.md WP-2, at
+  # this entry's real -c 100000 on the MTP-GGUF backing file) ── baseline 818,458,624 B /
+  # 0.76 GiB (desktop only); after cold load + short probe: 11,519,078,400 B / 10.73 GiB; after
+  # a moderate needle probe (4,992 real prompt tokens, correct recall): 11,535,470,592 B /
+  # 10.74 GiB — +16 MB only, draft context and KV pre-allocated at load exactly like the config-B
+  # record above. Free ≈5.2 GiB, well over the ~1.5 GiB gate, no -c step-down needed. MTP
+  # body-verified engaged both probes: draft acceptance 0.85/0.83, tg 54.3/54.6 tok/s (vs
+  # ≈29-30 tok/s pre-MTP at the same -ncmoe 32 placement — the batched-verification
+  # amortization of CPU-expert streaming, even better at short generations than the spike's
+  # +64% figure at -c 8192).
+  #
   # WP-4 step 5 (host-verified 2026-08-21): config B propagated to UD-Q5_K_XL (`-ncmoe 34`) and
   # UD-Q6_K_XL (`-ncmoe 35`), each recomputed from that file's own tensor-level GGUF math. Both
   # quants' near-ceiling needle probes (and UD-Q5_K_XL's moderate probe) initially read
@@ -792,9 +796,10 @@ groups:
     exclusive: true
     persistent: false
     members:
+      # UD-Q5_K_XL / UD-Q6_K_XL removed 2026-08-25 (user-directed hold on Q4 only — see the
+      # registry comment); their WP-4 step-5 placement records (`-ncmoe 34`/`-ncmoe 35`) live in
+      # the registry comment and docs/qwen36-35b-a3b-bakeoff-results.md for any future re-add.
       - Qwen3.6-35B-A3B-UD-Q4_K_XL
-      - Qwen3.6-35B-A3B-UD-Q5_K_XL
-      - Qwen3.6-35B-A3B-UD-Q6_K_XL
 
   # ── qwen38-27b-bakeoff — Qwen3.8-27B dense, testing only (see plans/serving-harness-round-2.md
   # WP-5). Same shape as the other bake-off groups: swap:true/exclusive:true.

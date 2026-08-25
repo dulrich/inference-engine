@@ -86,4 +86,18 @@ Concrete recommendation for the next queue design: no KV-type sweep (settled neg
 3. **Header-scan new GGUFs for nextn tensors before download decisions** — availability differs per checkpoint (Ling-3.0-tiny has none upstream) and per conversion (unsloth ships separate `-MTP-GGUF` repos), and the delta is a free +35% decode.
 4. Re-evaluate triggers unchanged from spike 1 (Qwen3.8-class `-ncmoe` MoE → HIP experiment; vLLM native gfx1201 kernels → gateway leg).
 
+## Addendum 2026-08-25 — qwen36-a3b MTP measured (post-spike follow-up)
+
+Downloaded `unsloth/Qwen3.6-35B-A3B-MTP-GGUF` UD-Q4_K_XL (21.3 GiB; separate repo from the plain files production serves — heads verified `blk.40.nextn.*` by header scan before and after download) and ran the same `mtp-ab.sh` A/B, **Vulkan only, `-ncmoe 32`** (production split), `-c 8192`:
+
+| Config | tg t/s (3 prompts) | mean | acceptance | VRAM |
+|---|---|---|---|---|
+| MTP off | 29.0 / 29.1 / 28.9 | 29.0 | — | 7.49 GiB |
+| MTP on | 44.6 / 47.8 / 50.5 | **47.6 (+64%)** | 0.65 / 0.74 / 0.78, mean len ~3.2 | 8.66 GiB |
+
+- **The amortization hypothesis held**: on the CPU-offloaded-expert split, decode pays expert streaming per token; MTP verification batches ~3 tokens per pass, so the relative gain (+64%) exceeds the dense 27B's (+35%) — and the VRAM cost is smaller (+1.17 GiB vs +2.25).
+- **This beats the HIP option outright**: HIP bought +17% tg on this model (35.0 vs 29.9) and requires the dual-backend image; Vulkan+MTP buys +64% with zero image work. The dual-backend image case just lost its only production-relevant payoff on the tg axis (HIP's pp advantage stands).
+- Adoption is **not** a config tweak: the MTP variant is a *different backing file* than the live `qwen36-a3b` alias — per the alias contract (and the gemma-qat precedent in `llama/config.yaml`), that's a new-alias-or-deliberate-repoint decision with output-equivalence verification, i.e. its own small plan. Depth behavior (acceptance at long context) also unmeasured here.
+- Second candidate noted: unsloth's gemma QAT repo ships `mtp-*` sidecar files (config.yaml comment records they were deliberately skipped at alias creation).
+
 Raw results: `runs/rocm-spike/results/kv-*`, `mtp-*` (scratch); snapshot + WP reports archived in archive-repo under `inference-engine/gfx1201-kv-fa-mtp-spike/`.

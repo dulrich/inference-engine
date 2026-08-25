@@ -4,3 +4,4 @@ __pycache__/
 .worktrees/
 runs/dispatch/
 runs/rocm-spike/
+.env

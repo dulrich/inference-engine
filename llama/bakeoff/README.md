@@ -703,6 +703,36 @@ tries `import verify_run` and delegates to its `main()`; absent that module it p
 message to stderr and exits `2` — never a traceback. **WP-4 lands `verify_run.py`** (below), so
 that absent-module path is now only reachable in a worktree/checkout that predates this section.
 
+## Test matrix (`queues/matrix-v1-shared.json`, `queues/matrix-v1-dedicated.json`)
+
+`plans/overnight-test-matrix-redesign.md` WP-3. Replaces the ladder queues with an axes-first pilot matrix: the user's direction (2026-08-25) named six axes — ceiling validation under shared/dedicated GPU, needle validation on quantized KV, timing (TTFT + t/s) on all measurements, long-context prefill and decode, base-vs-MTP, and "so on" — and each one maps onto an existing queue dimension rather than a new one (plan Decisions locked), except base-vs-MTP:
+
+- gpu_mode → queue-level `vram_profile` (`desktop-shared` for Tiers A–D/F, `headless` for Tier E)
+- context → `c`
+- KV quantization → `ctk`/`ctv`/`fa`
+- timing TTFT/t/s and long-context prefill/decode → the `"timing"` battery item's hot/warm `timing_round` rows plus the per-probe `server_prompt_eval_tok_s`/`server_eval_tok_s` on `"needle"` rows — at these tiers' 128k/256k prompt sizes those needle-row rates ARE the long-context prefill/decode measurement (real ~100k-token prompts, server-reported, never wall-derived)
+- sampling → `sampling_arm` (`"capability"` on every tier except F's `"production"`)
+- base-vs-MTP → the additive `spec_decode: "base" | "mtp"` cell key (WP-2), the one axis with no pre-existing dimension
+
+Every cell in both files carries `battery: ["timing", "needle"]` and `trials: 3`; every alias is fresh and `mx-`/`mxd-`-prefixed (append-only alias contract — none reuses a ladder-v1/ladder-v2/wp5-validation alias).
+
+### Tiers (18 cells `matrix-v1-shared.json`, priority-ordered A → B → F → C → D; 4 cells `matrix-v1-dedicated.json`, Tier E)
+
+- **Tier A — ceiling validation at served config (9 cells, shared)**: every chat model at its exact live `cmd:` values in `llama/config.yaml` — the machine-readable record the live-landed prose ceilings never had. The two MTP-serving models (`gemma-4-12b-qat`, `qwen36-a3b-mtp`) carry explicit `spec_decode: "mtp"` so the recorded `sweep_cell.spec_decode` is self-describing on both comparison arms (audit E-3 pin); the other 7 cells leave the key absent (registry `server_flags` as-is).
+- **Tier B — base vs MTP (2 cells, shared)**: `gemma-4-12b-qat` and `qwen36-a3b-mtp` at served config with `spec_decode: "base"` — Tier A is the MTP arm of the same comparison; needle guards the losslessness claim, timing quantifies the MTP win at real 128k context.
+- **Tier F — production sampling arm (2 cells, shared)**: `gemma-4-12b-qat` and `qwen36-a3b-mtp` (families `gemma4`/`qwen35moe`) at served config with `sampling_arm: "production"`. Verified against `sampling_table.py`: both families carry a complete `{temperature, top_p, top_k}` production entry there (so does `bailingmoe3`/Ling and `qwen35`/dense-Qwen38 — this pruned pilot exercises the axis on two families, not the full cross-product). `nemotron_h` has no entry at all: its card states `temperature`/`top_p` per use-case but never states `top_k`, so per that module's do-not-invent contract it stays `capability`-only, in the pilot and always.
+- **Tier C — needle on quantized KV (3 cells, shared)**: `nemotron-4b-ud`, `ling-3-tiny-ud-q4`, `gemma-4-12b-qat` at `c 131072`, `ctk`/`ctv q4_0`, `fa on` — the KV-quant recall counterfactual for the models this fleet serves f16 today (a VRAM-headroom win if recall holds). `qwen38`'s f16 counterfactual at 128k is analytically VRAM-impossible on this card (its f16 ceiling tops out at 40960/24576 depending on quant, far short of 131072 — quantized KV is why it reaches 131072/65536 at all) and is deliberately not authored.
+- **Tier D — above-served long-context exploration (2 cells, shared, absolute tail)**: `gemma-4-12b-qat` and `nemotron-4b-ud` at `c 262144` f16 (served `fa` values) — ladder-v2's own 256k cells, carried over.
+- **Tier E — dedicated-GPU re-run (4 cells, `matrix-v1-dedicated.json`)**: `gemma-4-12b-qat`, `qwen36-a3b-mtp`, `qwen38-iq3s`, `nemotron-4b-ud` at served config under `vram_profile: "headless"` — the shared-vs-dedicated ceiling/timing comparison, joined to Tier A by model plus the per-cell recorded `vram_profile`. `spec_decode` stays absent on every Tier E cell (the plan pins explicit values only on the Tier A/B comparison arms).
+
+Fit-safety ordering (audit/fit-safety pin): Tiers A/B/E/F are exactly the live-verified serving configs (or strictly below — a base arm drops a draft sidecar), so they run first; Tiers C/D push past the served ceiling and rely on `classify_fit` plus scratch-server startup verification to fail fast, so they are ordered last within the shared queue — a `pause-at-deadline` truncation drops Tier D, then Tier C, and never touches Tier A.
+
+### Ladder-v2 deletion
+
+`llama/bakeoff/queues/ladder-v2.json` is deleted, un-run (user decision 2026-08-25, choosing deletion over supersede-in-place, `plans/overnight-test-matrix-redesign.md` WP-3): it carried 11 cells over the pre-matrix landed recipes, no `.state.json`, and no `runs/bakeoff/ladder-v2/` directory ever existed, so nothing is lost. Its 9-model registry and 256k cells are this matrix's direct ancestor (Tier A/D lift its `models` map and carry its two 256k cells forward). Its own 11 aliases (`gemma-qat-c128k-f16-mtp` and siblings, none `mx-`/`mxd-`-prefixed) retire unused but stay reserved under the append-only alias contract — no matrix cell, present or future, may reuse one. Two live-state references to ladder-v2 went stale on deletion and were fixed in the same change: `cron-nightly.sh`'s default queue argument (now `matrix-v1-shared.json`) and `docs/gfx1201-kv-fa-mtp-findings.md`'s "committed DISARMED" sentence.
+
+Not authored in this pilot (plan Assumptions): vision probes, tool-calling under load, and a quality-corpus battery — follow-on tiers for a future `matrix-v2` queue once a `quality` battery item exists.
+
 ## Scheduling -- host control plane (`control_dispatcher.py`, `run-window.sh`)
 
 `plans/bakeoff-queue-control-plane.md` WP-3. Files-only, minutely host dispatcher, no persistent

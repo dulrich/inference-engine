@@ -24,7 +24,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 BAKEOFF_DIR="${SCRIPT_DIR}"
-QUEUE="${1:-${BAKEOFF_DIR}/queues/ladder-v1.json}"
+QUEUE="${1:-${BAKEOFF_DIR}/queues/matrix-v1-shared.json}"
 
 export PATH="/usr/local/bin:/usr/bin:/bin"
 

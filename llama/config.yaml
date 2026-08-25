@@ -352,6 +352,24 @@ models:
   # yet — see plans/serving-harness-round-2.md WP-5. Full -ngl 99 (dense, no MoE offload). Per-quant
   # -c set to each quant's own live-verified safe VRAM ceiling — see registry comment above and
   # the group's own fit-math comment below for why these are lower than the plan's 100K target.
+  #
+  # ── q4q4 KV ladder landing (host-verified 2026-08-25, plans/long-context-serving-default.md
+  # WP-3, user-directed) ── IQ3_S's proven `-ctk q4_0 -ctv q4_0 -fa on` recipe propagated to
+  # ALL THREE quants (supersedes the 2026-08-21/22 "IQ3_S only" decision below — f16 KV cannot
+  # reach the 128k+ goal on any of these: 0.0625 MiB/token × 131072 ≈ 8 GiB beside 10-12 GiB
+  # weights). Live numbers, all needle-at-depth at ~89-90% real fill, temp 0, recall exact,
+  # fused-fa confirmed by VRAM arithmetic (f16 KV would not have loaded; per-quant residual
+  # non-weight overhead matches the measured ~17.6 KB/token q4q4 rate + a small fused buffer):
+  # - UD-IQ3_XXS: -c 40960 f16 → 131072 q4q4. Footprint 13.5 GB, 2.50 GiB free at peak; recall
+  #   exact at 116,863 real tokens; pp 370 t/s at scale, tg 26.8. 256k test: -c 262144 LOADS
+  #   but leaves ~142 MB free — decisive fit-FAIL, recorded from a live load, reverted.
+  # - UD-IQ3_S: -c 120000 → 131072 (same recipe as before). 1.59 GiB free at peak — holds the
+  #   ~1.5 GiB gate, barely; recall exact at 116,863 real tokens; pp 366 t/s, tg 25.6.
+  # - UD-Q3_K_XL: -c 24576 f16 → 65536 q4q4 — its max-safe rung: 1.73 GiB free at peak (the
+  #   next rung, 81920, predicts ≈1.48 GiB — under the gate); recall exact at 58,422 real
+  #   tokens; pp 512 t/s, tg 27.9. 131072 is analytically impossible for this quant's 12.2 GiB
+  #   weights; recorded as the plan's expected step-down, with numbers.
+  # 262144 fits NO qwen38 quant (XXS measured above; S/Q3_K_XL strictly worse by weights).
   Qwen3.8-27B-UD-IQ3_XXS:
     name: "Qwen3.8 27B (UD-IQ3_XXS)"
     aliases:
@@ -359,7 +377,10 @@ models:
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_XXS.gguf
-      -c 40960
+      -c 131072
+      -ctk q4_0
+      -ctv q4_0
+      -fa on
       --jinja
     ttl: 1800
     checkEndpoint: /health
@@ -411,7 +432,7 @@ models:
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf
-      -c 120000
+      -c 131072
       -ctk q4_0
       -ctv q4_0
       -fa on
@@ -426,7 +447,10 @@ models:
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q3_K_XL.gguf
-      -c 24576
+      -c 65536
+      -ctk q4_0
+      -ctv q4_0
+      -fa on
       --jinja
     ttl: 1800
     checkEndpoint: /health

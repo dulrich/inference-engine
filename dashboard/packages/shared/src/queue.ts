@@ -51,22 +51,38 @@ export const QueueCellSchema = z.object({
 });
 export type QueueCell = z.infer<typeof QueueCellSchema>;
 
-/** Per-queue ETA (`plans/bench-dashboard-polish.md` WP-2) — derived API-side from
- * consecutive-cell-record-timestamp deltas under `runs/bakeoff/<queueStem>/<cell-dir>/
- * config.json` (`apps/api/src/queue/eta.ts`), never from anything the browser reads
- * itself. `basis: null` (with `medianCellMinutes`/`estimatedMinutesRemaining`/
- * `cellsPerHour`/`sampleSize` all `null` alongside it) means "no timing basis yet" — the
- * null-honest state the UI renders as a quiet note, never an error. `remainingCells` is
- * computed straight from `cellCounts` (`pending + running`) independently of whether any
- * timing basis exists — it's a cell count, not a derived time estimate, so it's populated
- * whenever a sibling state file is, even with zero timing data. */
+/** Per-queue ETA (`plans/bench-dashboard-polish.md` WP-2; model/context-aware fallback
+ * chain added by `plans/bakeoff-timing-records-and-estimates.md` WP-2) — derived API-side,
+ * never from anything the browser reads itself. `basis: null` (with
+ * `medianCellMinutes`/`estimatedMinutesRemaining`/`cellsPerHour`/`sampleSize` all `null`
+ * alongside it) means "no timing basis yet" — the null-honest state the UI renders as a
+ * quiet note, never an error. `remainingCells` is computed straight from `cellCounts`
+ * (`pending + running`) independently of whether any timing basis exists — it's a cell
+ * count, not a derived time estimate, so it's populated whenever a sibling state file is,
+ * even with zero timing data.
+ *
+ * `basis: "model-table"` (WP-2, timing-records plan): the estimate used a per-(model,
+ * context) cost table built from this queue's own records (`apps/api/src/queue/eta.ts`)
+ * for at least one remaining cell, instead of (or alongside) the plain consecutive-
+ * timestamp global median above — supersedes `"current-run"`/`"prior-runs"` for that
+ * queue's headline the moment any remaining cell resolves this way. `bucketSampleSize`
+ * (total per-cell cost samples consumed across the whole estimate) and `scalingCaveat`
+ * (true whenever the total is not purely exact-(model,context)-basis — some remaining cell
+ * fell back to a same-model-scaled projection, the plain global median, or was dropped
+ * entirely for lack of any basis) are both `.optional()` alongside `.nullable()`: they are
+ * only ever present when `basis === "model-table"`; every other case omits them entirely
+ * so the wire JSON for "no better basis exists" stays byte-identical to before this field
+ * pair existed (honesty contract — never a fabricated `false`/`0` standing in for "not
+ * evaluated"). */
 export const QueueEtaSchema = z.object({
   remainingCells: z.number().int().nonnegative().nullable(),
   medianCellMinutes: z.number().nullable(),
   estimatedMinutesRemaining: z.number().nullable(),
   cellsPerHour: z.number().nullable(),
-  basis: z.enum(["current-run", "prior-runs"]).nullable(),
+  basis: z.enum(["current-run", "prior-runs", "model-table"]).nullable(),
   sampleSize: z.number().int().nonnegative().nullable(),
+  bucketSampleSize: z.number().int().nonnegative().nullable().optional(),
+  scalingCaveat: z.boolean().nullable().optional(),
 });
 export type QueueEta = z.infer<typeof QueueEtaSchema>;
 

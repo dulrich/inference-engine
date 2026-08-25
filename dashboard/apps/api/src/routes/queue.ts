@@ -29,6 +29,13 @@ import { computeEtaForQueue } from "../queue/eta.ts";
 // fs read entirely (`computeEtaForQueue`'s own "recordsDir: null -> no I/O" contract) and
 // still yields a fully-shaped `eta` object (remainingCells populated from cellCounts,
 // every timing field null) rather than an absent field.
+//
+// `cellDescriptors` (WP-2, `plans/bakeoff-timing-records-and-estimates.md`) rides along on
+// the same `computeEtaForQueue` call — the model/context-aware cost table needs to know
+// WHICH model/context each remaining cell is, and `cells` below (built from the queue
+// file, joined against the state file) is already exactly that; this route just narrows it
+// to the 4 fields the estimator needs and passes every cell through unfiltered (state
+// filtering is `computeEtaForQueue`'s own job, not this route's).
 
 const KNOWN_CELL_STATES: readonly CellState[] = [
   "pending",
@@ -225,7 +232,12 @@ export async function buildQueueListResponse(
       // currently names — every other queue passes `null` and falls to `"prior-runs"`
       // (or `null` basis with no data at all).
       const liveStartedAt = control?.live && control.live.queueStem === stem ? control.live.startedAt : null;
-      const eta = await computeEtaForQueue({ recordsDir: recordsDir ?? null, queueStem: stem, remainingCells, liveStartedAt });
+      // `cellDescriptors` (WP-2, `plans/bakeoff-timing-records-and-estimates.md`) is just
+      // `cells` above, narrowed to the 4 fields the model/context-aware estimator needs --
+      // `computeEtaForQueue` does its own pending/running filtering, so every state is
+      // passed through here unfiltered.
+      const cellDescriptors = cells.map(({ alias, model, c, state }) => ({ alias, model, c, state }));
+      const eta = await computeEtaForQueue({ recordsDir: recordsDir ?? null, queueStem: stem, remainingCells, liveStartedAt, cellDescriptors });
 
       queues.push({
         name: stem,

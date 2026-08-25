@@ -1,6 +1,6 @@
 # Resident router (:4813) — consumer guide
 
-The resident mixed local/subscription-Claude gateway shipped by `plans/resident-router-ai-gateway.md` (build context `router/`, fleet wiring in `fleet-tools/compose.fleet.yml` + `SERVICES.md`). Engine: `@the-next-ai/ai-gateway` 1.0.18, source build pinned at `782cd51` with one vendored patch (`router/patches/0001-omit-x-api-key-for-passthrough-bearer.patch` — omit `x-api-key` when the credential is a passthrough OAuth bearer; the sole defect that blocked subscription passthrough, `oauth-passthrough-probe.md`). Evidence records this doc builds on: `routing-decision.md` (arm selection, qwen38 conversion fix), `oauth-passthrough-probe.md` (OAUTH-PROBE-OK / AUTH-COEXIST-OK).
+The resident mixed local/subscription-Claude gateway shipped by `plans/resident-router-ai-gateway.md` (build context `router/`, fleet wiring in `fleet-tools/compose.fleet.yml` + `SERVICES.md`). Engine: `@the-next-ai/ai-gateway` 1.0.18, source build pinned at `782cd51` with a four-patch vendored series (`router/patches/0001`–`0004`; rationale per patch in `router/AGENTS.md`): 0001 omits `x-api-key` for the passthrough OAuth bearer (the sole defect that blocked subscription passthrough, `oauth-passthrough-probe.md`), 0002 adds the local-leg prefill/idle-gap ping keepalive, 0003 relays upstream error bodies byte-verbatim to Anthropic-protocol clients, 0004 adds the `/v1/messages/count_tokens` route (`plans/router-prefill-keepalive-and-protocol-gaps.md`). Evidence records this doc builds on: `routing-decision.md` (arm selection, qwen38 conversion fix), `oauth-passthrough-probe.md` (OAUTH-PROBE-OK / AUTH-COEXIST-OK).
 
 One loopback port, two Anthropic-protocol legs behind one client-auth boundary:
 
@@ -35,12 +35,14 @@ The `claude-local/` prefix **is required** on request ids — it is what selects
 
 Both modes: add `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` to surface the merged `/v1/models` list in the model picker (discovery only lists ids containing `claude`/`anthropic` — both legs' ids qualify by construction). Containment rules for agent fixtures (deny-rule profile, disposable fixture dirs) are unchanged from WP-4 — see `docs/claude-code-local-profile.md`; note its correction that only `Edit(path)` deny rules cover file-editing tools.
 
-## Limitations (deliberate, recorded at plan time)
+## Protocol coverage (closed by `plans/router-prefill-keepalive-and-protocol-gaps.md`, 2026-08-25)
 
-- **No capability fallback**: the engine wraps upstream errors in its own envelope (`401 All target providers failed.`-style), so Claude Code's documented fallback-on-upstream-error behavior is unsupported through this service.
-- **No `/v1/messages/count_tokens` route** — 404s through the gateway; Claude Code degrades gracefully (observed across every WP-5 harness run).
-- **No prefill keepalive**: no early bytes or pings during upstream prefill, so the WP-4 **300 s silent-abort** condition still applies at extreme local context.
-- `?beta=true` query forwarding and open-list header forwarding are absent; both measured harmless for both legs (probe doc).
+Three of the four launch limitations are now shipped behavior; one accepted gap remains:
+
+- **Prefill/idle keepalive (patch 0002, shipped)**: whenever ≥15 s pass with no frame on a local-leg streamed response — including before `message_start`, i.e. the whole prefill window — the gateway emits an `event: ping` frame, defusing the WP-4 **300 s silent-abort** condition at extreme local context. Pre-`message_start` ping tolerance was measured on Claude Code **2.1.243** (spike record in the plan doc), not assumed from the protocol reference; re-verify on a major harness upgrade. Live-verified on `:4813` (ping 8.7 s before `message_start` on a cold-model 22k-token prompt, intact completion).
+- **Upstream error-body passthrough (patch 0003, shipped)**: on the final target attempt for an Anthropic-protocol client, a non-empty upstream error body is relayed byte-verbatim with the upstream status instead of the engine's `All target providers failed.` envelope — restoring Claude Code's documented fallback-on-upstream-error behavior. Other source protocols, non-final attempts, and empty bodies keep the envelope.
+- **`/v1/messages/count_tokens` (patch 0004, shipped)**: proxied on both legs behind the same auth/idempotency prehandlers, with the messages path's own ordered model resolution. Live-verified on the local leg (llama.cpp serves it natively) and the hosted leg (200 through the OAuth passthrough, 2026-08-25).
+- **Accepted gap (unchanged)**: `?beta=true` query forwarding and open-list header forwarding are absent; both measured harmless for both legs (probe doc).
 
 ## Operations
 

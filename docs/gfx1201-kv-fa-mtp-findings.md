@@ -101,3 +101,18 @@ Downloaded `unsloth/Qwen3.6-35B-A3B-MTP-GGUF` UD-Q4_K_XL (21.3 GiB; separate rep
 - Second candidate noted: unsloth's gemma QAT repo ships `mtp-*` sidecar files (config.yaml comment records they were deliberately skipped at alias creation).
 
 Raw results: `runs/rocm-spike/results/kv-*`, `mtp-*` (scratch); snapshot + WP reports archived in archive-repo under `inference-engine/gfx1201-kv-fa-mtp-spike/`.
+
+## Addendum 2026-08-25 — MTP rollout executed (plans/mtp-serving-rollout.md)
+
+The rollout landed the same day, with user-directed scope amendments (rev 2–3: Ling quant reduction; qwen36 held to Q4 only, Q5/Q6 MTP downloads cancelled). Serving state after WP-2/WP-3, all verified live by response body:
+
+| Alias | Change | Fit at real `-c` (baseline 0.76 GiB desktop) | MTP engagement |
+|---|---|---|---|
+| `gemma-4-12b-qat` | +`--mmproj` (vision) +`-md` sidecar +`--spec-type draft-mtp`, `-c 32768` | 9.73 GiB used → **≈6.2 GiB free** (stable across chat + vision probes) | draft_n 36/29 accepted (0.81), 81.9 tok/s |
+| `qwen36-a3b` | `-m` → MTP-GGUF variant +`--spec-type draft-mtp`, `-ncmoe 32`, `-c 100000` | 10.74 GiB used peak → **≈5.2 GiB free**; +16 MB only across a 4,992-token needle probe (pre-allocated) | acceptance 0.85/0.83, tg 54.3–54.6 tok/s (vs ≈29–30 pre-MTP: **+~85% at short generations**) |
+| `gemma-4-12b` | REMOVED (user-directed; consumers repoint to `gemma-4-12b-qat`, tracked in INITIATIVE.md) | — | — |
+| `ling-3-tiny-q4-m`, `qwen36-a3b-q5`, `qwen36-a3b-q6` | REMOVED (quant reductions; no consumers) | — | — |
+
+Neither fit gate tripped — no `-c` step-down anywhere; the draft-context-scales-with-`-c` concern was real but small at these contexts (qwen's whole MTP+KV+buffer overhead at `-c 100000` is ~4.5 GiB above weights-resident, dominated by pre-allocated KV, not the draft context). Ladder-v1 was retired terminal (`completed` + retirement annotation — batch.py has no cancelled state; 2 finished gemma cells retained); the plain qwen dir (76 GiB), the lmstudio gemma dir (7.1 GiB), and the Ling Q4_K_M file (4.5 GiB) were deleted (~88 GiB reclaimed), and a post-deletion probe confirmed serving reads only the MTP paths. A future ladder-v2 measures the MTP recipes.
+
+**Dual-backend image: retired as a queued item entirely** (user decision 2026-08-25, superseding recommendation 4's HIP re-evaluate trigger): decode is the limiter for most real workflows, Vulkan+MTP owns decode, and HIP's remaining pp advantage does not justify the second load-bearing pin, the silent-alias failure class, and the rebuild coupling documented in the spike. HIP numbers above stay as measurement record only.

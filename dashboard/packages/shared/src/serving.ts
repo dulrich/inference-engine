@@ -27,6 +27,44 @@ export const ServingFlagsSchema = z.object({
 });
 export type ServingFlags = z.infer<typeof ServingFlagsSchema>;
 
+// Capability metadata (WP-2, `plans/capability-surfacing-and-local-agent-endpoints.md`;
+// normative contract: `docs/model-capabilities.md`) -- the per-model `metadata:` block in
+// `llama/config.yaml`, parsed by the SAME server-side reader as `flags` above (read-only
+// file parse, never a live call to the router -- see `llamaConfig.ts`'s header comment for
+// the data-path decision and the network-reachability finding behind it). `capability` is
+// additive alongside `flags`, never a replacement for it (plan's "augment, never replace"
+// pin) -- the pre-existing full-flag pipeline this schema already carried is untouched
+// above.
+//
+// Every leaf is nullable, matching `ServingFlagsSchema`'s own posture just above: a value
+// resolves to `null` when it can't be determined, never a guessed default. In practice
+// every one of the 12 real served models carries a complete block (WP-1's exit bar), but a
+// model with no `metadata:` key at all (a config predating WP-1, or a fixture that doesn't
+// need one) still round-trips as `capability: null` on `ServingAlias` below, same "absence
+// is a valid state" posture `matchServingToMeasured`'s "no measurement yet" already uses.
+//
+// `reasoning` and the modality lists are bare strings, not a `z.enum` -- the contract doc
+// pins both vocabularies "append-only": a future value this not-yet-updated dashboard
+// doesn't recognize must still round-trip and render as its own label (CC-04: the label
+// text IS the information), never fail closed on an unknown-but-valid wire value.
+export const ServingCapabilitySchema = z.object({
+  contextLength: z.number().int().nullable(),
+  inputModalities: z.array(z.string()).default([]),
+  outputModalities: z.array(z.string()).default([]),
+  toolCalling: z.boolean().nullable(),
+  reasoning: z.string().nullable(),
+  serving: z.object({
+    quant: z.string().nullable(),
+    kvCacheType: z.string().nullable(),
+    flashAttention: z.boolean().nullable(),
+    mtp: z.boolean().nullable(),
+    // Optional serving keys (contract doc: "absent means macro default, never unknown").
+    moeCpuOffloadLayers: z.number().int().nullable().default(null),
+    ubatch: z.number().int().nullable().default(null),
+  }),
+});
+export type ServingCapability = z.infer<typeof ServingCapabilitySchema>;
+
 export const ServingAliasSchema = z.object({
   modelKey: z.string(),
   name: z.string().nullable(),
@@ -34,6 +72,9 @@ export const ServingAliasSchema = z.object({
   ttl: z.number().int().nullable(),
   checkEndpoint: z.string().nullable(),
   flags: ServingFlagsSchema,
+  // `.default(null)` widens what `.parse()` accepts the same way `allFlags` above does --
+  // a payload predating this field still round-trips as `capability: null`.
+  capability: ServingCapabilitySchema.nullable().default(null),
 });
 export type ServingAlias = z.infer<typeof ServingAliasSchema>;
 

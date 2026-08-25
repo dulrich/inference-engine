@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { guardedNavClick, parsePath, runDetailPath, tabToPath } from "./routes.ts";
 
 describe("tabToPath / runDetailPath", () => {
-  test("every tab maps to its own path", () => {
-    expect(tabToPath("runs")).toBe("/");
+  test("every tab maps to its own path -- Serving owns \"/\" (WP-2 default landing route)", () => {
+    expect(tabToPath("runs")).toBe("/runs");
     expect(tabToPath("ladders")).toBe("/ladders");
     expect(tabToPath("longcontext")).toBe("/longcontext");
     expect(tabToPath("fit")).toBe("/fit");
-    expect(tabToPath("serving")).toBe("/serving");
+    expect(tabToPath("serving")).toBe("/");
     expect(tabToPath("queue")).toBe("/queue");
   });
 
@@ -17,13 +17,17 @@ describe("tabToPath / runDetailPath", () => {
 });
 
 describe("parsePath", () => {
-  test("resolves each tab's bare path", () => {
-    expect(parsePath("/")).toEqual({ tab: "runs", matched: true });
+  test("resolves each tab's bare path -- \"/\" resolves to Serving (WP-2 default landing route)", () => {
+    expect(parsePath("/")).toEqual({ tab: "serving", matched: true });
+    expect(parsePath("/runs")).toEqual({ tab: "runs", matched: true });
     expect(parsePath("/ladders")).toEqual({ tab: "ladders", matched: true });
     expect(parsePath("/longcontext")).toEqual({ tab: "longcontext", matched: true });
     expect(parsePath("/fit")).toEqual({ tab: "fit", matched: true });
-    expect(parsePath("/serving")).toEqual({ tab: "serving", matched: true });
     expect(parsePath("/queue")).toEqual({ tab: "queue", matched: true });
+  });
+
+  test("the pre-WP-2 \"/serving\" path is no longer a tab path (Serving moved to \"/\") -- unmatched, normalizes to Serving anyway via the shared fallback", () => {
+    expect(parsePath("/serving")).toEqual({ tab: "serving", matched: false });
   });
 
   test("resolves a run detail path", () => {
@@ -34,12 +38,12 @@ describe("parsePath", () => {
     expect(parsePath("/runs/a%2Fb")).toEqual({ tab: "runs", runId: "a/b", matched: true });
   });
 
-  test("an unrecognized path is unmatched, defaulting to runs", () => {
-    expect(parsePath("/nonsense")).toEqual({ tab: "runs", matched: false });
+  test("an unrecognized path is unmatched, defaulting to serving (WP-2 default landing route)", () => {
+    expect(parsePath("/nonsense")).toEqual({ tab: "serving", matched: false });
   });
 
-  test("/runs/ with no id is unmatched", () => {
-    expect(parsePath("/runs/")).toEqual({ tab: "runs", matched: false });
+  test("/runs/ with no id is unmatched, defaulting to serving", () => {
+    expect(parsePath("/runs/")).toEqual({ tab: "serving", matched: false });
   });
 });
 

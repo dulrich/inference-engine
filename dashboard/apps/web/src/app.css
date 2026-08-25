@@ -20,7 +20,11 @@
  *
  * WP-1 (plan `bench-dashboard-polish.md` WP-1) extends `.serving-*` with the per-row full-
  * config expand -- the toggle itself is a plain `.btn-secondary` (no new button rule), the
- * expanded panel reuses `.run-table`/`.run-table-muted` for the flag/value list. */
+ * expanded panel reuses `.run-table`/`.run-table-muted` for the flag/value list.
+ *
+ * WP-2 (plan `capability-surfacing-and-local-agent-endpoints.md` WP-2) extends `.serving-*`
+ * again with the capability-metadata column (`.serving-capabilities`/`.serving-cap-*`) --
+ * `.pill`/`.pill-tag` reuse only, no new chip chrome. */
 
 /* ---- Shared view chrome ------------------------------------------------- */
 
@@ -192,6 +196,34 @@
 
 .serving-measured-link:hover {
   text-decoration: underline;
+}
+
+/* ---- Serving: capability metadata column (WP-2) ----------------------------
+   Overrides `.run-table td`'s default `white-space: nowrap` -- this cell stacks three
+   lines (modalities / tools+reasoning pills / the serving-facts summary) rather than one. */
+
+.serving-capabilities {
+  min-width: 220px;
+  white-space: normal;
+}
+
+.serving-cap-modalities,
+.serving-cap-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.serving-cap-arrow {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.serving-cap-serving {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
 }
 
 /* ---- Serving: per-row full-config expand (WP-1) ---------------------------- */

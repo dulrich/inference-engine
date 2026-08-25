@@ -1,4 +1,4 @@
-import type { ServingAlias, ServingFlagEntry, ServingFlags, ServingResponse } from "@bench-dashboard/shared";
+import type { ServingAlias, ServingCapability, ServingFlagEntry, ServingFlags, ServingResponse } from "@bench-dashboard/shared";
 
 // `GET /api/serving`'s server-side reader (cycle-1 blocking finding B1 — the browser gets
 // no executable path to `llama/config.yaml`; only this module ever opens the file, and it
@@ -6,13 +6,47 @@ import type { ServingAlias, ServingFlagEntry, ServingFlags, ServingResponse } fr
 // `Bun.YAML.parse` (no `js-yaml`/`yaml` dependency — `llama/config.yaml` has no real YAML
 // anchors, only llama-swap's own `${macro}` string substitution, which this module expands
 // itself before flag extraction).
+//
+// WP-2 data-path decision (`plans/capability-surfacing-and-local-agent-endpoints.md` WP-2
+// brief): capability metadata is read from THIS SAME bind-mounted `config.yaml`'s per-model
+// `metadata:` block, never fetched live from the router's `GET /v1/models`. Two findings
+// ruled the live-fetch alternative out: (1) the brief's literal condition -- "can the API
+// container already reach :4811" -- is false by this fleet's own documented network fact
+// (`fleet-tools/compose.fleet.yml`'s Open WebUI comment block, verified live
+// 2026-08-20): :4811 is `127.0.0.1`-bound on the HOST, and a socket bound to loopback never
+// accepts packets arriving from another container's bridge interface -- only the container
+// DNS name (`inference-engine-llama:4806`, reachable over the shared default compose
+// network) works, and reaching THAT would still be a new architectural dependency, not
+// something already wired for this container. (2) this repo's own locked decision (`plans/
+// bench-results-db-and-dashboard.md`, "Read-only over serving config") already commits the
+// API to reading `llama/config.yaml` directly rather than calling the live service, and
+// llama-swap surfaces `metadata:` into `/v1/models` verbatim (`docs/model-capabilities.md`)
+// -- so the config file is the identical normative source with none of the new runtime
+// dependency, container-restart ordering, or fixture-untestability a live call would add.
 
+interface LlamaConfigCapabilityServing {
+  quant?: string;
+  kv_cache_type?: string;
+  flash_attention?: boolean;
+  mtp?: boolean;
+  moe_cpu_offload_layers?: number;
+  ubatch?: number;
+}
+interface LlamaConfigCapability {
+  context_length?: number;
+  input_modalities?: string[];
+  output_modalities?: string[];
+  tool_calling?: boolean;
+  reasoning?: string;
+  serving?: LlamaConfigCapabilityServing;
+}
 interface LlamaConfigModel {
   name?: string;
   aliases?: string[];
   cmd?: string;
   ttl?: number;
   checkEndpoint?: string;
+  metadata?: LlamaConfigCapability;
 }
 interface LlamaConfigDoc {
   macros?: Record<string, string>;
@@ -96,6 +130,33 @@ function extractFlags(cmdText: string): ServingFlags {
   };
 }
 
+/** `metadata:` -> the typed capability block (WP-2, `docs/model-capabilities.md`). `null`
+ * when a model carries no `metadata:` key at all -- a real serving fact for a config
+ * predating WP-1, never a parse error. A present block is trusted field-by-field (WP-1's
+ * exit bar already verifies every real served model's block is complete); any individual
+ * field this parser can't find resolves to `null`, never a guessed default, matching
+ * `extractFlags`'s own posture above. `??` (not `||`) throughout so a legitimate `false`
+ * (e.g. `tool_calling: false`) is never mistaken for "absent". */
+function extractCapability(metadata: LlamaConfigCapability | undefined): ServingCapability | null {
+  if (metadata === undefined) return null;
+  const serving = metadata.serving ?? {};
+  return {
+    contextLength: metadata.context_length ?? null,
+    inputModalities: metadata.input_modalities ?? [],
+    outputModalities: metadata.output_modalities ?? [],
+    toolCalling: metadata.tool_calling ?? null,
+    reasoning: metadata.reasoning ?? null,
+    serving: {
+      quant: serving.quant ?? null,
+      kvCacheType: serving.kv_cache_type ?? null,
+      flashAttention: serving.flash_attention ?? null,
+      mtp: serving.mtp ?? null,
+      moeCpuOffloadLayers: serving.moe_cpu_offload_layers ?? null,
+      ubatch: serving.ubatch ?? null,
+    },
+  };
+}
+
 /** `configText` -> the served-alias list, filtered to models that actually publish at
  * least one alias (a `models:` entry with no `aliases:` is not reachable by any consumer
  * and is never a "served alias" — the brief's "filtered" pin). */
@@ -114,6 +175,7 @@ export function parseServedAliases(configText: string): ServingAlias[] {
       ttl: typeof model.ttl === "number" ? model.ttl : null,
       checkEndpoint: model.checkEndpoint ?? null,
       flags: extractFlags(expandMacros(model.cmd ?? "", macros)),
+      capability: extractCapability(model.metadata),
     });
   }
   return aliases;

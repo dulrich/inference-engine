@@ -5,15 +5,20 @@
 // API driven directly from App.svelte). Queue (WP-C, plan
 // `bench-dashboard-run-context-surfacing.md` WP-C) is a read-only view over `GET
 // /api/queue` -- no drill-down path of its own.
+//
+// Serving owns "/" (WP-2, `plans/capability-surfacing-and-local-agent-endpoints.md`: "Serving
+// becomes the default landing route of the SPA") -- Runs moved to its own bare `/runs` path,
+// distinct from the existing `/runs/:id` drill-down pattern below (`RUN_DETAIL_PATH` requires
+// a non-empty id segment, so it never matches the bare `/runs`).
 
 export type Tab = "runs" | "ladders" | "longcontext" | "fit" | "serving" | "queue";
 
 const TAB_PATHS: Record<Tab, string> = {
-  runs: "/",
+  runs: "/runs",
   ladders: "/ladders",
   longcontext: "/longcontext",
   fit: "/fit",
-  serving: "/serving",
+  serving: "/",
   queue: "/queue",
 };
 
@@ -35,7 +40,10 @@ export interface ParsedRoute {
   matched: boolean;
 }
 
-const UNMATCHED: ParsedRoute = { tab: "runs", matched: false };
+// An unrecognized path normalizes to "/" (below, `applyLocation`'s `history.replaceState`),
+// so its fallback tab must match whatever tab "/" itself resolves to -- `serving` since
+// WP-2, matching `TAB_PATHS.serving` above.
+const UNMATCHED: ParsedRoute = { tab: "serving", matched: false };
 
 const RUN_DETAIL_PATH = /^\/runs\/([^/]+)$/;
 

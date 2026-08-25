@@ -139,7 +139,7 @@ describe("CurveSeriesSchema", () => {
 });
 
 describe("ServingResponseSchema", () => {
-  test("round-trips a served-alias response", () => {
+  test("round-trips a served-alias response with an explicit null capability", () => {
     const response = {
       configPath: "/fixtures/llama-config.yaml",
       models: [
@@ -150,10 +150,63 @@ describe("ServingResponseSchema", () => {
           ttl: 1800,
           checkEndpoint: "/health",
           flags: { contextLength: 32768, kvCacheTypeK: "q4_0", kvCacheTypeV: "q4_0", flashAttention: "on", gpuLayers: 99 },
+          capability: null,
         },
       ],
     };
-    expect(() => ServingResponseSchema.parse(response)).not.toThrow();
+    const parsed = ServingResponseSchema.parse(response);
+    expect(parsed.models[0]?.capability).toBeNull();
+  });
+
+  test("round-trips a full capability block (WP-2, incl. optional serving keys)", () => {
+    const response = {
+      configPath: "/fixtures/llama-config.yaml",
+      models: [
+        {
+          modelKey: "gemma-4-12B-it-qat-UD-Q4_K_XL",
+          name: "Gemma 4 12B it QAT (UD-Q4_K_XL)",
+          aliases: ["gemma-4-12b-qat"],
+          ttl: 1800,
+          checkEndpoint: "/health",
+          flags: { contextLength: 131072, kvCacheTypeK: null, kvCacheTypeV: null, flashAttention: null, gpuLayers: 99 },
+          capability: {
+            contextLength: 131072,
+            inputModalities: ["text", "image"],
+            outputModalities: ["text"],
+            toolCalling: true,
+            reasoning: "request-controllable",
+            serving: {
+              quant: "UD-Q4_K_XL",
+              kvCacheType: "f16",
+              flashAttention: false,
+              mtp: true,
+              moeCpuOffloadLayers: null,
+              ubatch: null,
+            },
+          },
+        },
+      ],
+    };
+    const parsed = ServingResponseSchema.parse(response);
+    expect(parsed.models[0]?.capability).toEqual(response.models[0]?.capability);
+  });
+
+  test("accepts a `capability` entirely absent from the payload (backward-compat default)", () => {
+    const response = {
+      configPath: "/fixtures/llama-config.yaml",
+      models: [
+        {
+          modelKey: "fixture-chat-q4",
+          name: null,
+          aliases: ["fixture-chat"],
+          ttl: null,
+          checkEndpoint: null,
+          flags: { contextLength: null, kvCacheTypeK: null, kvCacheTypeV: null, flashAttention: null, gpuLayers: null },
+        },
+      ],
+    };
+    const parsed = ServingResponseSchema.parse(response);
+    expect(parsed.models[0]?.capability).toBeNull();
   });
 });
 

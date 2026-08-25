@@ -28,7 +28,12 @@
     { tab: "queue", label: "Queue" },
   ];
 
-  let activeTab = $state<Tab>("runs");
+  // Serving is the default landing tab (WP-2, `plans/capability-surfacing-and-local-agent-
+  // endpoints.md`: "Serving becomes the default landing route of the SPA", `routes.ts`
+  // `TAB_PATHS.serving === "/"`) -- `applyLocation()` below overwrites this from the real
+  // URL before first render, so this initial value only matters as the pre-navigation
+  // fallback, same as `routes.ts`'s own `UNMATCHED` default.
+  let activeTab = $state<Tab>("serving");
   // Only meaningful while activeTab === "runs" (routes.ts `/runs/:id`): Runs renders a
   // drill-down page when this is set, its list otherwise.
   let activeRunId = $state<string | undefined>(undefined);

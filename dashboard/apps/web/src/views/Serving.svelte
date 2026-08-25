@@ -1,13 +1,27 @@
 <script lang="ts">
-  // Serving -- live-served aliases joined to their best measured cell (plan WP-2 bullet 5).
-  // `GET /api/serving` is a server-side reader of `llama/config.yaml`; the SPA never reads
-  // any host file directly (Decisions locked "Read-only over serving config"). The join to
-  // `experiments` is client-side (`lib/serving/matchMeasured.ts`) -- most aliases have no
-  // measurement yet, which is an expected, designed state, not an error.
+  // Serving -- live-served aliases joined to their best measured cell (plan WP-2 bullet 5,
+  // `bench-dashboard-polish.md`), and now the default landing view (plan WP-2, `capability-
+  // surfacing-and-local-agent-endpoints.md`). `GET /api/serving` is a server-side reader of
+  // `llama/config.yaml`; the SPA never reads any host file directly (Decisions locked
+  // "Read-only over serving config"). The join to `experiments` is client-side
+  // (`lib/serving/matchMeasured.ts`) -- most aliases have no measurement yet, which is an
+  // expected, designed state, not an error. The "Capabilities" column renders
+  // `row.alias.capability` (the per-model `metadata:` block, `docs/model-capabilities.md`)
+  // ALONGSIDE the pre-existing Context/KV K/KV V/FA columns and the full-flag expand row
+  // below -- augmenting, never subsetting or replacing either (a `null` capability, e.g. a
+  // model predating the WP-1 metadata rollout, renders its own muted "no capability
+  // metadata" note rather than an empty cell).
   import type { ExperimentSummary } from "@bench-dashboard/shared";
   import { getServing } from "../api.ts";
   import { matchServingToMeasured } from "../lib/serving/matchMeasured.ts";
   import { expandToggleLabel, flagValueClass, formatFlagValue, toggleExpandedRow } from "../lib/serving/expand.ts";
+  import {
+    capabilityReasoningLabel,
+    capabilityReasoningPillClass,
+    capabilityToolsLabel,
+    capabilityToolsPillClass,
+    formatCapabilityServingSummary,
+  } from "../lib/serving/capability.ts";
   import { guardedNavClick, runDetailPath } from "../routes.ts";
   import { formatCount } from "../lib/format.ts";
 
@@ -90,6 +104,7 @@
           <th>KV K</th>
           <th>KV V</th>
           <th>FA</th>
+          <th>Capabilities</th>
           <th>Measured cell</th>
           <th>Config</th>
         </tr>
@@ -103,6 +118,30 @@
             <td>{row.alias.flags.kvCacheTypeK ?? "—"}</td>
             <td>{row.alias.flags.kvCacheTypeV ?? "—"}</td>
             <td>{row.alias.flags.flashAttention ?? "—"}</td>
+            <td class="serving-capabilities">
+              {#if row.alias.capability}
+                <div class="serving-cap-modalities">
+                  {#each row.alias.capability.inputModalities as modality (modality)}
+                    <span class="pill pill-tag">{modality}</span>
+                  {/each}
+                  <span class="serving-cap-arrow" aria-hidden="true">&rarr;</span>
+                  {#each row.alias.capability.outputModalities as modality (modality)}
+                    <span class="pill pill-tag">{modality}</span>
+                  {/each}
+                </div>
+                <div class="serving-cap-facts">
+                  <span class="pill {capabilityToolsPillClass(row.alias.capability.toolCalling)}">
+                    {capabilityToolsLabel(row.alias.capability.toolCalling)}
+                  </span>
+                  <span class="pill {capabilityReasoningPillClass(row.alias.capability.reasoning)}">
+                    {capabilityReasoningLabel(row.alias.capability.reasoning)}
+                  </span>
+                </div>
+                <div class="serving-cap-serving run-table-muted">{formatCapabilityServingSummary(row.alias.capability)}</div>
+              {:else}
+                <span class="run-table-muted">no capability metadata</span>
+              {/if}
+            </td>
             <td>
               {#if row.measured}
                 <a
@@ -128,7 +167,7 @@
           </tr>
           {#if expandedRows.has(row.alias.modelKey)}
             <tr class="serving-flags-row">
-              <td colspan="8">
+              <td colspan="9">
                 {#if row.alias.flags.allFlags.length === 0}
                   <p class="run-table-muted">No flags found in the served command.</p>
                 {:else}

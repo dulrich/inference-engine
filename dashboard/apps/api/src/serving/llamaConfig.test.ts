@@ -84,6 +84,52 @@ describe("readServingConfig", () => {
     expect(response.models.some((m) => m.modelKey === "fixture-unaliased")).toBe(false);
   });
 
+  test("parses a full capability block, incl. both optional serving keys", async () => {
+    const response = await readServingConfig(FIXTURE_PATH);
+    const chat = response.models.find((m) => m.modelKey === "fixture-chat-q4");
+    expect(chat?.capability).toEqual({
+      contextLength: 32768,
+      inputModalities: ["text"],
+      outputModalities: ["text"],
+      toolCalling: true,
+      reasoning: "request-controllable",
+      serving: {
+        quant: "Q4_K_M",
+        kvCacheType: "q4_0",
+        flashAttention: true,
+        mtp: false,
+        moeCpuOffloadLayers: 8,
+        ubatch: 2048,
+      },
+    });
+  });
+
+  test("a capability block with no optional serving keys resolves them to null, never a guessed 0", async () => {
+    const response = await readServingConfig(FIXTURE_PATH);
+    const embed = response.models.find((m) => m.modelKey === "fixture-embed-f16");
+    expect(embed?.capability).toEqual({
+      contextLength: 8192,
+      inputModalities: ["text"],
+      outputModalities: ["embedding"],
+      toolCalling: false,
+      reasoning: "none",
+      serving: {
+        quant: "F16",
+        kvCacheType: "f16",
+        flashAttention: false,
+        mtp: false,
+        moeCpuOffloadLayers: null,
+        ubatch: null,
+      },
+    });
+  });
+
+  test("a model with no metadata block at all resolves capability to null", async () => {
+    const response = await readServingConfig(FIXTURE_PATH);
+    const edge = response.models.find((m) => m.modelKey === "fixture-flags-edge");
+    expect(edge?.capability).toBeNull();
+  });
+
   test("never writes the source file (read-only over serving config)", async () => {
     const before = await Bun.file(FIXTURE_PATH).text();
     await readServingConfig(FIXTURE_PATH);

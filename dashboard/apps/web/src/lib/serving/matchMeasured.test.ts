@@ -17,6 +17,7 @@ function servingAlias(overrides: Partial<ServingAlias>): ServingAlias {
       gpuLayers: null,
       allFlags: [],
     },
+    capability: null,
     ...overrides,
   };
 }

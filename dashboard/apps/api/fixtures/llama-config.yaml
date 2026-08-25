@@ -12,10 +12,24 @@ macros:
     -ngl 99 -c 8192 -b 8192 -ub 8192
 
 models:
+  # `metadata:` (WP-2, `docs/model-capabilities.md`) -- no optional `serving.*` keys, so
+  # `readServingConfig` must resolve `moeCpuOffloadLayers`/`ubatch` to `null` (macro
+  # default), never a guessed 0.
   fixture-embed-f16:
     name: "Fixture embedding (f16)"
     aliases:
       - fixture-embed
+    metadata:
+      context_length: 8192
+      input_modalities: ["text"]
+      output_modalities: ["embedding"]
+      tool_calling: false
+      reasoning: "none"
+      serving:
+        quant: "F16"
+        kv_cache_type: "f16"
+        flash_attention: false
+        mtp: false
     cmd: |
       ${llama_server_common}
       -m /models/example-org/fixture-embed-gguf/fixture-embed-f16.gguf
@@ -23,10 +37,24 @@ models:
     ttl: 1800
     checkEndpoint: /health
 
+  # `metadata:` with BOTH optional `serving.*` keys present -- the full-block case.
   fixture-chat-q4:
     name: "Fixture chat model (Q4_K_M)"
     aliases:
       - fixture-chat
+    metadata:
+      context_length: 32768
+      input_modalities: ["text"]
+      output_modalities: ["text"]
+      tool_calling: true
+      reasoning: "request-controllable"
+      serving:
+        quant: "Q4_K_M"
+        kv_cache_type: "q4_0"
+        flash_attention: true
+        mtp: false
+        moe_cpu_offload_layers: 8
+        ubatch: 2048
     cmd: |
       /usr/local/bin/llama-server
       --host 0.0.0.0 --port ${PORT}
@@ -42,7 +70,8 @@ models:
   # `allFlags` (WP-1) edge cases: a boolean flag immediately followed by another flag
   # (`--jinja`), and flag values that must NOT be mistaken for flags themselves -- a
   # negative integer (`-1`) and a decimal (`0.8`), per `FLAG_TOKEN`'s "dash(es) then a
-  # letter" test in `llamaConfig.ts`.
+  # letter" test in `llamaConfig.ts`. Deliberately carries NO `metadata:` block too -- the
+  # WP-2 "a model with no capability metadata resolves to `capability: null`" case.
   fixture-flags-edge:
     name: "Fixture edge-case flags"
     aliases:

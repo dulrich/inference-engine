@@ -232,6 +232,51 @@ describe("buildQueueListResponse: fixtures/queues", () => {
   });
 });
 
+// `eta.cellDescriptors` pass-through (WP-2, `plans/bakeoff-timing-records-and-estimates.md`)
+// -- exercises this route's OWN wiring (the `cells` array it already built gets narrowed
+// and forwarded into `computeEtaForQueue`), not `eta.ts`'s fallback-chain logic itself
+// (covered directly in `../queue/eta.test.ts`).
+describe("eta model/context-aware descriptor pass-through", () => {
+  function makeRecordsDir(prefix: string): string {
+    return mkdtempSync(join(tmpdir(), `bench-dashboard-queue-route-eta-${prefix}-`));
+  }
+
+  test("a remaining cell's own alias/model/c reaches the estimator and activates the model-table basis", async () => {
+    const recordsDir = makeRecordsDir("descriptor-pass-through");
+    // `synth-joined`'s `gemma-qat-detail-fallback` cell joins to `state: "running"` (its
+    // state entry is the `detail.alias`-fallback one) at `c: 8192` -- a real cost-table
+    // record for that exact (model, context) pair should light up `basis: "model-table"`.
+    const cellDir = join(recordsDir, "synth-joined", "hist-gemma-c8192");
+    mkdirSync(cellDir, { recursive: true });
+    writeFileSync(
+      join(cellDir, "config.json"),
+      JSON.stringify({
+        cell_wall_seconds: 300, // 5 minutes
+        sweep_cell: { model: "gemma-4-12b-qat", server_flags: { "-c": 8192 } },
+      }),
+    );
+
+    const { queues } = await buildQueueListResponse(FIXTURES_DIR, recordsDir);
+    const entry = queues.find((q) => q.name === "synth-joined");
+    if (!entry || !isEntry(entry)) throw new Error("expected a joined queue entry");
+
+    expect(entry.eta?.basis).toBe("model-table");
+    expect(entry.eta?.medianCellMinutes).toBe(5);
+    expect(entry.eta?.bucketSampleSize).toBe(1);
+    expect(entry.eta?.scalingCaveat).toBe(false);
+  });
+
+  test("no matching cost-table record: route behavior unchanged from pre-WP-2 (basis stays null, no data)", async () => {
+    const recordsDir = makeRecordsDir("descriptor-no-match");
+    const { queues } = await buildQueueListResponse(FIXTURES_DIR, recordsDir);
+    const entry = queues.find((q) => q.name === "synth-joined");
+    if (!entry || !isEntry(entry)) throw new Error("expected a joined queue entry");
+
+    expect(entry.eta?.basis).toBeNull();
+    expect(Object.keys(entry.eta ?? {})).not.toContain("bucketSampleSize");
+  });
+});
+
 describe("buildControlSection", () => {
   test("undefined controlHostDir (CONTROL_HOST_DIR unset) -> null, no I/O attempted", async () => {
     expect(await buildControlSection(undefined)).toBeNull();

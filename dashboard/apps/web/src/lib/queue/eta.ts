@@ -28,10 +28,14 @@ export function formatMinutesAsHm(minutes: number | null): string {
 
 /** `basis` -> its display label (spec pin "basis labels"). `null` reads as "no data" here
  * too, though callers needing the full line fall back to `ETA_NO_DATA_NOTE` before this is
- * ever reached in practice. */
+ * ever reached in practice. `"model-table"` (WP-2, `plans/bakeoff-timing-records-and-
+ * estimates.md`) is the model/context-aware cost-table basis -- `formatQueueEtaLine` below
+ * appends the terse `±scaled` caveat marker to THIS label, never bakes it in here, so
+ * `etaBasisLabel` alone stays a pure basis-to-label map. */
 export function etaBasisLabel(basis: QueueEta["basis"]): string {
   if (basis === "current-run") return "current run";
   if (basis === "prior-runs") return "prior runs";
+  if (basis === "model-table") return "model/context table";
   return "no data yet";
 }
 
@@ -47,7 +51,13 @@ export function formatQueueEtaLine(eta: QueueEta | null | undefined): string {
     return ETA_NO_DATA_NOTE;
   }
   const sampleSize = eta.sampleSize ?? 0;
-  return `~${eta.cellsPerHour.toFixed(1)} cells/hour · est. ${formatMinutesAsHm(eta.estimatedMinutesRemaining)} remaining (basis: ${etaBasisLabel(eta.basis)}, n=${sampleSize})`;
+  // `scalingCaveat` (WP-2, `plans/bakeoff-timing-records-and-estimates.md`) is only ever
+  // `true`/`false` when `basis === "model-table"` -- every other basis leaves it
+  // `null`/`undefined`, which this terse suffix naturally skips (`eta.scalingCaveat` alone
+  // is falsy in both those cases), so the line's FORM stays exactly what it was before this
+  // field existed for every non-model-table basis.
+  const basisLabel = etaBasisLabel(eta.basis) + (eta.scalingCaveat ? " ±scaled" : "");
+  return `~${eta.cellsPerHour.toFixed(1)} cells/hour · est. ${formatMinutesAsHm(eta.estimatedMinutesRemaining)} remaining (basis: ${basisLabel}, n=${sampleSize})`;
 }
 
 /** Forward-framed complement to `formatQueueEtaLine` (spec example: `"≈5 cells in the

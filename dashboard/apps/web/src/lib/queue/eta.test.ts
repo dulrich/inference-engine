@@ -42,9 +42,10 @@ describe("formatMinutesAsHm", () => {
 });
 
 describe("etaBasisLabel", () => {
-  test("maps both known bases", () => {
+  test("maps all known bases", () => {
     expect(etaBasisLabel("current-run")).toBe("current run");
     expect(etaBasisLabel("prior-runs")).toBe("prior runs");
+    expect(etaBasisLabel("model-table")).toBe("model/context table");
   });
 
   test("null -> no data yet", () => {
@@ -84,6 +85,21 @@ describe("formatQueueEtaLine", () => {
   test("sampleSize null renders n=0 rather than n=null", () => {
     const line = formatQueueEtaLine(eta({ sampleSize: null }));
     expect(line).toContain("n=0");
+  });
+
+  test("model-table basis with scalingCaveat true appends the terse ±scaled marker", () => {
+    const line = formatQueueEtaLine(eta({ basis: "model-table", scalingCaveat: true, cellsPerHour: 6, estimatedMinutesRemaining: 30, sampleSize: 1 }));
+    expect(line).toBe("~6.0 cells/hour · est. 0 h 30 m remaining (basis: model/context table ±scaled, n=1)");
+  });
+
+  test("model-table basis with scalingCaveat false renders the plain label, no suffix", () => {
+    const line = formatQueueEtaLine(eta({ basis: "model-table", scalingCaveat: false, cellsPerHour: 6, estimatedMinutesRemaining: 10, sampleSize: 1 }));
+    expect(line).toBe("~6.0 cells/hour · est. 0 h 10 m remaining (basis: model/context table, n=1)");
+  });
+
+  test("a legacy basis is never suffixed even if scalingCaveat were somehow present", () => {
+    const line = formatQueueEtaLine(eta({ basis: "current-run", scalingCaveat: undefined }));
+    expect(line).not.toContain("±scaled");
   });
 });
 

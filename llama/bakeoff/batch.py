@@ -45,6 +45,7 @@ import re
 import signal
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional
@@ -146,6 +147,14 @@ def validate_queue(queue: Dict[str, Any]) -> None:
             raise QueueValidationError(
                 f"cells[{idx}] references unknown model {cell['model']!r} (not in this queue's own 'models' registry)"
             )
+        # WP-1 (bakeoff-timing-records-and-estimates): optional per-cell override for the
+        # `"timing"` battery item's round count -- same optional-and-validated-when-present
+        # shape as `models[*].chars_per_token` above. Absent means TIMING_DEFAULT_ROUNDS.
+        rounds = cell.get(TIMING_ROUNDS_CELL_KEY)
+        if rounds is not None and (not isinstance(rounds, int) or isinstance(rounds, bool) or rounds < 1):
+            raise QueueValidationError(
+                f"cells[{idx}] {TIMING_ROUNDS_CELL_KEY} {rounds!r} must be a positive integer when present"
+            )
 
 
 def load_queue(queue_path: Path) -> Dict[str, Any]:
@@ -203,6 +212,17 @@ def resolve_cell(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]) -> Di
     # tuning a model's measured `chars_per_token` never changes any cell_id). A haystack-sizing
     # knob is a measurement-accuracy fact, not a cell-identity fact.
     cell["_chars_per_token"] = model_entry.get("chars_per_token")
+    # WP-1 (bakeoff-timing-records-and-estimates): the queue model KEY, kept verbatim so the
+    # persisted record can carry `sweep_cell.model` (the estimator's model-identity pin -- see
+    # `write_cell_record`). `_queue_model_id` above already holds the same value; `model` is
+    # the un-prefixed spelling, set AFTER `compute_cell_id` so cell identity is untouched, and
+    # deliberately never passed into any `sweep.py` function.
+    cell["model"] = abbreviated["model"]
+    # WP-1: the `"timing"` battery item's per-cell round-count override (see
+    # `TIMING_ROUNDS_CELL_KEY`). Also set after `compute_cell_id` -- how many timing rounds a
+    # cell runs is a measurement-depth fact, not a cell-identity fact, exactly like
+    # `_chars_per_token`.
+    cell[TIMING_ROUNDS_CELL_KEY] = abbreviated.get(TIMING_ROUNDS_CELL_KEY)
     return cell
 
 
@@ -603,6 +623,41 @@ def default_cell_runner(handle: "sweep.ScratchServerHandle", cell: Dict[str, Any
 # dropped.
 LONGCONTEXT_BATTERY_ITEM = "needle"
 
+# -------------------------------------------------------------------------------------------
+# `"timing"` battery item (plan `bakeoff-timing-records-and-estimates.md` WP-1). Declared in
+# `sweep.VALID_BATTERY_ITEMS` and in live queues (`queues/ladder-v2.json`) since before this WP,
+# but never implemented -- a `battery: ["needle","timing"]` cell ran only its needle arm. It now
+# runs a small round pass whose `timing_round` samples are appended to the SAME `samples.jsonl`,
+# in the exact pre-v2 shape `run_harness.run_round` has always emitted (and that the dashboard's
+# `packages/shared/src/metric.ts` already parses).
+# -------------------------------------------------------------------------------------------
+
+TIMING_BATTERY_ITEM = "timing"
+
+# Brief-pinned (audit E1 disposition): 3 rounds TOTAL, `round_index` 0..2. Large-ctx cells are
+# expensive and this pass is a decode-rate measurement, not a statistics exercise.
+TIMING_DEFAULT_ROUNDS = 3
+
+# Brief-pinned per-cell override key, read straight off the (abbreviated, and hence resolved)
+# cell dict. `None`/absent -> TIMING_DEFAULT_ROUNDS.
+TIMING_ROUNDS_CELL_KEY = "timing_rounds"
+
+# A SHORT prompt on purpose: this arm measures decode throughput and first-token latency for the
+# cell's model, not its prefill behavior at the cell's `-c` (the needle arm is what exercises
+# long context). ~64 predicted tokens is enough decode window for `observed_decode_tok_s` to be
+# meaningful while costing ~a second per round. Fixed text, so every round after the first is a
+# genuine prefix-cache hit.
+TIMING_PROMPT = (
+    "Explain, in one short paragraph, why a warm cache makes a repeated request faster."
+)
+TIMING_MAX_TOKENS = 64
+
+# Round 0 runs against a freshly started, just-verified scratch server with an empty KV cache;
+# rounds 1+ resend the identical prompt, so they are cache-hitting `hot` rounds and
+# `run_round`'s own hot cache assertion (`cached/prompt > 0.90`) is a real check on them.
+# `run_round`'s `cache_assertion_passed` stays `None` for the `cold` round, as it always has.
+TIMING_ROUND_STATES = ("cold", "hot")
+
 # WP-6 (WP-5 punt, measured): the flat 256-token response cap is too tight for multi_needle
 # under the verbose production arm (temp 1.0) -- gemma f16's multi_needle went 0/9
 # all-`truncated(benign)` in WP-5's attended run while single_needle at the same cap scored
@@ -644,6 +699,12 @@ def write_cell_record(
     sampling_arm_effective: str,
     vram_profile: Optional[str] = None,
     response_caps: Optional[Dict[str, Any]] = None,
+    cell_started_at: Optional[str] = None,
+    cell_ended_at: Optional[str] = None,
+    cell_wall_seconds: Optional[float] = None,
+    scratch_startup_seconds: Optional[float] = None,
+    extra_samples: Optional[List[Dict[str, Any]]] = None,
+    extra_completions: Optional[List[Dict[str, Any]]] = None,
 ) -> Path:
     """WP-5 glue: persists one live cell's battery output as a standard four-file
     `run_harness.write_experiment_record` directory under `records_dir/<cell_id>/` -- exactly the
@@ -668,6 +729,28 @@ def write_cell_record(
     `vram_profile`, the effective `--vram-profile`/queue `vram_profile` string this cell ran
     under, and `response_caps`, the response-length budget the battery actually enforced
     (`{"default": <flat max_tokens>, "by_task": LONGCONTEXT_MAX_TOKENS_BY_TASK}`).
+
+    **WP-1 of `bakeoff-timing-records-and-estimates.md`** (additive again; `schema_version` stays
+    2, and every one of these arguments defaults to `None`, so a pre-existing positional caller --
+    including this suite's direct `write_cell_record(...)` tests -- writes what it wrote before):
+
+    - `cell_started_at`/`cell_ended_at` (ISO-8601 UTC) and `cell_wall_seconds` (float): the cell's
+      own clock, as top-level `config.json` keys. `cell_wall_seconds` is measured MONOTONICALLY by
+      the caller (`_cell_timing_fields` below, off `sweep.ScratchServerHandle.started_monotonic`),
+      never by differencing the two ISO strings.
+    - `scratch_startup_seconds` (float | null): the scratch server's spawn -> startup-verification
+      elapsed time (`sweep._ScratchServerContext.__enter__`). Deliberately NOT named
+      `model_load_seconds` -- README.md's honest-timing-semantics contract reserves that name for
+      a `ResidencyPoller`-OBSERVED residency transition, which this measurement is not.
+    - `sweep_cell["model"]`: the QUEUE MODEL KEY (`resolve_cell` copies it onto the cell as
+      `model`, the un-prefixed twin of the private `_queue_model_id`). This is the record-side
+      model-identity pin the model/context-aware queue estimator keys its cost table on; `None`
+      for a cell dict carrying neither spelling. Every record written before this WP simply lacks
+      the key, and the estimator's fallback chain is exactly the story for those.
+    - `extra_samples`/`extra_completions`: rows appended to `samples.jsonl`/`completions.jsonl`
+      AFTER the battery's own rows -- how the `"timing"` battery item's `timing_round` rows reach
+      the same record as the needle arm's `longcontext_probe` rows, without either arm needing to
+      know the other's result shape.
     """
     cell_id = cell["cell_id"]
     host_path = cell.get("model_host_path")
@@ -692,6 +775,8 @@ def write_cell_record(
             completions.extend(cell_result.completions)
             if wilson_summary is None and cell_result.summary is not None:
                 wilson_summary = cell_result.summary
+    samples.extend(extra_samples or [])
+    completions.extend(extra_completions or [])
     config = {
         "lineage": lineage,
         "sweep_cell": {
@@ -701,6 +786,12 @@ def write_cell_record(
             "model_host_path": host_path,
             "battery": cell.get("battery"),
             "sampling_arm": sampling_arm_effective,
+            # WP-1 (bakeoff-timing-records-and-estimates): the queue model key. `resolve_cell`
+            # sets `model`; `_queue_model_id` is the same value under this module's private
+            # underscore convention and is accepted as a fallback so a hand-built cell dict from
+            # either era records the same identity. `None` when neither is present -- never a
+            # guess derived from the alias (aliases and model keys are separate vocabularies).
+            "model": cell.get("model") or cell.get("_queue_model_id"),
         },
         "vram": {
             "baseline_bytes": vram_baseline_bytes,
@@ -710,11 +801,107 @@ def write_cell_record(
         "wilson_summary": wilson_summary,
         "vram_profile": vram_profile,
         "response_caps": response_caps,
+        # WP-1 (bakeoff-timing-records-and-estimates), all four additive and null-tolerated.
+        "cell_started_at": cell_started_at,
+        "cell_ended_at": cell_ended_at,
+        "cell_wall_seconds": cell_wall_seconds,
+        "scratch_startup_seconds": scratch_startup_seconds,
     }
     run_harness.write_experiment_record(
         cell_id, config, [], completions, samples, base_dir=records_dir,
     )
     return records_dir / cell_id
+
+
+def _cell_timing_fields(handle: "sweep.ScratchServerHandle") -> Dict[str, Any]:
+    """The four additive `config.json` timing keys for the cell `handle` belongs to, read at the
+    moment the record is about to be written (WP-1, `bakeoff-timing-records-and-estimates.md`).
+
+    Every read is a `getattr(..., None)`, so a duck-typed stand-in handle (this suite's fake
+    context managers, and any future caller's) degrades to explicit nulls instead of raising --
+    the same null-not-guessed stance the rest of the record format takes. `cell_wall_seconds`
+    comes from the monotonic clock the handle started, never from subtracting ISO strings.
+    """
+    started_monotonic = getattr(handle, "started_monotonic", None)
+    wall_seconds: Optional[float] = None
+    if isinstance(started_monotonic, (int, float)) and not isinstance(started_monotonic, bool):
+        wall_seconds = time.monotonic() - started_monotonic
+    return {
+        "cell_started_at": getattr(handle, "started_at", None),
+        "cell_ended_at": _utc_now_iso(),
+        "cell_wall_seconds": wall_seconds,
+        "scratch_startup_seconds": getattr(handle, "scratch_startup_seconds", None),
+    }
+
+
+def timing_rounds_for_cell(cell: Dict[str, Any]) -> int:
+    """`TIMING_ROUNDS_CELL_KEY` off the cell, else `TIMING_DEFAULT_ROUNDS`. A non-int or
+    non-positive value falls back to the default rather than raising -- `validate_queue` already
+    rejects a malformed override at load time, so reaching here with one means a hand-built cell
+    dict, and a timing arm must never be the thing that fails an otherwise-good cell."""
+    raw = cell.get(TIMING_ROUNDS_CELL_KEY)
+    if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 1:
+        return raw
+    return TIMING_DEFAULT_ROUNDS
+
+
+def run_timing_rounds(
+    handle: "sweep.ScratchServerHandle",
+    cell: Dict[str, Any],
+    round_fn: Optional[Callable[..., Any]] = None,
+    timeout: float = 180.0,
+) -> Dict[str, Any]:
+    """The `"timing"` battery item: `timing_rounds_for_cell(cell)` short-prompt generation rounds
+    against `handle`'s live scratch server, returning
+    `{"samples": [...], "completions": [...], "detail": {...}}`.
+
+    `run_harness.run_round` is REUSED verbatim -- not reimplemented. It already emits exactly the
+    pre-v2 `timing_round` sample shape (`model_load_seconds`, `first_generation_token_ms`,
+    `decode_wall_ms`, `observed_decode_tok_s`, `server_*_tok_s`, `completion_tokens`,
+    `cache_hit_ratio`, ...) that `dashboard/packages/shared/src/metric.ts` parses, and it never
+    raises on a transport failure (it records `success: false` on the sample instead). The plan's
+    Assumptions allowed a minimal hot/warm loop here if reuse needed structural surgery; it did
+    not -- `run_round` takes `(base_url, alias, run_state, round_index, prompt, max_tokens)` and
+    is already independent of how the server it talks to was started.
+
+    Round schedule (brief-pinned): `round_index` 0 is the `cold` round -- the timing pass runs
+    FIRST for a cell whose battery has both `"timing"` and `"needle"`, so round 0 genuinely hits a
+    freshly started server with an empty KV cache. Rounds 1+ resend the identical prompt and are
+    labeled `hot`, which arms `run_round`'s own real cache-evidence assertion for them.
+
+    `model_load_seconds` stays `null` on every row here, deliberately and by the README timing
+    contract: `poll_for_load` is left off because a scratch server is a bare `llama-server` with
+    no llama-swap `/models` residency status to poll, AND the server was already health-checked
+    and startup-verified before round 0 -- there is no residency transition left to OBSERVE. The
+    honest field for the startup cost is `config.json`'s `scratch_startup_seconds`; nothing here
+    subtracts an assumed constant from another timing field to manufacture a value.
+    """
+    round_fn = round_fn or run_harness.run_round
+    rounds = timing_rounds_for_cell(cell)
+    samples: List[Dict[str, Any]] = []
+    completions: List[Dict[str, Any]] = []
+    error: Optional[str] = None
+    for round_index in range(rounds):
+        run_state = TIMING_ROUND_STATES[0] if round_index == 0 else TIMING_ROUND_STATES[1]
+        try:
+            sample, completion = round_fn(
+                handle.base_url, cell["alias"], run_state, round_index,
+                TIMING_PROMPT, TIMING_MAX_TOKENS, timeout=timeout,
+            )
+        except Exception as exc:  # noqa: BLE001 -- a timing arm never fails an otherwise-good
+            # cell: the partial rounds already collected are kept, the reason is surfaced in
+            # `detail`, and the caller's own disposition logic is left completely untouched.
+            error = f"{type(exc).__name__}: {exc}"
+            break
+        samples.append(sample)
+        completions.append(completion)
+    detail = {
+        "rounds_requested": rounds,
+        "rounds_recorded": len(samples),
+        "rounds_succeeded": sum(1 for s in samples if s.get("success") is True),
+        "error": error,
+    }
+    return {"samples": samples, "completions": completions, "detail": detail}
 
 
 def make_longcontext_cell_runner(
@@ -725,6 +912,7 @@ def make_longcontext_cell_runner(
     timeout: float = 300,
     records_dir: Optional[Path] = None,
     vram_profile: Optional[str] = None,
+    timing_round_fn: Optional[Callable[..., Any]] = None,
 ) -> Callable[["sweep.ScratchServerHandle", Dict[str, Any]], CellOutcome]:
     """Builds the real live `cell_runner` for a `battery: [..., "needle"]` queue cell:
     `longcontext.run_live_battery`'s full task x position x trial sweep against `handle`'s live
@@ -742,8 +930,22 @@ def make_longcontext_cell_runner(
 
     A cell whose `battery` does not include `"needle"` (`LONGCONTEXT_BATTERY_ITEM`) defers
     entirely to `default_cell_runner` -- this runner only OWNS the longcontext-battery cells; any
-    other battery item (`vram`/`timing`/`quality`) gets the WP-1 startup-verification-only
+    other battery item (`vram`/`quality`) gets the WP-1 startup-verification-only
     disposition, same as before this WP existed.
+
+    **`"timing"` battery item** (WP-1 of `bakeoff-timing-records-and-estimates.md`): a cell whose
+    `battery` includes `"timing"` (`TIMING_BATTERY_ITEM`) additionally runs `run_timing_rounds`
+    -- FIRST, before the needle arm, so its round 0 is a genuinely cold request against the
+    freshly verified scratch server -- and the resulting `timing_round` rows are appended to
+    whichever record this runner goes on to write (needle arm's or the startup-only arm's), via
+    `write_cell_record`'s `extra_samples`/`extra_completions`. The timing arm NEVER changes a
+    cell's disposition: `CellOutcome.status`/`reason`/`correctness_failure` are decided by exactly
+    the same ladder as before, over exactly the same needle-battery samples. Its own outcome is
+    reported under `detail["timing"]`; a transport-failed round shows up as `success: false` on
+    its own row, as it does everywhere else in this harness. `timing_round_fn` is the injectable
+    seam (default `run_harness.run_round`, the live one) this module's tests always fake, so no
+    test in this suite ever opens a socket for a timing round. A cell WITHOUT `"timing"` in its
+    battery is byte-identical to pre-WP behavior apart from the additive `config.json` keys.
 
     **CellOutcome mapping** (brief-pinned, exact strings; REORDERED by the transport-failure-
     taxonomy WP -- `plans/bakeoff-transport-taxonomy-and-prompt-fit.md` WP-1 -- see that plan's
@@ -794,7 +996,23 @@ def make_longcontext_cell_runner(
         if not handle.verified:
             return CellOutcome("failed", "invalid_config", False, {"startup_details": handle.details})
 
-        if LONGCONTEXT_BATTERY_ITEM not in (cell.get("battery") or []):
+        battery = cell.get("battery") or []
+
+        # WP-1 (bakeoff-timing-records-and-estimates): the timing arm runs BEFORE the needle arm
+        # -- brief-pinned, and load-bearing: round 0's whole claim to being cold is that nothing
+        # has touched this scratch server since startup verification.
+        timing_samples: List[Dict[str, Any]] = []
+        timing_completions: List[Dict[str, Any]] = []
+        timing_detail: Optional[Dict[str, Any]] = None
+        if TIMING_BATTERY_ITEM in battery:
+            timing_result = run_timing_rounds(
+                handle, cell, round_fn=timing_round_fn, timeout=timeout,
+            )
+            timing_samples = timing_result["samples"]
+            timing_completions = timing_result["completions"]
+            timing_detail = timing_result["detail"]
+
+        if LONGCONTEXT_BATTERY_ITEM not in battery:
             outcome = default_cell_runner(handle, cell)
             # WP-5: augment the startup-only disposition with VRAM read-backs so a
             # vram-battery fit-measurement cell (e.g. the gemma 262144 f16 cell whose measured
@@ -807,6 +1025,8 @@ def make_longcontext_cell_runner(
             augmented = dict(outcome.detail or {})
             augmented["vram_before_bytes"] = handle.vram_before_bytes
             augmented["vram_after_bytes"] = vram_after
+            if timing_detail is not None:
+                augmented["timing"] = timing_detail
             # WP-5 (verifier finding): a completed non-needle cell with NO records subdirectory
             # fails verify_run's `records_present` check -- the unattended loop (batch run ->
             # batch verify, audit M2) would page on every fit-measurement cell. Write the same
@@ -821,6 +1041,9 @@ def make_longcontext_cell_runner(
                         sampling_arm_effective=None,
                         vram_profile=vram_profile,
                         response_caps=response_caps,
+                        extra_samples=timing_samples,
+                        extra_completions=timing_completions,
+                        **_cell_timing_fields(handle),
                     ))
                     augmented["record_error"] = None
                 except Exception as exc:  # noqa: BLE001 -- record write must never fail a cell
@@ -892,7 +1115,10 @@ def make_longcontext_cell_runner(
         except Exception as exc:  # pragma: no cover -- defensive: an unexpected transport/battery
             # exception never propagates out and aborts the whole queue; it becomes an ordinary
             # failed-cell disposition, same as a health-timeout.
-            return CellOutcome("failed", "battery_error", False, {"error": str(exc)})
+            battery_error_detail: Dict[str, Any] = {"error": str(exc)}
+            if timing_detail is not None:
+                battery_error_detail["timing"] = timing_detail
+            return CellOutcome("failed", "battery_error", False, battery_error_detail)
 
         try:
             vram_after_bytes = vram_used_bytes_fn()
@@ -911,6 +1137,12 @@ def make_longcontext_cell_runner(
                     handle.vram_before_bytes, vram_after_bytes, effective_arm,
                     vram_profile=vram_profile,
                     response_caps=response_caps,
+                    # WP-1: the timing arm's rows ride into the SAME record, after the needle
+                    # arm's -- empty lists when this cell's battery has no `"timing"` item, which
+                    # is a no-op append.
+                    extra_samples=timing_samples,
+                    extra_completions=timing_completions,
+                    **_cell_timing_fields(handle),
                 ))
             except Exception as exc:
                 record_error = f"{type(exc).__name__}: {exc}"
@@ -963,6 +1195,10 @@ def make_longcontext_cell_runner(
             "record_path": record_path,
             "record_error": record_error,
         }
+        # WP-1: additive, and only for a cell that actually has a `"timing"` battery item -- a
+        # needle-only cell's `detail` stays byte-identical to what it was before this WP.
+        if timing_detail is not None:
+            detail["timing"] = timing_detail
 
         if has_transport_failure:
             return CellOutcome("failed", "transport_error", False, detail)

@@ -666,5 +666,78 @@ class TestWp2PromptFitShrinkLoop(unittest.TestCase):
             )
 
 
+class TestRunCellTimingEnrichment(unittest.TestCase):
+    """WP-1 of `plans/bakeoff-timing-records-and-estimates.md`: three additive, nullable
+    per-probe fields on the `longcontext_probe` row -- `completion_tokens` (projected from the
+    already-parsed `usage`) and `server_prompt_eval_tok_s`/`server_eval_tok_s` (the server's own
+    `timings` block, NEVER derived from `wall_seconds`)."""
+
+    def setUp(self):
+        self.task = longcontext.SingleNeedleTask()
+        self.payload = run_harness.sampling_arm_payload(run_harness.SAMPLING_ARM_CAPABILITY, seed=7)
+
+    def _request_fn_with(self, usage, timings):
+        def request_fn(prompt, max_tokens, sampling):
+            result = {
+                "success": True, "error": None, "content_text": "x", "reasoning_text": "",
+                "finish_reason": "stop", "usage": usage, "wall_seconds": 12.5,
+                "t0_iso": "2026-08-25T00:00:00+00:00",
+            }
+            if timings is not None:
+                result["timings"] = timings
+            return result
+
+        return request_fn
+
+    def test_projects_completion_tokens_and_server_rates(self):
+        request_fn = self._request_fn_with(
+            {"prompt_tokens": 1234, "completion_tokens": 56},
+            {"prompt_per_second": 1679.5, "predicted_per_second": 61.1, "prompt_n": 1234},
+        )
+        result = longcontext.run_cell(
+            request_fn, self.task, "cell-timing-enriched", 0.45, 2000,
+            sampling_arm="capability", sampling_payload=self.payload, n_trials=1,
+        )
+        sample = result.samples[0]
+        self.assertEqual(sample["completion_tokens"], 56)
+        self.assertEqual(sample["server_prompt_eval_tok_s"], 1679.5)
+        self.assertEqual(sample["server_eval_tok_s"], 61.1)
+        # The existing fields are untouched, and decode rate is NEVER wall-derived: 56/12.5
+        # would be 4.48 tok/s, a number this row must never report.
+        self.assertEqual(sample["prompt_tokens"], 1234)
+        self.assertEqual(sample["wall_seconds"], 12.5)
+        self.assertNotAlmostEqual(sample["server_eval_tok_s"], 56 / 12.5)
+
+    def test_missing_timings_block_records_explicit_nulls(self):
+        # Back-compat: a response (or an injected stub) with no `timings` and no
+        # `completion_tokens` still produces a valid row -- explicit nulls, never a guess.
+        request_fn = self._request_fn_with({"prompt_tokens": 1234}, None)
+        result = longcontext.run_cell(
+            request_fn, self.task, "cell-timing-absent", 0.45, 2000,
+            sampling_arm="capability", sampling_payload=self.payload, n_trials=1,
+        )
+        sample = result.samples[0]
+        for key in ("completion_tokens", "server_prompt_eval_tok_s", "server_eval_tok_s"):
+            self.assertIn(key, sample)
+            self.assertIsNone(sample[key])
+
+    def test_transport_failed_trial_still_carries_the_keys(self):
+        def failing_request_fn(prompt, max_tokens, sampling):
+            return {
+                "success": False, "error": "URLError: refused", "content_text": "",
+                "reasoning_text": "", "finish_reason": None, "usage": None,
+                "wall_seconds": 0.01, "t0_iso": "2026-08-25T00:00:00+00:00",
+            }
+
+        result = longcontext.run_cell(
+            failing_request_fn, self.task, "cell-timing-transport", 0.45, 2000,
+            sampling_arm="capability", sampling_payload=self.payload, n_trials=1,
+        )
+        sample = result.samples[0]
+        self.assertFalse(sample["success"])
+        self.assertIsNone(sample["completion_tokens"])
+        self.assertIsNone(sample["server_eval_tok_s"])
+
+
 if __name__ == "__main__":
     unittest.main()

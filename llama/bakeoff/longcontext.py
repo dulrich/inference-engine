@@ -928,7 +928,10 @@ def run_cell(
 
     `request_fn(prompt, max_tokens, sampling) -> result_dict` is the caller's live-request
     hook, matching `run_harness._execute_streaming_request`'s return shape (`content_text`,
-    `reasoning_text`, `finish_reason`, `usage`, `success`, `error`, `wall_seconds`, `t0_iso`).
+    `reasoning_text`, `finish_reason`, `usage`, `success`, `error`, `wall_seconds`, `t0_iso`,
+    and -- WP-1 of `bakeoff-timing-records-and-estimates.md` -- the optional `timings` block).
+    Every one of those keys is read with `.get(...)`, so a stub that models only a subset stays
+    valid; a missing `timings` simply records `null` rate fields.
     This module never calls the network itself -- no live Docker/GPU execution happens here;
     a live orchestrator wires `request_fn` to the real router, and this module's own tests pass
     a fixture-returning stub. Example live wiring (NOT executed by this module or its tests):
@@ -1029,6 +1032,15 @@ def run_cell(
             )
             classifier.flags["scored_on_reasoning_channel"] = scored_on_reasoning
         usage = result.get("usage") or {}
+        # WP-1 (plan `bakeoff-timing-records-and-estimates.md`): the server's OWN reported
+        # prompt-eval / decode rates, retained verbatim and nullable. `timings` is
+        # `_execute_streaming_request`'s pass-through of llama.cpp's final-chunk `timings` block
+        # (live-verified present on this build, 2026-08-25); any response that omits it -- or any
+        # injected `request_fn` test double that doesn't model it -- records `None`, never a
+        # substitute. Decode tok/s is NEVER derived from `wall_seconds` here: a needle probe's
+        # wall time is prefill-dominated, so dividing tokens by it would report a number that
+        # answers a different question (plan Decisions locked).
+        timings = result.get("timings") or {}
         prompt_sha256 = hashlib.sha256(trial.prompt.encode("utf-8")).hexdigest()
 
         # WP-2 (transport-taxonomy-and-prompt-fit): additive-only `trial_meta` keys, recorded ONLY
@@ -1070,6 +1082,12 @@ def run_cell(
             "error": result.get("error"),
             "wall_seconds": result.get("wall_seconds"),
             "prompt_tokens": usage.get("prompt_tokens"),
+            # WP-1 (bakeoff-timing-records-and-estimates), all three ADDITIVE and nullable:
+            # `completion_tokens` was already parsed into `usage` here and simply never
+            # projected; the two rate fields come only from the server's own `timings` block.
+            "completion_tokens": usage.get("completion_tokens"),
+            "server_prompt_eval_tok_s": timings.get("prompt_per_second"),
+            "server_eval_tok_s": timings.get("predicted_per_second"),
             "timestamp": result.get("t0_iso"),
         }
         completion = {

@@ -53,7 +53,10 @@ transition. This harness never assumes that separation is free:
   resident when the poller started, or the transition happened between two polls, this field is
   `null`. **Do not "fix" a null value by subtracting an assumed constant from another timing
   field** — that was rev 1's rejected assumption (plan Decisions locked / Assumptions). A
-  reviewer should revert any change that does this.
+  reviewer should revert any change that does this. **The name is reserved**: the separate
+  spawn → startup-verification measurement added 2026-08-25 is called `scratch_startup_seconds`
+  and lives on `config.json`, precisely so it can never be mistaken for this field (see the
+  dated additive-field note in "Schema v2" below).
 - **`first_request_e2e_ttft_ms`** is always populated (request issued → first generated token of
   any kind) and, for a genuinely cold round, includes model load time inside it. This is the
   number every WP actually reports whenever `model_load_seconds` stays `null`.
@@ -630,6 +633,40 @@ WP's own tests inject scripted fake `cell_runner`s to exercise every disposition
 health-timeout / OOM / degenerate / needle-recall failure / hang) the state machine has to
 handle, without the real battery existing yet.
 
+### The `timing` battery item (2026-08-25, `plans/bakeoff-timing-records-and-estimates.md` WP-1)
+
+`"timing"` has been in `sweep.VALID_BATTERY_ITEMS` and in live queue files since long before it
+did anything: a `battery: ["needle","timing"]` cell used to run only its needle arm, silently.
+It now runs a small round pass whose `timing_round` rows are appended to the same record's
+`samples.jsonl` (see the 2026-08-25 additive-field note in "Schema v2" above).
+
+- **`run_harness.run_round` is reused verbatim**, not reimplemented — it already emits exactly
+  the `timing_round` shape the dashboard parses, and it already never raises on a transport
+  failure (it records `success: false` on the row instead).
+- **3 rounds by default** (`round_index` 0–2), overridable per cell with an optional integer
+  `timing_rounds` key on the queue's abbreviated cell — validated at queue-load time, and set on
+  the resolved cell AFTER `compute_cell_id`, so measurement depth never perturbs cell identity
+  (same contract as `chars_per_token`).
+- **Round 0 is the `cold` round; rounds 1+ are `hot`** and resend the identical short prompt, so
+  `run_round`'s real cache-evidence assertion (`cached/prompt > 0.90`) actually means something
+  for them. The prompt is short on purpose: this arm measures decode throughput and first-token
+  latency, while the needle arm is what exercises long context.
+- **The timing pass runs FIRST** for a cell that has both `"timing"` and `"needle"`. That
+  ordering is the whole basis for calling round 0 cold — nothing else has touched the scratch
+  server since startup verification.
+- **`model_load_seconds` stays `null` on every row this arm writes**, by the honest-timing
+  contract: a scratch server is a bare `llama-server` with no llama-swap `/models` residency
+  status to poll, and it was already health-checked and startup-verified before round 0, so there
+  is no residency transition left to observe. The honest number for that cost is
+  `config.json`'s `scratch_startup_seconds`. Nothing subtracts an assumed constant to fill the
+  gap; a reviewer should revert any change that does.
+- **The timing arm never changes a cell's disposition.** `CellOutcome.status`/`reason`/
+  `correctness_failure` are decided by exactly the needle ladder documented above, over exactly
+  the needle battery's samples; the timing pass reports itself under `detail["timing"]`
+  (`rounds_requested`/`rounds_recorded`/`rounds_succeeded`/`error`) and a failed round shows up
+  as `success: false` on its own row. A cell WITHOUT `"timing"` in its battery is unchanged apart
+  from the additive `config.json` keys.
+
 ### CLI
 
 ```sh
@@ -1168,6 +1205,44 @@ may append to v2 with a dated note in this section.
   on disk for reproducing pre-WP-3 records), the inverse of `needle_probe`'s always-`null`
   value, since this IS the corpus-backed instrument. See "Long-context correctness instrument v2" above
   for the full field-by-field description; this sample type is part of the frozen v2 contract.
+
+#### Additive v2 fields — 2026-08-25 (`plans/bakeoff-timing-records-and-estimates.md` WP-1)
+
+Purely additive, per the freeze rule directly above: **`schema_version` stays 2**, no existing
+field is renamed, repurposed, or removed, and every field below is optional and nullable. A
+record written before this date simply lacks these keys, and every consumer (dashboard ingest,
+`verify_run.py`, the queue estimator) must keep parsing such a record unchanged — that
+back-compat is asserted in the stdlib suite, not just asserted here.
+
+- **`config.json`, four new top-level keys** — the per-cell clock the model/context-aware queue
+  estimator needs:
+  - `cell_started_at` / `cell_ended_at` — ISO-8601 UTC. The start is taken at the TOP of the
+    cell's scratch-server context (before the pre-spawn orphan sweep), so the interval covers the
+    cell's whole occupancy of the GPU, not just its battery.
+  - `cell_wall_seconds` — float, measured from `time.monotonic()`, **never** by differencing the
+    two ISO strings (a wall-clock step must not be able to contaminate a duration).
+  - `scratch_startup_seconds` — float or `null`: the scratch server's spawn → startup-verification
+    elapsed time (`sweep._ScratchServerContext.__enter__`, previously an untimed wait). `null`
+    whenever the server failed health or startup verification — a health timeout's elapsed time
+    is the timeout, not a startup measurement. **This is deliberately NOT called
+    `model_load_seconds`**: that name is reserved by the honest-timing-semantics contract at the
+    top of this file for a `ResidencyPoller`-*observed* residency transition, and these are
+    different measurements of different things. Never conflate or substitute them.
+- **`config.json` `sweep_cell` gains `model`** — the queue model KEY (`cells[].model` in the
+  queue file), the record-side model-identity pin the queue estimator groups its cost table by.
+  `null` for a record whose cell dict carried no model key; never inferred from the alias
+  (aliases and model keys are separate, independently-append-only vocabularies).
+- **`longcontext_probe` samples gain three nullable fields** — `completion_tokens` (projected
+  from the `usage` object that was already being parsed and partially projected), plus
+  `server_prompt_eval_tok_s` and `server_eval_tok_s`, read only from llama.cpp's own `timings`
+  response block (`prompt_per_second` / `predicted_per_second`; live-verified present on this
+  build 2026-08-25). All three are `null` for any response that omits the source. **A decode rate
+  is never derived from `wall_seconds` here** — a needle probe's wall time is prefill-dominated,
+  so tokens ÷ wall would answer a different question while looking like throughput.
+- **`timing_round` samples can now appear in a v2 record.** They are the SAME shape
+  `run_harness.run_round` has always emitted (the pre-v2 field set), because the `"timing"`
+  battery item reuses `run_round` verbatim rather than reimplementing it — see "The `timing`
+  battery item" under the batch runner below.
 
 ### Sampling-arm presets
 

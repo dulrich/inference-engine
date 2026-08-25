@@ -1906,5 +1906,364 @@ class TestCmdReArm(unittest.TestCase):
             self.assertEqual(code, 0)
 
 
+# -------------------------------------------------------------------------------------------
+# WP-1 of `plans/bakeoff-timing-records-and-estimates.md`: additive per-cell timing in
+# `config.json`, `sweep_cell.model`, and the previously-declared-but-missing `"timing"` battery
+# item. No live scratch server anywhere below -- `timing_round_fn` is always a fake.
+# -------------------------------------------------------------------------------------------
+
+
+def _fake_timing_round_fn(fail_at=None, raise_at=None):
+    """Stand-in for `run_harness.run_round`, returning its exact `(sample, completion)` shape
+    (the pre-v2 `timing_round` field set the dashboard already parses). Records its calls."""
+
+    def _fn(base_url, alias, run_state, round_index, prompt, max_tokens, timeout=180):
+        _fn.calls.append({
+            "base_url": base_url, "alias": alias, "run_state": run_state,
+            "round_index": round_index, "prompt": prompt, "max_tokens": max_tokens,
+            "timeout": timeout,
+        })
+        if raise_at is not None and round_index == raise_at:
+            raise RuntimeError("boom")
+        success = not (fail_at is not None and round_index == fail_at)
+        sample = {
+            "type": "timing_round",
+            "completion_ref": f"{run_state}-{round_index}",
+            "round_index": round_index,
+            "run_state": run_state,
+            "timestamp": "2026-08-25T00:00:00+00:00",
+            "success": success,
+            "error": None if success else "URLError: refused",
+            "prompt_tokens": 20,
+            "cached_tokens": 0 if run_state == "cold" else 19,
+            "completion_tokens": 64,
+            "total_tokens": 84,
+            "cache_hit_ratio": 0.0 if run_state == "cold" else 0.95,
+            "cache_assertion_passed": None if run_state == "cold" else True,
+            "first_generation_token_ms": 120.0,
+            "first_visible_content_ms": 120.0,
+            "first_request_e2e_ttft_ms": 120.0,
+            "warm_ttft_ms": None,
+            "hot_ttft_ms": 120.0 if run_state == "hot" else None,
+            "model_load_seconds": None,
+            "decode_wall_ms": 1000.0,
+            "observed_decode_tok_s": 64.0,
+            "server_prompt_eval_count": 20,
+            "server_prompt_eval_time_ms": 12.0,
+            "server_prompt_eval_tok_s": 1666.0,
+            "server_eval_count": 64,
+            "server_eval_time_ms": 1000.0,
+            "server_eval_tok_s": 64.0,
+            "finish_reason": "length",
+            "wall_seconds": 1.2,
+        }
+        completion = {
+            "type": "timing_round", "completion_ref": f"{run_state}-{round_index}",
+            "round_index": round_index, "run_state": run_state,
+            "prompt_char_len": len(prompt), "content_text": "text",
+            "reasoning_text": "", "finish_reason": "length",
+        }
+        return sample, completion
+
+    _fn.calls = []
+    return _fn
+
+
+class TestBtreRecordTimingFields(unittest.TestCase):
+    """Additive `config.json` keys: `cell_started_at`/`cell_ended_at`/`cell_wall_seconds`/
+    `scratch_startup_seconds`, plus `sweep_cell.model`."""
+
+    def _battery_results(self):
+        return {"single_needle": {0.45: longcontext.CellResult(
+            samples=[_sample("single_needle", "correct", True)],
+            completions=[{"type": "longcontext_probe", "trial_index": 0}],
+            summary=None,
+        )}}
+
+    def test_direct_call_without_the_new_kwargs_still_parses_with_explicit_nulls(self):
+        # Back-compat: the pre-WP call shape (positional + the WP-B kwargs) keeps working, and
+        # every new key is present-and-null rather than absent-and-ambiguous.
+        with tempfile.TemporaryDirectory() as tmp:
+            out = batch.write_cell_record(
+                Path(tmp) / "run", dict(_longcontext_cell()), self._battery_results(),
+                vram_baseline_bytes=1, vram_loaded_bytes=2,
+                sampling_arm_effective="capability",
+            )
+            config = json.loads((out / "config.json").read_text())
+            self.assertEqual(config["schema_version"], 2)  # additive only -- never a bump
+            for key in ("cell_started_at", "cell_ended_at", "cell_wall_seconds",
+                        "scratch_startup_seconds"):
+                self.assertIn(key, config)
+                self.assertIsNone(config[key])
+            self.assertIn("model", config["sweep_cell"])
+            self.assertIsNone(config["sweep_cell"]["model"])
+
+    def test_new_kwargs_round_trip_verbatim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cell = dict(_longcontext_cell())
+            cell["model"] = "gemma-4-12b-qat"
+            out = batch.write_cell_record(
+                Path(tmp) / "run", cell, self._battery_results(),
+                vram_baseline_bytes=1, vram_loaded_bytes=2,
+                sampling_arm_effective="capability",
+                cell_started_at="2026-08-25T12:00:00+00:00",
+                cell_ended_at="2026-08-25T12:34:56+00:00",
+                cell_wall_seconds=2096.0,
+                scratch_startup_seconds=31.5,
+            )
+            config = json.loads((out / "config.json").read_text())
+            self.assertEqual(config["cell_started_at"], "2026-08-25T12:00:00+00:00")
+            self.assertEqual(config["cell_ended_at"], "2026-08-25T12:34:56+00:00")
+            self.assertEqual(config["cell_wall_seconds"], 2096.0)
+            self.assertEqual(config["scratch_startup_seconds"], 31.5)
+            self.assertEqual(config["sweep_cell"]["model"], "gemma-4-12b-qat")
+            # The reserved name stays reserved: the startup measurement must never be recorded
+            # under `model_load_seconds` (README honest-timing-semantics contract).
+            self.assertNotIn("model_load_seconds", config)
+
+    def test_queue_model_id_is_accepted_as_the_model_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cell = dict(_longcontext_cell())
+            cell["_queue_model_id"] = "model-a"
+            out = batch.write_cell_record(
+                Path(tmp) / "run", cell, self._battery_results(),
+                vram_baseline_bytes=1, vram_loaded_bytes=2,
+                sampling_arm_effective="capability",
+            )
+            config = json.loads((out / "config.json").read_text())
+            self.assertEqual(config["sweep_cell"]["model"], "model-a")
+
+    def test_resolved_cells_carry_the_queue_model_key_without_changing_cell_id(self):
+        plain = batch.resolve_queue_cells(_minimal_queue())
+        for cell in plain:
+            self.assertEqual(cell["model"], "model-a")
+            self.assertEqual(cell["model"], cell["_queue_model_id"])
+        # Identity is untouched by the new key (it is set after `compute_cell_id`).
+        recomputed = [sweep.compute_cell_id(c) for c in plain]
+        self.assertEqual(recomputed, [c["cell_id"] for c in plain])
+
+    def test_runner_stamps_the_handles_clock_into_the_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            battery_fn = _fake_battery_fn_factory(
+                {"single_needle": [_sample("single_needle", "correct", True)]},
+            )
+            runner = batch.make_longcontext_cell_runner(
+                battery_fn=battery_fn, vram_used_bytes_fn=lambda: 5000,
+                records_dir=Path(tmp) / "run-clock",
+            )
+            handle = _handle()
+            handle.started_at = "2026-08-25T09:00:00+00:00"
+            handle.scratch_startup_seconds = 12.75
+            cell = _longcontext_cell()
+            cell["model"] = "model-a"
+            outcome = runner(handle, cell)
+            config = json.loads(
+                (Path(outcome.detail["record_path"]) / "config.json").read_text()
+            )
+            self.assertEqual(config["cell_started_at"], "2026-08-25T09:00:00+00:00")
+            self.assertEqual(config["scratch_startup_seconds"], 12.75)
+            self.assertEqual(config["sweep_cell"]["model"], "model-a")
+            self.assertIsInstance(config["cell_wall_seconds"], float)
+            self.assertGreaterEqual(config["cell_wall_seconds"], 0.0)
+            self.assertIsInstance(config["cell_ended_at"], str)
+
+    def test_startup_only_cell_record_also_carries_the_clock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = batch.make_longcontext_cell_runner(
+                battery_fn=_fake_battery_fn_factory({}), vram_used_bytes_fn=lambda: 4321,
+                records_dir=Path(tmp) / "run-vram-clock",
+            )
+            handle = _handle()
+            handle.scratch_startup_seconds = 8.5
+            outcome = runner(handle, _longcontext_cell(battery=["vram"]))
+            config = json.loads(
+                (Path(outcome.detail["record_path"]) / "config.json").read_text()
+            )
+            self.assertEqual(config["scratch_startup_seconds"], 8.5)
+            self.assertIsInstance(config["cell_wall_seconds"], float)
+
+
+class TestBtreTimingBatteryItem(unittest.TestCase):
+    """The `"timing"` battery item: 3 rounds by default, `timing_rounds` override, timing-first
+    ordering, `timing_round` rows appended to the SAME `samples.jsonl`."""
+
+    def test_validate_queue_rejects_a_malformed_timing_rounds_override(self):
+        for bad in (0, -2, 2.5, "3", True):
+            queue = _minimal_queue()
+            queue["cells"][0]["timing_rounds"] = bad
+            with self.assertRaises(batch.QueueValidationError):
+                batch.validate_queue(queue)
+
+    def test_validate_queue_accepts_a_positive_int_or_absence(self):
+        queue = _minimal_queue()
+        batch.validate_queue(queue)
+        queue["cells"][0]["timing_rounds"] = 5
+        batch.validate_queue(queue)
+
+    def test_resolved_cell_carries_the_override_without_changing_cell_id(self):
+        plain = batch.resolve_queue_cells(_minimal_queue())
+        queue = _minimal_queue()
+        queue["cells"][0]["timing_rounds"] = 5
+        with_override = batch.resolve_queue_cells(queue)
+        for before, after in zip(plain, with_override):
+            self.assertEqual(before["cell_id"], after["cell_id"])
+        self.assertEqual(with_override[0]["timing_rounds"], 5)
+        self.assertIsNone(plain[0]["timing_rounds"])
+
+    def test_rounds_default_to_three_and_honor_the_override(self):
+        self.assertEqual(batch.TIMING_DEFAULT_ROUNDS, 3)
+        self.assertEqual(batch.timing_rounds_for_cell({}), 3)
+        self.assertEqual(batch.timing_rounds_for_cell({"timing_rounds": 7}), 7)
+        # A malformed value never raises out of the timing arm -- it falls back.
+        for bad in ({"timing_rounds": 0}, {"timing_rounds": "5"}, {"timing_rounds": None}):
+            self.assertEqual(batch.timing_rounds_for_cell(bad), 3)
+
+    def test_round_schedule_is_cold_then_hot_with_indices_from_zero(self):
+        round_fn = _fake_timing_round_fn()
+        result = batch.run_timing_rounds(
+            _handle(), _longcontext_cell(battery=["timing"]), round_fn=round_fn,
+        )
+        self.assertEqual([c["round_index"] for c in round_fn.calls], [0, 1, 2])
+        self.assertEqual([c["run_state"] for c in round_fn.calls], ["cold", "hot", "hot"])
+        self.assertEqual({c["alias"] for c in round_fn.calls}, {"lc-alias"})
+        self.assertEqual({c["max_tokens"] for c in round_fn.calls}, {batch.TIMING_MAX_TOKENS})
+        self.assertEqual(result["detail"]["rounds_recorded"], 3)
+        self.assertEqual(result["detail"]["rounds_succeeded"], 3)
+        self.assertIsNone(result["detail"]["error"])
+
+    def test_a_raising_round_keeps_partial_rows_and_never_propagates(self):
+        round_fn = _fake_timing_round_fn(raise_at=1)
+        result = batch.run_timing_rounds(
+            _handle(), _longcontext_cell(battery=["timing"]), round_fn=round_fn,
+        )
+        self.assertEqual(len(result["samples"]), 1)
+        self.assertIn("RuntimeError", result["detail"]["error"])
+        self.assertEqual(result["detail"]["rounds_recorded"], 1)
+
+    def test_needle_plus_timing_appends_timing_rows_to_the_same_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            round_fn = _fake_timing_round_fn()
+            battery_fn = _fake_battery_fn_factory(
+                {"single_needle": [_sample("single_needle", "correct", True)]},
+            )
+            runner = batch.make_longcontext_cell_runner(
+                battery_fn=battery_fn, vram_used_bytes_fn=lambda: 5000,
+                records_dir=Path(tmp) / "run-timing", timing_round_fn=round_fn,
+            )
+            outcome = runner(_handle(), _longcontext_cell(battery=["timing", "needle"]))
+            self.assertEqual(outcome.status, "completed")
+            self.assertEqual(outcome.detail["timing"]["rounds_recorded"], 3)
+            rows = [
+                json.loads(line)
+                for line in (Path(outcome.detail["record_path"]) / "samples.jsonl")
+                .read_text().strip().splitlines()
+            ]
+            # This suite's `_sample()` fixture is a minimal needle-probe stand-in with no `type`
+            # key, so the battery row is identified by its absence -- what matters here is that
+            # the timing rows land in the same file, after the battery's own.
+            kinds = [r.get("type") for r in rows]
+            self.assertEqual(kinds.count("timing_round"), 3)
+            self.assertEqual(len(rows), 4)
+            # Battery rows first, timing rows appended after -- a stable, documented order.
+            self.assertNotEqual(kinds[0], "timing_round")
+            timing_rows = [r for r in rows if r.get("type") == "timing_round"]
+            # Exactly the pre-v2 field set `packages/shared/src/metric.ts` parses.
+            for key in ("run_state", "round_index", "first_generation_token_ms",
+                        "observed_decode_tok_s", "prompt_tokens", "cached_tokens",
+                        "cache_hit_ratio", "cache_assertion_passed", "model_load_seconds",
+                        "decode_wall_ms", "server_prompt_eval_tok_s", "server_eval_tok_s",
+                        "completion_tokens"):
+                self.assertIn(key, timing_rows[0])
+            # Honest-timing contract: no observed residency transition here, so null -- never a
+            # constant subtracted off another field.
+            self.assertTrue(all(r["model_load_seconds"] is None for r in timing_rows))
+            completions = [
+                json.loads(line)
+                for line in (Path(outcome.detail["record_path"]) / "completions.jsonl")
+                .read_text().strip().splitlines()
+            ]
+            self.assertEqual(
+                sum(1 for c in completions if c.get("type") == "timing_round"), 3
+            )
+
+    def test_timing_runs_before_the_needle_battery(self):
+        order = []
+        round_fn = _fake_timing_round_fn()
+
+        def recording_round_fn(*args, **kwargs):
+            order.append("timing")
+            return round_fn(*args, **kwargs)
+
+        inner_battery_fn = _fake_battery_fn_factory(
+            {"single_needle": [_sample("single_needle", "correct", True)]},
+        )
+
+        def recording_battery_fn(*args, **kwargs):
+            order.append("needle")
+            return inner_battery_fn(*args, **kwargs)
+
+        runner = batch.make_longcontext_cell_runner(
+            battery_fn=recording_battery_fn, vram_used_bytes_fn=lambda: 5000,
+            timing_round_fn=recording_round_fn,
+        )
+        runner(_handle(), _longcontext_cell(battery=["timing", "needle"]))
+        self.assertEqual(order, ["timing", "timing", "timing", "needle"])
+
+    def test_timing_only_cell_records_rows_via_the_startup_only_arm(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            round_fn = _fake_timing_round_fn()
+            runner = batch.make_longcontext_cell_runner(
+                battery_fn=_fake_battery_fn_factory({}), vram_used_bytes_fn=lambda: 4321,
+                records_dir=Path(tmp) / "run-timing-only", timing_round_fn=round_fn,
+            )
+            outcome = runner(_handle(), _longcontext_cell(battery=["timing"]))
+            self.assertEqual(outcome.status, "completed")
+            rows = [
+                json.loads(line)
+                for line in (Path(outcome.detail["record_path"]) / "samples.jsonl")
+                .read_text().strip().splitlines()
+            ]
+            self.assertEqual([r["type"] for r in rows], ["timing_round"] * 3)
+
+    def test_needle_only_cell_is_untouched_by_the_timing_arm(self):
+        round_fn = _fake_timing_round_fn()
+        battery_fn = _fake_battery_fn_factory(
+            {"single_needle": [_sample("single_needle", "correct", True)]},
+        )
+        runner = batch.make_longcontext_cell_runner(
+            battery_fn=battery_fn, vram_used_bytes_fn=lambda: 5000,
+            timing_round_fn=round_fn,
+        )
+        outcome = runner(_handle(), _longcontext_cell(battery=["vram", "needle"]))
+        self.assertEqual(round_fn.calls, [])  # never invoked
+        self.assertNotIn("timing", outcome.detail)  # detail shape byte-identical to pre-WP
+        self.assertEqual(outcome.status, "completed")
+
+    def test_a_failed_timing_round_never_changes_the_cell_disposition(self):
+        round_fn = _fake_timing_round_fn(fail_at=0)
+        battery_fn = _fake_battery_fn_factory(
+            {"single_needle": [_sample("single_needle", "correct", True)]},
+        )
+        runner = batch.make_longcontext_cell_runner(
+            battery_fn=battery_fn, vram_used_bytes_fn=lambda: 5000,
+            timing_round_fn=round_fn,
+        )
+        outcome = runner(_handle(), _longcontext_cell(battery=["timing", "needle"]))
+        self.assertEqual(outcome.status, "completed")
+        self.assertIsNone(outcome.reason)
+        self.assertFalse(outcome.correctness_failure)
+        self.assertEqual(outcome.detail["timing"]["rounds_succeeded"], 2)
+
+    def test_unhealthy_handle_never_reaches_the_timing_arm(self):
+        round_fn = _fake_timing_round_fn()
+        runner = batch.make_longcontext_cell_runner(
+            battery_fn=_fake_battery_fn_factory({}), vram_used_bytes_fn=lambda: 1,
+            timing_round_fn=round_fn,
+        )
+        outcome = runner(_handle(healthy=False), _longcontext_cell(battery=["timing"]))
+        self.assertEqual(outcome.reason, "health_timeout")
+        self.assertEqual(round_fn.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -45,6 +45,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -994,11 +995,34 @@ def verify_startup_state(log_text: str, cell: Dict[str, Any]) -> Tuple[bool, Dic
 # -------------------------------------------------------------------------------------------
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 class ScratchServerHandle:
     """Mutable handle yielded by `scratch_server()`. `teardown_result` is `None` until the `with`
     block exits (set inside the context manager's own `finally`) -- callers that keep a reference
     to the handle can read it once their `with` block has exited, since it's the same object
-    mutated in place, not a snapshot."""
+    mutated in place, not a snapshot.
+
+    **Cell clock (plan `bakeoff-timing-records-and-estimates.md` WP-1, additive)**: three optional
+    constructor arguments carry the per-cell timing a record consumer (`batch.write_cell_record`)
+    stamps into `config.json`. All three default to `None`, so every pre-existing construction
+    site (this module's own context manager before it was updated, and every test that builds a
+    stand-in handle positionally or by keyword) keeps working unchanged:
+
+    - `started_at` / `started_monotonic` -- the wall-clock ISO stamp and the monotonic reading
+      taken at the TOP of the cell's scratch-server context (before the orphan sweep and the
+      spawn), i.e. the start of the cell's real occupancy of the GPU. When omitted they default
+      to "now at handle construction", which is the only start a directly-constructed handle can
+      honestly claim; `cell_wall_seconds` is always derived from `started_monotonic` (never from
+      differencing the ISO strings), so a clock step can never contaminate it.
+    - `scratch_startup_seconds` -- see `_ScratchServerContext.__enter__`. Deliberately NOT named
+      `model_load_seconds`: that name is reserved by `README.md`'s honest-timing-semantics
+      contract for a `ResidencyPoller`-OBSERVED residency transition, and this measurement is a
+      different thing (spawn -> startup-verification pass for a bare scratch llama-server).
+      `None` whenever the measurement isn't available.
+    """
 
     def __init__(
         self,
@@ -1011,6 +1035,9 @@ class ScratchServerHandle:
         vram_before_bytes: int,
         port: int,
         container: str,
+        started_at: Optional[str] = None,
+        started_monotonic: Optional[float] = None,
+        scratch_startup_seconds: Optional[float] = None,
     ) -> None:
         self.cell_id = cell_id
         self.base_url = base_url
@@ -1022,6 +1049,11 @@ class ScratchServerHandle:
         self.port = port
         self.container = container
         self.teardown_result: Optional[Dict[str, Any]] = None
+        self.started_at = started_at if started_at is not None else _utc_now_iso()
+        self.started_monotonic = (
+            started_monotonic if started_monotonic is not None else time.monotonic()
+        )
+        self.scratch_startup_seconds = scratch_startup_seconds
 
 
 class _ScratchServerContext:
@@ -1045,6 +1077,11 @@ class _ScratchServerContext:
         self.handle: Optional[ScratchServerHandle] = None
 
     def __enter__(self) -> ScratchServerHandle:
+        # WP-1 (bakeoff-timing-records-and-estimates): the cell clock starts HERE, at the top of
+        # the context -- before the orphan sweep and the spawn -- so `cell_wall_seconds` on the
+        # persisted record covers the cell's whole occupancy of the GPU, not just the battery.
+        cell_started_monotonic = time.monotonic()
+        cell_started_at = _utc_now_iso()
         cell_id = self.cell.get("cell_id") or compute_cell_id(self.cell)
         # WP-5 attended-validation finding #6: pre-spawn orphan sweep. A crash inside this
         # method after `spawn_scratch_server` but before the handle exists (finding #5's
@@ -1058,6 +1095,13 @@ class _ScratchServerContext:
         vram_before = read_vram_used_bytes()
         argv = build_command(self.cell, port=self.port)
         log_path = f"/tmp/sweep-cell-{cell_id}.log"
+        # WP-1 (bakeoff-timing-records-and-estimates): `scratch_startup_seconds`'s clock. Starts
+        # at the create call below (`docker exec`-ing the llama-server child into the scratch
+        # container) and stops the moment startup verification has a verdict -- the wait that was
+        # untimed before this WP. Recorded ONLY when the server both answered health and passed
+        # startup-state verification; a health timeout's elapsed time is the timeout, not a
+        # startup measurement, so it stays `None` rather than being passed off as one.
+        startup_t0 = time.monotonic()
         spawn_scratch_server(argv, log_path, container=self.container)
 
         bridge_ip = discover_bridge_ip(self.container)
@@ -1076,11 +1120,14 @@ class _ScratchServerContext:
         )
         log_text = log_result.stdout.decode("utf-8", errors="replace")
         verified, details = verify_startup_state(log_text, self.cell)
+        startup_seconds = time.monotonic() - startup_t0 if (healthy and verified) else None
 
         self.handle = ScratchServerHandle(
             cell_id=cell_id, base_url=base_url, healthy=healthy, verified=verified,
             details=details, log_text=log_text, vram_before_bytes=vram_before,
             port=self.port, container=self.container,
+            started_at=cell_started_at, started_monotonic=cell_started_monotonic,
+            scratch_startup_seconds=startup_seconds,
         )
         return self.handle
 

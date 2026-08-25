@@ -359,5 +359,82 @@ class TestBuildCommandBooleanFlags(unittest.TestCase):
         self.assertEqual(argv[argv.index("--port") + 1], "18080")
 
 
+class TestScratchServerHandleCellClock(unittest.TestCase):
+    """WP-1 of `plans/bakeoff-timing-records-and-estimates.md`: the handle's additive cell clock.
+    Constructing a handle directly (what every test double in this repo does) must keep working
+    unchanged, and must self-populate an honest start rather than leaving a hole."""
+
+    def _handle(self, **kwargs):
+        return sweep.ScratchServerHandle(
+            cell_id="x", base_url="http://fake", healthy=True, verified=True,
+            details={}, log_text="", vram_before_bytes=0, port=1, container="fake", **kwargs
+        )
+
+    def test_pre_wp_construction_still_works_and_self_populates_a_start(self):
+        handle = self._handle()
+        self.assertIsInstance(handle.started_at, str)
+        self.assertTrue(handle.started_at.endswith("+00:00"))
+        self.assertIsInstance(handle.started_monotonic, float)
+        # Never invented: the startup measurement is only ever supplied by the real context
+        # manager, so a directly-constructed handle reports null, not a fabricated number.
+        self.assertIsNone(handle.scratch_startup_seconds)
+
+    def test_explicit_values_are_carried_verbatim(self):
+        handle = self._handle(
+            started_at="2026-08-25T12:00:00+00:00", started_monotonic=1000.0,
+            scratch_startup_seconds=42.25,
+        )
+        self.assertEqual(handle.started_at, "2026-08-25T12:00:00+00:00")
+        self.assertEqual(handle.started_monotonic, 1000.0)
+        self.assertEqual(handle.scratch_startup_seconds, 42.25)
+
+
+class TestScratchStartupTimer(unittest.TestCase):
+    """The NEW monotonic timer around `spawn_scratch_server` -> startup verification
+    (`sweep._ScratchServerContext.__enter__`). Every Docker/sysfs collaborator is patched out;
+    no container, no host sysfs, no network is touched by these tests."""
+
+    CELL = {
+        "cell_id": "timed-cell", "alias": "a",
+        "model_container_path": "/models/a.gguf",
+        "server_flags": {"-c": 32768, "-ctk": "f16", "-ctv": "f16", "-fa": "on", "-ngl": 99},
+    }
+
+    def _run(self, healthy, verified):
+        from unittest import mock
+
+        clock = iter([100.0, 110.0, 137.5, 200.0, 300.0, 400.0])
+        with mock.patch.object(sweep, "find_host_pid_by_port", return_value=None), \
+                mock.patch.object(sweep, "teardown_scratch_server", return_value={}), \
+                mock.patch.object(sweep, "read_vram_used_bytes", return_value=0), \
+                mock.patch.object(sweep, "build_command", return_value=["llama-server"]), \
+                mock.patch.object(sweep, "spawn_scratch_server", return_value=None), \
+                mock.patch.object(sweep, "discover_bridge_ip", return_value="10.0.0.2"), \
+                mock.patch.object(sweep, "wait_for_health", return_value=healthy), \
+                mock.patch.object(sweep, "verify_startup_state", return_value=(verified, {})), \
+                mock.patch.object(sweep.subprocess, "run") as run_mock, \
+                mock.patch.object(sweep.time, "monotonic", side_effect=lambda: next(clock)):
+            run_mock.return_value = mock.Mock(stdout=b"log")
+            with sweep.scratch_server(self.CELL, port=1) as handle:
+                return handle
+
+    def test_records_spawn_to_verification_elapsed_on_a_good_startup(self):
+        handle = self._run(healthy=True, verified=True)
+        # clock: 100.0 = cell start (top of __enter__), 110.0 = spawn, 137.5 = verification done.
+        self.assertEqual(handle.started_monotonic, 100.0)
+        self.assertAlmostEqual(handle.scratch_startup_seconds, 27.5)
+        self.assertIsInstance(handle.started_at, str)
+
+    def test_health_timeout_records_null_never_the_timeout_duration(self):
+        handle = self._run(healthy=False, verified=True)
+        self.assertIsNone(handle.scratch_startup_seconds)
+        # The cell clock still started -- only the startup MEASUREMENT is unavailable.
+        self.assertEqual(handle.started_monotonic, 100.0)
+
+    def test_failed_startup_verification_records_null(self):
+        handle = self._run(healthy=True, verified=False)
+        self.assertIsNone(handle.scratch_startup_seconds)
+
+
 if __name__ == "__main__":
     unittest.main()

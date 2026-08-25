@@ -1,0 +1,347 @@
+diff --git a/src/gateway/streaming-conversion.test.ts b/src/gateway/streaming-conversion.test.ts
+new file mode 100644
+index 0000000..f7a42cd
+--- /dev/null
++++ b/src/gateway/streaming-conversion.test.ts
+@@ -0,0 +1,230 @@
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import {
++  optimisticStreamKeepAliveFrame,
++  preStartSafeAnthropicPingFrame,
++  withIdleGapKeepAlive
++} from './streaming-conversion';
++
++/**
++ * A hand-rolled async generator test double: yields whatever is `push()`-ed, in order,
++ * finishes on `end()`, throws on `fail()`. When nothing is queued it parks on a promise
++ * that only `push`/`end`/`fail` can resolve — the same "no data yet" shape
++ * `relayAnthropicMessagesFromOpenAIStream` presents while waiting on the real upstream.
++ */
++function createControllableGenerator() {
++  type QueueItem =
++    | { kind: 'value'; value: string }
++    | { kind: 'done' }
++    | { kind: 'error'; error: unknown };
++
++  const queue: QueueItem[] = [];
++  let wake: (() => void) | undefined;
++  let cleanedUp = false;
++
++  async function* run(): AsyncGenerator<string> {
++    try {
++      for (;;) {
++        if (queue.length === 0) {
++          await new Promise<void>((resolve) => {
++            wake = resolve;
++          });
++          continue;
++        }
++
++        const item = queue.shift() as QueueItem;
++        if (item.kind === 'value') {
++          yield item.value;
++        } else if (item.kind === 'done') {
++          return;
++        } else {
++          throw item.error;
++        }
++      }
++    } finally {
++      cleanedUp = true;
++    }
++  }
++
++  return {
++    generator: run(),
++    push(value: string) {
++      queue.push({ kind: 'value', value });
++      wake?.();
++      wake = undefined;
++    },
++    end() {
++      queue.push({ kind: 'done' });
++      wake?.();
++      wake = undefined;
++    },
++    fail(error: unknown) {
++      queue.push({ kind: 'error', error });
++      wake?.();
++      wake = undefined;
++    },
++    isCleanedUp() {
++      return cleanedUp;
++    }
++  };
++}
++
++/** Never produces a frame and never finishes — models an upstream stuck mid-prefill. */
++function createBlockedForeverGenerator() {
++  async function* run(): AsyncGenerator<string> {
++    await new Promise<void>(() => {});
++    yield 'unreachable';
++  }
++
++  return run();
++}
++
++describe('preStartSafeAnthropicPingFrame', () => {
++  it('emits the exact ping frame bytes', () => {
++    expect(preStartSafeAnthropicPingFrame()).toBe('event: ping\ndata: {"type":"ping"}\n\n');
++  });
++
++  it('is unconditional, unlike optimisticStreamKeepAliveFrame which is post-start-gated', () => {
++    const preStartRelay = {
++      sourceAdapterKey: 'anthropic_messages',
++      state: { started: false }
++    } as never;
++
++    // The existing, post-start-gated helper degrades to a comment before message_start...
++    expect(optimisticStreamKeepAliveFrame(preStartRelay)).toBe(': keep-alive\n\n');
++    // ...while the new helper emits the real ping frame regardless of any relay state at all
++    // (it takes none), which is the entire reason it exists as a separate helper.
++    expect(preStartSafeAnthropicPingFrame()).toBe('event: ping\ndata: {"type":"ping"}\n\n');
++  });
++});
++
++describe('withIdleGapKeepAlive', () => {
++  afterEach(() => {
++    vi.useRealTimers();
++  });
++
++  it('yields a ping frame during pre-first-frame silence', async () => {
++    vi.useFakeTimers();
++    const inner = createBlockedForeverGenerator();
++    const wrapped = withIdleGapKeepAlive(inner, () => 'PING', 1000);
++
++    const pending = wrapped.next();
++    await vi.advanceTimersByTimeAsync(1000);
++    await expect(pending).resolves.toEqual({ value: 'PING', done: false });
++  });
++
++  it('repeats the ping for as long as the gap persists', async () => {
++    vi.useFakeTimers();
++    const inner = createBlockedForeverGenerator();
++    const wrapped = withIdleGapKeepAlive(inner, () => 'PING', 1000);
++
++    for (let i = 0; i < 3; i += 1) {
++      const pending = wrapped.next();
++      await vi.advanceTimersByTimeAsync(1000);
++      await expect(pending).resolves.toEqual({ value: 'PING', done: false });
++    }
++  });
++
++  it('never pings while inner frames arrive faster than the interval', async () => {
++    const control = createControllableGenerator();
++    const wrapped = withIdleGapKeepAlive(control.generator, () => 'PING', 10_000);
++    const seen: unknown[] = [];
++
++    control.push('frame-1');
++    seen.push((await wrapped.next()).value);
++
++    await new Promise((resolve) => setTimeout(resolve, 5));
++    control.push('frame-2');
++    seen.push((await wrapped.next()).value);
++
++    await new Promise((resolve) => setTimeout(resolve, 5));
++    control.end();
++    const final = await wrapped.next();
++
++    expect(seen).toEqual(['frame-1', 'frame-2']);
++    expect(final).toEqual({ value: undefined, done: true });
++  });
++
++  it('forwards inner frames byte-identical and in order, never reordered or dropped', async () => {
++    const control = createControllableGenerator();
++    const wrapped = withIdleGapKeepAlive(control.generator, () => 'PING', 10_000);
++    const frames = [
++      'event: message_start\ndata: {"type":"message_start"}\n\n',
++      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"text":"hi"}}\n\n',
++      'event: message_stop\ndata: {"type":"message_stop"}\n\n'
++    ];
++
++    for (const frame of frames) {
++      control.push(frame);
++    }
++    control.end();
++
++    const received: string[] = [];
++    for (;;) {
++      const result = await wrapped.next();
++      if (result.done) {
++        break;
++      }
++      received.push(result.value);
++    }
++
++    expect(received).toHaveLength(frames.length);
++    frames.forEach((frame, index) => {
++      expect(received[index]).toBe(frame);
++    });
++  });
++
++  it('stops permanently once inner finishes — no trailing frames after the terminal event', async () => {
++    vi.useFakeTimers();
++    const control = createControllableGenerator();
++    const wrapped = withIdleGapKeepAlive(control.generator, () => 'PING', 1000);
++
++    control.push('frame-1');
++    await expect(wrapped.next()).resolves.toEqual({ value: 'frame-1', done: false });
++
++    control.end();
++    await expect(wrapped.next()).resolves.toEqual({ value: undefined, done: true });
++
++    // No timer should still be scheduled once the inner generator has finished.
++    expect(vi.getTimerCount()).toBe(0);
++
++    // Advancing well past the interval, repeatedly, must not resurrect a ping.
++    await vi.advanceTimersByTimeAsync(5000);
++    expect(vi.getTimerCount()).toBe(0);
++    await expect(wrapped.next()).resolves.toEqual({ value: undefined, done: true });
++  });
++
++  it('propagates an inner error and leaves no leaked timer', async () => {
++    vi.useFakeTimers();
++    const control = createControllableGenerator();
++    const wrapped = withIdleGapKeepAlive(control.generator, () => 'PING', 1000);
++
++    control.push('frame-1');
++    await expect(wrapped.next()).resolves.toEqual({ value: 'frame-1', done: false });
++
++    const boom = new Error('upstream exploded');
++    control.fail(boom);
++    await expect(wrapped.next()).rejects.toBe(boom);
++
++    expect(vi.getTimerCount()).toBe(0);
++    expect(control.isCleanedUp()).toBe(true);
++  });
++
++  it('closes the inner generator and clears its timer on external return() (abort path)', async () => {
++    vi.useFakeTimers();
++    const control = createControllableGenerator();
++    const wrapped = withIdleGapKeepAlive(control.generator, () => 'PING', 1000);
++
++    control.push('frame-1');
++    await expect(wrapped.next()).resolves.toEqual({ value: 'frame-1', done: false });
++
++    // Mirrors what Readable.from()'s destroy handling does when
++    // bindAbortSignalToReadable's onAbort fires on client disconnect.
++    const returned = await wrapped.return(undefined);
++
++    expect(returned).toEqual({ value: undefined, done: true });
++    expect(vi.getTimerCount()).toBe(0);
++    expect(control.isCleanedUp()).toBe(true);
++
++    await expect(wrapped.next()).resolves.toEqual({ value: undefined, done: true });
++  });
++});
+diff --git a/src/gateway/streaming-conversion.ts b/src/gateway/streaming-conversion.ts
+index 54d0a08..7d5194b 100644
+--- a/src/gateway/streaming-conversion.ts
++++ b/src/gateway/streaming-conversion.ts
+@@ -320,7 +320,13 @@ export function relayConvertedStreamFromUpstreamResponse(
+ 
+   let stream: Readable;
+   if (source.adapterKey === 'anthropic_messages') {
+-    stream = Readable.from(relayAnthropicMessagesFromOpenAIStream(upstreamResponse));
++    stream = Readable.from(
++      withIdleGapKeepAlive(
++        relayAnthropicMessagesFromOpenAIStream(upstreamResponse),
++        preStartSafeAnthropicPingFrame,
++        LOCAL_LEG_IDLE_KEEP_ALIVE_INTERVAL_MS
++      )
++    );
+   } else if (source.adapterKey === 'openai_responses') {
+     stream = Readable.from(relayOpenAIResponsesFromOpenAIStream(upstreamResponse, standardRequest?.tools));
+   } else if (source.adapterKey === 'gemini_stream') {
+@@ -339,6 +345,91 @@ export function relayConvertedStreamFromUpstreamResponse(
+   return reply.send(stream);
+ }
+ 
++/**
++ * How long the local leg's converted Anthropic stream may stay byte-silent — from stream
++ * open through stream end, covering prefill and any mid-stream stall alike — before
++ * `relayConvertedStreamFromUpstreamResponse` injects a `ping` frame of its own. A module
++ * constant, not a config knob: comfortably inside Claude Code's 300 s read-timeout watchdog
++ * on `ANTHROPIC_BASE_URL` streams, and the traffic cost of a 15 s cadence is negligible.
++ */
++const LOCAL_LEG_IDLE_KEEP_ALIVE_INTERVAL_MS = 15_000;
++
++/**
++ * The `ping` frame for the local leg's idle-gap keepalive (see `withIdleGapKeepAlive` below).
++ * Deliberately NOT `optimisticStreamKeepAliveFrame` (above): that helper only emits `event:
++ * ping` once `relay.state.started` (i.e. after `message_start`) and degrades to an SSE
++ * comment before that — by design, for its post-start virtual-tool use, which stays
++ * byte-untouched. The idle-gap wrapper can fire before the upstream has sent anything at
++ * all (the whole point — it covers prefill), so it needs a frame that is safe to emit
++ * unconditionally. Measured tolerated pre-`message_start` by Claude Code 2.1.243 (see
++ * plans/router-prefill-keepalive-and-protocol-gaps.md); the byte shape is otherwise
++ * identical to the post-start helper's.
++ */
++export function preStartSafeAnthropicPingFrame(): string {
++  return encodeSseEvent('ping', { type: 'ping' });
++}
++
++/**
++ * Wrap `inner` so that any gap of `intervalMs` or more between frames it produces —
++ * including the gap before its first frame — yields one `pingFrame()` in the meantime,
++ * repeating for as long as the gap persists. Inner frames are forwarded in order and
++ * byte-identical; the wrapper never reorders, delays, or drops them. Once `inner` finishes
++ * (returns or throws), no further frames — including no trailing ping — are produced.
++ *
++ * Lives locally rather than reusing `keepAliveWhilePending` (`gateway/handler.ts`): that
++ * helper races a single pending promise against a repeating timer (built for one internal
++ * tool call), not repeated gaps across an entire stream's lifetime, and importing it here
++ * would create a module cycle — `handler.ts` already imports this module. This wrapper
++ * follows the same promise-race shape locally instead.
++ */
++export async function* withIdleGapKeepAlive(
++  inner: AsyncGenerator<string>,
++  pingFrame: () => string,
++  intervalMs: number
++): AsyncGenerator<string> {
++  let pendingNext = inner.next();
++  try {
++    for (;;) {
++      let timer: ReturnType<typeof setTimeout> | undefined;
++      let race: { timedOut: true } | { timedOut: false; result: IteratorResult<string> };
++      try {
++        // Cleared the instant the race settles, win or lose — not deferred until this
++        // iteration's `yield` is resumed, which the consumer (a Node `Readable`) controls
++        // and may not do for an arbitrary time. A settled-but-uncleared timer would sit
++        // there, formally still scheduled, for as long as the consumer takes to ask for
++        // the next frame.
++        race = await Promise.race([
++          pendingNext.then((result) => ({ timedOut: false as const, result })),
++          new Promise<{ timedOut: true }>((resolve) => {
++            timer = setTimeout(() => resolve({ timedOut: true }), intervalMs);
++          })
++        ]);
++      } finally {
++        clearTimeout(timer);
++      }
++
++      if (race.timedOut) {
++        yield pingFrame();
++        continue;
++      }
++
++      if (race.result.done) {
++        return;
++      }
++
++      yield race.result.value;
++      pendingNext = inner.next();
++    }
++  } finally {
++    try {
++      await inner.return?.(undefined);
++    } catch {
++      // Best-effort: inner is being torn down (abort/error unwind); nothing else to do
++      // with a failure to close it here.
++    }
++  }
++}
++
+ export function canRelayOptimisticOpenAIChatStream(source: GatewaySourceContext): boolean {
+   return source.adapterKey === 'openai_responses' || source.adapterKey === 'anthropic_messages';
+ }

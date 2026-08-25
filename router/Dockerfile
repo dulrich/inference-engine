@@ -36,6 +36,10 @@ COPY patches/0001-omit-x-api-key-for-passthrough-bearer.patch /tmp/0001-omit-x-a
 RUN git apply --check /tmp/0001-omit-x-api-key-for-passthrough-bearer.patch \
     && git apply /tmp/0001-omit-x-api-key-for-passthrough-bearer.patch
 
+COPY patches/0002-prefill-keepalive-ping.patch /tmp/0002-prefill-keepalive-ping.patch
+RUN git apply --check /tmp/0002-prefill-keepalive-ping.patch \
+    && git apply /tmp/0002-prefill-keepalive-ping.patch
+
 # The repo's own package-lock.json — measured green 2026-08-25 (145 packages, <1s).
 RUN npm ci
 
@@ -44,10 +48,10 @@ RUN npm ci
 RUN npm run build
 
 # Build-stage gate (repo Gates rule, "the relevant... run green"): the patched credential-header
-# behavior is locked by this file's test cases. Baseline at 782cd51 is 11/11; the patch adds 3
-# cases (bearer-only passthrough under both gateway-auth postures, plus a managed-key regression
-# lock) for 14/14, 0 failing. A non-zero exit here fails the image build.
-RUN npx vitest run src/adapters/builtins/common.test.ts
+# behavior is locked by common.test.ts (14/14, unchanged by 0002); the local-leg idle-gap
+# keepalive added by 0002 is locked by streaming-conversion.test.ts (9 new cases). Baseline at
+# 782cd51 with both patches applied is 23/23, 0 failing. A non-zero exit here fails the image build.
+RUN npx vitest run src/adapters/builtins/common.test.ts src/gateway/streaming-conversion.test.ts
 
 # esbuild bundles everything except fastify/undici/ws (build.js's `external` list) into
 # dist/index.js, so pruning devDependencies is the only trim the runtime stage needs.

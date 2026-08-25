@@ -1,0 +1,270 @@
+diff --git a/src/gateway/handler.ts b/src/gateway/handler.ts
+index 0c6ddeb..f4ab118 100644
+--- a/src/gateway/handler.ts
++++ b/src/gateway/handler.ts
+@@ -541,6 +541,7 @@ export async function handleGatewayRequest(
+       const currentAttemptSequence = upstreamAttemptSequence;
+ 
+       if (!upstreamResponse.ok) {
++        const rawUpstreamResponseForRelay = upstreamResponse.clone();
+         const details = await safeReadUpstreamPayload(
+           request,
+           targetProvider,
+@@ -574,6 +575,9 @@ export async function handleGatewayRequest(
+           targetProviderConfig,
+         );
+         if (!shouldTryNextTargetAfterFailure(config, targetProviders, targetIndex, attempt)) {
++          if (await maybeRelayRawUpstreamErrorResponse(reply, source, rawUpstreamResponseForRelay)) {
++            return;
++          }
+           break;
+         }
+         continue;
+@@ -889,6 +893,7 @@ export async function handleGatewayRequest(
+       const currentAttemptSequence = upstreamAttemptSequence;
+ 
+       if (!upstreamResponse.ok) {
++        const rawUpstreamResponseForRelay = upstreamResponse.clone();
+         const upstreamPayload = await safeReadUpstreamPayload(
+           request,
+           targetProvider,
+@@ -922,6 +927,9 @@ export async function handleGatewayRequest(
+           targetProviderConfig,
+         );
+         if (!shouldTryNextTargetAfterFailure(config, targetProviders, targetIndex, attempt)) {
++          if (await maybeRelayRawUpstreamErrorResponse(reply, source, rawUpstreamResponseForRelay)) {
++            return;
++          }
+           break;
+         }
+         continue;
+@@ -1281,6 +1289,7 @@ export async function handleGatewayRequest(
+     upstreamAttemptSequence += 1;
+     const currentAttemptSequence = upstreamAttemptSequence;
+ 
++    const rawUpstreamResponseForRelay = upstreamResponse.clone();
+     const upstreamPayload = await readBufferedUpstreamPayload(
+       request,
+       targetProvider,
+@@ -1316,6 +1325,9 @@ export async function handleGatewayRequest(
+         targetProviderConfig,
+       );
+       if (!shouldTryNextTargetAfterFailure(config, targetProviders, targetIndex, attempt)) {
++        if (await maybeRelayRawUpstreamErrorResponse(reply, source, rawUpstreamResponseForRelay)) {
++          return;
++        }
+         break;
+       }
+       continue;
+@@ -5913,6 +5925,34 @@ async function retryEmptyOutputResponseParseFailure(input: {
+   };
+ }
+ 
++// Patch 0003 (upstream-error-body-passthrough): decided at the non-2xx response site, with a
++// Response clone taken before any read (audit B2 — the attempt record's parsed payload is not
++// byte-verbatim and cannot distinguish an empty body). Scoped to Anthropic-protocol sources on
++// their final target attempt with a non-empty raw body (audit M2 — every other source protocol,
++// non-final attempt, or empty body keeps the existing envelope, unchanged).
++async function maybeRelayRawUpstreamErrorResponse(
++  reply: FastifyReply,
++  source: GatewaySourceContext,
++  rawUpstreamResponse: Response
++): Promise<boolean> {
++  if (source.adapterKey !== 'anthropic_messages') {
++    return false;
++  }
++
++  const rawBody = Buffer.from(await rawUpstreamResponse.arrayBuffer());
++  if (rawBody.byteLength === 0) {
++    return false;
++  }
++
++  reply.code(rawUpstreamResponse.status);
++  const contentType = rawUpstreamResponse.headers.get('content-type');
++  if (contentType) {
++    reply.header('content-type', contentType);
++  }
++  reply.send(rawBody);
++  return true;
++}
++
+ function shouldTryNextTargetAfterFailure(
+   config: GatewayConfig,
+   targets: TargetProviderRoute[],
+diff --git a/src/gateway/routes.test.ts b/src/gateway/routes.test.ts
+index 6499845..0f26c7f 100644
+--- a/src/gateway/routes.test.ts
++++ b/src/gateway/routes.test.ts
+@@ -10593,6 +10593,172 @@ export function createGatewayPlugin() {
+     }
+   });
+ 
++  // Patch 0003 (upstream-error-body-passthrough, audit B2/M2): the final Anthropic-protocol
++  // attempt's non-empty upstream error body is relayed byte-verbatim instead of the
++  // "All target providers failed." envelope. Every other case (other source protocols,
++  // non-final attempts, empty bodies, dispatch-stage failures) keeps the envelope unchanged.
++  it('relays the final Anthropic-protocol attempt upstream error body byte-verbatim (patch 0003)', async () => {
++    const rawErrorBody = '{"type":"error","error":{"type":"invalid_request_error","message":"WP2-SENTINEL"}}';
++    const fetchMock = vi.fn(async () =>
++      new Response(rawErrorBody, {
++        status: 400,
++        headers: {
++          'content-type': 'application/json'
++        }
++      })
++    );
++    vi.stubGlobal('fetch', fetchMock as typeof fetch);
++
++    const config = createConfig([createProviderConfig('r9s-anthropic', 'anthropic_messages', ['glm-5.1'])]);
++    config.routing = {
++      preferSourceProviderForBareModels: true
++    };
++
++    const app = Fastify({ logger: false });
++    registerGatewayRoutes(app, config, createGatewayRuntime());
++    await app.ready();
++
++    try {
++      const response = await app.inject({
++        method: 'POST',
++        url: '/v1/messages',
++        headers: {
++          'content-type': 'application/json',
++          'anthropic-version': '2023-06-01'
++        },
++        payload: {
++          model: 'glm-5.1',
++          messages: [{ role: 'user', content: 'hello' }]
++        }
++      });
++
++      expect(response.statusCode).toBe(400);
++      expect(response.body).toBe(rawErrorBody);
++      expect(String(response.headers['content-type'] || '')).toContain('application/json');
++      expect(fetchMock).toHaveBeenCalledTimes(1);
++    } finally {
++      await app.close();
++    }
++  });
++
++  it('keeps the envelope for an Anthropic-protocol dispatch-stage failure (patch 0003)', async () => {
++    const fetchMock = vi.fn(async () => {
++      throw new Error('connection reset');
++    });
++    vi.stubGlobal('fetch', fetchMock as typeof fetch);
++
++    const config = createConfig([createProviderConfig('r9s-anthropic', 'anthropic_messages', ['glm-5.1'])]);
++    config.routing = {
++      preferSourceProviderForBareModels: true
++    };
++
++    const app = Fastify({ logger: false });
++    registerGatewayRoutes(app, config, createGatewayRuntime());
++    await app.ready();
++
++    try {
++      const response = await app.inject({
++        method: 'POST',
++        url: '/v1/messages',
++        headers: {
++          'content-type': 'application/json',
++          'anthropic-version': '2023-06-01'
++        },
++        payload: {
++          model: 'glm-5.1',
++          messages: [{ role: 'user', content: 'hello' }]
++        }
++      });
++
++      const body = JSON.parse(response.body);
++      expect(body.error.message).toBe('All target providers failed.');
++    } finally {
++      await app.close();
++    }
++  });
++
++  it('keeps the envelope for an openai_responses source upstream HTTP error (patch 0003, unchanged)', async () => {
++    const fetchMock = vi.fn(async () =>
++      new Response(JSON.stringify({ error: { message: 'bad request upstream' } }), {
++        status: 400,
++        headers: {
++          'content-type': 'application/json'
++        }
++      })
++    );
++    vi.stubGlobal('fetch', fetchMock as typeof fetch);
++
++    const app = Fastify({ logger: false });
++    registerGatewayRoutes(
++      app,
++      createConfig([createProviderConfig('openai-main', 'openai_responses', ['gpt-5.6-sol'])]),
++      createGatewayRuntime()
++    );
++    await app.ready();
++
++    try {
++      const response = await app.inject({
++        method: 'POST',
++        url: '/v1/responses',
++        headers: {
++          'content-type': 'application/json'
++        },
++        payload: {
++          model: 'openai-main/gpt-5.6-sol',
++          input: 'hello'
++        }
++      });
++
++      expect(response.statusCode).toBe(400);
++      const body = JSON.parse(response.body);
++      expect(body.error.message).toBe('All target providers failed.');
++    } finally {
++      await app.close();
++    }
++  });
++
++  it('keeps the envelope for a final Anthropic-protocol attempt with an empty upstream error body (patch 0003)', async () => {
++    const fetchMock = vi.fn(async () =>
++      new Response('', {
++        status: 400,
++        headers: {
++          'content-type': 'application/json'
++        }
++      })
++    );
++    vi.stubGlobal('fetch', fetchMock as typeof fetch);
++
++    const config = createConfig([createProviderConfig('r9s-anthropic', 'anthropic_messages', ['glm-5.1'])]);
++    config.routing = {
++      preferSourceProviderForBareModels: true
++    };
++
++    const app = Fastify({ logger: false });
++    registerGatewayRoutes(app, config, createGatewayRuntime());
++    await app.ready();
++
++    try {
++      const response = await app.inject({
++        method: 'POST',
++        url: '/v1/messages',
++        headers: {
++          'content-type': 'application/json',
++          'anthropic-version': '2023-06-01'
++        },
++        payload: {
++          model: 'glm-5.1',
++          messages: [{ role: 'user', content: 'hello' }]
++        }
++      });
++
++      expect(response.statusCode).toBe(400);
++      const body = JSON.parse(response.body);
++      expect(body.error.message).toBe('All target providers failed.');
++    } finally {
++      await app.close();
++    }
++  });
++
+   it('optimistically streams virtual model content as Anthropic messages while intercepting internal tool calls', async () => {
+     const firstStream = [
+       'data: {"id":"chatcmpl_virtual_websearch_messages_optimistic_1","object":"chat.completion.chunk","model":"glm-5","choices":[{"index":0,"delta":{"role":"assistant"}}]}\n\n',

@@ -25,7 +25,11 @@
 #   2. A request with a missing gateway key, and one with a wrong gateway key, each return a
 #      401 error body (asserted on the body's error message, not just the status).
 #   3. One non-streamed chat completion via claude-local/qwen36-a3b returns non-empty content.
-#   4. (--subscription only) one claude -p call through the gateway returns a completion.
+#   4. POST /v1/messages/count_tokens via claude-local/qwen36-a3b returns an integer
+#      input_tokens field (local leg; patch 0004).
+#   5. POST /v1/messages/count_tokens with an unresolvable model returns a 404-class JSON
+#      error body (patch 0004).
+#   6. (--subscription only) one claude -p call through the gateway returns a completion.
 #
 # Exits non-zero on any check failure. Requires: curl, jq.
 set -u
@@ -132,7 +136,39 @@ else
 	bad "/v1/chat/completions (claude-local/qwen36-a3b) did not return non-empty content. Response: $chat_json"
 fi
 
-# ── 4. Hosted-leg subscription probe (held; never run unattended) ──────────────────────────
+# ── 4. Local-leg count_tokens (claude-local/qwen36-a3b) ─────────────────────────────────────
+note "checking POST /v1/messages/count_tokens (model=claude-local/qwen36-a3b) ..."
+count_tokens_json=$(curl -s --max-time 30 -X POST "$BASE_URL/v1/messages/count_tokens" \
+	-H 'Content-Type: application/json' \
+	-H "x-gateway-key: $GATEWAY_KEY" \
+	-d '{"model":"claude-local/qwen36-a3b","messages":[{"role":"user","content":"Reply with the single word: pong"}]}') || count_tokens_json=""
+count_tokens_value=$(echo "$count_tokens_json" | jq -r '
+	.input_tokens
+	| if type == "number" and (. == (. | floor)) then . else empty end
+' 2>/dev/null)
+if [ -n "$count_tokens_value" ]; then
+	pass "/v1/messages/count_tokens (claude-local/qwen36-a3b) returned integer input_tokens=$count_tokens_value"
+else
+	bad "/v1/messages/count_tokens (claude-local/qwen36-a3b) did not return an integer input_tokens. Response: $count_tokens_json"
+fi
+
+# ── 5. count_tokens with an unresolvable model returns a 404-class JSON error body ──────────
+note "checking POST /v1/messages/count_tokens with an unresolvable model ..."
+wrong_model_status=$(curl -s --max-time 15 -o /tmp/smoke-router-wrong-model-body.$$ -w '%{http_code}' \
+	-X POST "$BASE_URL/v1/messages/count_tokens" \
+	-H 'Content-Type: application/json' \
+	-H "x-gateway-key: $GATEWAY_KEY" \
+	-d '{"model":"wp2-smoke-nonexistent-model","messages":[{"role":"user","content":"hi"}]}') || wrong_model_status=""
+wrong_model_json=$(cat /tmp/smoke-router-wrong-model-body.$$ 2>/dev/null)
+rm -f /tmp/smoke-router-wrong-model-body.$$
+wrong_model_msg=$(echo "$wrong_model_json" | jq -r '.error.message // empty' 2>/dev/null)
+if [ "$wrong_model_status" = "404" ] && [ -n "$wrong_model_msg" ]; then
+	pass "/v1/messages/count_tokens with an unresolvable model returned 404 with a body error: $wrong_model_msg"
+else
+	bad "/v1/messages/count_tokens with an unresolvable model did not return a 404 body error (status=$wrong_model_status). Response: $wrong_model_json"
+fi
+
+# ── 6. Hosted-leg subscription probe (held; never run unattended) ──────────────────────────
 if [ "$SUBSCRIPTION" -eq 1 ]; then
 	note "--subscription passed: running one claude -p call through $BASE_URL on the saved claude.ai login."
 	note "This bills the operator's real Claude subscription."

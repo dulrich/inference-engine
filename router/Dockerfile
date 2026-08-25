@@ -1,9 +1,15 @@
 # router/Dockerfile — @the-next-ai/ai-gateway (https://github.com/The-NeXT-AI/ai-gateway),
-# built from source at a pinned commit with one vendored patch. Never `npm install
+# built from source at a pinned commit with a four-patch vendored series. Never `npm install
 # @the-next-ai/ai-gateway` and never a moving branch/tag — the pin below is a commit SHA.
 #
 # See router/AGENTS.md for the patch rationale and the never-set-ANTHROPIC_API_KEY constraint,
-# and router/patches/0001-omit-x-api-key-for-passthrough-bearer.patch for the change itself.
+# and router/patches/000{1,2,3,4}-*.patch for the changes themselves: 0001 omits x-api-key for
+# the passthrough OAuth bearer, 0002 adds the local-leg prefill/idle-gap ping keepalive, 0003
+# relays upstream error bodies byte-verbatim to Anthropic-protocol clients on the final attempt,
+# and 0004 adds the POST /v1/messages/count_tokens route. This is a bounded stabilization
+# series (plans/router-prefill-keepalive-and-protocol-gaps.md) — the next semantic patch into
+# handler.ts/streaming-conversion.ts beyond it, or the first nontrivial pin-upgrade rebase,
+# triggers a replace-vs-integrate design spike before any patch 0005.
 #
 # Deviation from the plan's literal example command (recorded in
 # runs/dispatch/resident-router-wp-1-report.md): `git fetch --depth 1 origin 782cd51` (the short
@@ -40,6 +46,14 @@ COPY patches/0002-prefill-keepalive-ping.patch /tmp/0002-prefill-keepalive-ping.
 RUN git apply --check /tmp/0002-prefill-keepalive-ping.patch \
     && git apply /tmp/0002-prefill-keepalive-ping.patch
 
+COPY patches/0003-upstream-error-body-passthrough.patch /tmp/0003-upstream-error-body-passthrough.patch
+RUN git apply --check /tmp/0003-upstream-error-body-passthrough.patch \
+    && git apply /tmp/0003-upstream-error-body-passthrough.patch
+
+COPY patches/0004-count-tokens-route.patch /tmp/0004-count-tokens-route.patch
+RUN git apply --check /tmp/0004-count-tokens-route.patch \
+    && git apply /tmp/0004-count-tokens-route.patch
+
 # The repo's own package-lock.json — measured green 2026-08-25 (145 packages, <1s).
 RUN npm ci
 
@@ -48,10 +62,14 @@ RUN npm ci
 RUN npm run build
 
 # Build-stage gate (repo Gates rule, "the relevant... run green"): the patched credential-header
-# behavior is locked by common.test.ts (14/14, unchanged by 0002); the local-leg idle-gap
-# keepalive added by 0002 is locked by streaming-conversion.test.ts (9 new cases). Baseline at
-# 782cd51 with both patches applied is 23/23, 0 failing. A non-zero exit here fails the image build.
-RUN npx vitest run src/adapters/builtins/common.test.ts src/gateway/streaming-conversion.test.ts
+# behavior is locked by common.test.ts (14/14, unchanged since 0001); the local-leg idle-gap
+# keepalive added by 0002 is locked by streaming-conversion.test.ts (9 cases); the upstream
+# error-body passthrough (0003) and the count_tokens route (0004) are locked by
+# routes.test.ts, which also carries the engine's own pre-existing envelope tests unmodified
+# (the M2 cross-check that other source protocols/non-final attempts still get the envelope).
+# Baseline at 782cd51 with all four patches applied is 163/163, 0 failing. A non-zero exit here
+# fails the image build.
+RUN npx vitest run src/adapters/builtins/common.test.ts src/gateway/streaming-conversion.test.ts src/gateway/routes.test.ts
 
 # esbuild bundles everything except fastify/undici/ws (build.js's `external` list) into
 # dist/index.js, so pruning devDependencies is the only trim the runtime stage needs.
@@ -60,7 +78,7 @@ RUN npm prune --omit=dev
 FROM node:24-slim AS runtime
 
 LABEL org.opencontainers.image.title="inference-engine-router" \
-      org.opencontainers.image.description="@the-next-ai/ai-gateway 1.0.18, source build at 782cd51, x-api-key passthrough-bearer patch"
+      org.opencontainers.image.description="@the-next-ai/ai-gateway 1.0.18, source build at 782cd51, four-patch series: x-api-key passthrough-bearer omission, prefill/idle-gap ping keepalive, upstream error-body passthrough, /v1/messages/count_tokens route"
 
 WORKDIR /app
 

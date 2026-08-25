@@ -1,0 +1,444 @@
+diff --git a/src/gateway/handler.ts b/src/gateway/handler.ts
+index f4ab118..cfeb7ed 100644
+--- a/src/gateway/handler.ts
++++ b/src/gateway/handler.ts
+@@ -65,6 +65,7 @@ import {
+   relayConvertedStreamFromStandardResponse,
+   relayConvertedStreamFromUpstreamResponse
+ } from './streaming-conversion';
++import { buildAnthropicHeaders } from '../adapters/builtins/common';
+ import {
+   addNamespaceFieldsToStandardResponse,
+   isHostedWebSearchTool
+@@ -1570,6 +1571,192 @@ export async function handleGatewayRequest(
+   return reply.send(fallbackFailure.payload);
+ }
+ 
++// Patch 0004 (count-tokens-route, audit B3/M1/E1): a lean proxy for
++// POST /v1/messages/count_tokens. Reuses the same ordered target-provider + target-model
++// resolution `handleGatewayRequest` uses for `/v1/messages` (resolveTargetProviders +
++// resolveTargetModel, with the model-validation fallthrough across the ordered default
++// provider list — never a reimplemented bare-id shortcut) and the same credential path
++// (buildAnthropicHeaders for the base headers, applyProviderCredentials for the local
++// leg's provider-apikey replacement, gated the same way applyProviderRequestOverrides
++// gates it: only when the target route carries an explicit providerConfig). URL
++// construction is provider-specific (audit B3): the local baseurl already ends in `/v1`,
++// so the `/v1` segment is appended only when the resolved baseurl doesn't already carry
++// one. Upstream status/body are relayed verbatim (including errors), consistent with
++// patch 0003's error-passthrough contract.
++export async function handleAnthropicCountTokensRequest(
++  request: FastifyRequest,
++  reply: FastifyReply,
++  config: GatewayConfig,
++  runtime: GatewayRuntime
++) {
++  const clientAbortSignal = createClientDisconnectSignal(request, reply);
++  const source: GatewaySourceContext = { adapterKey: 'anthropic_messages' };
++  const sourceAdapter = runtime.sourceAdapters.get(source.adapterKey);
++  if (!sourceAdapter) {
++    return reply.code(500).send({
++      error: {
++        message: `Source adapter is not registered: ${source.adapterKey}`
++      }
++    });
++  }
++
++  const body = request.body;
++  if (!isObject(body)) {
++    return sendBadRequest(reply, 'Request body must be a JSON object.');
++  }
++
++  const requestedModel =
++    readHeader(request.headers['x-target-model']) || resolvePassthroughModel(body, source);
++
++  const targetProvidersResult = resolveTargetProviders(
++    request,
++    sourceAdapter.provider,
++    config,
++    requestedModel
++  );
++  if (!targetProvidersResult.ok) {
++    return sendBadRequest(reply, targetProvidersResult.error);
++  }
++
++  let resolvedTarget: TargetProviderRoute | undefined;
++  let resolvedProviderConfig: ProviderConfig | undefined;
++  let resolvedModel: string | undefined;
++
++  for (const target of targetProvidersResult.value) {
++    const targetProviderConfig = resolveProviderConfig(config, target);
++    const modelResult = resolveTargetModel(request, target, requestedModel, config);
++    if (!modelResult.ok || !modelResult.value) {
++      continue;
++    }
++
++    resolvedTarget = target;
++    resolvedProviderConfig = targetProviderConfig;
++    resolvedModel = modelResult.value;
++    break;
++  }
++
++  if (!resolvedTarget || !resolvedModel) {
++    return reply.code(404).send({
++      error: {
++        message: `Model not found for /v1/messages/count_tokens: ${requestedModel || '(none)'}`,
++        type: 'invalid_request_error',
++        code: 'model_not_found'
++      }
++    });
++  }
++
++  if (clientAbortSignal.aborted) {
++    return;
++  }
++
++  // An explicit local providerConfig with its own apikey (e.g. claude-local) replaces whatever
++  // credential buildAnthropicHeaders would otherwise resolve, exactly like
++  // applyProviderRequestOverrides's unconditional override for an explicit provider route
++  // (router/AGENTS.md "Config" — claude-local's apikey is a load-bearing dummy). In that case a
++  // missing incoming/managed Anthropic credential must not fail the request: the local leg
++  // never needed a real one.
++  const hasExplicitProviderConfig = Boolean(resolvedTarget.providerConfig);
++  const willOverrideCredential = hasExplicitProviderConfig && Boolean(resolvedProviderConfig?.apikey);
++
++  let upstreamHeaders: Record<string, string>;
++  if (willOverrideCredential) {
++    upstreamHeaders = buildCountTokensLocalPassthroughHeaders(request.headers);
++  } else {
++    const headersResult = buildAnthropicHeaders(request.headers, config);
++    if (!headersResult.ok) {
++      return sendBadRequest(reply, headersResult.error);
++    }
++    upstreamHeaders = headersResult.value;
++  }
++
++  let upstreamUrl = buildCountTokensUpstreamUrl(resolvedTarget, resolvedProviderConfig, config);
++
++  if (willOverrideCredential) {
++    const credentialOverride = applyProviderCredentials(
++      upstreamUrl,
++      upstreamHeaders,
++      resolvedTarget.provider,
++      resolvedProviderConfig!.apikey!
++    );
++    upstreamUrl = credentialOverride.url;
++    upstreamHeaders = credentialOverride.headers;
++  }
++
++  const upstreamBody = applyPassthroughModelOverride(
++    { url: upstreamUrl, headers: upstreamHeaders, body },
++    resolvedTarget.provider,
++    resolvedModel
++  ).body;
++
++  let upstreamResponse: Response;
++  try {
++    upstreamResponse = await callUpstream(
++      upstreamUrl,
++      upstreamHeaders,
++      upstreamBody,
++      config.upstreamTimeoutMs,
++      clientAbortSignal,
++      {
++        logger: request.log,
++        provider: resolvedTarget.provider,
++        providerName: resolvedProviderConfig?.name,
++        sourceAdapterKey: source.adapterKey
++      }
++    );
++  } catch (error) {
++    if (clientAbortSignal.aborted) {
++      return;
++    }
++
++    return reply.code(502).send({
++      error: {
++        message: error instanceof Error ? error.message : 'Failed to reach upstream provider.'
++      }
++    });
++  }
++
++  if (clientAbortSignal.aborted) {
++    return;
++  }
++
++  return relayUpstreamResponse(reply, upstreamResponse, clientAbortSignal);
++}
++
++// Minimal Anthropic-shaped headers for a target whose credential will be overridden by
++// applyProviderCredentials (an explicit local providerConfig with its own apikey). No
++// authorization/x-api-key is resolved here — the credential override sets it — so a request
++// with no incoming/managed Anthropic credential still reaches the local leg.
++function buildCountTokensLocalPassthroughHeaders(headers: FastifyRequest['headers']): Record<string, string> {
++  const mapped: Record<string, string> = {
++    'content-type': 'application/json',
++    'anthropic-version':
++      readHeader(headers['anthropic-version']) ||
++      readHeader(headers['x-anthropic-version']) ||
++      process.env.ANTHROPIC_VERSION ||
++      '2023-06-01'
++  };
++
++  const beta = readHeader(headers['anthropic-beta']);
++  if (beta) {
++    mapped['anthropic-beta'] = beta;
++  }
++
++  return mapped;
++}
++
++function buildCountTokensUpstreamUrl(
++  target: TargetProviderRoute,
++  targetProviderConfig: ProviderConfig | undefined,
++  config: GatewayConfig
++): string {
++  const baseUrl =
++    targetProviderConfig?.baseurl || providerBaseUrlForType(target.provider, config) || config.anthropicBaseUrl;
++  const trimmedBaseUrl = trimRightSlash(baseUrl);
++  return trimmedBaseUrl.endsWith('/v1')
++    ? `${trimmedBaseUrl}/messages/count_tokens`
++    : `${trimmedBaseUrl}/v1/messages/count_tokens`;
++}
++
+ async function runTransparentToolExecutionLoop(input: {
+   request: FastifyRequest;
+   reply: FastifyReply;
+diff --git a/src/gateway/routes.test.ts b/src/gateway/routes.test.ts
+index 0f26c7f..ebfb304 100644
+--- a/src/gateway/routes.test.ts
++++ b/src/gateway/routes.test.ts
+@@ -10759,6 +10759,210 @@ export function createGatewayPlugin() {
+     }
+   });
+ 
++  // Patch 0004 (count-tokens-route, audit B3/M1/E1): POST /v1/messages/count_tokens reuses the
++  // messages path's ordered target-provider/target-model resolution and credential path, with
++  // provider-specific URL construction locked to the exact URLs both legs use.
++  it('proxies count_tokens to the local leg with the exact URL and stripped model (patch 0004)', async () => {
++    let capturedUrl = '';
++    let capturedInit: RequestInit | undefined;
++    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
++      capturedUrl = String(url);
++      capturedInit = init;
++      return new Response(JSON.stringify({ input_tokens: 12 }), {
++        status: 200,
++        headers: {
++          'content-type': 'application/json'
++        }
++      });
++    });
++    vi.stubGlobal('fetch', fetchMock as typeof fetch);
++
++    const localProvider = createProviderConfig('claude-local', 'openai_chat_completions', ['qwen36-a3b']);
++    localProvider.baseurl = 'http://inference-engine-llama:4806/v1';
++    localProvider.apikey = 'local-dummy-key-not-a-secret';
++    const config = createConfig([localProvider]);
++    // No incoming authorization/x-api-key header below, and no managed Anthropic credential
++    // configured (matches production: ANTHROPIC_API_KEY is never set, router/AGENTS.md) — the
++    // local leg's own apikey must still carry the request; it never needed a real Anthropic
++    // credential (this reproduces a live-gate regression: WP-2 gate 5a, "ANTHROPIC_API_KEY is
++    // missing" from a naive buildAnthropicHeaders-first implementation).
++    config.anthropicApiKey = undefined;
++
++    const app = Fastify({ logger: false });
++    registerGatewayRoutes(app, config, createGatewayRuntime());
++    await app.ready();
++
++    try {
++      const response = await app.inject({
++        method: 'POST',
++        url: '/v1/messages/count_tokens',
++        headers: {
++          'content-type': 'application/json'
++        },
++        payload: {
++          model: 'claude-local/qwen36-a3b',
++          messages: [{ role: 'user', content: 'hello' }]
++        }
++      });
++
++      expect(fetchMock).toHaveBeenCalledTimes(1);
++      expect(capturedUrl).toBe('http://inference-engine-llama:4806/v1/messages/count_tokens');
++      const forwardedBody = JSON.parse(String(capturedInit?.body || '{}'));
++      expect(forwardedBody.model).toBe('qwen36-a3b');
++      expect(forwardedBody.messages).toEqual([{ role: 'user', content: 'hello' }]);
++      expect((capturedInit?.headers as Record<string, string>).authorization).toBe(
++        'Bearer local-dummy-key-not-a-secret'
++      );
++      expect(response.statusCode).toBe(200);
++      expect(JSON.parse(response.body)).toEqual({ input_tokens: 12 });
++    } finally {
++      await app.close();
++    }
++  });
++
++  it('proxies count_tokens to the hosted leg with bearer-only credential semantics (patch 0004)', async () => {
++    let capturedUrl = '';
++    let capturedInit: RequestInit | undefined;
++    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
++      capturedUrl = String(url);
++      capturedInit = init;
++      return new Response(JSON.stringify({ input_tokens: 42 }), {
++        status: 200,
++        headers: {
++          'content-type': 'application/json'
++        }
++      });
++    });
++    vi.stubGlobal('fetch', fetchMock as typeof fetch);
++
++    const config = createConfig([
++      createProviderConfig('anthropic-main', 'anthropic_messages', ['claude-sonnet-5'])
++    ]);
++
++    const app = Fastify({ logger: false });
++    registerGatewayRoutes(app, config, createGatewayRuntime());
++    await app.ready();
++
++    try {
++      const response = await app.inject({
++        method: 'POST',
++        url: '/v1/messages/count_tokens',
++        headers: {
++          'content-type': 'application/json',
++          authorization: 'Bearer client-oauth-token',
++          'anthropic-version': '2023-06-01',
++          'anthropic-beta': 'some-beta-flag'
++        },
++        payload: {
++          model: 'anthropic-main/claude-sonnet-5',
++          messages: [{ role: 'user', content: 'hello' }]
++        }
++      });
++
++      expect(fetchMock).toHaveBeenCalledTimes(1);
++      expect(capturedUrl).toBe('https://api.anthropic.com/v1/messages/count_tokens');
++      const upstreamHeaders = capturedInit?.headers as Record<string, string>;
++      expect(upstreamHeaders.authorization).toBe('Bearer client-oauth-token');
++      expect(upstreamHeaders['x-api-key']).toBeUndefined();
++      expect(upstreamHeaders['anthropic-version']).toBe('2023-06-01');
++      expect(upstreamHeaders['anthropic-beta']).toBe('some-beta-flag');
++      expect(response.statusCode).toBe(200);
++      expect(JSON.parse(response.body)).toEqual({ input_tokens: 42 });
++    } finally {
++      await app.close();
++    }
++  });
++
++  it('returns a 404 JSON error body for an unresolvable count_tokens model (patch 0004)', async () => {
++    const fetchMock = vi.fn();
++    vi.stubGlobal('fetch', fetchMock as typeof fetch);
++
++    const config = createConfig([
++      createProviderConfig('claude-local', 'openai_chat_completions', ['qwen36-a3b'])
++    ]);
++
++    const app = Fastify({ logger: false });
++    registerGatewayRoutes(app, config, createGatewayRuntime());
++    await app.ready();
++
++    try {
++      const response = await app.inject({
++        method: 'POST',
++        url: '/v1/messages/count_tokens',
++        headers: {
++          'content-type': 'application/json'
++        },
++        payload: {
++          model: 'totally-unresolvable-model',
++          messages: [{ role: 'user', content: 'hello' }]
++        }
++      });
++
++      expect(response.statusCode).toBe(404);
++      const body = JSON.parse(response.body);
++      expect(body.error.code).toBe('model_not_found');
++      expect(fetchMock).not.toHaveBeenCalled();
++    } finally {
++      await app.close();
++    }
++  });
++
++  it('rejects count_tokens with a missing or wrong gateway key (patch 0004, auth prehandler)', async () => {
++    const fetchMock = vi.fn();
++    vi.stubGlobal('fetch', fetchMock as typeof fetch);
++
++    const config = createConfig([
++      createProviderConfig('claude-local', 'openai_chat_completions', ['qwen36-a3b'])
++    ]);
++    config.auth = {
++      ...config.auth,
++      enabled: true,
++      mode: 'static_api_key',
++      required: true,
++      staticApiKeys: {
++        keys: ['correct-gateway-key'],
++        keyHeader: 'x-gateway-key',
++        keyBearerOnly: false
++      }
++    };
++
++    const app = Fastify({ logger: false });
++    registerGatewayRoutes(app, config, createGatewayRuntime());
++    await app.ready();
++
++    try {
++      const missingKeyResponse = await app.inject({
++        method: 'POST',
++        url: '/v1/messages/count_tokens',
++        headers: {
++          'content-type': 'application/json'
++        },
++        payload: {
++          model: 'claude-local/qwen36-a3b',
++          messages: [{ role: 'user', content: 'hello' }]
++        }
++      });
++      expect(missingKeyResponse.statusCode).toBe(401);
++
++      const wrongKeyResponse = await app.inject({
++        method: 'POST',
++        url: '/v1/messages/count_tokens',
++        headers: {
++          'content-type': 'application/json',
++          'x-gateway-key': 'wrong-key'
++        },
++        payload: {
++          model: 'claude-local/qwen36-a3b',
++          messages: [{ role: 'user', content: 'hello' }]
++        }
++      });
++      expect(wrongKeyResponse.statusCode).toBe(401);
++      expect(fetchMock).not.toHaveBeenCalled();
++    } finally {
++      await app.close();
++    }
++  });
++
+   it('optimistically streams virtual model content as Anthropic messages while intercepting internal tool calls', async () => {
+     const firstStream = [
+       'data: {"id":"chatcmpl_virtual_websearch_messages_optimistic_1","object":"chat.completion.chunk","model":"glm-5","choices":[{"index":0,"delta":{"role":"assistant"}}]}\n\n',
+diff --git a/src/gateway/routes.ts b/src/gateway/routes.ts
+index 9c78df3..7f678b0 100644
+--- a/src/gateway/routes.ts
++++ b/src/gateway/routes.ts
+@@ -18,7 +18,7 @@ import {
+   handleXAIVideoGenerationRequest,
+   registerOpenAIMediaBodyParsers
+ } from './openai-json';
+-import { handleGatewayRequest, parseGeminiTail } from './handler';
++import { handleAnthropicCountTokensRequest, handleGatewayRequest, parseGeminiTail } from './handler';
+ import { createGatewayIdempotencyPreHandler } from './idempotency';
+ import type { GatewayRuntime } from './runtime';
+ import { decodeGatewayVideoId } from './video-compat';
+@@ -174,6 +174,10 @@ export function registerGatewayRoutes(
+     );
+   });
+ 
++  fastify.post('/v1/messages/count_tokens', { preHandler: gatewayWritePreHandlers }, async (request, reply) => {
++    return handleAnthropicCountTokensRequest(request, reply, config, runtime);
++  });
++
+   fastify.post<{ Params: { '*': string } }>(
+     '/v1beta/models/*',
+     { preHandler: gatewayWritePreHandlers },

@@ -11,9 +11,17 @@
   // below -- augmenting, never subsetting or replacing either (a `null` capability, e.g. a
   // model predating the WP-1 metadata rollout, renders its own muted "no capability
   // metadata" note rather than an empty cell).
-  import type { ExperimentSummary } from "@bench-dashboard/shared";
-  import { getServing } from "../api.ts";
+  //
+  // "tok/s (p50)" column (WP-3, `plans/bakeoff-timing-records-and-estimates.md`) fetches
+  // the SEPARATE DB-backed `GET /api/serving/timing` aggregate alongside `GET /api/serving`
+  // and joins the two client-side by alias (`lib/serving/matchTiming.ts`) -- `GET
+  // /api/serving` itself stays a pure config-file parse, untouched. p50 + sample count
+  // only; an alias with no timing data (the `bge-*` embed/rerank aliases) renders the
+  // literal "—", never a guessed value.
+  import type { ExperimentSummary, ServingTimingRow } from "@bench-dashboard/shared";
+  import { getServing, getServingTiming } from "../api.ts";
   import { matchServingToMeasured } from "../lib/serving/matchMeasured.ts";
+  import { formatServingTimingCell, matchServingTiming } from "../lib/serving/matchTiming.ts";
   import { expandToggleLabel, flagValueClass, formatFlagValue, toggleExpandedRow } from "../lib/serving/expand.ts";
   import {
     capabilityReasoningLabel,
@@ -41,6 +49,7 @@
 
   let configPath = $state("");
   let rows = $state<ReturnType<typeof matchServingToMeasured>>([]);
+  let timingRows = $state<ServingTimingRow[]>([]);
   let servingLoading = $state(false);
   let servingError = $state("");
 
@@ -57,9 +66,10 @@
     servingLoading = true;
     servingError = "";
     try {
-      const response = await getServing();
+      const [response, timing] = await Promise.all([getServing(), getServingTiming()]);
       configPath = response.configPath;
       rows = matchServingToMeasured(response.models, exps);
+      timingRows = timing;
     } catch (e) {
       servingError = e instanceof Error ? e.message : "Unable to load served aliases";
     } finally {
@@ -105,6 +115,7 @@
           <th>KV V</th>
           <th>FA</th>
           <th>Capabilities</th>
+          <th class="run-table-num">tok/s (p50)</th>
           <th>Measured cell</th>
           <th>Config</th>
         </tr>
@@ -142,6 +153,7 @@
                 <span class="run-table-muted">no capability metadata</span>
               {/if}
             </td>
+            <td class="run-table-num">{formatServingTimingCell(matchServingTiming(row.alias.aliases, timingRows))}</td>
             <td>
               {#if row.measured}
                 <a
@@ -167,7 +179,7 @@
           </tr>
           {#if expandedRows.has(row.alias.modelKey)}
             <tr class="serving-flags-row">
-              <td colspan="9">
+              <td colspan="10">
                 {#if row.alias.flags.allFlags.length === 0}
                   <p class="run-table-muted">No flags found in the served command.</p>
                 {:else}

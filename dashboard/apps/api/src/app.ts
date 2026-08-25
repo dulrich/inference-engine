@@ -10,6 +10,7 @@ import { registerHealthRoutes } from "./routes/health.ts";
 import { registerLadderRoutes } from "./routes/ladders.ts";
 import { registerQueueRoutes } from "./routes/queue.ts";
 import { registerServingRoutes } from "./routes/serving.ts";
+import { registerServingTimingRoutes } from "./routes/servingTiming.ts";
 
 // Fleet scaffold convention (model_scoreboard `app.ts`): the Hono app object only — no
 // `Bun.serve` call here, so importing this module (tests, `smoke.ts`) never binds a port
@@ -22,6 +23,7 @@ registerExperimentRoutes(app);
 registerLadderRoutes(app);
 registerCurveRoutes(app);
 registerServingRoutes(app);
+registerServingTimingRoutes(app);
 registerExportRoutes(app);
 registerQueueRoutes(app);
 registerControlRoutes(app);

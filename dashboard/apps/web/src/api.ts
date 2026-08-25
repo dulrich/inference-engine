@@ -7,6 +7,7 @@ import {
   MetricRowSchema,
   QueueListResponseSchema,
   ServingResponseSchema,
+  ServingTimingRowSchema,
   TrialRowSchema,
   type ControlAcceptedResponse,
   type ControlCancelRequest,
@@ -17,6 +18,7 @@ import {
   type LadderRow,
   type QueueListResponse,
   type ServingResponse,
+  type ServingTimingRow,
 } from "@bench-dashboard/shared";
 import { z } from "zod";
 import { parseControlActionResponse } from "./lib/queue/control.ts";
@@ -74,6 +76,14 @@ export function getCurves(experimentId: string): Promise<CurveSeries> {
 
 export function getServing(): Promise<ServingResponse> {
   return getJson("/api/serving", ServingResponseSchema);
+}
+
+// `GET /api/serving/timing` (WP-3, `plans/bakeoff-timing-records-and-estimates.md`) -- a
+// separate DB-backed aggregate, fetched by `Serving.svelte` ALONGSIDE `getServing()` above
+// and joined client-side by alias (`lib/serving/matchTiming.ts`). `getServing()` itself
+// stays untouched -- this is an additive fetch, not a replacement.
+export function getServingTiming(): Promise<ServingTimingRow[]> {
+  return getJson("/api/serving/timing", ServingTimingRowSchema.array());
 }
 
 // `GET /api/queue` (WP-A) -- read-only queue/state visibility (WP-C Queue tab). Missing

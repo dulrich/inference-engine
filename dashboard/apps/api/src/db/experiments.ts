@@ -4,6 +4,7 @@ import type {
   ExperimentSummary,
   LadderRow,
   MetricRow,
+  ServingTimingRow,
   TrialRow,
 } from "@bench-dashboard/shared";
 import type { NormalizedRecord } from "../ingest/record.ts";
@@ -426,6 +427,68 @@ function median(values: number[]): number | null {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 0 ? ((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2 : (sorted[mid] as number);
+}
+
+/** Trailing suffix `readLegacyTimingRecord`'s dir-derived record ids commonly carry
+ * (`gemma-4-12b-qat-full`, WP-4's real-data example) -- the record's own `sweep_alias`
+ * value is sourced from `config.alias` and, on every legacy dir measured to date, is
+ * already clean of this suffix, but the WP-3 alias-join rule strips it defensively for any
+ * `v1-timing` row whose stored alias does carry it. Never applied to a `v2` row. */
+const LEGACY_TIMING_ALIAS_SUFFIX = "-full";
+
+/** Maps a stored `sweep_alias` + its `schema_origin` to the alias `GET
+ * /api/serving/timing`'s response groups by (`listServingTimingRows` below) --
+ * `plans/bakeoff-timing-records-and-estimates.md` WP-3's pinned alias-join rule. A `v2`
+ * alias is returned exactly as stored. A `v1-timing` alias has a trailing `-full` suffix
+ * stripped (`gemma-4-12b-qat-full` -> `gemma-4-12b-qat`) so the pre-v2 timing-only ingest
+ * side door (WP-4) joins onto the same served alias a v2 measurement of the same model
+ * would use. If the stripped alias collides with a `v2` alias that also has timing rows,
+ * `listServingTimingRows`'s grouping-by-computed-alias merges their samples -- they are the
+ * same served model measured in two eras, never a coincidence to hide. */
+function servingTimingAlias(alias: string, schemaOrigin: string): string {
+  if (schemaOrigin !== "v1-timing") return alias;
+  return alias.endsWith(LEGACY_TIMING_ALIAS_SUFFIX) ? alias.slice(0, -LEGACY_TIMING_ALIAS_SUFFIX.length) : alias;
+}
+
+interface ServingTimingSourceRow {
+  alias: string;
+  schema_origin: string;
+  observed_decode_tok_s: number;
+}
+
+/** `GET /api/serving/timing` support (WP-3) -- p50 decode tok/s + sample count grouped by
+ * alias, mirroring `listLadderRows`' median pattern just above (application-code median,
+ * SQLite has no built-in `MEDIAN`, over an expected small per-alias row count). Only
+ * `timing_round` metrics with a non-null `observed_decode_tok_s` are considered, joined to
+ * their experiment's `sweep_alias`/`schema_origin` -- an experiment with no `sweep_alias`
+ * (nothing to join on) is excluded up front by the query, never surfaced as an
+ * alias-less row. Grouping key is `servingTimingAlias`'s computed alias, not the raw
+ * column, so a legacy `-full`-suffixed alias and its v2 equivalent merge into one row. */
+export function listServingTimingRows(): ServingTimingRow[] {
+  const sourceRows = db
+    .query(
+      `
+        SELECT e.sweep_alias AS alias, e.schema_origin AS schema_origin, m.observed_decode_tok_s AS observed_decode_tok_s
+        FROM metrics m
+        JOIN experiments e ON e.id = m.experiment_id
+        WHERE m.metric_type = 'timing_round'
+          AND m.observed_decode_tok_s IS NOT NULL
+          AND e.sweep_alias IS NOT NULL
+      `,
+    )
+    .all() as ServingTimingSourceRow[];
+
+  const samplesByAlias = new Map<string, number[]>();
+  for (const row of sourceRows) {
+    const alias = servingTimingAlias(row.alias, row.schema_origin);
+    const samples = samplesByAlias.get(alias);
+    if (samples) samples.push(row.observed_decode_tok_s);
+    else samplesByAlias.set(alias, [row.observed_decode_tok_s]);
+  }
+
+  return [...samplesByAlias.entries()]
+    .map(([alias, samples]) => ({ alias, p50DecodeTokS: median(samples), sampleCount: samples.length }))
+    .sort((a, b) => a.alias.localeCompare(b.alias));
 }
 
 /** `GET /api/curves/:experimentId` support — every `longcontext_probe` trial for the

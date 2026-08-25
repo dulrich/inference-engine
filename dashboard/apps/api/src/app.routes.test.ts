@@ -98,6 +98,24 @@ describe("GET /api/serving", () => {
   });
 });
 
+describe("GET /api/serving/timing", () => {
+  // Wiring/shape smoke test only (audit cycle-1 B2: confirms `registerServingTimingRoutes`
+  // is actually reached, before the SPA wildcard) -- `db/experiments.test.ts` covers
+  // `listServingTimingRows` itself (median math, the v1-timing `-full`-suffix mapping, the
+  // merge case) directly. Empty here even though `fixture-v2-full` carries 2 real
+  // `timing_round` rows: its `sweep_cell` is `null` (a non-sweep full-CLI record), so it
+  // has no `sweep_alias` to join on -- nothing to guess, per the null-honest contract this
+  // route's header comment documents.
+  test("is registered and returns the array wire shape", async () => {
+    const { status, body } = await getJson<{ alias: string; p50DecodeTokS: number | null; sampleCount: number }[]>(
+      "/api/serving/timing",
+    );
+    expect(status).toBe(200);
+    expect(Array.isArray(body)).toBe(true);
+    expect(body).toEqual([]);
+  });
+});
+
 describe("GET /api/queue", () => {
   // Route-wiring smoke test only — `routes/queue.test.ts` covers `buildQueueListResponse`
   // itself (joined/unjoined/malformed/missing-dir) directly, sidestepping `config.ts`'s

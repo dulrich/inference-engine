@@ -83,3 +83,22 @@ export const ServingResponseSchema = z.object({
   models: z.array(ServingAliasSchema),
 });
 export type ServingResponse = z.infer<typeof ServingResponseSchema>;
+
+// `GET /api/serving/timing` (WP-3, `plans/bakeoff-timing-records-and-estimates.md`) -- a
+// SEPARATE DB-backed aggregate, never folded into `ServingResponseSchema`/`GET /api/serving`
+// above (Decisions locked: that route stays a pure `llama/config.yaml` file-parse, unchanged
+// by this addition). One row per alias carrying at least one `timing_round` metric with a
+// numeric `observed_decode_tok_s` (`db/experiments.ts listServingTimingRows`); an alias with
+// zero such samples (the `bge-*` embed/rerank aliases are the known case today) simply does
+// not appear here -- the web client's join treats absence as the literal "—", never a
+// guessed zero. p50 + sample count only, deliberately no p90 (n≈10/record per experiment
+// makes a p90 dishonest at this depth -- plan Decisions locked). `p50DecodeTokS` stays
+// nullable on the wire type for the same "null, not guessed" posture every other measured
+// field in this schema already carries, even though the route's own selection query (only
+// rows with at least one sample) means it is never actually null in practice.
+export const ServingTimingRowSchema = z.object({
+  alias: z.string(),
+  p50DecodeTokS: z.number().nullable(),
+  sampleCount: z.number().int(),
+});
+export type ServingTimingRow = z.infer<typeof ServingTimingRowSchema>;

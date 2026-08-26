@@ -1,0 +1,148 @@
+{
+  "queue_state": "completed",
+  "created_at": "2026-08-26T00:06:02+00:00",
+  "cells": {
+    "mxd-gemma-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-e5a6c2af": {
+      "state": "failed",
+      "reason": "degenerate",
+      "alias": "mxd-gemma-qat-c128k-f16-mtp",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "gemma4",
+        "target_tokens": 111411,
+        "chars_per_token": 4.3,
+        "vram_before_bytes": 407400448,
+        "vram_after_bytes": 11894083584,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "runs/bakeoff/matrix-v1-dedicated/mxd-gemma-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-e5a6c2af",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null
+        }
+      }
+    },
+    "mxd-qwen36-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-6ea21d2e": {
+      "state": "completed",
+      "reason": null,
+      "alias": "mxd-qwen36-c128k-f16-mtp",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "qwen35moe",
+        "target_tokens": 111411,
+        "chars_per_token": 4.0,
+        "vram_before_bytes": 409493504,
+        "vram_after_bytes": 12901064704,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "runs/bakeoff/matrix-v1-dedicated/mxd-qwen36-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-6ea21d2e",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null
+        }
+      }
+    },
+    "mxd-qwen38-iq3s-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-eedc64d6": {
+      "state": "completed",
+      "reason": null,
+      "alias": "mxd-qwen38-iq3s-c128k-q4q4-fa",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "qwen35",
+        "target_tokens": 111411,
+        "chars_per_token": 4.0,
+        "vram_before_bytes": 409493504,
+        "vram_after_bytes": 14951612416,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "runs/bakeoff/matrix-v1-dedicated/mxd-qwen38-iq3s-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-eedc64d6",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null
+        }
+      }
+    },
+    "mxd-nemotron-c128k-f16-ctkf16-ctvf16-faauto-c131072-535f7178": {
+      "state": "failed",
+      "reason": "needle_failure",
+      "alias": "mxd-nemotron-c128k-f16",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "nemotron_h",
+        "target_tokens": 111411,
+        "chars_per_token": 4.17,
+        "vram_before_bytes": 409493504,
+        "vram_after_bytes": 6010236928,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "runs/bakeoff/matrix-v1-dedicated/mxd-nemotron-c128k-f16-ctkf16-ctvf16-faauto-c131072-535f7178",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null
+        }
+      }
+    }
+  },
+  "updated_at": "2026-08-26T05:20:41+00:00",
+  "paused_reason": "deadline"
+}

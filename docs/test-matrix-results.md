@@ -40,5 +40,5 @@ Needle counts are over 27 probes (single + multi needle, positions 0.10/0.45/0.8
 
 ## Not run / resumable (deferred at closeout, user decision 2026-08-26)
 
-- `matrix-v1-dedicated-prod`: 3 pending cells — `qwen38-iq3s-prod-nothink` (interrupted, reset), `qwen36-prod-rb128`, `qwen38-iq3s-prod-rb128` (`--reasoning-budget 128`). Resume: `POST :4810/api/control/start {"queueStem":"matrix-v1-dedicated-prod","minutes":360}` on a quiesced desktop (~5.5 h).
+- `matrix-v1-dedicated-prod`: 7 pending cells — four timing-only qwen36 cells (mtp|base × thinking|no-think, ~5–8 min each; answers the "serve no-think without MTP?" question raised by the 53 → 37 t/s observation above), then `qwen38-iq3s-prod-nothink` (interrupted, reset), `qwen36-prod-rb128`, `qwen38-iq3s-prod-rb128` (`--reasoning-budget 128`). Resume: `POST :4810/api/control/start {"queueStem":"matrix-v1-dedicated-prod","minutes":360}` on a quiesced desktop (~5.5 h).
 - `matrix-v1-shared` (18 cells, Tiers A→B→F→C→D, desktop-shared profile) — never started; the base-vs-MTP (Tier B) and quantized-KV (Tier C) comparisons live there. Start explicitly per window (never the cron default); results append to this table.

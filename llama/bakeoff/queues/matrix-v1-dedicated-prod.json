@@ -119,6 +119,62 @@
   },
   "cells": [
     {
+      "model": "qwen36-a3b-mtp",
+      "alias": "mxdp-qwen36-c128k-f16-timing-mtp-think",
+      "spec_decode": "mtp",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "battery": [
+        "timing"
+      ],
+      "sampling_arm": "production",
+      "trials": 1
+    },
+    {
+      "model": "qwen36-a3b-mtp",
+      "alias": "mxdp-qwen36-c128k-f16-timing-base-think",
+      "spec_decode": "base",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "battery": [
+        "timing"
+      ],
+      "sampling_arm": "production",
+      "trials": 1
+    },
+    {
+      "model": "qwen36-a3b-mtp-nothink",
+      "alias": "mxdp-qwen36-c128k-f16-timing-mtp-nothink",
+      "spec_decode": "mtp",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "battery": [
+        "timing"
+      ],
+      "sampling_arm": "production",
+      "trials": 1
+    },
+    {
+      "model": "qwen36-a3b-mtp-nothink",
+      "alias": "mxdp-qwen36-c128k-f16-timing-base-nothink",
+      "spec_decode": "base",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "battery": [
+        "timing"
+      ],
+      "sampling_arm": "production",
+      "trials": 1
+    },
+    {
       "model": "ling-3-tiny-ud-q4",
       "alias": "mxdp-ling-ud-q4-c128k-f16-prod",
       "c": 131072,

@@ -2,12 +2,12 @@ import type { CaptureEnvelope, CaptureRecord } from "@bench-dashboard/shared";
 import type { Hono } from "hono";
 import { getCaptureRecord, listExperimentIds } from "../db/experiments.ts";
 
-// `GET /api/export/scoreboard-capture` — raw record pass-through for the deferred
-// `model_scoreboard` connector successor plan (Decisions locked). Explicitly EXPERIMENTAL,
-// not a stable public interface (cycle-1 material finding M4): the envelope's own
-// `stability` field says so on the wire, and this route accepts an optional
-// `?id=<experimentId>` filter (repeatable) but otherwise returns every ingested experiment
-// — the successor plan is what freezes a versioned contract here, not this WP.
+// `GET /api/export/scoreboard-capture` — raw record pass-through, the FROZEN v1 capture
+// contract consumed by `model_scoreboard`'s `local-capture` source adapter. `captureVersion: 1`
+// and `stability: "v1"` are both on the wire; this route accepts an optional
+// `?id=<experimentId>` filter (repeatable) but otherwise returns every ingested experiment.
+// Any future envelope field removal/rename, or a record-shape change that breaks the
+// consumer's zod read, bumps `captureVersion` together with the consumer's literal.
 export function registerExportRoutes(app: Hono): void {
   app.get("/api/export/scoreboard-capture", (c) => {
     const requestedIds = c.req.queries("id");
@@ -18,7 +18,8 @@ export function registerExportRoutes(app: Hono): void {
       if (record) records.push(record);
     }
     const envelope: CaptureEnvelope = {
-      stability: "experimental",
+      captureVersion: 1,
+      stability: "v1",
       generatedAt: new Date().toISOString(),
       recordCount: records.length,
       records,

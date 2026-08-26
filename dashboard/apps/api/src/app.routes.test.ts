@@ -184,14 +184,16 @@ describe("POST /api/control/*", () => {
 });
 
 describe("GET /api/export/scoreboard-capture", () => {
-  test("envelope marks stability \"experimental\" and passes through raw records", async () => {
+  test("envelope marks captureVersion 1 / stability \"v1\" and passes through raw records", async () => {
     const { status, body } = await getJson<{
+      captureVersion: number;
       stability: string;
       recordCount: number;
       records: { experimentId: string; config: unknown; samples: unknown[] }[];
     }>("/api/export/scoreboard-capture");
     expect(status).toBe(200);
-    expect(body.stability).toBe("experimental");
+    expect(body.captureVersion).toBe(1);
+    expect(body.stability).toBe("v1");
     expect(body.recordCount).toBe(2);
     const smokeCell = body.records.find((r) => r.experimentId === "fixture-v2-smoke-cell");
     expect(smokeCell).toBeDefined();

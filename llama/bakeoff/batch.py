@@ -729,6 +729,25 @@ def _prompt_fit_budget(context: int, max_tokens: int) -> int:
     return context - response_cap - TEMPLATE_MARGIN
 
 
+_SHARED_MODELS_ORG_REPO_RE = re.compile(r"^/srv/models/([^/]+)/([^/]+)/[^/]+$")
+
+
+def hf_repo_from_host_path(host_path: Optional[str]) -> Optional[str]:
+    """Derives `"<org>/<repo>"` from a `model_host_path` under the shared-models mount, else
+    `None`. `host_path` must match `^/srv/models/([^/]+)/([^/]+)/[^/]+$` exactly --
+    the mount prefix, then org, then repo, then a single filename segment. `None` input, a path
+    outside `/srv/models`, or a path with too few/many segments below the prefix (e.g.
+    only `org/file` with no repo directory) all return `None` rather than guessing; this is a
+    display-side convenience derivation, never a substitute for real HF lineage capture."""
+    if not host_path:
+        return None
+    match = _SHARED_MODELS_ORG_REPO_RE.match(host_path)
+    if not match:
+        return None
+    org, repo = match.group(1), match.group(2)
+    return f"{org}/{repo}"
+
+
 def write_cell_record(
     records_dir: Path,
     cell: Dict[str, Any],
@@ -752,11 +771,19 @@ def write_cell_record(
     (its `CellOutcome.detail` carries only a compact summary); this closes that gap for the CLI
     path.
 
-    Lineage: `filename`/`file_size` come from the cell's own `model_host_path` (stat'd live);
-    `sha256`/`hf_repo`/`hf_revision`/`llama_cpp_build` are recorded as explicit `None` --
-    `REQUIRED_LINEAGE_FIELDS` requires every key present, and permits `None` for genuinely
-    unresolved values (hashing a multi-GiB GGUF per cell is not worth the wall-clock; the host
-    path + size pin the artifact well enough for this campaign's records).
+    Lineage: `filename`/`file_size` come from the cell's own `model_host_path` (stat'd live).
+    `hf_repo` is derived from that same `model_host_path` via `hf_repo_from_host_path()` --
+    `"<org>/<repo>"` when the path matches `/srv/models/<org>/<repo>/<file>`, else
+    `None` (hashing a multi-GiB GGUF per cell is not worth the wall-clock, but the registry's own
+    directory layout already encodes the repo for free). `llama_cpp_build` comes from
+    `run_harness.resolve_llama_cpp_build()` (the pinned `llama/Dockerfile` `ARG LLAMA_CPP_TAG=`,
+    or its fallback constant) -- the build actually serving this cell, always resolvable, never
+    `None`. `sha256`/`hf_revision` stay explicit `None`: `REQUIRED_LINEAGE_FIELDS` requires every
+    key present and permits `None` for genuinely unresolved values, and neither has a cheap
+    derivation the way repo/build do. Existing on-disk records from before this derivation
+    existed are never rewritten -- their `hf_repo`/`llama_cpp_build` stay `None` forever; a
+    consumer reading historical records recovers the repo from `sweep_cell.model_host_path`
+    itself.
 
     `wilson_summary`: the first non-null per-task/position summary from the battery (Wilson
     intervals exist only where `n_trials >= longcontext.MIN_TRIALS_FOR_WILSON`); `None` for
@@ -808,8 +835,9 @@ def write_cell_record(
         except OSError:
             file_size = None
     lineage = {
-        "hf_repo": None, "hf_revision": None, "filename": filename,
-        "file_size": file_size, "sha256": None, "llama_cpp_build": None,
+        "hf_repo": hf_repo_from_host_path(host_path), "hf_revision": None, "filename": filename,
+        "file_size": file_size, "sha256": None,
+        "llama_cpp_build": run_harness.resolve_llama_cpp_build(),
     }
     samples: List[Dict[str, Any]] = []
     completions: List[Dict[str, Any]] = []

@@ -211,10 +211,14 @@ describe("ServingResponseSchema", () => {
 });
 
 describe("CaptureEnvelopeSchema", () => {
-  test("requires stability to be exactly \"experimental\"", () => {
-    const envelope = { stability: "experimental", generatedAt: "2026-08-23T00:00:00Z", recordCount: 0, records: [] };
+  test("requires captureVersion to be exactly 1 and stability to be exactly \"v1\"", () => {
+    const envelope = {
+      captureVersion: 1, stability: "v1",
+      generatedAt: "2026-08-23T00:00:00Z", recordCount: 0, records: [],
+    };
     expect(() => CaptureEnvelopeSchema.parse(envelope)).not.toThrow();
-    expect(() => CaptureEnvelopeSchema.parse({ ...envelope, stability: "stable" })).toThrow();
+    expect(() => CaptureEnvelopeSchema.parse({ ...envelope, stability: "experimental" })).toThrow();
+    expect(() => CaptureEnvelopeSchema.parse({ ...envelope, captureVersion: 2 })).toThrow();
   });
 });
 

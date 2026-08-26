@@ -1620,6 +1620,87 @@ class TestWriteCellRecord(unittest.TestCase):
             self.assertIsNone(outcome.detail["record_path"])
             self.assertIsNotNone(outcome.detail["record_error"])
 
+    # -- lineage fill (local-capture WP-1): hf_repo derived from model_host_path, ---------------
+    # -- llama_cpp_build resolved live, past-record None values never rewritten -----------------
+
+    def test_record_lineage_derives_hf_repo_and_llama_cpp_build(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cell = dict(_longcontext_cell())
+            cell["model_host_path"] = (
+                "/srv/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf"
+            )
+            records_dir = Path(tmp) / "run-lineage-fill"
+            with mock.patch.object(
+                run_harness, "resolve_llama_cpp_build", return_value="b1234-fixed",
+            ):
+                out = batch.write_cell_record(
+                    records_dir, cell, self._battery_results(),
+                    vram_baseline_bytes=1000, vram_loaded_bytes=9000,
+                    sampling_arm_effective="capability",
+                )
+            config = json.loads((out / "config.json").read_text())
+            self.assertEqual(config["lineage"]["hf_repo"], "unsloth/Qwen3.8-27B-GGUF")
+            self.assertEqual(config["lineage"]["llama_cpp_build"], "b1234-fixed")
+            self.assertIsNone(config["lineage"]["hf_revision"])
+            self.assertIsNone(config["lineage"]["sha256"])
+
+    def test_record_lineage_hf_repo_none_when_host_path_outside_shared_models(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cell = dict(_longcontext_cell())
+            cell["model_host_path"] = "/opt/models/unsloth/Qwen3.8-27B-GGUF/model.gguf"
+            records_dir = Path(tmp) / "run-lineage-outside"
+            out = batch.write_cell_record(
+                records_dir, cell, self._battery_results(),
+                vram_baseline_bytes=1000, vram_loaded_bytes=9000,
+                sampling_arm_effective="capability",
+            )
+            config = json.loads((out / "config.json").read_text())
+            self.assertIsNone(config["lineage"]["hf_repo"])
+            # llama_cpp_build is resolved regardless of host_path shape -- it is not path-derived.
+            self.assertIsNotNone(config["lineage"]["llama_cpp_build"])
+
+    def test_record_lineage_hf_repo_none_when_host_path_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cell = dict(_longcontext_cell())
+            cell.pop("model_host_path", None)
+            records_dir = Path(tmp) / "run-lineage-absent"
+            out = batch.write_cell_record(
+                records_dir, cell, self._battery_results(),
+                vram_baseline_bytes=1000, vram_loaded_bytes=9000,
+                sampling_arm_effective="capability",
+            )
+            config = json.loads((out / "config.json").read_text())
+            self.assertIsNone(config["lineage"]["hf_repo"])
+
+
+class TestHfRepoFromHostPath(unittest.TestCase):
+    """Unit coverage for `batch.hf_repo_from_host_path` in isolation from `write_cell_record` --
+    the local-capture WP-1 lineage-fill helper (`"<org>/<repo>"` from a `model_host_path` under
+    `/srv/models`, else `None`)."""
+
+    def test_matches_org_repo_under_shared_models_prefix(self):
+        host_path = "/srv/models/unsloth/Qwen3.8-27B-GGUF/x.gguf"
+        self.assertEqual(
+            batch.hf_repo_from_host_path(host_path), "unsloth/Qwen3.8-27B-GGUF",
+        )
+
+    def test_path_outside_shared_models_prefix_returns_none(self):
+        self.assertIsNone(
+            batch.hf_repo_from_host_path("/home/other_models/unsloth/repo/x.gguf"),
+        )
+
+    def test_none_input_returns_none(self):
+        self.assertIsNone(batch.hf_repo_from_host_path(None))
+
+    def test_path_with_only_two_segments_after_prefix_returns_none(self):
+        # No repo directory -- just an org segment then a file, one level short of the
+        # required org/repo/file shape.
+        self.assertIsNone(
+            batch.hf_repo_from_host_path("/srv/models/unsloth/x.gguf"),
+        )
+
 
 class TestWp5CliArgs(unittest.TestCase):
     def test_scratch_container_and_records_dir_default_to_none(self):

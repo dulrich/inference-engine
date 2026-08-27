@@ -132,8 +132,8 @@ moderate size in the context-ceiling plan; Q8_0 was) re-run through the new
 timing tables, numeric cache-hit assertions, and a first-ever manually-scored quality-corpus pass
 for this model family — **not a fresh safety validation**; `-c 131072`/f16 cache is already
 proven safe by the results above. UD-Q4_K_XL's config entry was not touched (already f16-cache,
-`-c 131072`). Raw records: `runs/bakeoff/ling-3-tiny-q8-full/`,
-`runs/bakeoff/ling-3-tiny-ud-q6-xl-full/`, `runs/bakeoff/ling-3-tiny-ud-q4-xl-full/`. Driver
+`-c 131072`). Raw records: `llama/bakeoff/records/ling-3-tiny-q8-full/`,
+`llama/bakeoff/records/ling-3-tiny-ud-q6-xl-full/`, `llama/bakeoff/records/ling-3-tiny-ud-q4-xl-full/`. Driver
 script and its full stdout: `runs/dispatch/wp3-driver-script.py`,
 `runs/dispatch/wp3-driver-full-output.log`.
 

@@ -96,7 +96,7 @@ describe("listRecordDirs", () => {
 // Two-level ingest (WP-A, `plans/bench-dashboard-run-context-surfacing.md` WP-A): a
 // first-level dir with `config.json` stays a flat record dir; a first-level dir WITHOUT
 // one, whose immediate subdirs have it, is a batch run dir whose subdirs are scanned
-// instead (exactly one extra level, mirroring `runs/bakeoff/wp5-validation/<cell-id>/` —
+// instead (exactly one extra level, mirroring `llama/bakeoff/records/wp5-validation/<cell-id>/` —
 // not depended on here, this fixture tree mirrors its shape); a dir with neither stays
 // itself (and downstream `readRecordDir` classifies it `invalid`, unchanged).
 describe("listRecordDirs: two-level (batch run dir) scan", () => {

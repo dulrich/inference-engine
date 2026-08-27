@@ -1,0 +1,95 @@
+{
+  "alias": "qwen36-a3b-q5",
+  "base_url": "http://127.0.0.1:4811/v1",
+  "lineage": {
+    "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+    "hf_revision": "9280dd353ab587157920d5bd391ada414d84e552",
+    "llama_cpp_build": "b10534",
+    "filename": "Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf",
+    "file_size": 26592508896,
+    "sha256": "25233af7642e3a91bd52cc4aeefdbd4a117479088e06cf1aea5b6bedb443c506"
+  },
+  "configuration": {
+    "fixture_input_tokens_target": 8000,
+    "fixture_output_tokens": 256,
+    "cold_rounds": 3,
+    "warm_rounds": 3,
+    "hot_rounds": 3,
+    "needle_context_ceiling": 100000,
+    "placement": "config B placement policy propagated from the UD-Q4_K_XL canary search (WP-4 step 5) -- -ncmoe adjusted per quant's own measured routed-expert tensor size, not re-searched",
+    "cold_precondition": "eviction via a request into the chat group (nemotron-4b), verified live in WP-2/WP-3/WP-4 to actually flip residency status before each cold round -- not a container restart"
+  },
+  "timing_summary": {
+    "cold": {
+      "first_generation_token_ms": {
+        "n": 3,
+        "median": 16423.403035001684,
+        "mean": 22460.32343466747,
+        "min": 16357.239905002643,
+        "max": 34600.327363998076,
+        "stdev": 10513.6038513473
+      },
+      "observed_decode_tok_s": {
+        "n": 3,
+        "median": 27.720071239752134,
+        "mean": 27.728478631442805,
+        "min": 27.575155992323896,
+        "max": 27.890208662252384,
+        "stdev": 0.15769451285173935
+      },
+      "cache_assertions_passed": 0,
+      "cache_assertions_total": 0
+    },
+    "warm": {
+      "first_generation_token_ms": {
+        "n": 3,
+        "median": 13242.727851000382,
+        "mean": 13253.224421999525,
+        "min": 13238.68810500062,
+        "max": 13278.25730999757,
+        "stdev": 21.77301077200195
+      },
+      "observed_decode_tok_s": {
+        "n": 3,
+        "median": 27.80039106412145,
+        "mean": 27.82668845968825,
+        "min": 27.718191353837717,
+        "max": 27.96148296110558,
+        "stdev": 0.12375930794062594
+      },
+      "cache_assertions_passed": 3,
+      "cache_assertions_total": 3
+    },
+    "hot": {
+      "first_generation_token_ms": {
+        "n": 3,
+        "median": 107.00945200005663,
+        "mean": 107.29169399928651,
+        "min": 104.85739800060401,
+        "max": 110.00823199719889,
+        "stdev": 2.5869901671085582
+      },
+      "observed_decode_tok_s": {
+        "n": 3,
+        "median": 27.874400421632576,
+        "mean": 27.56881355106894,
+        "min": 26.85582357307974,
+        "max": 27.976216658494504,
+        "stdev": 0.6195624811566316
+      },
+      "cache_assertions_passed": 3,
+      "cache_assertions_total": 3
+    }
+  },
+  "status": "captured",
+  "notes": [
+    "WP-4 step 5 of plans/serving-harness-round-2.md -- propagates the winning A/B/C placement policy (config B) to this quant, adjusting only -ncmoe"
+  ],
+  "experiment_id": "qwen36-a3b-q5-full",
+  "timestamp": "2026-08-22T01:51:51.021221+00:00",
+  "size_check": {
+    "total_bytes": 74195,
+    "limit_bytes": 26214400,
+    "within_budget": true
+  }
+}

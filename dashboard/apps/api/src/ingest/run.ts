@@ -26,7 +26,7 @@ function markLegacyTimingProvenance(experimentId: string): void {
   db.query(`UPDATE experiments SET schema_origin = ? WHERE id = ?`).run("v1-timing", experimentId);
 }
 
-/** Scans `recordsDir` (one level deep — `runs/bakeoff/<experiment-id>/`), classifies each
+/** Scans `recordsDir` (one level deep — `llama/bakeoff/records/<experiment-id>/`), classifies each
  * subdirectory (`ingest/record.ts readRecordDir`), and upserts every v2 record. v1
  * records (no `schema_version` key, or any value other than `2`) are skipped with a
  * logged count (frozen input contract E1) — never an error, never attempted — UNLESS the

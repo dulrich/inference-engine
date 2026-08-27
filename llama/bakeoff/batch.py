@@ -475,7 +475,7 @@ _CHARS_PER_TOKEN_CONSERVATIVE = 5  # generous vs. this repo's own measured ~3.7-
 
 def project_cell_record_size_bytes(cell: Dict[str, Any], trials: int) -> int:
     """Conservative pre-enqueue size projection for one cell's contribution to
-    `runs/bakeoff/<experiment-id>/{samples,completions}.jsonl` (the two per-trial files;
+    `llama/bakeoff/records/<experiment-id>/{samples,completions}.jsonl` (the two per-trial files;
     `run_harness.write_experiment_record`'s `SIZE_LIMIT_BYTES` budget covers the whole
     experiment directory, but a single near-ceiling cell's own trials are what could blow it).
     Builds one synthetic WORST-CASE sample + completion pair matching the real
@@ -1712,7 +1712,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_run.add_argument(
         "--records-dir", default=None,
         help="run directory for verify_run.py-consumable per-cell records "
-        "(runs/bakeoff/<run-name>); no records are written when omitted",
+        "(llama/bakeoff/records/<run-name>); no records are written when omitted",
     )
     p_run.add_argument("--port", type=int, default=8899)
     p_run.add_argument(

@@ -56,7 +56,7 @@ LLAMA_DIR = MODULE_DIR.parent
 REPO_ROOT = LLAMA_DIR.parent
 DOCKERFILE_PATH = LLAMA_DIR / "Dockerfile"
 QUALITY_CORPUS_PATH = MODULE_DIR / "quality_corpus.jsonl"
-DEFAULT_RUNS_DIR = REPO_ROOT / "runs" / "bakeoff"
+DEFAULT_RUNS_DIR = REPO_ROOT / "llama" / "bakeoff" / "records"
 
 DEFAULT_BASE_URL = "http://127.0.0.1:4811/v1"
 
@@ -69,7 +69,7 @@ DEFAULT_ROUTER_BASE_URL = "http://127.0.0.1:4811"
 # below; this is only the fallback used if that read/parse ever fails.
 FALLBACK_LLAMA_CPP_BUILD = "b10534"
 
-# Decisions locked / cycle-2 audit finding: any single runs/bakeoff/<experiment-id>/ directory
+# Decisions locked / cycle-2 audit finding: any single llama/bakeoff/records/<experiment-id>/ directory
 # over this size is a hold-for-user signal, not a silent commit.
 SIZE_LIMIT_BYTES = 25 * 1024 * 1024  # 25 MiB
 
@@ -1132,13 +1132,13 @@ def run_quality_corpus(
 
 class SizeBudgetExceeded(Exception):
     """Raised by `write_experiment_record` when the projected on-disk size of
-    `runs/bakeoff/<experiment-id>/` exceeds `SIZE_LIMIT_BYTES`, computed BEFORE anything is
+    `llama/bakeoff/records/<experiment-id>/` exceeds `SIZE_LIMIT_BYTES`, computed BEFORE anything is
     written to disk. Cycle-2 audit finding (material) -- a hold-for-user signal, never a silent
     over-budget commit."""
 
     def __init__(self, total_bytes: int, limit_bytes: int):
         super().__init__(
-            f"projected runs/bakeoff/<experiment-id>/ size {total_bytes} bytes exceeds the "
+            f"projected llama/bakeoff/records/<experiment-id>/ size {total_bytes} bytes exceeds the "
             f"{limit_bytes}-byte (25 MiB) budget -- hold for user before writing anything"
         )
         self.total_bytes = total_bytes
@@ -1159,7 +1159,7 @@ def write_experiment_record(
     samples: List[Dict[str, Any]],
     base_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Writes `runs/bakeoff/<experiment-id>/{config.json,samples.jsonl,prompts.jsonl,
+    """Writes `llama/bakeoff/records/<experiment-id>/{config.json,samples.jsonl,prompts.jsonl,
     completions.jsonl}`.
 
     Field-to-file split (this WP's own call -- the plan pins only the four-file split itself):

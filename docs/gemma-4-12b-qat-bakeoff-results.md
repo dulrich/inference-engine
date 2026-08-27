@@ -2,7 +2,7 @@
 
 First-ever run of the new serving-harness bake-off tooling (`llama/bakeoff/run_harness.py`, WP-1
 of `plans/serving-harness-round-2.md`), against the new `gemma-4-12b-qat` testing alias (WP-2 of
-the same plan). Raw JSON record: `runs/bakeoff/gemma-4-12b-qat-full/`. See also
+the same plan). Raw JSON record: `llama/bakeoff/records/gemma-4-12b-qat-full/`. See also
 `docs/ling-3-tiny-bakeoff-results.md` (Ling-3.0-tiny, round-2 retest),
 `docs/qwen36-35b-a3b-bakeoff-results.md` (Qwen3.6-35B-A3B MoE), and
 `docs/qwen38-27b-bakeoff-results.md` (Qwen3.8-27B dense).

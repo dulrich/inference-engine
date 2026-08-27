@@ -1,6 +1,6 @@
 # Single-process deploy: Bun serves the API + the built Svelte SPA on one port
 # (model_scoreboard exemplar — plan bench-results-db-and-dashboard WP-3). The DB is
-# derived state on the /data volume; the source of truth (runs/bakeoff/ records,
+# derived state on the /data volume; the source of truth (llama/bakeoff/records/,
 # llama/config.yaml) is bind-mounted read-only by compose.fleet.yml.
 FROM oven/bun:1.3 AS build
 WORKDIR /app

@@ -43,7 +43,7 @@
 #                                  top/os.kill seam).
 #   BAKEOFF_SCRATCH_CONTAINER  -- default "bakeoff-scratch".
 #   BAKEOFF_SCRATCH_IMAGE      -- default "crucible-llamacpp-vulkan:b10534-swap243".
-#   BAKEOFF_RUNS_DIR           -- base dir for `--records-dir` (default <repo>/runs/bakeoff).
+#   BAKEOFF_RUNS_DIR           -- base dir for `--records-dir` (default <repo>/llama/bakeoff/records).
 #   BAKEOFF_PORT               -- scratch-server port (default 8899, batch.py's own default).
 
 set -uo pipefail
@@ -86,7 +86,7 @@ STOP_MARKER="${CONTROL_DIR}/stop-requested.${REQUEST_ID}"
 BATCH_CMD="${BAKEOFF_BATCH_CMD:-python3 ${BAKEOFF_DIR}/batch.py}"
 SCRATCH_CONTAINER="${BAKEOFF_SCRATCH_CONTAINER:-bakeoff-scratch}"
 SCRATCH_IMAGE="${BAKEOFF_SCRATCH_IMAGE:-crucible-llamacpp-vulkan:b10534-swap243}"
-RUNS_DIR="${BAKEOFF_RUNS_DIR:-${REPO_DIR}/runs/bakeoff}"
+RUNS_DIR="${BAKEOFF_RUNS_DIR:-${REPO_DIR}/llama/bakeoff/records}"
 RUN_DIR="${RUNS_DIR}/${QUEUE_STEM}"
 PORT="${BAKEOFF_PORT:-8899}"
 

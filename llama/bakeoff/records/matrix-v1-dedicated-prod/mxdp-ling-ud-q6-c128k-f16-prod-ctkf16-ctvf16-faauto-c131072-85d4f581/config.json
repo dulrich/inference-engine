@@ -1,0 +1,57 @@
+{
+  "lineage": {
+    "hf_repo": null,
+    "hf_revision": null,
+    "filename": "Ling-3.0-tiny-UD-Q6_K_XL.gguf",
+    "file_size": 7274546528,
+    "sha256": null,
+    "llama_cpp_build": null
+  },
+  "sweep_cell": {
+    "cell_id": "mxdp-ling-ud-q6-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-85d4f581",
+    "alias": "mxdp-ling-ud-q6-c128k-f16-prod",
+    "server_flags": {
+      "--host": "0.0.0.0",
+      "-lv": 9,
+      "-ctk": "f16",
+      "-ctv": "f16",
+      "-fa": "auto",
+      "-ngl": 99,
+      "--jinja": true,
+      "-c": 131072
+    },
+    "model_host_path": "/srv/models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q6_K_XL.gguf",
+    "battery": [
+      "timing",
+      "needle"
+    ],
+    "sampling_arm": "production",
+    "model": "ling-3-tiny-ud-q6",
+    "spec_decode": null
+  },
+  "vram": {
+    "baseline_bytes": 409505792,
+    "loaded_bytes": 8667750400,
+    "after_teardown_bytes": null
+  },
+  "wilson_summary": null,
+  "vram_profile": "headless",
+  "response_caps": {
+    "default": 256,
+    "by_task": {
+      "multi_needle": 768
+    }
+  },
+  "cell_started_at": "2026-08-26T15:30:25+00:00",
+  "cell_ended_at": "2026-08-26T16:02:19+00:00",
+  "cell_wall_seconds": 1914.3020088299963,
+  "scratch_startup_seconds": 6.581815095996717,
+  "experiment_id": "mxdp-ling-ud-q6-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-85d4f581",
+  "timestamp": "2026-08-26T16:02:19.481040+00:00",
+  "schema_version": 2,
+  "size_check": {
+    "total_bytes": 73927,
+    "limit_bytes": 26214400,
+    "within_budget": true
+  }
+}

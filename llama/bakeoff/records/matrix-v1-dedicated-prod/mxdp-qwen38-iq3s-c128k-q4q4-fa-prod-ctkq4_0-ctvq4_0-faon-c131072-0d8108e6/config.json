@@ -1,0 +1,57 @@
+{
+  "lineage": {
+    "hf_repo": null,
+    "hf_revision": null,
+    "filename": "Qwen3.8-27B-UD-IQ3_S.gguf",
+    "file_size": 12040883104,
+    "sha256": null,
+    "llama_cpp_build": null
+  },
+  "sweep_cell": {
+    "cell_id": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-ctkq4_0-ctvq4_0-faon-c131072-0d8108e6",
+    "alias": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod",
+    "server_flags": {
+      "--host": "0.0.0.0",
+      "-lv": 9,
+      "-ctk": "q4_0",
+      "-ctv": "q4_0",
+      "-fa": "on",
+      "-ngl": 99,
+      "--jinja": true,
+      "-c": 131072
+    },
+    "model_host_path": "/srv/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf",
+    "battery": [
+      "timing",
+      "needle"
+    ],
+    "sampling_arm": "production",
+    "model": "qwen38-iq3s",
+    "spec_decode": null
+  },
+  "vram": {
+    "baseline_bytes": 423763968,
+    "loaded_bytes": 14951665664,
+    "after_teardown_bytes": null
+  },
+  "wilson_summary": null,
+  "vram_profile": "headless",
+  "response_caps": {
+    "default": 256,
+    "by_task": {
+      "multi_needle": 768
+    }
+  },
+  "cell_started_at": "2026-08-26T08:06:46+00:00",
+  "cell_ended_at": "2026-08-26T10:18:30+00:00",
+  "cell_wall_seconds": 7903.606319923994,
+  "scratch_startup_seconds": 4.416556017997209,
+  "experiment_id": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-ctkq4_0-ctvq4_0-faon-c131072-0d8108e6",
+  "timestamp": "2026-08-26T10:18:30.314011+00:00",
+  "schema_version": 2,
+  "size_check": {
+    "total_bytes": 75120,
+    "limit_bytes": 26214400,
+    "within_budget": true
+  }
+}

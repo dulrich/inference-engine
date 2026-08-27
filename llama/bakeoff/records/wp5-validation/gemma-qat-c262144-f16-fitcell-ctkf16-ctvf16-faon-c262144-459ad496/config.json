@@ -1,0 +1,43 @@
+{
+  "lineage": {
+    "hf_repo": null,
+    "hf_revision": null,
+    "filename": "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+    "file_size": 6716356800,
+    "sha256": null,
+    "llama_cpp_build": null
+  },
+  "sweep_cell": {
+    "cell_id": "gemma-qat-c262144-f16-fitcell-ctkf16-ctvf16-faon-c262144-459ad496",
+    "alias": "gemma-qat-c262144-f16-fitcell",
+    "server_flags": {
+      "--host": "0.0.0.0",
+      "-lv": 9,
+      "-ctk": "f16",
+      "-ctv": "f16",
+      "-fa": "on",
+      "-ngl": 99,
+      "--jinja": true,
+      "-c": 262144
+    },
+    "model_host_path": "/srv/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+    "battery": [
+      "vram"
+    ],
+    "sampling_arm": null
+  },
+  "vram": {
+    "baseline_bytes": 1104486400,
+    "loaded_bytes": 14025760768,
+    "after_teardown_bytes": null
+  },
+  "wilson_summary": null,
+  "experiment_id": "gemma-qat-c262144-f16-fitcell-ctkf16-ctvf16-faon-c262144-459ad496",
+  "timestamp": "2026-08-23T23:47:39.339858+00:00",
+  "schema_version": 2,
+  "size_check": {
+    "total_bytes": 1127,
+    "limit_bytes": 26214400,
+    "within_budget": true
+  }
+}

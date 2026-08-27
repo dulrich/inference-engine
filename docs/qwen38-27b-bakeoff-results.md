@@ -209,7 +209,7 @@ the 15.92 GiB card nameplate — meets and slightly exceeds the ~1.5–2 GiB saf
 
 Hot-median decode (34.37 tok/s) is **0.5% below** the f16 baseline's 34.55 tok/s hot-median —
 essentially throughput parity, comfortably inside the plan's 15% "close" band. Full record:
-`runs/bakeoff/qwen38-27b-iq3s-kv-e-alt-q4q4-c120000/`.
+`llama/bakeoff/records/qwen38-27b-iq3s-kv-e-alt-q4q4-c120000/`.
 
 ## Quality comparison vs. the f16 baseline
 

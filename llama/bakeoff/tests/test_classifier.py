@@ -21,7 +21,7 @@ if str(BAKEOFF_DIR) not in sys.path:
 
 import longcontext  # noqa: E402
 
-CLEAN_COMPLETIONS_PATH = REPO_ROOT / "runs" / "bakeoff" / "gemma-4-12b-qat-full" / "completions.jsonl"
+CLEAN_COMPLETIONS_PATH = REPO_ROOT / "llama" / "bakeoff" / "records" / "gemma-4-12b-qat-full" / "completions.jsonl"
 
 
 def _load_degenerate_fragments():
@@ -94,7 +94,7 @@ class TestDegenerateFragmentsAreGroundTruthPositives(unittest.TestCase):
 
 class TestCleanGemmaQatRowsClassifyNonDegenerate(unittest.TestCase):
     """23 rows, real transcripts (full reasoning_text + content_text), committed at
-    `runs/bakeoff/gemma-4-12b-qat-full/completions.jsonl` -- includes several timing_round rows
+    `llama/bakeoff/records/gemma-4-12b-qat-full/completions.jsonl` -- includes several timing_round rows
     that share the degenerate fragments' surface shape (finish_reason: length, content_text
     empty) while reasoning in genuinely fluent prose; this is the near-miss case the classifier
     must not flag."""

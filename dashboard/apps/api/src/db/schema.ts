@@ -19,7 +19,7 @@ import type { Database } from "bun:sqlite";
 //
 // Four tables (brief's File scope, apps/api bullet):
 //
-// - `experiments` — one row per `runs/bakeoff/<experiment-id>/config.json`, schema-v2 by
+// - `experiments` — one row per `llama/bakeoff/records/<experiment-id>/config.json`, schema-v2 by
 //   default, plus (WP-4) the allowlisted pre-v2 timing-only side door — either way, every
 //   row's provenance is explicit in `schema_origin` (`'v2'` default / `'v1-timing'`), never
 //   inferred from `schema_version` (which every row here reads `2`, a `replaceExperiment`
@@ -30,7 +30,7 @@ import type { Database } from "bun:sqlite";
 //   parsed `prompts.jsonl`/`completions.jsonl` arrays verbatim (samples.jsonl's own
 //   verbatim reconstruction comes from `trials.raw_json`, ordered by `line_index`) — so
 //   `GET /api/export/scoreboard-capture`'s raw pass-through is servable from the DB alone,
-//   with no live re-read of `runs/bakeoff/` at request time. A `v1-timing` row's
+//   with no live re-read of `llama/bakeoff/records/` at request time. A `v1-timing` row's
 //   `raw_prompts_json`/`raw_completions_json` are always `'[]'` — the side door never reads
 //   those files, only `samples.jsonl`'s `timing_round` rows.
 // - `trials` — one row per `samples.jsonl` line, any `type` (frozen contract: "type is

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { CellState, QueueEta } from "@bench-dashboard/shared";
 
 // Per-queue ETA (`plans/bench-dashboard-polish.md` WP-2). Estimator input is the queue's
-// own per-cell record timestamps: `runs/bakeoff/<queueStem>/<cell-dir>/config.json`'s ISO
+// own per-cell record timestamps: `llama/bakeoff/records/<queueStem>/<cell-dir>/config.json`'s ISO
 // `timestamp` field (measured against the live run 2026-08-24 -- one cell dir per
 // completed/in-flight cell, records accumulate in the same dir across nights). This module
 // only ever READS `recordsDir` (the records mount is `:ro` in production) -- never a write

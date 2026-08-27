@@ -37,7 +37,7 @@ from-scratch worker can run this with nothing beyond what's already on the host 
   correction uptake, long-form synthesis, long-context retrieval), including 2 deterministic
   sentinels (`qa-2`, `longctx-1`) that do not dominate the set. Reused identically across every
   quant of a given model — do not parameterize it per-model.
-- Raw experiment records land in `runs/bakeoff/<experiment-id>/` (tracked and committed — see
+- Raw experiment records land in `llama/bakeoff/records/<experiment-id>/` (tracked and committed — see
   "Honest-timing-semantics contract" below and the plan's Decisions locked section for why this
   reverses the more common "runs/ is scratch" convention).
 
@@ -163,7 +163,7 @@ python3 llama/bakeoff/run_harness.py full \
 
 Runs the sweep, both needle probes (moderate always; near-ceiling only if `--context-ceiling` is
 given), and the quality corpus, then writes
-`runs/bakeoff/<experiment-id>/{config.json,samples.jsonl,prompts.jsonl,completions.jsonl}`.
+`llama/bakeoff/records/<experiment-id>/{config.json,samples.jsonl,prompts.jsonl,completions.jsonl}`.
 
 `--gguf-host-path` takes a **real host filesystem path** (not the container-internal `/models/...`
 path baked into `llama/config.yaml`'s `cmd:` blocks) — this module deliberately does not hardcode
@@ -507,7 +507,7 @@ resolve against the queue's own `models:` map, so one queue file is one reproduc
   +11–17% per family (nemotron hit ~0.99×`-c` at 64k; at 512k that overshoot would overflow the
   context). Values are derived from measured `prompt_tokens / target_tokens` distributions in
   committed records (midrange-centered so the observed band sits inside verify_run's ±10%
-  tolerance): `runs/bakeoff/wp5-validation` gives gemma4 4.3, bailingmoe3 4.2, nemotron_h 4.17;
+  tolerance): `llama/bakeoff/records/wp5-validation` gives gemma4 4.3, bailingmoe3 4.2, nemotron_h 4.17;
   qwen35moe is unmeasured and starts at a conservative 4.0. Deliberately NOT part of the cell
   identity: adding or tuning it never changes any `cell_id`.
 - `cells` — an ORDERED list of abbreviated cells `{model, alias, c, ctk, ctv, fa, battery,
@@ -739,7 +739,7 @@ Fit-safety ordering (audit/fit-safety pin): Tiers A/B/E/F are exactly the live-v
 
 ### Ladder-v2 deletion
 
-`llama/bakeoff/queues/ladder-v2.json` is deleted, un-run (user decision 2026-08-25, choosing deletion over supersede-in-place, `plans/overnight-test-matrix-redesign.md` WP-3): it carried 11 cells over the pre-matrix landed recipes, no `.state.json`, and no `runs/bakeoff/ladder-v2/` directory ever existed, so nothing is lost. Its 9-model registry and 256k cells are this matrix's direct ancestor (Tier A/D lift its `models` map and carry its two 256k cells forward). Its own 11 aliases (`gemma-qat-c128k-f16-mtp` and siblings, none `mx-`/`mxd-`-prefixed) retire unused but stay reserved under the append-only alias contract — no matrix cell, present or future, may reuse one. Two live-state references to ladder-v2 went stale on deletion and were fixed in the same change: `cron-nightly.sh`'s default queue argument (now `matrix-v1-shared.json`) and `docs/gfx1201-kv-fa-mtp-findings.md`'s "committed DISARMED" sentence.
+`llama/bakeoff/queues/ladder-v2.json` is deleted, un-run (user decision 2026-08-25, choosing deletion over supersede-in-place, `plans/overnight-test-matrix-redesign.md` WP-3): it carried 11 cells over the pre-matrix landed recipes, no `.state.json`, and no `llama/bakeoff/records/ladder-v2/` directory ever existed, so nothing is lost. Its 9-model registry and 256k cells are this matrix's direct ancestor (Tier A/D lift its `models` map and carry its two 256k cells forward). Its own 11 aliases (`gemma-qat-c128k-f16-mtp` and siblings, none `mx-`/`mxd-`-prefixed) retire unused but stay reserved under the append-only alias contract — no matrix cell, present or future, may reuse one. Two live-state references to ladder-v2 went stale on deletion and were fixed in the same change: `cron-nightly.sh`'s default queue argument (now `matrix-v1-shared.json`) and `docs/gfx1201-kv-fa-mtp-findings.md`'s "committed DISARMED" sentence.
 
 Not authored in this pilot (plan Assumptions): vision probes, tool-calling under load, and a quality-corpus battery — follow-on tiers for a future `matrix-v2` queue once a `quality` battery item exists.
 
@@ -1168,7 +1168,7 @@ asserted):
    two real captured degenerate fragments (`tests/fixtures/degenerate_fragments.json` — verbatim
    wire captures, `runs/dispatch/qshiv2-wp-3-fixture-source.md`) both score EXACTLY 0 core
    function words (68 and 40 tokens respectively — pure jargon-noun concatenation, no grammar).
-   The 23 committed clean `gemma-4-12b-qat` rows (`runs/bakeoff/gemma-4-12b-qat-full/
+   The 23 committed clean `gemma-4-12b-qat` rows (`llama/bakeoff/records/gemma-4-12b-qat-full/
    completions.jsonl`) — including several `timing_round` rows sharing the fragments' exact
    metadata shape (`finish_reason: "length"`, `content_text` empty, since they're the old
    word-soup fixture cut off by `max_tokens` mid-list) — score a MINIMUM of 3 core function
@@ -1228,7 +1228,7 @@ record`, `needle_probe`, `run_quality_corpus`) v2-conformant from day one; **WP-
 field list as the versioned DB contract** the sibling `bench-results-db-and-dashboard` plan
 ingests. The freeze covers every field bullet below, including WP-3's `longcontext_probe`
 sample type. Conformance was verified at freeze time over every record this plan's WPs
-produced: `runs/bakeoff/wp1-smoke-cell-ling-q4km/` (config lineage keys, `sweep_cell`/
+produced: `llama/bakeoff/records/wp1-smoke-cell-ling-q4km/` (config lineage keys, `sweep_cell`/
 `wilson_summary` presence, per-sample v2 fields, all four files parse clean) and a
 stub-driven `longcontext.run_cell` sample (all fields below present, seed fields distinct,
 JSON-serializable). Pre-existing v1 records on disk remain as-is — the DB plan ingests v2

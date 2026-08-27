@@ -637,7 +637,7 @@ def classify_trial(
     IMPORTANT, empirically load-bearing: `content_channel_never_reached` +
     `budget_exhausted_in_reasoning` (finish_reason == "length" with an empty content channel)
     is NOT by itself sufficient evidence of `degenerate` -- this repo's own committed clean
-    gemma-qat fixture rows (`runs/bakeoff/gemma-4-12b-qat-full/completions.jsonl`, the cold
+    gemma-qat fixture rows (`llama/bakeoff/records/gemma-4-12b-qat-full/completions.jsonl`, the cold
     timing rounds) exhibit exactly that shape while reasoning in genuinely fluent, on-topic
     prose that simply ran out of `max_tokens` before reaching an answer -- see this module's
     test suite and the WP-3 report for the measured near-miss. That combination is recorded

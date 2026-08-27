@@ -1,0 +1,94 @@
+{
+  "alias": "ling-3-tiny-ud-q4-xl",
+  "base_url": "http://127.0.0.1:4811/v1",
+  "lineage": {
+    "hf_repo": "bloomer010/Ling-3.0-tiny-GGUF",
+    "hf_revision": "unknown",
+    "llama_cpp_build": "b10534",
+    "filename": "Ling-3.0-tiny-UD-Q4_K_XL.gguf",
+    "file_size": 5340611328,
+    "sha256": "a54cf3f3acffd8d23c111913abb0108e41bb8d518028eee661751512926a5a16"
+  },
+  "configuration": {
+    "fixture_input_tokens_target": 8000,
+    "fixture_output_tokens": 256,
+    "cold_rounds": 3,
+    "warm_rounds": 3,
+    "hot_rounds": 3,
+    "needle_context_ceiling": 131072,
+    "cold_precondition": "eviction via a request into the chat group (nemotron-4b), verified live in WP-2 to actually flip residency status before each cold round -- not a container restart"
+  },
+  "timing_summary": {
+    "cold": {
+      "first_generation_token_ms": {
+        "n": 3,
+        "median": 3356.797522001216,
+        "mean": 4029.262464334048,
+        "min": 3355.673444000786,
+        "max": 5375.316427000143,
+        "stdev": 1165.7170620243407
+      },
+      "observed_decode_tok_s": {
+        "n": 3,
+        "median": 172.5841865122527,
+        "mean": 172.04474014421524,
+        "min": 169.75181427381867,
+        "max": 173.79821964657435,
+        "stdev": 2.0764394761606044
+      },
+      "cache_assertions_passed": 0,
+      "cache_assertions_total": 0
+    },
+    "warm": {
+      "first_generation_token_ms": {
+        "n": 3,
+        "median": 892.4584209999011,
+        "mean": 892.3734076664308,
+        "min": 889.7858039999846,
+        "max": 894.8759979994065,
+        "stdev": 2.5461616578859414
+      },
+      "observed_decode_tok_s": {
+        "n": 3,
+        "median": 175.23052057543038,
+        "mean": 175.10292461942166,
+        "min": 174.74287984535707,
+        "max": 175.33537343747753,
+        "stdev": 0.31618461406002396
+      },
+      "cache_assertions_passed": 3,
+      "cache_assertions_total": 3
+    },
+    "hot": {
+      "first_generation_token_ms": {
+        "n": 3,
+        "median": 33.1399139995483,
+        "mean": 32.990057333032986,
+        "min": 32.50545999981114,
+        "max": 33.32479799973953,
+        "stdev": 0.4297341677199703
+      },
+      "observed_decode_tok_s": {
+        "n": 3,
+        "median": 174.30490731617715,
+        "mean": 174.3764079793938,
+        "min": 174.2510324764802,
+        "max": 174.57328414552407,
+        "stdev": 0.17261457986134163
+      },
+      "cache_assertions_passed": 3,
+      "cache_assertions_total": 3
+    }
+  },
+  "status": "captured",
+  "notes": [
+    "round-2 retest under the new bake-off harness -- plans/serving-harness-round-2.md WP-3; all three quants already verified safe at -c 131072/f16 cache by plans/ling-3-tiny-context-ceiling.md, this run is purely for comparable-format numbers, not a fresh safety validation"
+  ],
+  "experiment_id": "ling-3-tiny-ud-q4-xl-full",
+  "timestamp": "2026-08-22T00:05:20.035523+00:00",
+  "size_check": {
+    "total_bytes": 59199,
+    "limit_bytes": 26214400,
+    "within_budget": true
+  }
+}

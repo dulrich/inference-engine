@@ -1,6 +1,6 @@
 # Test matrix results — pointer (overnight-test-matrix-redesign, 2026-08-26)
 
-One-pager for `plans/overnight-test-matrix-redesign.md` WP-6. Records live in `runs/bakeoff/matrix-v1-dedicated/` (Tier E, capability arm) and `runs/bakeoff/matrix-v1-dedicated-prod/` (Tier E-prod, production arm + reasoning variants); every cell is schema-v2 and ingested into the bench dashboard (`:4810`, `/api/experiments`, aliases `mxd-*` / `mxdp-*`). Queue definitions and tier rationale: `llama/bakeoff/README.md` "Test matrix". All cells: `c 131072`, `battery [timing, needle]`, 3 trials, headless profile (desktop quiesced, VRAM baseline 0.38–0.41 GiB).
+One-pager for `plans/overnight-test-matrix-redesign.md` WP-6. Records live in `llama/bakeoff/records/matrix-v1-dedicated/` (Tier E, capability arm) and `llama/bakeoff/records/matrix-v1-dedicated-prod/` (Tier E-prod, production arm + reasoning variants); every cell is schema-v2 and ingested into the bench dashboard (`:4810`, `/api/experiments`, aliases `mxd-*` / `mxdp-*`). Queue definitions and tier rationale: `llama/bakeoff/README.md` "Test matrix". All cells: `c 131072`, `battery [timing, needle]`, 3 trials, headless profile (desktop quiesced, VRAM baseline 0.38–0.41 GiB).
 
 ## Per-cell verdicts (11 landed cells)
 

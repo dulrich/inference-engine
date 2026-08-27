@@ -329,7 +329,7 @@
   <p class="eyebrow">Bake-off records</p>
   <h1>Runs</h1>
   <p class="run-lede">
-    Ingested experiments from <code>runs/bakeoff/</code>, one row per <code>config.json</code>. Open a row for the
+    Ingested experiments from <code>llama/bakeoff/records/</code>, one row per <code>config.json</code>. Open a row for the
     per-trial verdicts and metrics.
   </p>
 
@@ -339,7 +339,7 @@
     <p class="error-text">{error}</p>
   {:else if experiments.length === 0}
     <p class="run-empty">
-      No experiments have been ingested yet. Run <code>bun run ingest</code> against <code>runs/bakeoff/</code> (or, for
+      No experiments have been ingested yet. Run <code>bun run ingest</code> against <code>llama/bakeoff/records/</code> (or, for
       dev, against the API fixtures: <code>bun run ingest -- --dir apps/api/fixtures/records</code>).
     </p>
   {:else}

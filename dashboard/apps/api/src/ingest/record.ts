@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 
-// Reads one `runs/bakeoff/<experiment-id>/` directory and classifies it as `v2` (parsed
+// Reads one `llama/bakeoff/records/<experiment-id>/` directory and classifies it as `v2` (parsed
 // and normalized, ready for `db/experiments.ts replaceExperiment`), `v1` (frozen input
 // contract: "Pre-existing v1 records on disk remain as-is — the DB plan ingests v2 only",
 // `llama/bakeoff/README.md` "Schema v2 (FROZEN 2026-08-23)"), or `invalid` (a directory
@@ -429,7 +429,7 @@ async function immediateSubDirs(dir: string): Promise<string[]> {
  * - Contains `config.json` directly → a record dir (the original flat contract,
  *   preserved verbatim — `readRecordDir` classifies it `v2`/`v1`/`invalid` as before).
  * - Does NOT contain `config.json`, but at least one of ITS immediate subdirs does → a
- *   batch run dir (e.g. `runs/bakeoff/wp5-validation/<cell-id>/config.json`, live
+ *   batch run dir (e.g. `llama/bakeoff/records/wp5-validation/<cell-id>/config.json`, live
  *   example — not depended on by tests, which build their own fixtures). Every immediate
  *   subdir of a batch run dir is scanned as a record dir in its own right — exactly one
  *   extra level, matching the flat contract's own invalid/v1/v2 classification for each

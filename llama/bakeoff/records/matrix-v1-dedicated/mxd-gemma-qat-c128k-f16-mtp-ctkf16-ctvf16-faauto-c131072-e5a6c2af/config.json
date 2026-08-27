@@ -1,0 +1,60 @@
+{
+  "lineage": {
+    "hf_repo": null,
+    "hf_revision": null,
+    "filename": "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+    "file_size": 6716356800,
+    "sha256": null,
+    "llama_cpp_build": null
+  },
+  "sweep_cell": {
+    "cell_id": "mxd-gemma-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-e5a6c2af",
+    "alias": "mxd-gemma-qat-c128k-f16-mtp",
+    "server_flags": {
+      "--host": "0.0.0.0",
+      "-lv": 9,
+      "-ctk": "f16",
+      "-ctv": "f16",
+      "-fa": "auto",
+      "-ngl": 99,
+      "--jinja": true,
+      "--mmproj": "/models/unsloth/gemma-4-12B-it-qat-GGUF/mmproj-BF16.gguf",
+      "-md": "/models/unsloth/gemma-4-12B-it-qat-GGUF/mtp-gemma-4-12B-it.gguf",
+      "--spec-type": "draft-mtp",
+      "-c": 131072
+    },
+    "model_host_path": "/srv/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+    "battery": [
+      "timing",
+      "needle"
+    ],
+    "sampling_arm": "capability",
+    "model": "gemma-4-12b-qat",
+    "spec_decode": null
+  },
+  "vram": {
+    "baseline_bytes": 407400448,
+    "loaded_bytes": 11894083584,
+    "after_teardown_bytes": null
+  },
+  "wilson_summary": null,
+  "vram_profile": "headless",
+  "response_caps": {
+    "default": 256,
+    "by_task": {
+      "multi_needle": 768
+    }
+  },
+  "cell_started_at": "2026-08-26T00:06:02+00:00",
+  "cell_ended_at": "2026-08-26T01:05:11+00:00",
+  "cell_wall_seconds": 3549.174584158005,
+  "scratch_startup_seconds": 3.593588212002942,
+  "experiment_id": "mxd-gemma-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-e5a6c2af",
+  "timestamp": "2026-08-26T01:05:11.594896+00:00",
+  "schema_version": 2,
+  "size_check": {
+    "total_bytes": 81753,
+    "limit_bytes": 26214400,
+    "within_budget": true
+  }
+}

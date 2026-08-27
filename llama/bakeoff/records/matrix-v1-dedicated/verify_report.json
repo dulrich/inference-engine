@@ -1,0 +1,358 @@
+{
+  "run_dir": "../../runs/bakeoff/matrix-v1-dedicated",
+  "run_dir_exists": true,
+  "state_path": "../../runs/bakeoff/matrix-v1-dedicated/queue.state.json",
+  "queue_state": "completed",
+  "generated_at": "2026-08-26T05:21:38+00:00",
+  "checks": [
+    {
+      "check": "abort_state",
+      "cell_id": null,
+      "expected": "queue_state != 'aborted-hang'",
+      "observed": {
+        "queue_state": "completed",
+        "aborted_hang_cells": []
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "mxd-gemma-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-e5a6c2af",
+      "expected": "records subdirectory present",
+      "observed": "../../runs/bakeoff/matrix-v1-dedicated/mxd-gemma-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-e5a6c2af",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mxd-gemma-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-e5a6c2af",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "mxd-gemma-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-e5a6c2af",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 131072,
+        "weights_bytes": 6716356800,
+        "kv_bytes_per_token": 21504.0,
+        "kv_bytes_at_context": 2818572288.0,
+        "estimated_delta_bytes": 9534929088.0,
+        "measured_delta_bytes": 11486683136,
+        "ratio": 1.204695182311984
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "mxd-gemma-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-e5a6c2af",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 27,
+        "violations": [
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 127116
+          },
+          {
+            "trial_index": 1,
+            "target_tokens": 111411,
+            "prompt_tokens": 128174
+          },
+          {
+            "trial_index": 1,
+            "target_tokens": 111411,
+            "prompt_tokens": 127091
+          },
+          {
+            "trial_index": 1,
+            "target_tokens": 111411,
+            "prompt_tokens": 127107
+          }
+        ]
+      },
+      "verdict": "fail"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "mxd-gemma-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-e5a6c2af",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "mxd-gemma-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-e5a6c2af",
+      "expected": null,
+      "observed": {
+        "correct": 19,
+        "degenerate": 2,
+        "truncated(benign)": 6
+      },
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "mxd-nemotron-c128k-f16-ctkf16-ctvf16-faauto-c131072-535f7178",
+      "expected": "records subdirectory present",
+      "observed": "../../runs/bakeoff/matrix-v1-dedicated/mxd-nemotron-c128k-f16-ctkf16-ctvf16-faauto-c131072-535f7178",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mxd-nemotron-c128k-f16-ctkf16-ctvf16-faauto-c131072-535f7178",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "mxd-nemotron-c128k-f16-ctkf16-ctvf16-faauto-c131072-535f7178",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 131072,
+        "weights_bytes": 3133118624,
+        "kv_bytes_per_token": 16384.0,
+        "kv_bytes_at_context": 2147483648.0,
+        "estimated_delta_bytes": 5280602272.0,
+        "measured_delta_bytes": 5600743424,
+        "ratio": 1.0606258785475142
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "mxd-nemotron-c128k-f16-ctkf16-ctvf16-faauto-c131072-535f7178",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 27,
+        "violations": [
+          {
+            "trial_index": 1,
+            "target_tokens": 111411,
+            "prompt_tokens": 126523
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 126273
+          },
+          {
+            "trial_index": 1,
+            "target_tokens": 111411,
+            "prompt_tokens": 127082
+          },
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 126255
+          }
+        ]
+      },
+      "verdict": "fail"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "mxd-nemotron-c128k-f16-ctkf16-ctvf16-faauto-c131072-535f7178",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "mxd-nemotron-c128k-f16-ctkf16-ctvf16-faauto-c131072-535f7178",
+      "expected": null,
+      "observed": {
+        "correct": 25,
+        "wrong": 2
+      },
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "mxd-qwen36-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-6ea21d2e",
+      "expected": "records subdirectory present",
+      "observed": "../../runs/bakeoff/matrix-v1-dedicated/mxd-qwen36-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-6ea21d2e",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mxd-qwen36-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-6ea21d2e",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "mxd-qwen36-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-6ea21d2e",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 131072,
+        "weights_bytes": 22853663008,
+        "kv_bytes_per_token": 83968.0,
+        "kv_bytes_at_context": 11005853696.0,
+        "estimated_delta_bytes": 33859516704.0,
+        "measured_delta_bytes": 12491571200,
+        "ratio": 0.3689234937758077
+      },
+      "verdict": "fail"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "mxd-qwen36-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-6ea21d2e",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 27,
+        "violations": [
+          {
+            "trial_index": 1,
+            "target_tokens": 111411,
+            "prompt_tokens": 97988
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 97825
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 97603
+          }
+        ]
+      },
+      "verdict": "fail"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "mxd-qwen36-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-6ea21d2e",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "mxd-qwen36-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-6ea21d2e",
+      "expected": null,
+      "observed": {
+        "correct": 10,
+        "truncated(benign)": 17
+      },
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "mxd-qwen38-iq3s-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-eedc64d6",
+      "expected": "records subdirectory present",
+      "observed": "../../runs/bakeoff/matrix-v1-dedicated/mxd-qwen38-iq3s-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-eedc64d6",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mxd-qwen38-iq3s-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-eedc64d6",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "mxd-qwen38-iq3s-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-eedc64d6",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": {
+        "ctk": "q4_0",
+        "ctv": "q4_0",
+        "context": 131072,
+        "weights_bytes": 12040883104,
+        "kv_bytes_per_token": 74880.0,
+        "kv_bytes_at_context": 9814671360.0,
+        "estimated_delta_bytes": 21855554464.0,
+        "measured_delta_bytes": 14542118912,
+        "ratio": 0.6653740556412543
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "mxd-qwen38-iq3s-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-eedc64d6",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 27,
+        "violations": [
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 98135
+          }
+        ]
+      },
+      "verdict": "fail"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "mxd-qwen38-iq3s-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-eedc64d6",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "mxd-qwen38-iq3s-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-eedc64d6",
+      "expected": null,
+      "observed": {
+        "correct": 26,
+        "truncated(benign)": 1
+      },
+      "verdict": "informational"
+    }
+  ],
+  "cells": {
+    "mxd-gemma-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-e5a6c2af": {
+      "state": "failed",
+      "reason": "degenerate",
+      "has_records": true
+    },
+    "mxd-nemotron-c128k-f16-ctkf16-ctvf16-faauto-c131072-535f7178": {
+      "state": "failed",
+      "reason": "needle_failure",
+      "has_records": true
+    },
+    "mxd-qwen36-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-6ea21d2e": {
+      "state": "completed",
+      "reason": null,
+      "has_records": true
+    },
+    "mxd-qwen38-iq3s-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-eedc64d6": {
+      "state": "completed",
+      "reason": null,
+      "has_records": true
+    }
+  },
+  "summary": {
+    "total": 25,
+    "pass": 16,
+    "fail": 5,
+    "unknown": 0,
+    "informational": 4
+  },
+  "exit_code": 1
+}

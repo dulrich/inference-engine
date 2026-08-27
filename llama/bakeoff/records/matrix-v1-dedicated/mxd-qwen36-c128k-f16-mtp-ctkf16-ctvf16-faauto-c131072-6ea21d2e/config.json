@@ -1,0 +1,60 @@
+{
+  "lineage": {
+    "hf_repo": null,
+    "hf_revision": null,
+    "filename": "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+    "file_size": 22853663008,
+    "sha256": null,
+    "llama_cpp_build": null
+  },
+  "sweep_cell": {
+    "cell_id": "mxd-qwen36-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-6ea21d2e",
+    "alias": "mxd-qwen36-c128k-f16-mtp",
+    "server_flags": {
+      "--host": "0.0.0.0",
+      "-lv": 9,
+      "-ctk": "f16",
+      "-ctv": "f16",
+      "-fa": "auto",
+      "-ngl": 99,
+      "--jinja": true,
+      "-ncmoe": 32,
+      "--spec-type": "draft-mtp",
+      "-ub": 2048,
+      "-c": 131072
+    },
+    "model_host_path": "/srv/models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+    "battery": [
+      "timing",
+      "needle"
+    ],
+    "sampling_arm": "capability",
+    "model": "qwen36-a3b-mtp",
+    "spec_decode": null
+  },
+  "vram": {
+    "baseline_bytes": 409493504,
+    "loaded_bytes": 12901064704,
+    "after_teardown_bytes": null
+  },
+  "wilson_summary": null,
+  "vram_profile": "headless",
+  "response_caps": {
+    "default": 256,
+    "by_task": {
+      "multi_needle": 768
+    }
+  },
+  "cell_started_at": "2026-08-26T01:05:12+00:00",
+  "cell_ended_at": "2026-08-26T02:28:08+00:00",
+  "cell_wall_seconds": 4976.197038047998,
+  "scratch_startup_seconds": 3.7868088340037502,
+  "experiment_id": "mxd-qwen36-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-6ea21d2e",
+  "timestamp": "2026-08-26T02:28:08.789987+00:00",
+  "schema_version": 2,
+  "size_check": {
+    "total_bytes": 87241,
+    "limit_bytes": 26214400,
+    "within_budget": true
+  }
+}

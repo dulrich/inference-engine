@@ -1,0 +1,2559 @@
+{
+  "run_dir": "runs/bakeoff/ladder-v1",
+  "run_dir_exists": true,
+  "state_path": "runs/bakeoff/ladder-v1/queue.state.json",
+  "queue_state": "paused-resumable",
+  "generated_at": "2026-08-24T21:41:10+00:00",
+  "checks": [
+    {
+      "check": "abort_state",
+      "cell_id": null,
+      "expected": "queue_state != 'aborted-hang'",
+      "observed": {
+        "queue_state": "paused-resumable",
+        "aborted_hang_cells": []
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "gemma-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-bb2eef21",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "gemma-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-bb2eef21",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "gemma-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-bb2eef21",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "gemma-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-bb2eef21",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "gemma-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-bb2eef21",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "gemma-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-b2a4c43c",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "gemma-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-b2a4c43c",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "gemma-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-b2a4c43c",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "gemma-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-b2a4c43c",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "gemma-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-b2a4c43c",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "gemma-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-7f234f36",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "gemma-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-7f234f36",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "gemma-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-7f234f36",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "gemma-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-7f234f36",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "gemma-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-7f234f36",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "gemma-c256k-f16-capa-ctkf16-ctvf16-faon-c262144-6df1b1f7",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "gemma-c256k-f16-capa-ctkf16-ctvf16-faon-c262144-6df1b1f7",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "gemma-c256k-f16-capa-ctkf16-ctvf16-faon-c262144-6df1b1f7",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "gemma-c256k-f16-capa-ctkf16-ctvf16-faon-c262144-6df1b1f7",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "gemma-c256k-f16-capa-ctkf16-ctvf16-faon-c262144-6df1b1f7",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "gemma-c256k-f16-prod-ctkf16-ctvf16-faon-c262144-a7a1c3d5",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "gemma-c256k-f16-prod-ctkf16-ctvf16-faon-c262144-a7a1c3d5",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "gemma-c256k-f16-prod-ctkf16-ctvf16-faon-c262144-a7a1c3d5",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "gemma-c256k-f16-prod-ctkf16-ctvf16-faon-c262144-a7a1c3d5",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "gemma-c256k-f16-prod-ctkf16-ctvf16-faon-c262144-a7a1c3d5",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "gemma-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-e76b86cd",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "gemma-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-e76b86cd",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "gemma-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-e76b86cd",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "gemma-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-e76b86cd",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "gemma-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-e76b86cd",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "gemma-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-e4fe5b21",
+      "expected": "records subdirectory present",
+      "observed": "runs/bakeoff/ladder-v1/gemma-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-e4fe5b21",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "gemma-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-e4fe5b21",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "gemma-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-e4fe5b21",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 32768,
+        "weights_bytes": 6716356800,
+        "kv_bytes_per_token": 36864.0,
+        "kv_bytes_at_context": 1207959552.0,
+        "estimated_delta_bytes": 7924316352.0,
+        "measured_delta_bytes": 8964435968,
+        "ratio": 1.1312567002373002
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "gemma-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-e4fe5b21",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 27,
+        "violations": [
+          {
+            "trial_index": 0,
+            "target_tokens": 27852,
+            "prompt_tokens": 30893
+          },
+          {
+            "trial_index": 1,
+            "target_tokens": 27852,
+            "prompt_tokens": 30850
+          }
+        ]
+      },
+      "verdict": "fail"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "gemma-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-e4fe5b21",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "gemma-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-e4fe5b21",
+      "expected": null,
+      "observed": {
+        "correct": 23,
+        "truncated(benign)": 4
+      },
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "gemma-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-ec13812f",
+      "expected": "records subdirectory present",
+      "observed": "runs/bakeoff/ladder-v1/gemma-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-ec13812f",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "gemma-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-ec13812f",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "gemma-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-ec13812f",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 32768,
+        "weights_bytes": 6716356800,
+        "kv_bytes_per_token": 36864.0,
+        "kv_bytes_at_context": 1207959552.0,
+        "estimated_delta_bytes": 7924316352.0,
+        "measured_delta_bytes": 8984145920,
+        "ratio": 1.1337439749906644
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "gemma-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-ec13812f",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 27,
+        "violations": [
+          {
+            "trial_index": 0,
+            "target_tokens": 27852,
+            "prompt_tokens": 31259
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 27852,
+            "prompt_tokens": 31170
+          },
+          {
+            "trial_index": 1,
+            "target_tokens": 27852,
+            "prompt_tokens": 30958
+          },
+          {
+            "trial_index": 1,
+            "target_tokens": 27852,
+            "prompt_tokens": 30728
+          }
+        ]
+      },
+      "verdict": "fail"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "gemma-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-ec13812f",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "gemma-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-ec13812f",
+      "expected": null,
+      "observed": {
+        "correct": 22,
+        "truncated(benign)": 5
+      },
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "gemma-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-3c64912f",
+      "expected": "records subdirectory present",
+      "observed": "runs/bakeoff/ladder-v1/gemma-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-3c64912f",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "gemma-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-3c64912f",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "gemma-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-3c64912f",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": {
+        "ctk": "q4_0",
+        "ctv": "q4_0",
+        "context": 32768,
+        "weights_bytes": 6716356800,
+        "kv_bytes_per_token": 10368.0,
+        "kv_bytes_at_context": 339738624.0,
+        "estimated_delta_bytes": 7056095424.0,
+        "measured_delta_bytes": 7494148096,
+        "ratio": 1.0620814552068054
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "gemma-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-3c64912f",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 24,
+        "violations": []
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "gemma-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-3c64912f",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "gemma-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-3c64912f",
+      "expected": null,
+      "observed": {
+        "correct": 24,
+        "wrong": 3
+      },
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "gemma-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-84485fc0",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "gemma-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-84485fc0",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "gemma-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-84485fc0",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "gemma-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-84485fc0",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "gemma-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-84485fc0",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "gemma-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-bba3c2c3",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "gemma-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-bba3c2c3",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "gemma-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-bba3c2c3",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "gemma-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-bba3c2c3",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "gemma-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-bba3c2c3",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "gemma-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-b70d3e46",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "gemma-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-b70d3e46",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "gemma-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-b70d3e46",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "gemma-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-b70d3e46",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "gemma-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-b70d3e46",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "ling-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-b6c81454",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "ling-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-b6c81454",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "ling-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-b6c81454",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "ling-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-b6c81454",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "ling-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-b6c81454",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "ling-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-f60f531f",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "ling-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-f60f531f",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "ling-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-f60f531f",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "ling-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-f60f531f",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "ling-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-f60f531f",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "ling-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-0776bda2",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "ling-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-0776bda2",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "ling-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-0776bda2",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "ling-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-0776bda2",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "ling-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-0776bda2",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "ling-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-b1de72a2",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "ling-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-b1de72a2",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "ling-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-b1de72a2",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "ling-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-b1de72a2",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "ling-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-b1de72a2",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "ling-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-1a3f57f4",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "ling-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-1a3f57f4",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "ling-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-1a3f57f4",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "ling-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-1a3f57f4",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "ling-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-1a3f57f4",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "ling-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-e12c9fd0",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "ling-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-e12c9fd0",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "ling-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-e12c9fd0",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "ling-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-e12c9fd0",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "ling-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-e12c9fd0",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "ling-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-49b92124",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "ling-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-49b92124",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "ling-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-49b92124",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "ling-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-49b92124",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "ling-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-49b92124",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "ling-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-3f61ac3d",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "ling-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-3f61ac3d",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "ling-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-3f61ac3d",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "ling-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-3f61ac3d",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "ling-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-3f61ac3d",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "ling-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-1b5231ea",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "ling-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-1b5231ea",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "ling-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-1b5231ea",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "ling-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-1b5231ea",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "ling-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-1b5231ea",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "ling-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-63621011",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "ling-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-63621011",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "ling-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-63621011",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "ling-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-63621011",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "ling-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-63621011",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "ling-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-bd7384d0",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "ling-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-bd7384d0",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "ling-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-bd7384d0",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "ling-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-bd7384d0",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "ling-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-bd7384d0",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "ling-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-0f80680c",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "ling-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-0f80680c",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "ling-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-0f80680c",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "ling-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-0f80680c",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "ling-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-0f80680c",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "nemotron-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-627adeb0",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "nemotron-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-627adeb0",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "nemotron-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-627adeb0",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "nemotron-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-627adeb0",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "nemotron-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-627adeb0",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "nemotron-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-d80d1b92",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "nemotron-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-d80d1b92",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "nemotron-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-d80d1b92",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "nemotron-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-d80d1b92",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "nemotron-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-d80d1b92",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "nemotron-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-f640c235",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "nemotron-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-f640c235",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "nemotron-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-f640c235",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "nemotron-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-f640c235",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "nemotron-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-f640c235",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "nemotron-c256k-f16-capa-ctkf16-ctvf16-faon-c262144-34ffbcc8",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "nemotron-c256k-f16-capa-ctkf16-ctvf16-faon-c262144-34ffbcc8",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "nemotron-c256k-f16-capa-ctkf16-ctvf16-faon-c262144-34ffbcc8",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "nemotron-c256k-f16-capa-ctkf16-ctvf16-faon-c262144-34ffbcc8",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "nemotron-c256k-f16-capa-ctkf16-ctvf16-faon-c262144-34ffbcc8",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "nemotron-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-c8eb9ef0",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "nemotron-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-c8eb9ef0",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "nemotron-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-c8eb9ef0",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "nemotron-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-c8eb9ef0",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "nemotron-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-c8eb9ef0",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "nemotron-c256k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c262144-912bb1f4",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "nemotron-c256k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c262144-912bb1f4",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "nemotron-c256k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c262144-912bb1f4",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "nemotron-c256k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c262144-912bb1f4",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "nemotron-c256k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c262144-912bb1f4",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "nemotron-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-6ccca239",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "nemotron-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-6ccca239",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "nemotron-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-6ccca239",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "nemotron-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-6ccca239",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "nemotron-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-6ccca239",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "nemotron-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-b0b368f9",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "nemotron-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-b0b368f9",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "nemotron-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-b0b368f9",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "nemotron-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-b0b368f9",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "nemotron-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-b0b368f9",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "nemotron-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-f3b891ea",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "nemotron-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-f3b891ea",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "nemotron-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-f3b891ea",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "nemotron-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-f3b891ea",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "nemotron-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-f3b891ea",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "nemotron-c512k-f16-capa-ctkf16-ctvf16-faon-c524288-26602b59",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "nemotron-c512k-f16-capa-ctkf16-ctvf16-faon-c524288-26602b59",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "nemotron-c512k-f16-capa-ctkf16-ctvf16-faon-c524288-26602b59",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "nemotron-c512k-f16-capa-ctkf16-ctvf16-faon-c524288-26602b59",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "nemotron-c512k-f16-capa-ctkf16-ctvf16-faon-c524288-26602b59",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "nemotron-c512k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c524288-993577ed",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "nemotron-c512k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c524288-993577ed",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "nemotron-c512k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c524288-993577ed",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "nemotron-c512k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c524288-993577ed",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "nemotron-c512k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c524288-993577ed",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "nemotron-c512k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c524288-ff2e2d4c",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "nemotron-c512k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c524288-ff2e2d4c",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "nemotron-c512k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c524288-ff2e2d4c",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "nemotron-c512k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c524288-ff2e2d4c",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "nemotron-c512k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c524288-ff2e2d4c",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "nemotron-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-c0c6ed03",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "nemotron-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-c0c6ed03",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "nemotron-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-c0c6ed03",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "nemotron-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-c0c6ed03",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "nemotron-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-c0c6ed03",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "nemotron-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-6a755c5e",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "nemotron-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-6a755c5e",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "nemotron-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-6a755c5e",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "nemotron-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-6a755c5e",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "nemotron-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-6a755c5e",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "nemotron-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-84231024",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "nemotron-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-84231024",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "nemotron-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-84231024",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "nemotron-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-84231024",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "nemotron-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-84231024",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "qwen-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-d648829d",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "qwen-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-d648829d",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "qwen-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-d648829d",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "qwen-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-d648829d",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "qwen-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-d648829d",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "qwen-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-439280de",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "qwen-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-439280de",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "qwen-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-439280de",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "qwen-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-439280de",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "qwen-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-439280de",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "qwen-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-d25b7512",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "qwen-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-d25b7512",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "qwen-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-d25b7512",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "qwen-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-d25b7512",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "qwen-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-d25b7512",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "qwen-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-3b7aca95",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "qwen-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-3b7aca95",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "qwen-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-3b7aca95",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "qwen-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-3b7aca95",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "qwen-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-3b7aca95",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "qwen-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-a4523784",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "qwen-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-a4523784",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "qwen-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-a4523784",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "qwen-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-a4523784",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "qwen-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-a4523784",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "qwen-c256k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c262144-f72351c0",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "qwen-c256k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c262144-f72351c0",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "qwen-c256k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c262144-f72351c0",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "qwen-c256k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c262144-f72351c0",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "qwen-c256k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c262144-f72351c0",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "qwen-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-de58b7e6",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "qwen-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-de58b7e6",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "qwen-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-de58b7e6",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "qwen-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-de58b7e6",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "qwen-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-de58b7e6",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "qwen-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-500122c1",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "qwen-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-500122c1",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "qwen-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-500122c1",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "qwen-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-500122c1",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "qwen-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-500122c1",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "qwen-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-f44a970b",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "qwen-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-f44a970b",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "qwen-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-f44a970b",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "qwen-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-f44a970b",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "qwen-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-f44a970b",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "qwen-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-4e03948f",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "qwen-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-4e03948f",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "qwen-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-4e03948f",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "qwen-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-4e03948f",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "qwen-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-4e03948f",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "qwen-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-62c043a9",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "qwen-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-62c043a9",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "qwen-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-62c043a9",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "qwen-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-62c043a9",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "qwen-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-62c043a9",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "qwen-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-6bcf1af0",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "qwen-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-6bcf1af0",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "qwen-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-6bcf1af0",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "qwen-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-6bcf1af0",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "qwen-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-6bcf1af0",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "qwen-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-12812fed",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "qwen-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-12812fed",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "qwen-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-12812fed",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "qwen-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-12812fed",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "qwen-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-12812fed",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "qwen-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-5e4b4847",
+      "expected": "records optional for state 'pending'",
+      "observed": "no records subdirectory found",
+      "verdict": "unknown"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "qwen-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-5e4b4847",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": "config.json missing/unparseable",
+      "verdict": "unknown"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "qwen-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-5e4b4847",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "qwen-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-5e4b4847",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "qwen-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-5e4b4847",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    }
+  ],
+  "cells": {
+    "gemma-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-bb2eef21": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "gemma-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-b2a4c43c": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "gemma-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-7f234f36": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "gemma-c256k-f16-capa-ctkf16-ctvf16-faon-c262144-6df1b1f7": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "gemma-c256k-f16-prod-ctkf16-ctvf16-faon-c262144-a7a1c3d5": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "gemma-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-e76b86cd": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "gemma-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-e4fe5b21": {
+      "state": "completed",
+      "reason": null,
+      "has_records": true
+    },
+    "gemma-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-ec13812f": {
+      "state": "completed",
+      "reason": null,
+      "has_records": true
+    },
+    "gemma-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-3c64912f": {
+      "state": "pending",
+      "reason": null,
+      "has_records": true
+    },
+    "gemma-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-84485fc0": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "gemma-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-bba3c2c3": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "gemma-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-b70d3e46": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "ling-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-b6c81454": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "ling-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-f60f531f": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "ling-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-0776bda2": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "ling-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-b1de72a2": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "ling-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-1a3f57f4": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "ling-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-e12c9fd0": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "ling-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-49b92124": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "ling-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-3f61ac3d": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "ling-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-1b5231ea": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "ling-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-63621011": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "ling-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-bd7384d0": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "ling-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-0f80680c": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "nemotron-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-627adeb0": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "nemotron-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-d80d1b92": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "nemotron-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-f640c235": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "nemotron-c256k-f16-capa-ctkf16-ctvf16-faon-c262144-34ffbcc8": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "nemotron-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-c8eb9ef0": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "nemotron-c256k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c262144-912bb1f4": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "nemotron-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-6ccca239": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "nemotron-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-b0b368f9": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "nemotron-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-f3b891ea": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "nemotron-c512k-f16-capa-ctkf16-ctvf16-faon-c524288-26602b59": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "nemotron-c512k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c524288-993577ed": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "nemotron-c512k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c524288-ff2e2d4c": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "nemotron-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-c0c6ed03": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "nemotron-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-6a755c5e": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "nemotron-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-84231024": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "qwen-c128k-f16-capa-ctkf16-ctvf16-faon-c131072-d648829d": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "qwen-c128k-f16-prod-ctkf16-ctvf16-faon-c131072-439280de": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "qwen-c128k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c131072-d25b7512": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "qwen-c128k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c131072-3b7aca95": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "qwen-c256k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c262144-a4523784": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "qwen-c256k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c262144-f72351c0": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "qwen-c32k-f16-capa-ctkf16-ctvf16-faon-c32768-de58b7e6": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "qwen-c32k-f16-prod-ctkf16-ctvf16-faon-c32768-500122c1": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "qwen-c32k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c32768-f44a970b": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "qwen-c32k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c32768-4e03948f": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "qwen-c64k-f16-capa-ctkf16-ctvf16-faon-c65536-62c043a9": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "qwen-c64k-f16-prod-ctkf16-ctvf16-faon-c65536-6bcf1af0": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "qwen-c64k-q4q4-cap-ctkq4_0-ctvq4_0-faon-c65536-12812fed": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    },
+    "qwen-c64k-q8q8-cap-ctkq8_0-ctvq8_0-faon-c65536-5e4b4847": {
+      "state": "pending",
+      "reason": null,
+      "has_records": false
+    }
+  },
+  "summary": {
+    "total": 269,
+    "pass": 64,
+    "fail": 2,
+    "unknown": 150,
+    "informational": 53
+  },
+  "exit_code": 1
+}

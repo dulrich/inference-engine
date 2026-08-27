@@ -6,7 +6,7 @@ dist/
 build/
 coverage/
 
-# generated runtime data (bun:sqlite) — derived from runs/bakeoff/, recreate via `bun run ingest`
+# generated runtime data (bun:sqlite) — derived from llama/bakeoff/records/, recreate via `bun run ingest`
 data/
 *.db
 *.db-*

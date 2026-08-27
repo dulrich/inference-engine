@@ -11,16 +11,16 @@ import { join } from "node:path";
 export const config = {
   port: Number(process.env.PORT ?? 4810),
 
-  // dashboard/data/app.db — gitignored (dashboard/.gitignore), derived from runs/bakeoff/
+  // dashboard/data/app.db — gitignored (dashboard/.gitignore), derived from llama/bakeoff/records/
   // (Decisions locked: "the DB is derived, records are source of truth").
   dbPath: process.env.APP_DB_PATH ?? join(import.meta.dir, "../../../data/app.db"),
 
   webDir: process.env.APP_WEB_DIR ?? join(import.meta.dir, "../../web/dist"),
 
-  // The ingest CLI's default scan root: `../runs/bakeoff` relative to `dashboard/` (brief's
-  // File scope pin), i.e. `<repo-root>/runs/bakeoff` from this file's real location four
-  // path segments down (`dashboard/apps/api/src`).
-  recordsDir: process.env.RECORDS_DIR ?? join(import.meta.dir, "../../../../runs/bakeoff"),
+  // The ingest CLI's default scan root: `../llama/bakeoff/records` relative to `dashboard/`
+  // (brief's File scope pin), i.e. `<repo-root>/llama/bakeoff/records` from this file's real
+  // location four path segments down (`dashboard/apps/api/src`).
+  recordsDir: process.env.RECORDS_DIR ?? join(import.meta.dir, "../../../../llama/bakeoff/records"),
 
   // `GET /api/serving`'s read-only source (cycle-1 blocking finding B1). Defaults to the
   // real repo file for local dev convenience — it IS present in this worktree — but every

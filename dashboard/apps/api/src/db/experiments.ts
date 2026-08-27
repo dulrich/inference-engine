@@ -7,6 +7,7 @@ import type {
   ServingTimingRow,
   TrialRow,
 } from "@bench-dashboard/shared";
+import { WilsonSummarySchema } from "@bench-dashboard/shared";
 import type { NormalizedRecord } from "../ingest/record.ts";
 import { db } from "./connection.ts";
 
@@ -279,37 +280,18 @@ export function replaceExperiment(record: NormalizedRecord): void {
     }
 
     db.query(`DELETE FROM summaries WHERE experiment_id = ?`).run(r.id);
-    if (isWilsonSummaryObject(r.wilsonSummary)) {
+    // `r.wilsonSummary` is `WilsonSummary` (validated at ingest, `ingest/record.ts` --
+    // `WilsonSummarySchema.safeParse`), so a non-null value here already has every field
+    // in the shape/type the schema requires -- no runtime re-check needed at this point.
+    if (r.wilsonSummary !== null) {
       const w = r.wilsonSummary;
       db.query(
         `INSERT INTO summaries (experiment_id, n, k, rate, sided, confidence, lower, upper, raw_json)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        r.id,
-        numericField(w, "n"),
-        numericField(w, "k"),
-        numericField(w, "rate"),
-        stringField(w, "sided"),
-        numericField(w, "confidence"),
-        numericField(w, "lower"),
-        numericField(w, "upper"),
-        JSON.stringify(w),
-      );
+      ).run(r.id, w.n, w.k, w.rate, w.sided, w.confidence, w.lower, w.upper, JSON.stringify(w));
     }
   });
   tx(record);
-}
-
-function isWilsonSummaryObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-function numericField(obj: Record<string, unknown>, key: string): number | null {
-  const value = obj[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-function stringField(obj: Record<string, unknown>, key: string): string | null {
-  const value = obj[key];
-  return typeof value === "string" ? value : null;
 }
 
 /** Drops every row this ingest owns across all four tables — `--rebuild`'s "drop" half.
@@ -347,7 +329,14 @@ export function getExperimentDetail(id: string): ExperimentDetail | undefined {
   if (!row) return undefined;
   return {
     ...rowToSummary(row),
-    wilsonSummary: row.wilson_summary_json ? (JSON.parse(row.wilson_summary_json) as ExperimentDetail["wilsonSummary"]) : null,
+    // Parsed (not cast) against the same frozen schema `replaceExperiment` validated on
+    // the way in -- this is our own persisted JSON, so a parse failure here means the
+    // stored row itself is corrupt (bad migration, hand-edited DB, etc). That throws
+    // rather than silently returning `null`: a `null` here reads as "no replicated
+    // correctness cells for this experiment" -- a valid, common, and very different
+    // state from "the data is broken" -- so masking corruption behind it would be a
+    // worse failure than a loud 500 on this one route.
+    wilsonSummary: row.wilson_summary_json ? WilsonSummarySchema.parse(JSON.parse(row.wilson_summary_json)) : null,
     responseCaps: responseCapsFromRawConfig(row.raw_config_json),
   };
 }

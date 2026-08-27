@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { WilsonSummarySchema, type WilsonSummary } from "@bench-dashboard/shared";
 
 // Reads one `llama/bakeoff/records/<experiment-id>/` directory and classifies it as `v2` (parsed
 // and normalized, ready for `db/experiments.ts replaceExperiment`), `v1` (frozen input
@@ -73,7 +74,7 @@ export interface NormalizedRecord {
   samplingArm: string | null;
   battery: string[] | null;
   vramProfile: string | null;
-  wilsonSummary: unknown | null;
+  wilsonSummary: WilsonSummary;
   rawConfig: unknown;
   rawPrompts: unknown[];
   rawCompletions: unknown[];
@@ -244,6 +245,19 @@ export async function readRecordDir(dir: string): Promise<ReadRecordResult> {
 
   if (config.schema_version !== 2) return { kind: "v1" };
 
+  // `wilson_summary` is validated against the shared frozen-contract schema here, before
+  // any of the rest of the record is normalized. Explicit-null (and an absent key, which
+  // `?? null` treats the same as explicit-null — the frozen contract's key-always-present
+  // guarantee is not re-enforced here) parses cleanly and stays valid; a NON-NULL value
+  // that doesn't match `WilsonSummarySchema` (missing/wrong-typed field, out-of-vocabulary
+  // `sided`, etc.) makes the whole record `invalid` rather than silently degrading to a
+  // null-filled summary downstream (`db/experiments.ts`'s insert used to do exactly that).
+  const wilsonSummaryParsed = WilsonSummarySchema.safeParse(config.wilson_summary ?? null);
+  if (!wilsonSummaryParsed.success) {
+    return { kind: "invalid", reason: `config.json: wilson_summary: ${wilsonSummaryParsed.error.message}` };
+  }
+  const wilsonSummary = wilsonSummaryParsed.data;
+
   let prompts: unknown[];
   let completions: unknown[];
   let samplesRaw: unknown[];
@@ -288,10 +302,9 @@ export async function readRecordDir(dir: string): Promise<ReadRecordResult> {
     // `vram_profile` — top-level on `config.json` (WP-B addition), absent on any record
     // predating it. Never guessed from `sweep_cell` or elsewhere — absent stays NULL.
     vramProfile: asString(config.vram_profile),
-    // `wilson_summary` is always present as a KEY on a v2 record (frozen contract) but its
-    // VALUE is legitimately `null` — `?? null` here is a default for an absent key on a
-    // malformed record, not a stand-in for the frozen null.
-    wilsonSummary: config.wilson_summary ?? null,
+    // Validated above (`WilsonSummarySchema.safeParse`) before any jsonl was even read —
+    // a malformed non-null value already returned `invalid` and never reaches this line.
+    wilsonSummary,
     rawConfig: config,
     rawPrompts: prompts,
     rawCompletions: completions,

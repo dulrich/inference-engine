@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listRecordDirs, readRecordDir } from "./record.ts";
 
@@ -169,5 +171,78 @@ describe("readRecordDir: sampling_arm/battery/vram_profile population", () => {
     expect(result.record.samplingArm).toBeNull();
     expect(result.record.battery).toBeNull();
     expect(result.record.vramProfile).toBeNull();
+  });
+});
+
+// WP-R5 (`plans/repository-tooling-structural-remediation.md`, review F5
+// boundary-type-contracts): `config.wilson_summary` is now parsed against the shared
+// `WilsonSummarySchema` during v2 ingest -- malformed NON-NULL data makes the whole record
+// `invalid` (never a plausible-looking null-filled `summaries` row) while valid explicit
+// `null` (the frozen contract's "no replicated correctness cells" case) keeps ingesting
+// exactly as before. These build their own throwaway record dirs with `mkdtempSync`
+// (the committed `fixtures/records` tree is historical evidence, never edited for a new
+// case) rather than reusing the existing fixtures.
+describe("readRecordDir: wilson_summary validation (WP-R5)", () => {
+  function makeRecordDir(wilsonSummary: unknown): string {
+    const dir = mkdtempSync(join(tmpdir(), "bench-dashboard-wilson-"));
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({
+        schema_version: 2,
+        description: "WP-R5 wilson_summary validation fixture",
+        timestamp: "2026-08-27T00:00:00+00:00",
+        lineage: {},
+        sweep_cell: null,
+        wilson_summary: wilsonSummary,
+      }),
+    );
+    // Only reached by the valid-null case below -- a malformed non-null summary makes
+    // `readRecordDir` return `invalid` before it ever reads these (`record.ts`'s
+    // wilson_summary parse runs immediately after the schema_version gate, ahead of the
+    // prompts/completions/samples reads), but writing them unconditionally keeps this
+    // helper's contract simple and matches what a real v2 record dir always has on disk.
+    writeFileSync(join(dir, "prompts.jsonl"), "");
+    writeFileSync(join(dir, "completions.jsonl"), "");
+    writeFileSync(join(dir, "samples.jsonl"), "");
+    return dir;
+  }
+
+  test("a malformed wilson_summary (n is a string, not a number) becomes an invalid record", async () => {
+    const dir = makeRecordDir({ n: "thirty", k: 0, rate: 0, sided: "one", confidence: 0.95, lower: null, upper: null });
+    const result = await readRecordDir(dir);
+    expect(result.kind).toBe("invalid");
+    if (result.kind !== "invalid") throw new Error("unreachable");
+    expect(result.reason).toContain("wilson_summary");
+  });
+
+  test("a malformed wilson_summary (missing required field k) becomes an invalid record", async () => {
+    const dir = makeRecordDir({ n: 30, rate: 0, sided: "one", confidence: 0.95, lower: null, upper: null });
+    const result = await readRecordDir(dir);
+    expect(result.kind).toBe("invalid");
+  });
+
+  test("an out-of-vocabulary wilson_summary.sided (\"three\") becomes an invalid record", async () => {
+    const dir = makeRecordDir({ n: 30, k: 0, rate: 0, sided: "three", confidence: 0.95, lower: null, upper: null });
+    const result = await readRecordDir(dir);
+    expect(result.kind).toBe("invalid");
+    if (result.kind !== "invalid") throw new Error("unreachable");
+    expect(result.reason).toContain("wilson_summary");
+  });
+
+  test("a valid explicit-null wilson_summary keeps ingesting as v2, unchanged (compatibility)", async () => {
+    const dir = makeRecordDir(null);
+    const result = await readRecordDir(dir);
+    expect(result.kind).toBe("v2");
+    if (result.kind !== "v2") throw new Error("unreachable");
+    expect(result.record.wilsonSummary).toBeNull();
+  });
+
+  test("a valid non-null wilson_summary object still ingests as v2 through the new parse path", async () => {
+    const valid = { n: 30, k: 3, rate: 0.1, sided: "two" as const, confidence: 0.95, lower: 0.02, upper: 0.27 };
+    const dir = makeRecordDir(valid);
+    const result = await readRecordDir(dir);
+    expect(result.kind).toBe("v2");
+    if (result.kind !== "v2") throw new Error("unreachable");
+    expect(result.record.wilsonSummary).toEqual(valid);
   });
 });

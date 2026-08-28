@@ -11,6 +11,7 @@ BAKEOFF_DIR = Path(__file__).resolve().parent.parent
 if str(BAKEOFF_DIR) not in sys.path:
     sys.path.insert(0, str(BAKEOFF_DIR))
 
+import scratch_lifecycle  # noqa: E402
 import sweep  # noqa: E402
 
 GEMMA_QAT_HOST_PATH = Path(
@@ -359,6 +360,82 @@ class TestBuildCommandBooleanFlags(unittest.TestCase):
         self.assertEqual(argv[argv.index("--port") + 1], "18080")
 
 
+class TestVerifyStartupState(unittest.TestCase):
+    """`verify_startup_state` -- "a healthy endpoint has told you nothing" (llama/AGENTS.md).
+
+    WP-R3 moved this function to `scratch_lifecycle.py`; before that move it had no direct
+    assertions anywhere in the suite (it was only ever a `mock.patch` target), so the move is
+    landed together with the coverage that pins its verdicts. The contract these lock: a field
+    the log never mentions is a MISMATCH, never a silent pass.
+    """
+
+    CELL = {
+        "alias": "demo",
+        "model_container_path": "/models/unsloth/demo/demo-Q4_K_M.gguf",
+        "server_flags": {"-c": 32768, "-ctk": "f16", "-ctv": "f16", "-fa": "on", "-ngl": 99},
+        "battery": ["vram"],
+    }
+
+    GOOD_LOG = (
+        "load_model: loading model '/models/unsloth/demo/demo-Q4_K_M.gguf'\n"
+        "llama_context: n_ctx                 = 32768\n"
+        "llama_context: flash_attn            = enabled\n"
+        "load_tensors: offloaded 25/25 layers to GPU\n"
+        "llama_kv_cache:  size =  1536.00 MiB ( 32768 cells,  24 layers), "
+        "K (f16):  768.00 MiB, V (f16):  768.00 MiB\n"
+    )
+
+    def test_a_matching_log_verifies_every_field(self):
+        ok, details = sweep.verify_startup_state(self.GOOD_LOG, self.CELL)
+        self.assertTrue(ok, details)
+        self.assertEqual(
+            details["checks"],
+            {
+                "model_path": True, "n_ctx": True, "type_k": True, "type_v": True,
+                "flash_attn": True, "offload_placement": True,
+            },
+        )
+
+    def test_an_empty_log_fails_every_check_rather_than_passing_silently(self):
+        ok, details = sweep.verify_startup_state("", self.CELL)
+        self.assertFalse(ok)
+        self.assertEqual(set(details["checks"].values()), {False})
+        self.assertEqual(set(details["matches"].values()), {None})
+
+    def test_each_mismatched_field_is_reported_individually(self):
+        cases = {
+            "n_ctx": ("n_ctx                 = 32768", "n_ctx                 = 8192"),
+            "type_k": ("K (f16)", "K (q8_0)"),
+            "type_v": ("V (f16)", "V (q4_0)"),
+            "flash_attn": ("flash_attn            = enabled",
+                           "flash_attn            = disabled"),
+            "model_path": ("demo-Q4_K_M.gguf'", "other-Q4_K_M.gguf'"),
+        }
+        for field, (needle, replacement) in cases.items():
+            with self.subTest(field=field):
+                log = self.GOOD_LOG.replace(needle, replacement)
+                self.assertNotEqual(log, self.GOOD_LOG, "fixture edit did not apply")
+                ok, details = sweep.verify_startup_state(log, self.CELL)
+                self.assertFalse(ok)
+                self.assertFalse(details["checks"][field])
+
+    def test_partial_offload_below_the_request_fails_placement(self):
+        log = self.GOOD_LOG.replace("offloaded 25/25 layers", "offloaded 12/25 layers")
+        ok, details = sweep.verify_startup_state(log, self.CELL)
+        self.assertFalse(ok)
+        self.assertFalse(details["checks"]["offload_placement"])
+
+    def test_flash_attention_off_is_verified_as_off(self):
+        cell = dict(self.CELL)
+        cell["server_flags"] = dict(self.CELL["server_flags"], **{"-fa": "off"})
+        log = self.GOOD_LOG.replace("flash_attn            = enabled",
+                                    "flash_attn            = disabled")
+        ok, details = sweep.verify_startup_state(log, cell)
+        self.assertTrue(ok, details)
+        # ... and the same log against a cell that asked for -fa on is a mismatch.
+        self.assertFalse(sweep.verify_startup_state(log, self.CELL)[0])
+
+
 class TestScratchServerHandleCellClock(unittest.TestCase):
     """WP-1 of `plans/bakeoff-timing-records-and-estimates.md`: the handle's additive cell clock.
     Constructing a handle directly (what every test double in this repo does) must keep working
@@ -391,8 +468,14 @@ class TestScratchServerHandleCellClock(unittest.TestCase):
 
 class TestScratchStartupTimer(unittest.TestCase):
     """The NEW monotonic timer around `spawn_scratch_server` -> startup verification
-    (`sweep._ScratchServerContext.__enter__`). Every Docker/sysfs collaborator is patched out;
-    no container, no host sysfs, no network is touched by these tests."""
+    (`scratch_lifecycle._ScratchServerContext.__enter__`, still reachable as
+    `sweep._ScratchServerContext` -- WP-R3 moved the implementation, not the public name).
+    Every Docker/sysfs collaborator is patched out; no container, no host sysfs, no network is
+    touched by these tests.
+
+    The patch targets name `scratch_lifecycle` rather than `sweep` because that is the module
+    whose globals `__enter__` actually reads; `sweep` re-exports the same objects, but patching
+    a re-export would rebind only the facade. The assertions below are unchanged."""
 
     CELL = {
         "cell_id": "timed-cell", "alias": "a",
@@ -404,16 +487,16 @@ class TestScratchStartupTimer(unittest.TestCase):
         from unittest import mock
 
         clock = iter([100.0, 110.0, 137.5, 200.0, 300.0, 400.0])
-        with mock.patch.object(sweep, "find_host_pid_by_port", return_value=None), \
-                mock.patch.object(sweep, "teardown_scratch_server", return_value={}), \
-                mock.patch.object(sweep, "read_vram_used_bytes", return_value=0), \
-                mock.patch.object(sweep, "build_command", return_value=["llama-server"]), \
-                mock.patch.object(sweep, "spawn_scratch_server", return_value=None), \
-                mock.patch.object(sweep, "discover_bridge_ip", return_value="10.0.0.2"), \
-                mock.patch.object(sweep, "wait_for_health", return_value=healthy), \
-                mock.patch.object(sweep, "verify_startup_state", return_value=(verified, {})), \
-                mock.patch.object(sweep.subprocess, "run") as run_mock, \
-                mock.patch.object(sweep.time, "monotonic", side_effect=lambda: next(clock)):
+        with mock.patch.object(scratch_lifecycle, "find_host_pid_by_port", return_value=None), \
+                mock.patch.object(scratch_lifecycle, "teardown_scratch_server", return_value={}), \
+                mock.patch.object(scratch_lifecycle, "read_vram_used_bytes", return_value=0), \
+                mock.patch.object(scratch_lifecycle, "build_command", return_value=["llama-server"]), \
+                mock.patch.object(scratch_lifecycle, "spawn_scratch_server", return_value=None), \
+                mock.patch.object(scratch_lifecycle, "discover_bridge_ip", return_value="10.0.0.2"), \
+                mock.patch.object(scratch_lifecycle, "wait_for_health", return_value=healthy), \
+                mock.patch.object(scratch_lifecycle, "verify_startup_state", return_value=(verified, {})), \
+                mock.patch.object(scratch_lifecycle.subprocess, "run") as run_mock, \
+                mock.patch.object(scratch_lifecycle.time, "monotonic", side_effect=lambda: next(clock)):
             run_mock.return_value = mock.Mock(stdout=b"log")
             with sweep.scratch_server(self.CELL, port=1) as handle:
                 return handle

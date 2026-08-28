@@ -15,31 +15,91 @@ from-scratch worker can run this with nothing beyond what's already on the host 
 
 ## Files
 
-- `run_harness.py` — the harness itself (timing sweep, needle probe, quality corpus, record
-  writer, CLI).
-- `sweep.py` — the declarative sweep framework: spec loading/expansion, the VRAM-fit pre-filter,
-  ladder expansion, deterministic cell IDs, exact-command building, and the scratch-server
-  lifecycle (spawn/health-poll/verify/teardown/VRAM-read-back). See "Sweep framework" below.
-- `longcontext.py` — the long-context correctness instrument v2: coherent haystack corpus
-  loading/assembly, the 3-task battery, the position sweep + n-trial cell driver, Wilson-interval
-  statistics, and the degeneracy classifier. See "Long-context correctness instrument v2" below.
+29 production modules. Several CLI entry points own the run loops and argparse surfaces;
+everything else is a module they compose. The `*_`-prefixed families are the WP-R1..R4 splits of
+`plans/repository-tooling-structural-remediation.md` — each extracted module names its origin and
+its review finding in its own docstring, so `head -3 <module>.py` tells you why it exists.
+
+**Entry points** (`python3 <file>` — all of these are runnable):
+
+- `batch.py` — queue-driven unattended batch runner: turns a self-contained queue file into a
+  durable, resumable run. Owns only the run loop and the CLI.
+- `sweep.py` — declarative sweep framework and the `--dry-run` cell expander.
+- `longcontext.py` — long-context correctness instrument v2 (haystack + battery + position sweep).
+- `run_harness.py` — serving-harness bake-off: timing sweep, needle probe, quality corpus.
+- `verify_run.py` — post-queue mechanical verification of a finished run directory.
+- `control_dispatcher.py` — host control-plane dispatcher CLI and the `run-window.sh` adapters.
+
+**Queue-cell core** (WP-R1, extracted from `batch.py`):
+
+- `cell_model.py` — the typed immutable cell values. `CellIdentity` carries exactly the four
+  fields `compute_cell_id` hashes and physically cannot carry more.
+- `cell_spec.py` — the plain-dict sweep-cell normal form: defaults, validation, deterministic
+  identity, and the exact `llama-server` argv a cell renders to.
+- `queue_file.py` — queue-file parse/validate/resolve, and the HH:MM deadline.
+- `queue_state.py` — the durable `.state.json` machine: init/load/atomic-save, the `interrupted`
+  rule, both re-arm forms, skip propagation.
+- `cell_outcome.py` — the outcome-precedence table, as a pure function.
+- `cell_record.py` — record persistence and the pre-enqueue size projection.
+- `cell_runner.py` — the live runners: startup gate → optional timing → optional battery.
+- `hang_rail.py` — the unattended safety rail: kernel hang-signature detection.
+
+**Measurement harness** (WP-R2, extracted from `run_harness.py`):
+
+- `harness_transport.py` — streaming HTTP transport, residency polling, timing rounds, live
+  tokenizer probes.
+- `harness_record.py` — schema-v2 experiment-record serialization.
+- `harness_fixture.py` — shared paths, constants, the fixed cold/warm/hot performance fixture.
+- `harness_cli.py` — the argparse surface and command composition.
+
+**Long-context instrument** (WP-R2, extracted from `longcontext.py`):
+
+- `longcontext_corpus.py` — corpus loading, deterministic haystack assembly, needle injection.
+- `longcontext_tasks.py` — the 3-task battery (literal recall, ordered readback, anchored QA).
+- `longcontext_classifier.py` — per-trial verdicts, the degeneracy classifier, Wilson-interval
+  statistics, and the deterministic per-trial seed schedule.
+- `longcontext_cell.py` — the prompt-fit shrink loop, the n-trial cell driver, the position sweep.
+
+**Fit math and server lifecycle** (WP-R3, extracted from `sweep.py`):
+
+- `gguf_fit.py` — pure GGUF geometry, KV-cache byte math, VRAM budgets, the fit pre-filter.
+- `scratch_lifecycle.py` — scratch-server spawn/bridge-IP discovery/health-poll/startup
+  verification/teardown. Health is judged **by response body, never status code**.
+
+**Control plane** (WP-R4, extracted from `control_dispatcher.py`):
+
+- `control_protocol.py` — the on-disk protocol: schema names, id/stem grammars, bounds, timestamp
+  spelling, and the single validator that decides whether an untrusted request is admissible.
+  `control-request-v1` is enforced here, not merely annotated.
+- `control_store.py` — durable file primitives (atomic write, claim, disposition).
+- `control_phases.py` — the dispatcher's six phases and its crash recovery.
+- `control_process.py` — process/boot identity reads.
+
+**Other:**
+
+- `sampling_table.py` — the per-model-family recommended "production" sampling table.
+- `gates.sh` — the executable form of this directory's gate list (see `AGENTS.md`).
+- `pyproject.toml` / `uv.lock` — **dev-only** Ruff + Pyright configuration. The runtime stays
+  Python-stdlib-only; nothing here is a runtime dependency.
+
+**Data and tests:**
+
+- `tests/` — stdlib `unittest` suite (534 tests) covering all of the above. Run it from the repo
+  root; the summary goes to **stderr**, because the suite prints JSON verification blocks to
+  stdout:
+  `python3 -m unittest discover -s llama/bakeoff/tests -p 'test_*.py' 2>&1 >/dev/null | tail -8`
 - `corpus/` — the coherent public-domain haystack corpus (Project Gutenberg) `longcontext.py`
-  assembles trials from, plus `corpus/manifest.json`'s provenance record. See that section.
-- `tests/` — stdlib `unittest` suite for `longcontext.py` (corpus integrity, haystack assembly,
-  task battery, classifier — including the real captured degenerate fragments and the committed
-  clean gemma-qat transcripts as fixtures — statistics, and the cell driver). Run with
-  `python3 -m unittest discover -s llama/bakeoff/tests -p 'test_*.py' -v`.
+  assembles trials from, plus `corpus/manifest.json`'s provenance record.
 - `examples/sweep-example.json` — a 3-cell fixture for `sweep.py --dry-run` (synthetic geometry,
-  no real model file required — see that section).
+  no real model file required).
+- `queues/` — committed queue files and their durable `.state.json` run state.
 - `quality_corpus.jsonl` — 12 fixed prompts across the 8 categories in
-  `references/serving-harness-test-round-2.md` §5 (factual/technical QA, code/debug reasoning,
-  multi-constraint instruction following, structured transformation, ambiguity/judgment,
-  correction uptake, long-form synthesis, long-context retrieval), including 2 deterministic
-  sentinels (`qa-2`, `longctx-1`) that do not dominate the set. Reused identically across every
-  quant of a given model — do not parameterize it per-model.
-- Raw experiment records land in `llama/bakeoff/records/<experiment-id>/` (tracked and committed — see
-  "Honest-timing-semantics contract" below and the plan's Decisions locked section for why this
-  reverses the more common "runs/ is scratch" convention).
+  `references/serving-harness-test-round-2.md` §5, including 2 deterministic sentinels (`qa-2`,
+  `longctx-1`) that do not dominate the set. Reused identically across every quant of a given
+  model — do not parameterize it per-model.
+- `records/<experiment-id>/` — raw experiment records, tracked and committed (see the
+  "Honest-timing-semantics contract" below and the remediation plan's Decisions-locked section
+  for why this reverses the more common "runs/ is scratch" convention).
 
 ## The honest-timing-semantics contract (read before changing timing code)
 

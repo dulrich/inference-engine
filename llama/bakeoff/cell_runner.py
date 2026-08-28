@@ -386,7 +386,7 @@ def make_longcontext_cell_runner(
                 tokenize_fn=_tokenize_fn,
                 token_budget=prompt_fit_budget(context, max_tokens),
             )
-        except Exception as exc:  # pragma: no cover -- defensive: an unexpected transport/battery
+        except Exception as exc:  # noqa: BLE001  # pragma: no cover -- defensive: transport/battery
             # exception never propagates out and aborts the whole queue; it becomes an ordinary
             # failed-cell disposition, same as a health timeout.
             detail = {"error": str(exc)}

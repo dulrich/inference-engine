@@ -32,7 +32,6 @@ import math
 import re
 from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
-
 # ---------------------------------------------------------------------------------------------
 # Degeneracy classifier (doc Req 6: tag SHAPE, not just pass/fail)
 # ---------------------------------------------------------------------------------------------

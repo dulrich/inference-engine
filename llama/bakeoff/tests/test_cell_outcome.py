@@ -18,6 +18,7 @@ Entirely offline and I/O-free: every input is a literal.
 import sys
 import unittest
 from pathlib import Path
+from typing import Any, ClassVar
 
 BAKEOFF_DIR = Path(__file__).resolve().parent.parent
 if str(BAKEOFF_DIR) not in sys.path:
@@ -41,7 +42,7 @@ TRANSPORT_FAILED = _s("wrong", success=False)
 class TestBatterySamplePrecedence(unittest.TestCase):
     """`classify_battery_samples`: one row per rule, plus every shadowing pair that matters."""
 
-    CASES = [
+    CASES: ClassVar[list[Any]] = [
         # (name, samples_by_task, expected reason, expected correctness_failure)
         ("empty battery completes", {}, None, False),
         ("all correct completes", {"single_needle": [CORRECT]}, None, False),
@@ -100,7 +101,7 @@ class TestBatterySamplePrecedence(unittest.TestCase):
 class TestCorrectnessFailureInvariant(unittest.TestCase):
     """`correctness_failure` arms `propagate_skips`. Exactly two reasons may set it."""
 
-    ALL_FAILED_DISPOSITIONS = {
+    ALL_FAILED_DISPOSITIONS: ClassVar[dict[str, Any]] = {
         "health_timeout": cell_outcome.HEALTH_TIMEOUT,
         "invalid_config": cell_outcome.INVALID_CONFIG,
         "invalid_sampling_arm": cell_outcome.INVALID_SAMPLING_ARM,

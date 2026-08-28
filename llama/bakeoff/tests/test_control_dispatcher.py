@@ -96,7 +96,7 @@ class TestIngestHardening(unittest.TestCase):
         target = Path(self.tmp.name) / "elsewhere.json"
         target.write_text(json.dumps({"request_id": REQ_A, "action": "arm", "requested_at": "2026-08-24T00:00:00Z"}))
         (self.paths.requests_dir / f"{REQ_A}.json").symlink_to(target)
-        pending, ignored = cd.ingest_pass(self.paths, self.queues_dir)
+        pending, _ignored = cd.ingest_pass(self.paths, self.queues_dir)
         self.assertEqual(pending, [])
         self.assertEqual(self._disposition(REQ_A)["state"], "rejected")
 
@@ -422,7 +422,7 @@ class TestTerminalizationGrace(unittest.TestCase):
             paths = _make_paths(tmp)
             self._claim(paths, REQ_A, "2026-08-24T00:01:00Z")
             now = datetime(2026, 8, 24, 0, 3, 0, tzinfo=timezone.utc)  # 2 min old, grace is 5
-            anomalies, late = cd.terminalize_phase(paths, lambda: now, lambda: BOOT_ID, _never_alive)
+            anomalies, _late = cd.terminalize_phase(paths, lambda: now, lambda: BOOT_ID, _never_alive)
             self.assertFalse((paths.dispositions_dir / f"{REQ_A}.json").exists())
             self.assertEqual(anomalies, [])
 

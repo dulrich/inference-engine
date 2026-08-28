@@ -6,6 +6,7 @@ straight off disk (in scope as data, per this WP's brief), never load a model.""
 import sys
 import unittest
 from pathlib import Path
+from typing import Any, ClassVar
 
 BAKEOFF_DIR = Path(__file__).resolve().parent.parent
 if str(BAKEOFF_DIR) not in sys.path:
@@ -211,8 +212,10 @@ class TestVRAMProfiles(unittest.TestCase):
         self.assertEqual(calls, {"total": 0, "used": 0})
 
     def test_headless_computes_live_admissible_budget(self):
-        total_fn = lambda: int(15.92 * GIB)
-        used_fn = lambda: int(0.3 * GIB)  # well under the refusal ceiling
+        def total_fn():
+            return int(15.92 * GIB)
+        def used_fn():
+            return int(0.3 * GIB)  # well under the refusal ceiling
         budget = sweep.compute_vram_budget_bytes("headless", total_fn, used_fn)
         expected = int(15.92 * GIB) - int(0.3 * GIB) - sweep.HEADLESS_PINNED_MARGIN_GIB * GIB
         self.assertAlmostEqual(budget, expected)
@@ -220,8 +223,10 @@ class TestVRAMProfiles(unittest.TestCase):
     def test_headless_refuses_on_a_live_desktop_baseline(self):
         # llama/config.yaml's gemma fit-math comment: mem_info_vram_used = 3,327,463,424 B
         # (~3.1 GiB) on this exact desktop-shared host -- must trip the refusal.
-        total_fn = lambda: int(15.92 * GIB)
-        used_fn = lambda: 3_327_463_424
+        def total_fn():
+            return int(15.92 * GIB)
+        def used_fn():
+            return 3_327_463_424
         with self.assertRaises(sweep.VRAMProfileRefused):
             sweep.compute_vram_budget_bytes("headless", total_fn, used_fn)
 
@@ -232,8 +237,10 @@ class TestVRAMProfiles(unittest.TestCase):
     def test_classify_fit_threads_vram_profile_and_readers_through(self):
         cell = _gemma_like_synthetic_geometry()
         cell["server_flags"]["-c"] = 32768
-        total_fn = lambda: int(15.92 * GIB)
-        used_fn = lambda: int(0.3 * GIB)
+        def total_fn():
+            return int(15.92 * GIB)
+        def used_fn():
+            return int(0.3 * GIB)
         fit = sweep.classify_fit(cell, vram_profile="headless", vram_total_bytes_fn=total_fn, vram_used_bytes_fn=used_fn)
         self.assertEqual(fit["vram_profile"], "headless")
         self.assertEqual(
@@ -369,7 +376,7 @@ class TestVerifyStartupState(unittest.TestCase):
     the log never mentions is a MISMATCH, never a silent pass.
     """
 
-    CELL = {
+    CELL: ClassVar[dict[str, Any]] = {
         "alias": "demo",
         "model_container_path": "/models/unsloth/demo/demo-Q4_K_M.gguf",
         "server_flags": {"-c": 32768, "-ctk": "f16", "-ctv": "f16", "-fa": "on", "-ngl": 99},
@@ -477,7 +484,7 @@ class TestScratchStartupTimer(unittest.TestCase):
     whose globals `__enter__` actually reads; `sweep` re-exports the same objects, but patching
     a re-export would rebind only the facade. The assertions below are unchanged."""
 
-    CELL = {
+    CELL: ClassVar[dict[str, Any]] = {
         "cell_id": "timed-cell", "alias": "a",
         "model_container_path": "/models/a.gguf",
         "server_flags": {"-c": 32768, "-ctk": "f16", "-ctv": "f16", "-fa": "on", "-ngl": 99},

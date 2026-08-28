@@ -47,20 +47,42 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import sweep
 from control_process import default_pid_alive, group_alive, pgid_alive, read_boot_id
 from control_protocol import (
-    GRACE_SECONDS, PRUNE_AGE_SECONDS, REQUEST_BASENAME_RE, VALID_ACTIONS, WIRE_STATES,
-    IngestedRequest, iso_z, parse_iso, validate_request_body,
+    GRACE_SECONDS,
+    PRUNE_AGE_SECONDS,
+    REQUEST_BASENAME_RE,
+    VALID_ACTIONS,
+    WIRE_STATES,
+    IngestedRequest,
+    iso_z,
+    parse_iso,
+    validate_request_body,
 )
 from control_store import (
-    MODULE_DIR, Paths, atomic_touch, atomic_write_json, probe_lock_free, read_json_safe,
+    MODULE_DIR,
+    Paths,
+    atomic_touch,
+    atomic_write_json,
+    probe_lock_free,
+    read_json_safe,
     safe_read_request_bytes,
 )
 
 __all__ = [
-    "DEFAULT_PORT", "DEFAULT_SCRATCH_CONTAINER", "DEFAULT_ROUTER_CONTAINER",
-    "write_disposition", "write_action",
-    "ingest_pass", "act_phase", "terminalize_phase", "compose_last_run", "janitor_phase",
-    "compose_status", "project_request_state", "map_last_run_disposition", "prune_phase",
+    "DEFAULT_PORT",
+    "DEFAULT_ROUTER_CONTAINER",
+    "DEFAULT_SCRATCH_CONTAINER",
+    "act_phase",
+    "compose_last_run",
+    "compose_status",
     "dispatch_pass",
+    "ingest_pass",
+    "janitor_phase",
+    "map_last_run_disposition",
+    "project_request_state",
+    "prune_phase",
+    "terminalize_phase",
+    "write_action",
+    "write_disposition",
 ]
 
 DEFAULT_PORT = 8899
@@ -645,7 +667,8 @@ def default_launch(req: IngestedRequest, paths: Paths, queues_dir: Path, run_win
         argv += ["--minutes", str(req.minutes)]
     env = dict(os.environ)
     env["BAKEOFF_STATE_DIR"] = str(paths.state_dir)
-    subprocess.Popen(  # noqa: S603 -- the real, live-capable launch path; never invoked by tests
+    # The real, live-capable launch path; never invoked by tests.
+    subprocess.Popen(
         argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         close_fds=True, env=env,
     )

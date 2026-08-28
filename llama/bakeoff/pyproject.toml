@@ -1,0 +1,73 @@
+# Dev-only quality contract for the bake-off harness.
+#
+# The harness RUNTIME is Python-stdlib-only and stays that way: nothing here is a runtime
+# dependency, nothing here enters a serving container, and `batch.py` / `sweep.py` /
+# `longcontext.py` / `control_dispatcher.py` are invoked with the host's bare `python3`
+# (3.12.3), never through this project's venv. This file exists solely so `uv run ruff`
+# and `uv run pyright` have a pinned, reproducible configuration.
+
+[project]
+name = "inference-engine-bakeoff"
+version = "0"
+description = "Dev-gate configuration for the llama.cpp bake-off harness (not a distributable package)."
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pyright==1.1.411",
+    "ruff==0.16.5",
+]
+
+[tool.uv]
+# The harness targets the host interpreter; keep the gate venv on the same minor version
+# so Ruff and Pyright judge the code against what actually runs it.
+python-preference = "only-system"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# Flat module layout: every production module and every test imports its siblings as
+# top-level names off `sys.path`, so this directory IS the source root.
+src = ["."]
+extend-exclude = ["corpus", "examples", "queues", "records"]
+
+[tool.ruff.lint]
+select = ["F", "E", "W", "I", "B", "BLE", "SIM", "RUF"]
+# Deferred, with a ratchet -- NOT silenced findings. Each entry is a rule this codebase does
+# not yet satisfy, listed with its count at the baseline commit and the reason it is not part
+# of WP-R6. WP-R6 is a gates-and-closeout package; none of these can be cleared without a
+# behaviour or control-flow change, which belongs to a package authorised to make one.
+# The ratchet: clear a family, delete its line. Never add a line to make a new finding go away.
+ignore = [
+    "E501",    # 315x line-too-long. Prose//data lines in docstrings and tables; the repo's
+               # markdown contract is explicitly "never hard-wrap", and no formatter is
+               # prescribed here, so a column limit would be churn with no defect value.
+    "UP",      # 796x pyupgrade (UP006/UP045/UP017/UP035/UP037). Mechanical `List[str]`->
+               # `list[str]`, `Optional[X]`->`X | None`, `timezone.utc`->`UTC`. All safe and
+               # autofixable, but it rewrites annotations in all 29 modules at once and would
+               # bury this sprint's behaviour-preserving refactor diff. Land it as its own
+               # single-purpose commit, where `--diff` is the whole review.
+    "B905",    # 5x zip-without-explicit-strict. Adding `strict=` is a REAL behaviour change
+               # (raises on length mismatch); each site needs its own judgement about whether
+               # a mismatch is a bug or tolerated.
+    "SIM102",  # 2x collapsible-if. Both sites carry an explanatory comment on the inner `if`
+    "SIM105",  # 9x try/except/pass -> contextlib.suppress. Rewrites exception handling in the
+               # control plane whose exception semantics WP-R4 just locked.
+    "SIM117",  # 2x nested `with`. Cosmetic; test-only.
+    "SIM905",  # 1x split-static-string. Its one site is a readable word list written as
+               # `"the a an of ...".split()`; expanding it to 15 quoted strings is strictly
+               # worse to read and to extend.
+    "RUF022",  # 1x unsorted `__all__` in control_dispatcher.py. Its ordering is SEMANTIC --
+               # the list is grouped under `# protocol` / `# store` / `# phases` comments that
+               # mirror the WP-R4 split. Alphabetizing it silently leaves those comments
+               # attached to the wrong symbols, which is the exact class of structural
+               # regression this sprint existed to remove. Keep the grouping; keep this off.
+]
+
+[tool.pyright]
+typeCheckingMode = "basic"
+pythonVersion = "3.12"
+include = ["."]
+exclude = ["**/__pycache__", "corpus", "examples", "queues", "records", ".venv", "tests"]
+extraPaths = ["."]

@@ -70,9 +70,9 @@ REPO_ROOT = LLAMA_DIR.parent
 # -------------------------------------------------------------------------------------------
 
 from cell_spec import (  # noqa: E402,F401
-    VALID_BATTERY_ITEMS,
     _DEFAULT_SERVER_FLAGS,
     _FLAG_ORDER,
+    VALID_BATTERY_ITEMS,
     _flag_args,
     build_command,
     compute_cell_id,
@@ -82,7 +82,6 @@ from gguf_fit import (  # noqa: E402,F401
     CARD_NAMEPLATE_VRAM_GIB,
     FIT_MARGIN_GIB,
     GIB,
-    GGUFParseError,
     HEADLESS_BASELINE_CEILING_GIB,
     HEADLESS_PINNED_MARGIN_GIB,
     KV_TYPE_BYTES_PER_ELEMENT,
@@ -90,6 +89,7 @@ from gguf_fit import (  # noqa: E402,F401
     NON_WEIGHT_OVERHEAD_GIB,
     REALISTIC_FREE_VRAM_GIB,
     VRAM_PROFILES,
+    GGUFParseError,
     VRAMProfileRefused,
     _resolve_geometry_and_weights,
     _resolve_geometry_and_weights_raw,
@@ -102,9 +102,9 @@ from gguf_fit import (  # noqa: E402,F401
     read_vram_used_bytes,
 )
 from scratch_lifecycle import (  # noqa: E402,F401
+    _STARTUP_PATTERNS,
     DEFAULT_CONTAINER_NAME,
     ScratchServerHandle,
-    _STARTUP_PATTERNS,
     _ScratchServerContext,
     _utc_now_iso,
     discover_bridge_ip,
@@ -115,7 +115,6 @@ from scratch_lifecycle import (  # noqa: E402,F401
     verify_startup_state,
     wait_for_health,
 )
-
 
 # -------------------------------------------------------------------------------------------
 # Ladder expansion -- one model x KV-type ladder x context ladder.

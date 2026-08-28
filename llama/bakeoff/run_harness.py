@@ -63,21 +63,49 @@ from typing import Any, Dict, List, Optional, Tuple
 # -- `run_harness.tokenize_count` as injected fakes, and every live caller resolves those through
 # -- this module object at call time.
 from harness_fixture import (  # noqa: F401
-    CHARS_PER_TOKEN_ESTIMATE, DEFAULT_BASE_URL, DEFAULT_ROUTER_BASE_URL, DEFAULT_RUNS_DIR,
-    DOCKERFILE_PATH, FALLBACK_LLAMA_CPP_BUILD, FIXTURE_INPUT_TOKENS_TARGET, FIXTURE_INSTRUCTION,
-    FIXTURE_OUTPUT_TOKENS, FIXTURE_PROMPT_BODY, FIXTURE_PROMPT_TEXT, FIXTURE_SEED, LLAMA_DIR,
-    MODULE_DIR, QUALITY_CORPUS_PATH, REPO_ROOT, REQUIRED_LINEAGE_FIELDS, SIZE_LIMIT_BYTES,
-    _build_filler_text, _single_user_message, _utc_now_iso, _WORD_BANK, summarize,
+    _WORD_BANK,
+    CHARS_PER_TOKEN_ESTIMATE,
+    DEFAULT_BASE_URL,
+    DEFAULT_ROUTER_BASE_URL,
+    DEFAULT_RUNS_DIR,
+    DOCKERFILE_PATH,
+    FALLBACK_LLAMA_CPP_BUILD,
+    FIXTURE_INPUT_TOKENS_TARGET,
+    FIXTURE_INSTRUCTION,
+    FIXTURE_OUTPUT_TOKENS,
+    FIXTURE_PROMPT_BODY,
+    FIXTURE_PROMPT_TEXT,
+    FIXTURE_SEED,
+    LLAMA_DIR,
+    MODULE_DIR,
+    QUALITY_CORPUS_PATH,
+    REPO_ROOT,
+    REQUIRED_LINEAGE_FIELDS,
+    SIZE_LIMIT_BYTES,
+    _build_filler_text,
+    _single_user_message,
+    _utc_now_iso,
+    summarize,
 )
 from harness_record import (  # noqa: F401
-    SizeBudgetExceeded, _jsonl, write_experiment_record,
+    SizeBudgetExceeded,
+    _jsonl,
+    write_experiment_record,
 )
 from harness_transport import (  # noqa: F401
-    CALIBRATION_MAX_TOKENS, CALIBRATION_PROBE_TOKENS, CALIBRATION_SEED, ResidencyPoller,
-    _execute_streaming_request, _novel_variant, _post_stream, _summarize_sweep,
-    calibrate_chars_per_token, run_round, run_sweep, tokenize_count,
+    CALIBRATION_MAX_TOKENS,
+    CALIBRATION_PROBE_TOKENS,
+    CALIBRATION_SEED,
+    ResidencyPoller,
+    _execute_streaming_request,
+    _novel_variant,
+    _post_stream,
+    _summarize_sweep,
+    calibrate_chars_per_token,
+    run_round,
+    run_sweep,
+    tokenize_count,
 )
-
 
 # ---------------------------------------------------------------------------------------------
 # llama.cpp build resolution + artifact lineage
@@ -294,7 +322,7 @@ def needle_probe(
         )
         return prompt, prompt_sha256, result
 
-    prompt, prompt_sha256, result = _build_and_send(target_tokens)
+    _prompt, prompt_sha256, result = _build_and_send(target_tokens)
 
     calibration_tolerance_met: Optional[bool] = None
     if calibrated:
@@ -306,7 +334,7 @@ def needle_probe(
         )
         if not tolerance_met and actual_prompt_tokens:
             target_tokens = int(target_tokens * target_actual_tokens / actual_prompt_tokens)
-            prompt, prompt_sha256, result = _build_and_send(target_tokens)
+            _prompt, prompt_sha256, result = _build_and_send(target_tokens)
             actual_prompt_tokens = (result["usage"] or {}).get("prompt_tokens")
             tolerance_met = (
                 actual_prompt_tokens is not None

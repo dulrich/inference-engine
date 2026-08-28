@@ -24,11 +24,11 @@ from typing import Any, Dict, List, Tuple
 
 import sweep
 from cell_model import (
+    SWEEP_PASSTHROUGH_KEYS,
     CellIdentity,
     ExecutionSettings,
     QueueCellMetadata,
     ResolvedCell,
-    SWEEP_PASSTHROUGH_KEYS,
 )
 
 QUEUE_FORMAT_VERSION = 1
@@ -74,7 +74,11 @@ def parse_deadline_time(deadline: str) -> Tuple[int, int]:
         if not (0 <= hh <= 23 and 0 <= mm <= 59):
             raise ValueError
     except ValueError:
-        raise QueueValidationError(f"deadline {deadline!r} is not a valid 'HH:MM' wall-clock time")
+        # `from None`: the ValueError is this block's own sentinel (and int()'s parse failure),
+        # an implementation detail -- chaining it would bury the domain error under noise.
+        raise QueueValidationError(
+            f"deadline {deadline!r} is not a valid 'HH:MM' wall-clock time"
+        ) from None
     return hh, mm
 
 

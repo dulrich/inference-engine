@@ -33,7 +33,6 @@ from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 # top-level import works whenever the importer has already put this directory on `sys.path`.
 import run_harness
 
-
 # ---------------------------------------------------------------------------------------------
 # Paths and corpus manifest loading
 # ---------------------------------------------------------------------------------------------

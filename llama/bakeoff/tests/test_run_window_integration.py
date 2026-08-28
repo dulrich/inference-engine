@@ -141,7 +141,7 @@ class TestDispatcherWrapperIntegration(unittest.TestCase):
             # Now request a stop, and run a SECOND real dispatch pass (full real defaults --
             # this is the dispatcher verifying the REAL process group of the REAL wrapper).
             _write_request(stop_id, "stop")
-            status2 = cd.dispatch_pass(paths, queues_dir)
+            cd.dispatch_pass(paths, queues_dir)
             stop_disp = _read_json(paths.dispositions_dir / f"{stop_id}.json")
             self.assertIsNotNone(stop_disp)
             self.assertEqual(stop_disp["state"], "done")

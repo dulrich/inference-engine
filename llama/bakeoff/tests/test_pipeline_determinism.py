@@ -145,7 +145,7 @@ class TestGoldenDigests(unittest.TestCase):
     def test_probes_are_reproducible_within_a_process(self):
         # Re-running a probe must return the same digest -- catches hidden per-call state
         # (a consumed module-level rng, a mutated cache) that a single call would miss.
-        for name, probe, expected in GOLDEN_DIGESTS:
+        for name, probe, _expected in GOLDEN_DIGESTS:
             with self.subTest(probe=name):
                 self.assertEqual(probe(), probe())
 

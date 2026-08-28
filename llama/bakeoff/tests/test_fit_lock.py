@@ -775,7 +775,7 @@ class TestTheLockIsNotVacuous(unittest.TestCase):
         with _memoized_gguf_reader():
             fits = [sweep.classify_fit(cell, vram_profile, _vram_total, _vram_used)]
             fits += computed["fits"][1:]
-        cmds = [sweep.build_command(cell, PINNED_COMMAND_PORT)] + computed["commands"][1:]
+        cmds = [sweep.build_command(cell, PINNED_COMMAND_PORT), *computed["commands"][1:]]
         self.assertNotEqual(_digest(fits), GOLDEN_FIT_DIGEST)
         self.assertNotEqual(_digest(cmds), GOLDEN_COMMAND_DIGEST)
 

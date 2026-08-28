@@ -69,35 +69,86 @@ import sweep
 # -- tooling have always reached for as `batch.<name>`. Kept at their historical home so the
 # -- WP-R1 split is invisible to every caller outside this directory.
 from cell_model import (  # noqa: F401
-    CellIdentity, ExecutionSettings, QueueCellMetadata, RecordMetadata, ResolvedCell,
+    CellIdentity,
+    ExecutionSettings,
+    QueueCellMetadata,
+    RecordMetadata,
+    ResolvedCell,
 )
 from cell_outcome import (  # noqa: F401
-    STATUS_ABORTED_HANG, STATUS_COMPLETED, STATUS_FAILED, CellOutcome, Disposition,
-    aborted_hang, classify_battery_samples, classify_sampling_arm, classify_startup,
+    STATUS_ABORTED_HANG,
+    STATUS_COMPLETED,
+    STATUS_FAILED,
+    CellOutcome,
+    Disposition,
+    aborted_hang,
+    classify_battery_samples,
+    classify_sampling_arm,
+    classify_startup,
 )
 from cell_record import (  # noqa: F401
-    LARGE_CONTEXT_SIZE_CHECK_THRESHOLD, SIZE_PROJECTION_HEADROOM, cell_timing_fields,
-    hf_repo_from_host_path, project_cell_record_size_bytes, write_cell_record,
+    LARGE_CONTEXT_SIZE_CHECK_THRESHOLD,
+    SIZE_PROJECTION_HEADROOM,
+    cell_timing_fields,
+    hf_repo_from_host_path,
+    project_cell_record_size_bytes,
+    write_cell_record,
 )
 from cell_runner import (  # noqa: F401
-    LONGCONTEXT_BATTERY_ITEM, LONGCONTEXT_MAX_TOKENS_BY_TASK, TEMPLATE_MARGIN,
-    TIMING_BATTERY_ITEM, TIMING_DEFAULT_ROUNDS, TIMING_MAX_TOKENS, TIMING_PROMPT,
-    TIMING_ROUND_STATES, default_cell_runner, make_longcontext_cell_runner, prompt_fit_budget,
-    resolve_timing_rounds, run_timing_rounds,
+    LONGCONTEXT_BATTERY_ITEM,
+    LONGCONTEXT_MAX_TOKENS_BY_TASK,
+    TEMPLATE_MARGIN,
+    TIMING_BATTERY_ITEM,
+    TIMING_DEFAULT_ROUNDS,
+    TIMING_MAX_TOKENS,
+    TIMING_PROMPT,
+    TIMING_ROUND_STATES,
+    default_cell_runner,
+    make_longcontext_cell_runner,
+    prompt_fit_budget,
+    resolve_timing_rounds,
+    run_timing_rounds,
 )
 from hang_rail import (  # noqa: F401
-    HANG_SIGNATURE_RE, detect_hang_signature, make_live_hang_check_fn, poll_journal_for_hang,
+    HANG_SIGNATURE_RE,
+    detect_hang_signature,
+    make_live_hang_check_fn,
+    poll_journal_for_hang,
 )
 from queue_file import (  # noqa: F401
-    QUEUE_FORMAT_VERSION, SPEC_DECODE_VALUES, STOP_POLICIES, TIMING_ROUNDS_CELL_KEY,
-    QueueValidationError, compute_deadline_dt, load_queue, resolve_cell, resolve_queue_cells,
+    QUEUE_FORMAT_VERSION,
+    SPEC_DECODE_VALUES,
+    STOP_POLICIES,
+    TIMING_ROUNDS_CELL_KEY,
+    QueueValidationError,
+    compute_deadline_dt,
+    load_queue,
+    resolve_cell,
+    resolve_queue_cells,
     validate_queue,
 )
 from queue_state import (  # noqa: F401
-    ABORTED_HANG, CELL_STATES, COMPLETED, CORRECTNESS_FAILURE_REASONS, FAILED, PENDING,
-    QUEUE_ABORTED_HANG, QUEUE_COMPLETED, QUEUE_PAUSED_RESUMABLE, QUEUE_RUNNING, RUNNING,
-    SKIPPED_PROPAGATED, TERMINAL_QUEUE_STATES, apply_interrupted_rule, default_state_path,
-    init_state, load_state, propagate_skips, re_arm_cells, re_arm_state, save_state,
+    ABORTED_HANG,
+    CELL_STATES,
+    COMPLETED,
+    CORRECTNESS_FAILURE_REASONS,
+    FAILED,
+    PENDING,
+    QUEUE_ABORTED_HANG,
+    QUEUE_COMPLETED,
+    QUEUE_PAUSED_RESUMABLE,
+    QUEUE_RUNNING,
+    RUNNING,
+    SKIPPED_PROPAGATED,
+    TERMINAL_QUEUE_STATES,
+    apply_interrupted_rule,
+    default_state_path,
+    init_state,
+    load_state,
+    propagate_skips,
+    re_arm_cells,
+    re_arm_state,
+    save_state,
 )
 
 MODULE_DIR = Path(__file__).resolve().parent
@@ -393,7 +444,7 @@ def run_queue(
         if container_controller is not None:
             try:
                 container_controller.start()
-            except Exception:
+            except Exception:  # noqa: BLE001 -- see below
                 pass  # never block termination on a failed restart attempt
         _restore_signal_traps(old_handlers)
 
@@ -546,7 +597,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     """`batch verify --run <dir>`: dispatch seam only in this module -- `verify_run.py` owns the
     verification. A clean, explicit error (never a traceback) if it isn't present."""
     try:
-        import verify_run  # type: ignore  # noqa: E402
+        import verify_run  # type: ignore
     except ImportError:
         print(
             f"verify_run.py not found (WP-4 not landed yet) -- 'batch verify' is a dispatch "

@@ -30,7 +30,6 @@ from typing import Any, Dict, NamedTuple, Tuple
 import run_harness
 from longcontext_corpus import insert_at_fraction, insert_multiple
 
-
 # ---------------------------------------------------------------------------------------------
 # Task battery: single-needle literal recall, multi-needle ordered readback, passage-anchored QA
 # ---------------------------------------------------------------------------------------------

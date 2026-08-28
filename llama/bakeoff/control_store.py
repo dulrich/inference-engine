@@ -37,10 +37,18 @@ from control_protocol import MAX_REQUEST_BYTES
 MODULE_DIR = Path(__file__).resolve().parent
 
 __all__ = [
-    "MODULE_DIR", "Paths", "resolve_state_dir", "resolve_queues_dir",
-    "tmp_path_for", "atomic_write_json", "atomic_touch",
-    "read_json_safe", "safe_read_request_bytes",
-    "flock_nonblocking_acquire", "flock_release", "probe_lock_free",
+    "MODULE_DIR",
+    "Paths",
+    "atomic_touch",
+    "atomic_write_json",
+    "flock_nonblocking_acquire",
+    "flock_release",
+    "probe_lock_free",
+    "read_json_safe",
+    "resolve_queues_dir",
+    "resolve_state_dir",
+    "safe_read_request_bytes",
+    "tmp_path_for",
 ]
 
 

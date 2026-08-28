@@ -75,6 +75,20 @@ from typing import Any, Dict, List, Optional
 # directory itself (see `tests/test_*.py`). Kept bound here (not only in the submodules) because
 # `tests/test_haystack.py` reads `longcontext.run_harness.CHARS_PER_TOKEN_ESTIMATE`.
 import run_harness  # noqa: F401
+from longcontext_cell import (  # noqa: F401
+    HAYSTACK_SHRINK_SAFETY_FACTOR,
+    MAX_HAYSTACK_ASSEMBLIES,
+    CellResult,
+    HaystackFit,
+    HaystackOverBudgetError,
+    RequestFn,
+    _assemble_haystack_fit,
+    _require_pinned_sampling,
+    build_live_request_fn,
+    run_cell,
+    run_live_battery,
+    run_position_sweep,
+)
 
 # -- re-exports: the public surface `batch.py`, `cell_runner.py`, `verify_run.py`, and every
 # -- `tests/test_*.py` have always reached for as `longcontext.<name>`. Kept at their historical
@@ -83,27 +97,48 @@ import run_harness  # noqa: F401
 # -- `_select_contiguous_passages` directly and `cell_runner.py` documents
 # -- `_assemble_haystack_fit` by name.
 from longcontext_classifier import (  # noqa: F401
-    CORE_FUNCTION_WORDS, DEGENERATE_SHAPES, MIN_CONTENT_TOKENS_FOR_HAYSTACK_OVERLAP,
-    MIN_TOKENS_FOR_COHERENCE_CHECK, MIN_TOKENS_FOR_REPETITION_CHECK, MIN_TRIALS_FOR_WILSON,
-    REPETITION_MAX_NGRAM_RATE_THRESHOLD, REPETITION_MIN_DISTINCT2_THRESHOLD, REPETITION_NGRAM_N,
-    SPECIAL_TOKEN_MIN_COUNT, SPECIAL_TOKEN_PATTERN, VERDICTS, ClassifierResult, classify_trial,
-    compute_flags, derive_trial_seed, wilson_interval,
-)
-from longcontext_cell import (  # noqa: F401
-    HAYSTACK_SHRINK_SAFETY_FACTOR, MAX_HAYSTACK_ASSEMBLIES, CellResult, HaystackFit,
-    HaystackOverBudgetError, RequestFn, _assemble_haystack_fit, _require_pinned_sampling,
-    build_live_request_fn, run_cell, run_live_battery, run_position_sweep,
+    CORE_FUNCTION_WORDS,
+    DEGENERATE_SHAPES,
+    MIN_CONTENT_TOKENS_FOR_HAYSTACK_OVERLAP,
+    MIN_TOKENS_FOR_COHERENCE_CHECK,
+    MIN_TOKENS_FOR_REPETITION_CHECK,
+    MIN_TRIALS_FOR_WILSON,
+    REPETITION_MAX_NGRAM_RATE_THRESHOLD,
+    REPETITION_MIN_DISTINCT2_THRESHOLD,
+    REPETITION_NGRAM_N,
+    SPECIAL_TOKEN_MIN_COUNT,
+    SPECIAL_TOKEN_PATTERN,
+    VERDICTS,
+    ClassifierResult,
+    classify_trial,
+    compute_flags,
+    derive_trial_seed,
+    wilson_interval,
 )
 from longcontext_corpus import (  # noqa: F401
-    CORPUS_DIR, HAYSTACK_STRUCTURE_COHERENT, MANIFEST_PATH, MODULE_DIR, HaystackAssembly,
-    _select_contiguous_passages, _snap_to_sentence_boundary, assemble_haystack,
-    insert_at_fraction, insert_multiple, load_book_text, load_corpus_manifest,
+    CORPUS_DIR,
+    HAYSTACK_STRUCTURE_COHERENT,
+    MANIFEST_PATH,
+    MODULE_DIR,
+    HaystackAssembly,
+    _select_contiguous_passages,
+    _snap_to_sentence_boundary,
+    assemble_haystack,
+    insert_at_fraction,
+    insert_multiple,
+    load_book_text,
+    load_corpus_manifest,
 )
 from longcontext_tasks import (  # noqa: F401
-    PASSAGE_QA_ITEMS, POSITION_FRACTIONS, TASKS, MultiNeedleTask, PassageQATask, SingleNeedleTask,
-    Task, TrialSpec,
+    PASSAGE_QA_ITEMS,
+    POSITION_FRACTIONS,
+    TASKS,
+    MultiNeedleTask,
+    PassageQATask,
+    SingleNeedleTask,
+    Task,
+    TrialSpec,
 )
-
 
 # ---------------------------------------------------------------------------------------------
 # CLI (offline only -- touches no Docker/network/GPU, matching sweep.py's --dry-run convention)

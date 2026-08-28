@@ -45,7 +45,6 @@ from run_harness import (
     run_quality_corpus,
 )
 
-
 # ---------------------------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------------------------
@@ -75,7 +74,7 @@ def _lineage_from_args(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def cmd_sweep(args: argparse.Namespace) -> int:
-    samples, completions, summary = run_sweep(
+    samples, _completions, summary = run_sweep(
         args.base_url, args.alias,
         cold_rounds=args.cold, warm_rounds=args.warm, hot_rounds=args.hot,
         input_tokens_target=args.input_tokens, output_tokens=args.output_tokens,
@@ -97,7 +96,7 @@ def cmd_needle(args: argparse.Namespace) -> int:
 
 def cmd_quality(args: argparse.Namespace) -> int:
     corpus = load_quality_corpus(Path(args.corpus)) if args.corpus else None
-    samples, completions = run_quality_corpus(
+    samples, _completions = run_quality_corpus(
         args.base_url, args.alias, corpus=corpus, max_tokens=args.max_tokens, timeout=args.timeout
     )
     print(json.dumps({"samples": samples}, indent=2, default=str))

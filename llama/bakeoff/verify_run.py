@@ -118,10 +118,17 @@ from typing import Any, Dict, List, Optional, Tuple
 # document -- a plain top-level import works whenever the importer has already put this
 # directory on `sys.path` (true when this file is run directly as a script, and when a test
 # under `tests/` inserts this directory itself).
-import batch  # noqa: E402  -- read-only: constants + default_state_path only, never edited/mutated
-import longcontext  # noqa: E402  -- MIN_TRIALS_FOR_WILSON, VERDICTS: consumed, never re-pinned
-import run_harness  # noqa: E402  -- REQUIRED_LINEAGE_FIELDS: consumed, never re-pinned
-import sweep  # noqa: E402  -- kv_bytes_per_token / gguf geometry: consumed, never reimplemented
+#
+# Every one of these four is consumed READ-ONLY -- this module verifies a finished run against
+# the production definitions, so re-pinning any of them here would make the check vacuous:
+#   batch        -- constants + default_state_path only; never edited or mutated
+#   longcontext  -- MIN_TRIALS_FOR_WILSON, VERDICTS: consumed, never re-pinned
+#   run_harness  -- REQUIRED_LINEAGE_FIELDS: consumed, never re-pinned
+#   sweep        -- kv_bytes_per_token / gguf geometry: consumed, never reimplemented
+import batch
+import longcontext
+import run_harness
+import sweep
 
 VERDICTS = ("pass", "fail", "unknown", "informational")
 
@@ -250,8 +257,15 @@ def load_cell_records(
         if not path.exists():
             errors.append(f"{name} missing")
             continue
+        # `line_no` is bound BEFORE the try and re-bound per file: the read itself can raise
+        # (an unreadable or undecodable file), which used to leave the name unbound and turn
+        # this function's documented "never raises" contract into an UnboundLocalError -- and,
+        # once the second file was reached, could report the FIRST file's stale line number.
+        # Line 0 honestly means "failed before any line was read".
+        line_no = 0
         try:
-            for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            for offset, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                line_no = offset
                 if not line.strip():
                     continue
                 sink.append(json.loads(line))

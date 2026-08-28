@@ -26,7 +26,6 @@ import run_harness  # noqa: E402
 import sampling_table  # noqa: E402
 import sweep  # noqa: E402
 
-
 # -------------------------------------------------------------------------------------------
 # Fixtures
 # -------------------------------------------------------------------------------------------
@@ -522,7 +521,7 @@ class TestSizeProjection(unittest.TestCase):
                 vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
             )
             self.assertEqual(spawned, [])  # never spawned -- refused before the server starts
-            cell_state = list(result["state"]["cells"].values())[0]
+            cell_state = next(iter(result["state"]["cells"].values()))
             self.assertEqual(cell_state["state"], batch.FAILED)
             self.assertEqual(cell_state["reason"], "projected_size_exceeded")
             self.assertGreater(
@@ -1161,7 +1160,7 @@ class TestRunQueueEndToEnd(unittest.TestCase):
                 calls["n"] += 1
                 return hang_line if calls["n"] == 1 else None
 
-            queue_path, result = self._run(
+            _queue_path, result = self._run(
                 queue, tmp, container_controller=controller, hang_check_fn=hang_check_fn,
             )
             self.assertEqual(result["queue_state"], batch.QUEUE_ABORTED_HANG)
@@ -1496,9 +1495,8 @@ class TestCLI(unittest.TestCase):
         from unittest import mock
 
         buf = io.StringIO()
-        with mock.patch.dict(sys.modules, {"verify_run": None}):
-            with redirect_stderr(buf):
-                code = batch.main(["verify", "--run", "/tmp/does-not-matter"])
+        with mock.patch.dict(sys.modules, {"verify_run": None}), redirect_stderr(buf):
+            code = batch.main(["verify", "--run", "/tmp/does-not-matter"])
         self.assertEqual(code, 2)
         self.assertIn("verify_run.py not found", buf.getvalue())
 
@@ -1996,7 +1994,7 @@ class TestCmdReArm(unittest.TestCase):
         from contextlib import redirect_stdout
 
         with tempfile.TemporaryDirectory() as tmp:
-            queue_path, cells, ids = self._seeded_state(tmp)
+            queue_path, _cells, ids = self._seeded_state(tmp)
             buf = io.StringIO()
             with redirect_stdout(buf):
                 code = batch.main(
@@ -2020,7 +2018,7 @@ class TestCmdReArm(unittest.TestCase):
         from contextlib import redirect_stdout
 
         with tempfile.TemporaryDirectory() as tmp:
-            queue_path, cells, ids = self._seeded_state(tmp)
+            queue_path, _cells, ids = self._seeded_state(tmp)
             buf = io.StringIO()
             with redirect_stdout(buf):
                 code = batch.main(["re-arm", "--queue", str(queue_path)])
@@ -2039,7 +2037,7 @@ class TestCmdReArm(unittest.TestCase):
         from contextlib import redirect_stderr
 
         with tempfile.TemporaryDirectory() as tmp:
-            queue_path, cells, ids = self._seeded_state(tmp)
+            queue_path, _cells, _ids = self._seeded_state(tmp)
             state_path = batch.default_state_path(queue_path)
             before = state_path.read_text(encoding="utf-8")
             buf = io.StringIO()
@@ -2058,14 +2056,13 @@ class TestCmdReArm(unittest.TestCase):
         from unittest import mock
 
         with tempfile.TemporaryDirectory() as tmp:
-            queue_path, cells, ids = self._seeded_state(tmp)
+            queue_path, _cells, ids = self._seeded_state(tmp)
             buf = io.StringIO()
             with mock.patch.object(
                 batch.subprocess, "run",
                 side_effect=AssertionError("re-arm must never call subprocess.run"),
-            ):
-                with redirect_stdout(buf):
-                    code = batch.main(["re-arm", "--queue", str(queue_path), "--cell", ids[1]])
+            ), redirect_stdout(buf):
+                code = batch.main(["re-arm", "--queue", str(queue_path), "--cell", ids[1]])
             self.assertEqual(code, 0)
 
 

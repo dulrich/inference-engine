@@ -157,7 +157,7 @@ class TestIngestHardening(unittest.TestCase):
 
     def test_already_dispositioned_id_is_never_reprocessed(self):
         _write_request(self.paths, REQ_A, "arm")
-        cd._write_disposition(self.paths, REQ_A, "done", None, lambda: datetime.now(timezone.utc))
+        cd.write_disposition(self.paths, REQ_A, "done", None, lambda: datetime.now(timezone.utc))
         # Corrupt the request body now -- idempotence must come from the disposition file
         # existing, never from re-deriving/re-validating body content.
         (self.paths.requests_dir / f"{REQ_A}.json").write_text("not json at all")
@@ -205,7 +205,7 @@ class TestStop(unittest.TestCase):
             "phase": "running", "started_at": "2026-08-24T00:00:00Z",
         }
         body.update(overrides)
-        cd._atomic_write_json(paths.live_path, body)
+        cd.atomic_write_json(paths.live_path, body)
         return body
 
     def test_stop_against_verified_live_run_writes_action_then_marker_then_disposition(self):
@@ -315,7 +315,7 @@ class TestCancel(unittest.TestCase):
             paths = _make_paths(tmp)
             queues_dir = _write_queue_stem(tmp)
             _write_request(paths, REQ_B, "start", queue_stem="ladder-v1", minutes=60, requested_at="2026-08-23T00:00:00Z")
-            cd._write_disposition(paths, REQ_B, "launch-failed", "busy", lambda: datetime.now(timezone.utc))
+            cd.write_disposition(paths, REQ_B, "launch-failed", "busy", lambda: datetime.now(timezone.utc))
             _write_request(paths, REQ_A, "cancel", target_request_id=REQ_B)
             _run_dispatch(paths, queues_dir)
             disp = json.loads((paths.dispositions_dir / f"{REQ_A}.json").read_text())
@@ -347,7 +347,7 @@ class TestCancel(unittest.TestCase):
             # claimed_at recent (within the terminalization grace window used by `_run_dispatch`'s
             # fixed now_fn) -- this test isolates the CANCEL rejection path, not phase 3's
             # separate no-launch-evidence terminalization of an abandoned claim.
-            cd._atomic_write_json(paths.claims_dir / f"{REQ_B}.json", {
+            cd.atomic_write_json(paths.claims_dir / f"{REQ_B}.json", {
                 "request_id": REQ_B, "claimed_at": "2026-08-24T00:04:30Z", "queue_stem": "ladder-v1", "minutes": 60,
             })
             _write_request(paths, REQ_A, "cancel", target_request_id=REQ_B)
@@ -365,13 +365,13 @@ class TestReplayFromAction(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
             queues_dir = _write_queue_stem(tmp)
-            cd._atomic_write_json(paths.live_path, {
+            cd.atomic_write_json(paths.live_path, {
                 "invocation_id": "req-live-inv", "request_id": "req-live-inv", "queue_stem": "ladder-v1",
                 "pid": 1, "pgid": 1, "pid_starttime": "1", "boot_id": BOOT_ID,
                 "phase": "running", "started_at": "2026-08-24T00:00:00Z",
             })
             _write_request(paths, REQ_A, "stop")
-            cd._write_action(paths, REQ_A, "stop", "req-live-inv", "req-live-inv", lambda: datetime.now(timezone.utc))
+            cd.write_action(paths, REQ_A, "stop", "req-live-inv", "req-live-inv", lambda: datetime.now(timezone.utc))
             # Marker was NOT yet created (dispatcher crashed between action-write and marker-create).
             self.assertFalse(paths.stop_marker("req-live-inv").exists())
             _run_dispatch(paths, queues_dir, pgid_alive_fn=_always_alive)
@@ -385,13 +385,13 @@ class TestReplayFromAction(unittest.TestCase):
             queues_dir = _write_queue_stem(tmp)
             # live.json now names a DIFFERENT (later) invocation -- the recorded target must never
             # be retargeted onto it.
-            cd._atomic_write_json(paths.live_path, {
+            cd.atomic_write_json(paths.live_path, {
                 "invocation_id": "req-later-inv", "request_id": "req-later-inv", "queue_stem": "ladder-v1",
                 "pid": 2, "pgid": 2, "pid_starttime": "2", "boot_id": BOOT_ID,
                 "phase": "running", "started_at": "2026-08-24T01:00:00Z",
             })
             _write_request(paths, REQ_A, "stop")
-            cd._write_action(paths, REQ_A, "stop", "req-dead-inv", "req-dead-inv", lambda: datetime.now(timezone.utc))
+            cd.write_action(paths, REQ_A, "stop", "req-dead-inv", "req-dead-inv", lambda: datetime.now(timezone.utc))
             _run_dispatch(paths, queues_dir, pgid_alive_fn=_always_alive)
             self.assertFalse(paths.stop_marker("req-dead-inv").exists())
             self.assertFalse(paths.stop_marker("req-later-inv").exists())  # never retargeted
@@ -403,7 +403,7 @@ class TestReplayFromAction(unittest.TestCase):
             paths = _make_paths(tmp)
             queues_dir = _write_queue_stem(tmp)
             _write_request(paths, REQ_A, "cancel", target_request_id=REQ_B)
-            cd._write_action(paths, REQ_A, "cancel", None, REQ_B, lambda: datetime.now(timezone.utc))
+            cd.write_action(paths, REQ_A, "cancel", None, REQ_B, lambda: datetime.now(timezone.utc))
             _run_dispatch(paths, queues_dir)
             target_disp = json.loads((paths.dispositions_dir / f"{REQ_B}.json").read_text())
             cancel_disp = json.loads((paths.dispositions_dir / f"{REQ_A}.json").read_text())
@@ -413,7 +413,7 @@ class TestReplayFromAction(unittest.TestCase):
 
 class TestTerminalizationGrace(unittest.TestCase):
     def _claim(self, paths, request_id, claimed_at):
-        cd._atomic_write_json(paths.claims_dir / f"{request_id}.json", {
+        cd.atomic_write_json(paths.claims_dir / f"{request_id}.json", {
             "request_id": request_id, "claimed_at": claimed_at, "queue_stem": "ladder-v1", "minutes": 60,
         })
 
@@ -439,7 +439,7 @@ class TestTerminalizationGrace(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
             self._claim(paths, REQ_A, "2026-08-24T00:04:59Z")  # 1s old -- would never clear grace
-            cd._atomic_write_json(paths.results_dir / f"{REQ_A}.json", {
+            cd.atomic_write_json(paths.results_dir / f"{REQ_A}.json", {
                 "invocation_id": REQ_A, "stage": "busy",
             })
             now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=timezone.utc)
@@ -451,7 +451,7 @@ class TestTerminalizationGrace(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
             self._claim(paths, REQ_A, "2026-08-24T00:00:00Z")
-            cd._atomic_write_json(paths.results_dir / f"{REQ_A}.json", {
+            cd.atomic_write_json(paths.results_dir / f"{REQ_A}.json", {
                 "invocation_id": REQ_A, "stage": "wrapper-started",
                 "pid": 999, "pgid": 999, "pid_starttime": "1", "boot_id": BOOT_ID,
             })
@@ -464,7 +464,7 @@ class TestTerminalizationGrace(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
             self._claim(paths, REQ_A, "2026-08-24T00:00:00Z")
-            cd._atomic_write_json(paths.results_dir / f"{REQ_A}.json", {
+            cd.atomic_write_json(paths.results_dir / f"{REQ_A}.json", {
                 "invocation_id": REQ_A, "stage": "wrapper-started",
                 "pid": 999, "pgid": 999, "pid_starttime": "1", "boot_id": BOOT_ID,
             })
@@ -476,7 +476,7 @@ class TestTerminalizationGrace(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
             self._claim(paths, REQ_A, "2026-08-24T00:00:00Z")
-            cd._atomic_write_json(paths.results_dir / f"{REQ_A}.json", {
+            cd.atomic_write_json(paths.results_dir / f"{REQ_A}.json", {
                 "invocation_id": REQ_A, "stage": "exited",
                 "run_exit": 0, "verify_exit": 0, "ended_at": "2026-08-24T00:02:00Z",
             })
@@ -489,8 +489,8 @@ class TestTerminalizationGrace(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
             self._claim(paths, REQ_A, "2026-08-24T00:00:00Z")
-            cd._write_disposition(paths, REQ_A, "launch-failed", "no-launch-evidence", lambda: datetime.now(timezone.utc))
-            cd._atomic_write_json(paths.results_dir / f"{REQ_A}.json", {
+            cd.write_disposition(paths, REQ_A, "launch-failed", "no-launch-evidence", lambda: datetime.now(timezone.utc))
+            cd.atomic_write_json(paths.results_dir / f"{REQ_A}.json", {
                 "invocation_id": REQ_A, "stage": "wrapper-started",
                 "pid": 1, "pgid": 1, "pid_starttime": "1", "boot_id": BOOT_ID,
             })
@@ -511,7 +511,7 @@ class TestJanitor(unittest.TestCase):
             "phase": "running", "started_at": "2026-08-24T00:00:00Z",
         }
         body.update(overrides)
-        cd._atomic_write_json(paths.live_path, body)
+        cd.atomic_write_json(paths.live_path, body)
         return body
 
     def test_group_dead_runs_full_recovery_and_composes_crashed_last_run(self):
@@ -645,7 +645,7 @@ class TestJanitor(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
             self._live(paths, invocation_id=REQ_A, request_id=REQ_A)
-            cd._atomic_write_json(paths.claims_dir / f"{REQ_A}.json", {
+            cd.atomic_write_json(paths.claims_dir / f"{REQ_A}.json", {
                 "request_id": REQ_A, "claimed_at": "2026-08-24T00:00:00Z", "queue_stem": "ladder-v1", "minutes": 60,
             })
             anomalies = cd.janitor_phase(
@@ -682,7 +682,7 @@ class TestReadJsonSafeAnomalies(unittest.TestCase):
     def test_genuinely_absent_file_is_silent(self):
         with tempfile.TemporaryDirectory() as tmp:
             anomalies: list = []
-            result = cd._read_json_safe(Path(tmp) / "does-not-exist.json", anomalies=anomalies)
+            result = cd.read_json_safe(Path(tmp) / "does-not-exist.json", anomalies=anomalies)
             self.assertIsNone(result)
             self.assertEqual(anomalies, [])
 
@@ -691,7 +691,7 @@ class TestReadJsonSafeAnomalies(unittest.TestCase):
             path = Path(tmp) / "big.json"
             path.write_text(json.dumps({"pad": "x" * 100}))
             anomalies: list = []
-            result = cd._read_json_safe(path, max_bytes=10, anomalies=anomalies)
+            result = cd.read_json_safe(path, max_bytes=10, anomalies=anomalies)
             self.assertIsNone(result)
             self.assertEqual(anomalies, ["unreadable-control-file: big.json"])
 
@@ -700,7 +700,7 @@ class TestReadJsonSafeAnomalies(unittest.TestCase):
             path = Path(tmp) / "garbage.json"
             path.write_text("{not json")
             anomalies: list = []
-            result = cd._read_json_safe(path, anomalies=anomalies)
+            result = cd.read_json_safe(path, anomalies=anomalies)
             self.assertIsNone(result)
             self.assertEqual(anomalies, ["unreadable-control-file: garbage.json"])
 
@@ -708,9 +708,9 @@ class TestReadJsonSafeAnomalies(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "good.json"
             path.write_text(json.dumps({"a": 1}))
-            self.assertEqual(cd._read_json_safe(path), {"a": 1})  # no anomalies= at all -- unchanged default
+            self.assertEqual(cd.read_json_safe(path), {"a": 1})  # no anomalies= at all -- unchanged default
             anomalies: list = []
-            self.assertEqual(cd._read_json_safe(path, anomalies=anomalies), {"a": 1})
+            self.assertEqual(cd.read_json_safe(path, anomalies=anomalies), {"a": 1})
             self.assertEqual(anomalies, [])
 
 
@@ -719,44 +719,44 @@ class TestWireStateProjection(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
             # pending -- nothing at all.
-            self.assertEqual(cd._project_request_state(paths, REQ_A), ("pending", None))
+            self.assertEqual(cd.project_request_state(paths, REQ_A), ("pending", None))
             # claimed.
-            cd._atomic_write_json(paths.claims_dir / f"{REQ_A}.json", {"request_id": REQ_A})
-            self.assertEqual(cd._project_request_state(paths, REQ_A), ("claimed", None))
+            cd.atomic_write_json(paths.claims_dir / f"{REQ_A}.json", {"request_id": REQ_A})
+            self.assertEqual(cd.project_request_state(paths, REQ_A), ("claimed", None))
             # running -- live.json names it.
-            cd._atomic_write_json(paths.live_path, {"request_id": REQ_A, "invocation_id": REQ_A})
-            self.assertEqual(cd._project_request_state(paths, REQ_A), ("running", None))
+            cd.atomic_write_json(paths.live_path, {"request_id": REQ_A, "invocation_id": REQ_A})
+            self.assertEqual(cd.project_request_state(paths, REQ_A), ("running", None))
             # disposition wins over everything else.
-            cd._write_disposition(paths, REQ_A, "done", None, lambda: datetime.now(timezone.utc))
-            self.assertEqual(cd._project_request_state(paths, REQ_A), ("done", None))
+            cd.write_disposition(paths, REQ_A, "done", None, lambda: datetime.now(timezone.utc))
+            self.assertEqual(cd.project_request_state(paths, REQ_A), ("done", None))
 
 
 class TestLastRunDispositionMapping(unittest.TestCase):
     def test_clean_iff_both_exit_codes_zero(self):
-        self.assertEqual(cd._map_last_run_disposition(0, 0, False), "clean")
+        self.assertEqual(cd.map_last_run_disposition(0, 0, False), "clean")
 
     def test_deadline_or_stop_pause_is_still_clean_exit_zero(self):
         # batch.py exits 0 for BOTH completion and a deadline/stop pause -- run_exit alone
         # cannot distinguish them, and per the pin it doesn't need to (queue state is surfaced
         # separately).
-        self.assertEqual(cd._map_last_run_disposition(0, 0, False), "clean")
+        self.assertEqual(cd.map_last_run_disposition(0, 0, False), "clean")
 
     def test_nonzero_run_exit_needs_attention(self):
         for code in (1, 130):
-            self.assertEqual(cd._map_last_run_disposition(code, 0, False), "needs-attention")
+            self.assertEqual(cd.map_last_run_disposition(code, 0, False), "needs-attention")
 
     def test_nonzero_verify_exit_needs_attention(self):
         for code in (1, 2):
-            self.assertEqual(cd._map_last_run_disposition(0, code, False), "needs-attention")
+            self.assertEqual(cd.map_last_run_disposition(0, code, False), "needs-attention")
 
     def test_late_launch_anomaly_forces_needs_attention_even_over_clean_exit(self):
-        self.assertEqual(cd._map_last_run_disposition(0, 0, True), "needs-attention")
+        self.assertEqual(cd.map_last_run_disposition(0, 0, True), "needs-attention")
 
     def test_crashed_is_never_returned_by_this_function(self):
         for run_exit in (None, 0, 1):
             for verify_exit in (None, 0, 1):
                 for late in (False, True):
-                    self.assertNotEqual(cd._map_last_run_disposition(run_exit, verify_exit, late), "crashed")
+                    self.assertNotEqual(cd.map_last_run_disposition(run_exit, verify_exit, late), "crashed")
 
 
 class TestPrune(unittest.TestCase):
@@ -796,7 +796,7 @@ class TestPrune(unittest.TestCase):
             live_marker = paths.stop_marker("req-live-inv")
             dead_marker.touch()
             live_marker.touch()
-            cd._atomic_write_json(paths.live_path, {"invocation_id": "req-live-inv"})
+            cd.atomic_write_json(paths.live_path, {"invocation_id": "req-live-inv"})
             cd.prune_phase(paths, lambda: datetime.now(timezone.utc))
             self.assertFalse(dead_marker.exists())
             self.assertTrue(live_marker.exists())
@@ -824,12 +824,12 @@ class TestStatusShape(unittest.TestCase):
     def test_live_and_last_run_projected_shapes(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
-            cd._atomic_write_json(paths.live_path, {
+            cd.atomic_write_json(paths.live_path, {
                 "invocation_id": "req-inv", "request_id": "req-inv", "queue_stem": "ladder-v1",
                 "pid": 1, "pgid": 1, "pid_starttime": "1", "boot_id": BOOT_ID,
                 "phase": "running", "started_at": "2026-08-24T00:00:00Z",
             })
-            cd._atomic_write_json(paths.last_run_path, {
+            cd.atomic_write_json(paths.last_run_path, {
                 "invocation_id": "req-inv", "request_id": "req-inv", "ended_at": "2026-08-23T23:00:00Z",
                 "run_exit": 0, "verify_exit": 0, "disposition": "clean",
             })
@@ -850,7 +850,7 @@ class TestStatusShape(unittest.TestCase):
             paths = _make_paths(tmp)
             _write_request(paths, REQ_B, "arm", requested_at="2026-08-24T00:00:01Z")
             _write_request(paths, REQ_A, "arm", requested_at="2026-08-24T00:00:00Z")
-            cd._write_disposition(paths, REQ_A, "done", None, lambda: datetime.now(timezone.utc))
+            cd.write_disposition(paths, REQ_A, "done", None, lambda: datetime.now(timezone.utc))
             now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=timezone.utc)
             status = cd.compose_status(paths, lambda: now, 0, [])
             self.assertEqual([r["request_id"] for r in status["requests"]], [REQ_A, REQ_B])
@@ -915,8 +915,8 @@ class TestCliArgParsing(unittest.TestCase):
     def test_state_dir_and_queues_dir_resolve_from_env_when_flag_absent(self):
         parser = cd.build_arg_parser()
         args = parser.parse_args(["dispatch", "--state-dir", "/tmp/x", "--queues-dir", "/tmp/y"])
-        self.assertEqual(str(cd._resolve_state_dir(args)), "/tmp/x")
-        self.assertEqual(str(cd._resolve_queues_dir(args)), "/tmp/y")
+        self.assertEqual(str(cd.resolve_state_dir(args)), "/tmp/x")
+        self.assertEqual(str(cd.resolve_queues_dir(args)), "/tmp/y")
 
     def test_result_write_requires_invocation_id_and_stage(self):
         parser = cd.build_arg_parser()

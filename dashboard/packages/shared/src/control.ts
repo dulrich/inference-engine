@@ -76,6 +76,18 @@ export const ControlSectionSchema = z.object({
 });
 export type ControlSection = z.infer<typeof ControlSectionSchema>;
 
+// ---- shared grammars and bounds. Single-sourced here (WP-R4) so the POST pre-validation
+// below and the on-disk `control-request-v1` schema further down cannot drift apart; each
+// mirrors a constant of the same name in `llama/bakeoff/control_protocol.py`.
+
+/** `control_protocol.QUEUE_STEM_RE`. */
+export const CONTROL_QUEUE_STEM_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+/** `control_protocol.REQUEST_BASENAME_RE`, minus the `.json` suffix. */
+export const CONTROL_REQUEST_ID_PATTERN = /^req-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$/;
+/** `control_protocol.MINUTES_MIN` / `MINUTES_MAX`. */
+export const CONTROL_MINUTES_MIN = 15;
+export const CONTROL_MINUTES_MAX = 480;
+
 // ---- POST /api/control/* request bodies (API pre-validation only — UX guardrails; the
 // host dispatcher re-validates fail-closed and is the sole authority) -----------------
 
@@ -83,19 +95,54 @@ export type ControlSection = z.infer<typeof ControlSectionSchema>;
  * own ingest validation (plan "Dispatcher" section (1)) — kept in lockstep by hand, not
  * by import, since the two live in different languages/processes. */
 export const ControlStartRequestSchema = z.object({
-  queueStem: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "queueStem must match ^[a-z0-9][a-z0-9-]*$"),
-  minutes: z.number().int().min(15).max(480),
+  queueStem: z.string().regex(CONTROL_QUEUE_STEM_PATTERN, "queueStem must match ^[a-z0-9][a-z0-9-]*$"),
+  minutes: z.number().int().min(CONTROL_MINUTES_MIN).max(CONTROL_MINUTES_MAX),
 });
 export type ControlStartRequest = z.infer<typeof ControlStartRequestSchema>;
 
 /** `POST /api/control/cancel` body. `targetRequestId` grammar is the pinned request-id
- * grammar (plan "Filesystem contract": `req-<UTCcompact>-<16 hex>`). */
+ * grammar (plan "Filesystem contract": `req-<UTCcompact>-<16 hex>`). Narrower than the
+ * on-disk `target_request_id` grammar below on purpose: the API can only ever cancel a
+ * request it wrote, never the nightly. */
 export const ControlCancelRequestSchema = z.object({
   targetRequestId: z
     .string()
-    .regex(/^req-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$/, "targetRequestId must match the request-id grammar"),
+    .regex(CONTROL_REQUEST_ID_PATTERN, "targetRequestId must match the request-id grammar"),
 });
 export type ControlCancelRequest = z.infer<typeof ControlCancelRequestSchema>;
+
+// ---- the on-disk `control-request-v1` drop-box file (WP-R4) --------------------------
+//
+// The API is the ONLY producer of these files and the host dispatcher
+// (`llama/bakeoff/control_protocol.py`) is the only consumer. WP-R4 made the dispatcher
+// REQUIRE `schema === CONTROL_REQUEST_SCHEMA_V1`: absent, wrong-typed, or unknown is now a
+// fail-closed `rejected` disposition rather than a tolerated extra key. The literal lives
+// here, once, so the producer stamps the same string this schema validates; the committed
+// fixtures under `apps/api/fixtures/control/contract-v1/` are parsed by BOTH this schema and
+// the Python validator, from the same bytes.
+
+/** `control_protocol.SCHEMA_REQUEST`. */
+export const CONTROL_REQUEST_SCHEMA_V1 = "control-request-v1";
+
+/** `control_protocol.HOST_ID_RE` — the dispatcher accepts a nightly id as a cancel target
+ * on disk even though the API itself never writes one. */
+export const CONTROL_TARGET_ID_PATTERN = /^(req-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}|nightly-[0-9]{8})$/;
+
+/** The `control-request-v1` file the API drops into `CONTROL_REQUESTS_DIR`. Field names are
+ * snake_case here and nowhere else on this wire: this is the Python dispatcher's shape, not
+ * the browser's. Per-action requirements (`start` needs `queue_stem` + `minutes`, `cancel`
+ * needs `target_request_id`) are enforced by the dispatcher, which is the sole authority;
+ * this schema pins the version, the grammars, and the bounds. */
+export const ControlRequestFileSchema = z.object({
+  schema: z.literal(CONTROL_REQUEST_SCHEMA_V1),
+  request_id: z.string().regex(CONTROL_REQUEST_ID_PATTERN, "request_id must match the request-id grammar"),
+  action: ControlActionSchema,
+  queue_stem: z.string().regex(CONTROL_QUEUE_STEM_PATTERN, "queue_stem must match ^[a-z0-9][a-z0-9-]*$").optional(),
+  minutes: z.number().int().min(CONTROL_MINUTES_MIN).max(CONTROL_MINUTES_MAX).optional(),
+  target_request_id: z.string().regex(CONTROL_TARGET_ID_PATTERN, "target_request_id must match the host-id grammar").optional(),
+  requested_at: z.string().min(1),
+});
+export type ControlRequestFile = z.infer<typeof ControlRequestFileSchema>;
 
 /** Every `POST /api/control/*` success response. */
 export const ControlAcceptedResponseSchema = z.object({

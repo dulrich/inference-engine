@@ -1,0 +1,77 @@
+{
+  "generated_at": "2026-08-27T12:10:00Z",
+  "armed": true,
+  "live": {
+    "request_id": "nightly-20260827",
+    "queue_stem": "contract-queue",
+    "phase": "running",
+    "started_at": "2026-08-27T11:00:00Z"
+  },
+  "last_run": {
+    "request_id": "inv-contract-0002",
+    "ended_at": "2026-08-27T09:00:00Z",
+    "run_exit": 0,
+    "verify_exit": 0,
+    "disposition": "clean"
+  },
+  "anomalies": [],
+  "requests": [
+    {
+      "request_id": "req-20260827T120000Z-00000000000000a1",
+      "action": "disarm",
+      "state": "done",
+      "reason": null,
+      "requested_at": "2026-08-27T12:00:00.000Z"
+    },
+    {
+      "request_id": "req-20260827T120100Z-00000000000000a2",
+      "action": "arm",
+      "state": "done",
+      "reason": null,
+      "requested_at": "2026-08-27T12:01:00.000Z"
+    },
+    {
+      "request_id": "req-20260827T120200Z-00000000000000a3",
+      "action": "start",
+      "state": "claimed",
+      "reason": null,
+      "requested_at": "2026-08-27T12:02:00.000Z"
+    },
+    {
+      "request_id": "req-20260827T120300Z-00000000000000a4",
+      "action": "stop",
+      "state": "done",
+      "reason": "stop-delivered",
+      "requested_at": "2026-08-27T12:03:00.000Z"
+    },
+    {
+      "request_id": "req-20260827T120400Z-00000000000000a5",
+      "action": "cancel",
+      "state": "rejected",
+      "reason": "already-claimed",
+      "requested_at": "2026-08-27T12:04:00.000Z"
+    },
+    {
+      "request_id": "req-20260827T120500Z-00000000000000b1",
+      "action": "arm",
+      "state": "rejected",
+      "reason": "malformed: schema is not control-request-v1",
+      "requested_at": "2026-08-27T12:05:00.000Z"
+    },
+    {
+      "request_id": "req-20260827T120600Z-00000000000000b2",
+      "action": "start",
+      "state": "rejected",
+      "reason": "malformed: schema is not control-request-v1",
+      "requested_at": "2026-08-27T12:06:00.000Z"
+    },
+    {
+      "request_id": "req-20260827T120700Z-00000000000000b3",
+      "action": "stop",
+      "state": "rejected",
+      "reason": "malformed: schema is not control-request-v1",
+      "requested_at": "2026-08-27T12:07:00.000Z"
+    }
+  ],
+  "ignored_invalid_names": 0
+}

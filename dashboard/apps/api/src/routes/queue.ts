@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { CellState, ControlSection, QueueListItem, QueueListResponse, QueueState } from "@bench-dashboard/shared";
-import { ControlSectionSchema } from "@bench-dashboard/shared";
+import { CellStateSchema, ControlSectionSchema, QueueStateSchema } from "@bench-dashboard/shared";
 import type { Hono } from "hono";
 import { config } from "../config.ts";
 import { computeEtaForQueue } from "../queue/eta.ts";
@@ -37,14 +37,13 @@ import { computeEtaForQueue } from "../queue/eta.ts";
 // to the 4 fields the estimator needs and passes every cell through unfiltered (state
 // filtering is `computeEtaForQueue`'s own job, not this route's).
 
-const KNOWN_CELL_STATES: readonly CellState[] = [
-  "pending",
-  "running",
-  "completed",
-  "failed",
-  "skipped-propagated",
-  "aborted-hang",
-];
+// The known-value lists below are DERIVED from the shared zod enums (`.options`), never
+// re-typed as parallel literal arrays (WP-R4, review finding F4). A parallel array is a second
+// place a vocabulary can be edited, and the failure mode is silent: a state the enum knows about
+// but the array does not is dropped to `null` here and renders as "no state" rather than as an
+// error. Membership is identical to the arrays these replaced — this is de-duplication, not
+// redefinition, and `queue.test.ts` pins the exact tuples.
+const KNOWN_CELL_STATES: readonly CellState[] = CellStateSchema.options;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -60,7 +59,7 @@ function asCellState(value: unknown): CellState | null {
   return s !== null && (KNOWN_CELL_STATES as readonly string[]).includes(s) ? (s as CellState) : null;
 }
 
-const KNOWN_QUEUE_STATES: readonly QueueState[] = ["running", "paused-resumable", "completed", "aborted-hang"];
+const KNOWN_QUEUE_STATES: readonly QueueState[] = QueueStateSchema.options;
 function asQueueState(value: unknown): QueueState | null {
   const s = asString(value);
   return s !== null && (KNOWN_QUEUE_STATES as readonly string[]).includes(s) ? (s as QueueState) : null;
@@ -140,14 +139,7 @@ function parseStateFile(raw: unknown): ParsedStateFile {
   if (!isRecord(raw)) throw new Error("state file is not a JSON object");
   if (!isRecord(raw.cells)) throw new Error("state file 'cells' is not an object");
 
-  const counts: Record<CellState, number> = {
-    pending: 0,
-    running: 0,
-    completed: 0,
-    failed: 0,
-    "skipped-propagated": 0,
-    "aborted-hang": 0,
-  };
+  const counts = zeroedCellCounts();
   const cellsByAlias = new Map<string, StateCellMatch>();
 
   for (const entry of Object.values(raw.cells)) {
@@ -163,14 +155,18 @@ function parseStateFile(raw: unknown): ParsedStateFile {
   return { queueState: asQueueState(raw.queue_state), cellsByAlias, counts };
 }
 
-const NULL_CELL_COUNTS: Record<CellState, number | null> = {
-  pending: null,
-  running: null,
-  completed: null,
-  failed: null,
-  "skipped-propagated": null,
-  "aborted-hang": null,
-};
+/** Every cell state at 0, in enum order. A fresh object per call — `parseStateFile` mutates
+ * its copy. Derived from `KNOWN_CELL_STATES` so adding a state to the shared enum can never
+ * leave a counter silently absent from the wire. */
+function zeroedCellCounts(): Record<CellState, number> {
+  return Object.fromEntries(KNOWN_CELL_STATES.map((state) => [state, 0])) as Record<CellState, number>;
+}
+
+/** The all-null counts for a queue with no state file at all (nothing is known yet) — never a
+ * mix of `null` and counted. Shared, read-only, same as before; only its construction changed. */
+const NULL_CELL_COUNTS: Record<CellState, number | null> = Object.fromEntries(
+  KNOWN_CELL_STATES.map((state) => [state, null]),
+) as Record<CellState, number | null>;
 
 /** The route's full logic, over an explicit `queuesDir` — factored out of the Hono
  * handler (which just calls this with `config.queuesDir`) so tests can exercise every

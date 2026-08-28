@@ -1,8 +1,12 @@
 import { linkSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { ControlAcceptedResponse, ControlAction } from "@bench-dashboard/shared";
-import { ControlCancelRequestSchema, ControlStartRequestSchema } from "@bench-dashboard/shared";
+import type { ControlAcceptedResponse, ControlRequestFile } from "@bench-dashboard/shared";
+import {
+  CONTROL_REQUEST_SCHEMA_V1,
+  ControlCancelRequestSchema,
+  ControlStartRequestSchema,
+} from "@bench-dashboard/shared";
 import type { Hono } from "hono";
 import { config } from "../config.ts";
 
@@ -21,15 +25,14 @@ import { config } from "../config.ts";
 
 const MAX_ID_ATTEMPTS = 5;
 
-export interface ControlRequestFileV1 {
-  schema: "control-request-v1";
-  request_id: string;
-  action: ControlAction;
-  queue_stem?: string;
-  minutes?: number;
-  target_request_id?: string;
-  requested_at: string;
-}
+/** The on-disk drop-box file this route writes. WP-R4 moved the shape itself to
+ * `@bench-dashboard/shared`'s `ControlRequestFileSchema` (a real zod schema, so the fixtures
+ * under `apps/api/fixtures/control/contract-v1/` can be parsed by the same definition the
+ * producer is typed against) and the version literal to `CONTROL_REQUEST_SCHEMA_V1` (the host
+ * dispatcher now REQUIRES it — an absent/unknown/wrong-typed `schema` is a fail-closed
+ * rejection, not a tolerated extra key). This alias is kept for the existing call sites and
+ * tests that import it by name. */
+export type ControlRequestFileV1 = ControlRequestFile;
 
 /** `req-<UTCcompact yyyymmddTHHMMSSZ>-<16 hex from randomUUID>` (plan "Filesystem
  * contract", cycle-1 M3 pin). Exported so tests can exercise the id-collision retry path
@@ -99,7 +102,7 @@ function unconfiguredResult(): ControlActionResult {
 export function recordSimpleAction(requestsDir: string | undefined, action: "arm" | "disarm" | "stop"): ControlActionResult {
   if (!requestsDir) return unconfiguredResult();
   const requestId = writeControlRequestExclusive(requestsDir, (id, requestedAt) => ({
-    schema: "control-request-v1",
+    schema: CONTROL_REQUEST_SCHEMA_V1,
     request_id: id,
     action,
     requested_at: requestedAt,
@@ -128,7 +131,7 @@ export function recordStartAction(requestsDir: string | undefined, body: unknown
   }
   const { queueStem, minutes } = parsed.data;
   const requestId = writeControlRequestExclusive(requestsDir, (id, requestedAt) => ({
-    schema: "control-request-v1",
+    schema: CONTROL_REQUEST_SCHEMA_V1,
     request_id: id,
     action: "start",
     queue_stem: queueStem,
@@ -147,7 +150,7 @@ export function recordCancelAction(requestsDir: string | undefined, body: unknow
     return { status: 400, body: { error: parsed.error.issues.map((issue) => issue.message).join("; ") } };
   }
   const requestId = writeControlRequestExclusive(requestsDir, (id, requestedAt) => ({
-    schema: "control-request-v1",
+    schema: CONTROL_REQUEST_SCHEMA_V1,
     request_id: id,
     action: "cancel",
     target_request_id: parsed.data.targetRequestId,

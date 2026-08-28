@@ -105,7 +105,7 @@ class TestDispatcherWrapperIntegration(unittest.TestCase):
             def _write_request(request_id, action, **extra):
                 body = {
                     "schema": "control-request-v1", "request_id": request_id, "action": action,
-                    "requested_at": cd._iso(datetime.now(timezone.utc)),
+                    "requested_at": cd.iso_z(datetime.now(timezone.utc)),
                 }
                 body.update(extra)
                 (paths.requests_dir / f"{request_id}.json").write_text(json.dumps(body))
@@ -120,7 +120,7 @@ class TestDispatcherWrapperIntegration(unittest.TestCase):
             }
 
             # Pass 1: ingest the start request, write the claim, detach-launch the REAL
-            # run-window.sh (control_dispatcher.py's real `_default_launch` -- the only
+            # run-window.sh (control_phases.py's real `default_launch` -- the only
             # non-default seam here is the env it hands the child, patched onto THIS process's
             # os.environ so the real launch path's own `dict(os.environ)` copy picks it up).
             with mock.patch.dict(os.environ, env_overrides):

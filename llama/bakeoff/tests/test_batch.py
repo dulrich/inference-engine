@@ -1,7 +1,13 @@
 """Queue-driven batch runner (plan longcontext-pow2-overnight-campaign.md WP-1). No live
 Docker/GPU execution anywhere in this suite -- `scratch_server_fn`/`container_controller`/
 `hang_check_fn`/`vram_*_bytes_fn`/`now_fn` are always fakes; `run_queue` never falls through to
-its real (Docker/sysfs-touching) defaults in any test here."""
+its real (Docker/sysfs-touching) defaults in any test here.
+
+WP-R1: `resolve_queue_cells` now returns typed `cell_model.ResolvedCell` values instead of plain
+dicts, so cell reads here are attribute reads (`cell.cell_id`, `cell.queue.sampling_arm`) rather
+than the former dict/underscore-key indexing. The scratch-server seam still speaks plain dicts --
+`fake_scratch_server_factory` below receives `cell.as_sweep_cell()`, exactly as `sweep.py` does.
+The identity contract itself is locked separately, by `tests/test_cell_identity.py`."""
 
 import json
 import sys
@@ -113,7 +119,7 @@ def scripted_cell_runner(outcomes_by_cell_id, default=None):
     default = default or batch.CellOutcome("completed")
 
     def _runner(handle, cell):
-        return outcomes_by_cell_id.get(cell["cell_id"], default)
+        return outcomes_by_cell_id.get(cell.cell_id, default)
     return _runner
 
 
@@ -223,12 +229,15 @@ class TestResolveQueueCells(unittest.TestCase):
         resolved = batch.resolve_queue_cells(_minimal_queue())
         self.assertEqual(len(resolved), 4)
         first = resolved[0]
-        self.assertEqual(first["server_flags"]["-c"], 32768)
-        self.assertEqual(first["server_flags"]["-ctk"], "f16")
-        self.assertEqual(first["server_flags"]["-ngl"], 99)  # inherited from model-a base flags
-        self.assertEqual(first["_queue_model_id"], "model-a")
-        self.assertEqual(first["_sampling_arm"], "capability")
-        self.assertEqual(first["_trials"], 3)
+        self.assertEqual(first.server_flags["-c"], 32768)
+        self.assertEqual(first.server_flags["-ctk"], "f16")
+        self.assertEqual(first.server_flags["-ngl"], 99)  # inherited from model-a base flags
+        self.assertEqual(first.queue.model_id, "model-a")
+        self.assertEqual(first.queue.sampling_arm, "capability")
+        self.assertEqual(first.queue.trials, 3)
+        # Execution settings are DERIVED from the normalized flags, not separate state.
+        self.assertEqual(first.execution.context, 32768)
+        self.assertEqual(first.execution.kv_key_type, "f16")
 
     def test_gpu_weights_bytes_and_kv_attention_layers_propagate_from_model_registry(self):
         q = _minimal_queue(cells=[{
@@ -236,23 +245,26 @@ class TestResolveQueueCells(unittest.TestCase):
             "fa": "on", "battery": ["vram"], "sampling_arm": "capability", "trials": 1,
         }])
         resolved = batch.resolve_queue_cells(q)
-        self.assertEqual(resolved[0]["gpu_weights_bytes"], 6 * sweep.GIB)
-        self.assertEqual(resolved[0]["kv_attention_layers"], 10)
-        self.assertEqual(resolved[0]["server_flags"]["-ncmoe"], 32)
+        self.assertEqual(resolved[0].sweep_passthrough["gpu_weights_bytes"], 6 * sweep.GIB)
+        self.assertEqual(resolved[0].sweep_passthrough["kv_attention_layers"], 10)
+        self.assertEqual(resolved[0].server_flags["-ncmoe"], 32)
+        # ...and they reach sweep.py through the one dict adapter, unchanged.
+        self.assertEqual(resolved[0].as_sweep_cell()["gpu_weights_bytes"], 6 * sweep.GIB)
 
     def test_model_family_propagates_from_model_registry_when_present(self):
         q = _minimal_queue()
         q["models"]["model-a"]["model_family"] = "gemma4"
         resolved = batch.resolve_queue_cells(q)
-        self.assertEqual(resolved[0]["model_family"], "gemma4")
+        self.assertEqual(resolved[0].model_family, "gemma4")
 
     def test_model_family_absent_when_registry_omits_it(self):
         resolved = batch.resolve_queue_cells(_minimal_queue())  # model-a carries no model_family
-        self.assertNotIn("model_family", resolved[0])
+        self.assertIsNone(resolved[0].model_family)
+        self.assertNotIn("model_family", resolved[0].as_sweep_cell())
 
     def test_cell_ids_are_distinct(self):
         resolved = batch.resolve_queue_cells(_minimal_queue())
-        ids = [c["cell_id"] for c in resolved]
+        ids = [c.cell_id for c in resolved]
         self.assertEqual(len(ids), len(set(ids)))
 
     def test_colliding_cell_ids_raise(self):
@@ -298,12 +310,12 @@ class TestStateMachinePrimitives(unittest.TestCase):
         resolved = batch.resolve_queue_cells(_minimal_queue())
         state = batch.init_state(resolved)
         for cell in resolved:
-            self.assertEqual(state["cells"][cell["cell_id"]]["alias"], cell["alias"])
+            self.assertEqual(state["cells"][cell.cell_id]["alias"], cell.alias)
 
     def test_apply_interrupted_rule_marks_running_as_failed_interrupted(self):
         resolved = batch.resolve_queue_cells(_minimal_queue())
         state = batch.init_state(resolved)
-        crashed_id = resolved[0]["cell_id"]
+        crashed_id = resolved[0].cell_id
         state["cells"][crashed_id]["state"] = batch.RUNNING
         changed = batch.apply_interrupted_rule(state)
         self.assertEqual(changed, [crashed_id])
@@ -313,10 +325,10 @@ class TestStateMachinePrimitives(unittest.TestCase):
     def test_apply_interrupted_rule_preserves_alias(self):
         resolved = batch.resolve_queue_cells(_minimal_queue())
         state = batch.init_state(resolved)
-        crashed_id = resolved[0]["cell_id"]
+        crashed_id = resolved[0].cell_id
         state["cells"][crashed_id]["state"] = batch.RUNNING
         batch.apply_interrupted_rule(state)
-        self.assertEqual(state["cells"][crashed_id]["alias"], resolved[0]["alias"])
+        self.assertEqual(state["cells"][crashed_id]["alias"], resolved[0].alias)
 
     def test_apply_interrupted_rule_is_a_noop_when_nothing_is_running(self):
         resolved = batch.resolve_queue_cells(_minimal_queue())
@@ -326,7 +338,7 @@ class TestStateMachinePrimitives(unittest.TestCase):
     def test_re_arm_resets_everything_but_completed(self):
         resolved = batch.resolve_queue_cells(_minimal_queue())
         state = batch.init_state(resolved)
-        ids = [c["cell_id"] for c in resolved]
+        ids = [c.cell_id for c in resolved]
         state["cells"][ids[0]]["state"] = batch.COMPLETED
         state["cells"][ids[1]]["state"] = batch.FAILED
         state["cells"][ids[2]]["state"] = batch.SKIPPED_PROPAGATED
@@ -355,7 +367,7 @@ class TestStateMachinePrimitives(unittest.TestCase):
             cs["state"] = batch.FAILED
         batch.re_arm_state(state)
         for cell in resolved:
-            self.assertEqual(state["cells"][cell["cell_id"]]["alias"], cell["alias"])
+            self.assertEqual(state["cells"][cell.cell_id]["alias"], cell.alias)
 
     def test_save_and_load_state_round_trips(self):
         resolved = batch.resolve_queue_cells(_minimal_queue())
@@ -386,39 +398,39 @@ class TestSkipPropagation(unittest.TestCase):
         self.queue = _minimal_queue()
         self.resolved = batch.resolve_queue_cells(self.queue)
         self.state = batch.init_state(self.resolved)
-        self.by_alias = {c["alias"]: c for c in self.resolved}
+        self.by_alias = {c.alias: c for c in self.resolved}
 
     def test_quantized_failure_propagates_to_later_larger_c_same_model_same_kv_type(self):
         failing = self.by_alias["model-a-c32k-q4"]
-        changed = batch.propagate_skips(self.resolved, self.state, failing["cell_id"])
-        larger_same_type = self.by_alias["model-a-c65k-q4"]["cell_id"]
+        changed = batch.propagate_skips(self.resolved, self.state, failing.cell_id)
+        larger_same_type = self.by_alias["model-a-c65k-q4"].cell_id
         self.assertIn(larger_same_type, changed)
         self.assertEqual(self.state["cells"][larger_same_type]["state"], batch.SKIPPED_PROPAGATED)
-        self.assertIn(failing["cell_id"], self.state["cells"][larger_same_type]["reason"])
+        self.assertIn(failing.cell_id, self.state["cells"][larger_same_type]["reason"])
 
     def test_does_not_propagate_to_f16_cells(self):
         failing = self.by_alias["model-a-c32k-q4"]
-        changed = batch.propagate_skips(self.resolved, self.state, failing["cell_id"])
-        f16_cell = self.by_alias["model-a-c65k-f16"]["cell_id"]
+        changed = batch.propagate_skips(self.resolved, self.state, failing.cell_id)
+        f16_cell = self.by_alias["model-a-c65k-f16"].cell_id
         self.assertNotIn(f16_cell, changed)
         self.assertEqual(self.state["cells"][f16_cell]["state"], batch.PENDING)
 
     def test_f16_failure_never_propagates_at_all(self):
         failing = self.by_alias["model-a-c32k-f16"]
-        changed = batch.propagate_skips(self.resolved, self.state, failing["cell_id"])
+        changed = batch.propagate_skips(self.resolved, self.state, failing.cell_id)
         self.assertEqual(changed, [])
 
     def test_does_not_propagate_to_smaller_or_equal_context(self):
         failing = self.by_alias["model-a-c65k-q4"]  # the LARGER-c quantized cell fails
-        changed = batch.propagate_skips(self.resolved, self.state, failing["cell_id"])
-        smaller = self.by_alias["model-a-c32k-q4"]["cell_id"]
+        changed = batch.propagate_skips(self.resolved, self.state, failing.cell_id)
+        smaller = self.by_alias["model-a-c32k-q4"].cell_id
         self.assertNotIn(smaller, changed)
 
     def test_only_touches_pending_cells(self):
         failing = self.by_alias["model-a-c32k-q4"]
-        larger_id = self.by_alias["model-a-c65k-q4"]["cell_id"]
+        larger_id = self.by_alias["model-a-c65k-q4"].cell_id
         self.state["cells"][larger_id]["state"] = batch.COMPLETED
-        changed = batch.propagate_skips(self.resolved, self.state, failing["cell_id"])
+        changed = batch.propagate_skips(self.resolved, self.state, failing.cell_id)
         self.assertEqual(changed, [])
         self.assertEqual(self.state["cells"][larger_id]["state"], batch.COMPLETED)
 
@@ -430,9 +442,8 @@ class TestSkipPropagation(unittest.TestCase):
 
 class TestSizeProjection(unittest.TestCase):
     def test_projection_exceeds_a_representative_real_shaped_record(self):
-        cell = {"server_flags": {"-c": 262144}}
         trials = 3
-        projected = batch.project_cell_record_size_bytes(cell, trials)
+        projected = batch.project_cell_record_size_bytes(262144, trials)
 
         realistic_sample = {
             "type": "needle_probe", "schema_version": 2, "size": "near_ceiling",
@@ -460,18 +471,70 @@ class TestSizeProjection(unittest.TestCase):
         self.assertGreater(projected, actual_bytes)
 
     def test_scales_with_trials(self):
-        cell = {"server_flags": {"-c": 524288}}
         self.assertGreater(
-            batch.project_cell_record_size_bytes(cell, 10),
-            batch.project_cell_record_size_bytes(cell, 1),
+            batch.project_cell_record_size_bytes(524288, 10),
+            batch.project_cell_record_size_bytes(524288, 1),
         )
+
+    def test_a_context_below_the_threshold_is_never_size_checked(self):
+        # The gate is `c >= LARGE_CONTEXT_SIZE_CHECK_THRESHOLD`; below it, no projection is
+        # computed at all and no cell can be refused on size.
+        cell = _longcontext_cell(context=batch.LARGE_CONTEXT_SIZE_CHECK_THRESHOLD - 1,
+                                 trials=10_000)
+        self.assertIsNone(batch._size_check_failure(cell))
+
+    def test_a_large_context_cell_over_budget_is_refused_with_both_numbers(self):
+        cell = _longcontext_cell(context=batch.LARGE_CONTEXT_SIZE_CHECK_THRESHOLD,
+                                 trials=10_000)
+        failure = batch._size_check_failure(cell)
+        self.assertIsNotNone(failure)
+        self.assertGreater(failure["projected_bytes"], run_harness.SIZE_LIMIT_BYTES)
+        self.assertEqual(failure["limit_bytes"], run_harness.SIZE_LIMIT_BYTES)
+
+    def test_a_large_context_cell_within_budget_is_admitted(self):
+        cell = _longcontext_cell(context=batch.LARGE_CONTEXT_SIZE_CHECK_THRESHOLD, trials=3)
+        self.assertIsNone(batch._size_check_failure(cell))
+
+    def test_an_absent_trial_count_is_treated_as_one_not_a_crash(self):
+        # `trials` is a required abbreviated-cell key, so a resolved queue cell always has one;
+        # a hand-built cell that doesn't must still be projectable rather than raising inside
+        # the run loop.
+        cell = _longcontext_cell(context=batch.LARGE_CONTEXT_SIZE_CHECK_THRESHOLD, trials=None)
+        self.assertIsNone(batch._size_check_failure(cell))
+
+    def test_run_queue_refuses_an_over_budget_cell_without_spawning_it(self):
+        # End-to-end: the refused cell is `failed`/`projected_size_exceeded` with its numbers in
+        # `detail`, no scratch server is ever spawned for it, and the queue still completes.
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = _minimal_queue(cells=[{
+                "model": "model-a", "alias": "model-a-c256k-huge",
+                "c": batch.LARGE_CONTEXT_SIZE_CHECK_THRESHOLD,
+                "ctk": "f16", "ctv": "f16", "fa": "on", "battery": ["vram"],
+                "sampling_arm": "capability", "trials": 10_000,
+            }])
+            queue_path = _write_queue(tmp, queue)
+            spawned = []
+            result = batch.run_queue(
+                queue_path,
+                scratch_server_fn=fake_scratch_server_factory(spawned=spawned),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
+                vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
+            )
+            self.assertEqual(spawned, [])  # never spawned -- refused before the server starts
+            cell_state = list(result["state"]["cells"].values())[0]
+            self.assertEqual(cell_state["state"], batch.FAILED)
+            self.assertEqual(cell_state["reason"], "projected_size_exceeded")
+            self.assertGreater(
+                cell_state["detail"]["projected_bytes"], run_harness.SIZE_LIMIT_BYTES,
+            )
+            self.assertEqual(result["queue_state"], batch.QUEUE_COMPLETED)
 
     def test_projection_is_comparable_against_run_harness_size_limit(self):
         # A single 262144+ cell's own trials are nowhere near the 25 MiB whole-experiment budget
         # at realistic trial counts -- the projection and the real limit are the same unit
         # (bytes) and the comparison in `run_queue` is exactly `projected > SIZE_LIMIT_BYTES`.
-        cell = {"server_flags": {"-c": 262144}}
-        projected = batch.project_cell_record_size_bytes(cell, trials=3)
+        projected = batch.project_cell_record_size_bytes(262144, trials=3)
         self.assertLess(projected, run_harness.SIZE_LIMIT_BYTES)
         self.assertIsInstance(projected, int)
 
@@ -538,18 +601,18 @@ class TestDefaultCellRunner(unittest.TestCase):
         )
 
     def test_healthy_and_verified_completes(self):
-        outcome = batch.default_cell_runner(self._handle(True, True), {})
+        outcome = batch.default_cell_runner(self._handle(True, True))
         self.assertEqual(outcome.status, "completed")
         self.assertFalse(outcome.correctness_failure)
 
     def test_unhealthy_fails_health_timeout(self):
-        outcome = batch.default_cell_runner(self._handle(False, True), {})
+        outcome = batch.default_cell_runner(self._handle(False, True))
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(outcome.reason, "health_timeout")
         self.assertFalse(outcome.correctness_failure)
 
     def test_healthy_but_unverified_fails_invalid_config(self):
-        outcome = batch.default_cell_runner(self._handle(True, False), {})
+        outcome = batch.default_cell_runner(self._handle(True, False))
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(outcome.reason, "invalid_config")
 
@@ -571,12 +634,34 @@ def _handle(healthy=True, verified=True, base_url="http://fake-bridge:9001", vra
 
 
 def _longcontext_cell(battery=("vram", "needle"), sampling_arm="capability", trials=3,
-                       model_family="gemma4", context=32768):
-    return {
-        "cell_id": "lc-cell", "alias": "lc-alias", "battery": list(battery),
-        "server_flags": {"-c": context}, "_sampling_arm": sampling_arm, "_trials": trials,
-        "model_family": model_family,
-    }
+                      model_family="gemma4", context=32768, chars_per_token=None,
+                      model_id=None, spec_decode=None, timing_rounds=None,
+                      model_host_path=None):
+    """A hand-built `ResolvedCell` for the runner/record tests.
+
+    Every knob that used to be poked onto the cell dict after construction (`_chars_per_token`,
+    `model`, `spec_decode`, `model_host_path`, ...) is a builder keyword now: `ResolvedCell` is
+    frozen, and that is the point -- a test can no longer attach a field to a cell in an order
+    that production code could not reproduce. `cell_id` is DERIVED from the identity fields
+    rather than asserted as a literal, so these fixtures exercise the same identity path
+    production does.
+    """
+    flags = {"-c": context}
+    return batch.ResolvedCell(
+        identity=batch.CellIdentity(
+            alias="lc-alias",
+            model_container_path="/models/lc/lc-model.gguf",
+            server_flags=flags,
+            model_host_path=model_host_path,
+        ),
+        execution=batch.ExecutionSettings.from_flags(flags, tuple(battery)),
+        queue=batch.QueueCellMetadata(
+            model_id=model_id, sampling_arm=sampling_arm, trials=trials,
+            chars_per_token=chars_per_token, timing_rounds=timing_rounds,
+            spec_decode=spec_decode,
+        ),
+        sweep_passthrough={} if model_family is None else {"model_family": model_family},
+    )
 
 
 def _sample(task, verdict, correct, success=True):
@@ -805,8 +890,7 @@ class TestLongcontextCellRunner(unittest.TestCase):
     def test_production_arm_with_unset_model_family_falls_back_to_capability(self):
         battery_fn = _fake_battery_fn_factory({"single_needle": [_sample("single_needle", "correct", True)]})
         runner = batch.make_longcontext_cell_runner(battery_fn=battery_fn)
-        cell = _longcontext_cell(sampling_arm="production")
-        del cell["model_family"]
+        cell = _longcontext_cell(sampling_arm="production", model_family=None)
         outcome = runner(_handle(), cell)
         self.assertEqual(outcome.detail["sampling_arm_effective"], "capability")
 
@@ -859,7 +943,7 @@ class TestLongcontextCellRunner(unittest.TestCase):
 
 # -------------------------------------------------------------------------------------------
 # Prompt-fit budget + tokenize_fn wiring (plan `bakeoff-transport-taxonomy-and-prompt-fit.md`
-# WP-2, Change 3) -- `_prompt_fit_budget`'s pure arithmetic, plus proof that `_runner` threads
+# WP-2, Change 3) -- `prompt_fit_budget`'s pure arithmetic, plus proof that `_runner` threads
 # both `token_budget` and a `tokenize_fn` bound to `handle.base_url` through the same
 # `battery_fn` seam that already carries `chars_per_token`. No live network anywhere here:
 # `run_harness.tokenize_count` itself is monkeypatched in the one test that calls through the
@@ -871,16 +955,16 @@ class TestPromptFitBudget(unittest.TestCase):
     def test_budget_is_context_minus_largest_response_cap_minus_margin(self):
         # max_tokens (256) < LONGCONTEXT_MAX_TOKENS_BY_TASK["multi_needle"] (768) -- the larger
         # of the two wins (one conservative scalar budget, brief-pinned).
-        budget = batch._prompt_fit_budget(context=32768, max_tokens=256)
+        budget = batch.prompt_fit_budget(context=32768, max_tokens=256)
         self.assertEqual(budget, 32768 - 768 - batch.TEMPLATE_MARGIN)
 
     def test_budget_uses_flat_max_tokens_when_it_exceeds_every_task_override(self):
-        budget = batch._prompt_fit_budget(context=8192, max_tokens=2000)
+        budget = batch.prompt_fit_budget(context=8192, max_tokens=2000)
         self.assertEqual(budget, 8192 - 2000 - batch.TEMPLATE_MARGIN)
 
     def test_budget_scales_with_context(self):
-        small = batch._prompt_fit_budget(context=8192, max_tokens=256)
-        large = batch._prompt_fit_budget(context=32768, max_tokens=256)
+        small = batch.prompt_fit_budget(context=8192, max_tokens=256)
+        large = batch.prompt_fit_budget(context=32768, max_tokens=256)
         self.assertLess(small, large)
         self.assertEqual(large - small, 32768 - 8192)
 
@@ -1048,7 +1132,7 @@ class TestRunQueueEndToEnd(unittest.TestCase):
             queue = _minimal_queue()
             queue_path = _write_queue(tmp, queue)
             resolved = batch.resolve_queue_cells(queue)
-            crashed_id = resolved[0]["cell_id"]
+            crashed_id = resolved[0].cell_id
             state = batch.init_state(resolved)
             state["cells"][crashed_id]["state"] = batch.RUNNING
             batch.save_state(batch.default_state_path(queue_path), state)
@@ -1081,7 +1165,7 @@ class TestRunQueueEndToEnd(unittest.TestCase):
                 queue, tmp, container_controller=controller, hang_check_fn=hang_check_fn,
             )
             self.assertEqual(result["queue_state"], batch.QUEUE_ABORTED_HANG)
-            first_cell_id = batch.resolve_queue_cells(queue)[0]["cell_id"]
+            first_cell_id = batch.resolve_queue_cells(queue)[0].cell_id
             self.assertEqual(result["state"]["cells"][first_cell_id]["state"], batch.ABORTED_HANG)
             # every later cell stays untouched (pending) -- the queue halts, it doesn't skip-mark
             remaining = [
@@ -1094,9 +1178,9 @@ class TestRunQueueEndToEnd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             queue = _minimal_queue()
             resolved = batch.resolve_queue_cells(queue)
-            by_alias = {c["alias"]: c for c in resolved}
-            failing_id = by_alias["model-a-c32k-q4"]["cell_id"]
-            later_id = by_alias["model-a-c65k-q4"]["cell_id"]
+            by_alias = {c.alias: c for c in resolved}
+            failing_id = by_alias["model-a-c32k-q4"].cell_id
+            later_id = by_alias["model-a-c65k-q4"].cell_id
             runner = scripted_cell_runner({
                 failing_id: batch.CellOutcome("failed", "degenerate", True),
             })
@@ -1109,9 +1193,9 @@ class TestRunQueueEndToEnd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             queue = _minimal_queue()
             resolved = batch.resolve_queue_cells(queue)
-            by_alias = {c["alias"]: c for c in resolved}
-            failing_id = by_alias["model-a-c32k-q4"]["cell_id"]
-            later_id = by_alias["model-a-c65k-q4"]["cell_id"]
+            by_alias = {c.alias: c for c in resolved}
+            failing_id = by_alias["model-a-c32k-q4"].cell_id
+            later_id = by_alias["model-a-c65k-q4"].cell_id
             runner = scripted_cell_runner({
                 failing_id: batch.CellOutcome("failed", "health_timeout", False),
             })
@@ -1243,11 +1327,11 @@ class TestControlWp2StopMarkerAndDeadline(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             queue = _minimal_queue()
             resolved = batch.resolve_queue_cells(queue)
-            first_id = resolved[0]["cell_id"]
+            first_id = resolved[0].cell_id
             marker_path = Path(tmp) / "stop.marker"
 
             def runner(handle, cell):
-                if cell["cell_id"] == first_id:
+                if cell.cell_id == first_id:
                     marker_path.write_text("stop")
                 return batch.CellOutcome("completed")
 
@@ -1258,7 +1342,7 @@ class TestControlWp2StopMarkerAndDeadline(unittest.TestCase):
             cells = result["state"]["cells"]
             self.assertEqual(cells[first_id]["state"], batch.COMPLETED)
             for cell in resolved[1:]:
-                self.assertEqual(cells[cell["cell_id"]]["state"], batch.PENDING)
+                self.assertEqual(cells[cell.cell_id]["state"], batch.PENDING)
 
     def test_marker_created_during_last_cell_is_consumed_but_run_still_completes(self):
         # Marker appears during the FINAL cell -- by the time the loop would check it again,
@@ -1267,11 +1351,11 @@ class TestControlWp2StopMarkerAndDeadline(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             queue = _minimal_queue()
             resolved = batch.resolve_queue_cells(queue)
-            last_id = resolved[-1]["cell_id"]
+            last_id = resolved[-1].cell_id
             marker_path = Path(tmp) / "stop.marker"
 
             def runner(handle, cell):
-                if cell["cell_id"] == last_id:
+                if cell.cell_id == last_id:
                     marker_path.write_text("stop")
                 return batch.CellOutcome("completed")
 
@@ -1495,21 +1579,20 @@ class TestWriteCellRecord(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             fake_gguf = Path(tmp) / "fake-model.gguf"
             fake_gguf.write_bytes(b"x" * 128)
-            cell = dict(_longcontext_cell())
-            cell["model_host_path"] = str(fake_gguf)
+            cell = _longcontext_cell(model_host_path=str(fake_gguf))
             records_dir = Path(tmp) / "run-wp5"
             out = batch.write_cell_record(
                 records_dir, cell, self._battery_results(),
                 vram_baseline_bytes=1000, vram_loaded_bytes=9000,
                 sampling_arm_effective="capability",
             )
-            self.assertEqual(out, records_dir / "lc-cell")
+            self.assertEqual(out, records_dir / cell.cell_id)
             config = json.loads((out / "config.json").read_text())
             for key in run_harness.REQUIRED_LINEAGE_FIELDS:
                 self.assertIn(key, config["lineage"])
             self.assertEqual(config["lineage"]["filename"], "fake-model.gguf")
             self.assertEqual(config["lineage"]["file_size"], 128)
-            self.assertEqual(config["sweep_cell"]["cell_id"], "lc-cell")
+            self.assertEqual(config["sweep_cell"]["cell_id"], cell.cell_id)
             self.assertEqual(config["vram"]["baseline_bytes"], 1000)
             self.assertEqual(config["vram"]["loaded_bytes"], 9000)
             self.assertIsNone(config["wilson_summary"])
@@ -1534,7 +1617,7 @@ class TestWriteCellRecord(unittest.TestCase):
     def test_config_carries_vram_profile_and_response_caps_when_supplied(self):
         # WP-B item 2: record `config.json` gains top-level `vram_profile` + `response_caps`.
         with tempfile.TemporaryDirectory() as tmp:
-            cell = dict(_longcontext_cell())
+            cell = _longcontext_cell()
             records_dir = Path(tmp) / "run-wp-b"
             out = batch.write_cell_record(
                 records_dir, cell, self._battery_results(),
@@ -1553,7 +1636,7 @@ class TestWriteCellRecord(unittest.TestCase):
         # Additive/backward-compatible: a caller (this WP's own earlier tests above) that omits
         # the two new kwargs still gets a valid record, with the keys present but null.
         with tempfile.TemporaryDirectory() as tmp:
-            cell = dict(_longcontext_cell())
+            cell = _longcontext_cell()
             records_dir = Path(tmp) / "run-wp-b-default"
             out = batch.write_cell_record(
                 records_dir, cell, self._battery_results(),
@@ -1627,10 +1710,9 @@ class TestWriteCellRecord(unittest.TestCase):
         from unittest import mock
 
         with tempfile.TemporaryDirectory() as tmp:
-            cell = dict(_longcontext_cell())
-            cell["model_host_path"] = (
+            cell = _longcontext_cell(model_host_path=(
                 "/srv/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf"
-            )
+            ))
             records_dir = Path(tmp) / "run-lineage-fill"
             with mock.patch.object(
                 run_harness, "resolve_llama_cpp_build", return_value="b1234-fixed",
@@ -1648,8 +1730,9 @@ class TestWriteCellRecord(unittest.TestCase):
 
     def test_record_lineage_hf_repo_none_when_host_path_outside_shared_models(self):
         with tempfile.TemporaryDirectory() as tmp:
-            cell = dict(_longcontext_cell())
-            cell["model_host_path"] = "/opt/models/unsloth/Qwen3.8-27B-GGUF/model.gguf"
+            cell = _longcontext_cell(
+                model_host_path="/opt/models/unsloth/Qwen3.8-27B-GGUF/model.gguf",
+            )
             records_dir = Path(tmp) / "run-lineage-outside"
             out = batch.write_cell_record(
                 records_dir, cell, self._battery_results(),
@@ -1663,8 +1746,7 @@ class TestWriteCellRecord(unittest.TestCase):
 
     def test_record_lineage_hf_repo_none_when_host_path_absent(self):
         with tempfile.TemporaryDirectory() as tmp:
-            cell = dict(_longcontext_cell())
-            cell.pop("model_host_path", None)
+            cell = _longcontext_cell(model_host_path=None)
             records_dir = Path(tmp) / "run-lineage-absent"
             out = batch.write_cell_record(
                 records_dir, cell, self._battery_results(),
@@ -1732,12 +1814,13 @@ class TestWp6CharsPerToken(unittest.TestCase):
         queue["models"]["model-a"]["chars_per_token"] = 4.24
         with_ratio = batch.resolve_queue_cells(queue)
         for before, after in zip(plain, with_ratio):
-            # The knob is sizing metadata, never cell identity: same cell_id either way.
-            self.assertEqual(before["cell_id"], after["cell_id"])
+            # The knob is sizing metadata, never cell identity: same cell_id either way -- and
+            # structurally so now, since it does not live on `CellIdentity` at all.
+            self.assertEqual(before.cell_id, after.cell_id)
         for cell in with_ratio:
-            self.assertEqual(cell["_chars_per_token"], 4.24)  # every cell is model-a's
+            self.assertEqual(cell.queue.chars_per_token, 4.24)  # every cell is model-a's
         for cell in plain:
-            self.assertIsNone(cell["_chars_per_token"])  # absent in the registry -> None
+            self.assertIsNone(cell.queue.chars_per_token)  # absent in the registry -> None
 
     def test_runner_forwards_ratio_and_task_caps_to_battery_and_detail(self):
         battery_fn = _fake_battery_fn_factory({
@@ -1746,8 +1829,7 @@ class TestWp6CharsPerToken(unittest.TestCase):
         runner = batch.make_longcontext_cell_runner(
             battery_fn=battery_fn, vram_used_bytes_fn=lambda: 5000,
         )
-        cell = _longcontext_cell()
-        cell["_chars_per_token"] = 4.06
+        cell = _longcontext_cell(chars_per_token=4.06)
         outcome = runner(_handle(), cell)
         self.assertEqual(outcome.status, "completed")
         self.assertEqual(battery_fn.calls[0]["chars_per_token"], 4.06)
@@ -1763,7 +1845,7 @@ class TestWp6CharsPerToken(unittest.TestCase):
         runner = batch.make_longcontext_cell_runner(
             battery_fn=battery_fn, vram_used_bytes_fn=lambda: 5000,
         )
-        outcome = runner(_handle(), _longcontext_cell())  # helper carries no _chars_per_token
+        outcome = runner(_handle(), _longcontext_cell())  # helper carries no chars_per_token
         self.assertEqual(outcome.status, "completed")
         self.assertIsNone(battery_fn.calls[0]["chars_per_token"])
         self.assertIsNone(outcome.detail["chars_per_token"])
@@ -1782,7 +1864,7 @@ class TestWp6ReArmCell(unittest.TestCase):
 
     def test_re_arms_named_cell_by_cell_id_and_resets_queue_state(self):
         state, cells = self._state_and_cells()
-        target = cells[1]["cell_id"]
+        target = cells[1].cell_id
         changed = batch.re_arm_cells(state, [target], cells)
         self.assertEqual(changed, [target])
         self.assertEqual(state["cells"][target]["state"], batch.PENDING)
@@ -1802,9 +1884,9 @@ class TestWp6ReArmCell(unittest.TestCase):
         # WP-B: `re_arm_cells` mutates `state`/`reason` in place -- the top-level `alias` set by
         # `init_state` must survive a targeted re-arm untouched.
         state, cells = self._state_and_cells()
-        target = cells[1]["cell_id"]
+        target = cells[1].cell_id
         batch.re_arm_cells(state, [target], cells)
-        self.assertEqual(state["cells"][target]["alias"], cells[1]["alias"])
+        self.assertEqual(state["cells"][target]["alias"], cells[1].alias)
 
     def test_unknown_name_raises_instead_of_silently_re_arming_nothing(self):
         state, cells = self._state_and_cells()
@@ -1861,7 +1943,7 @@ class TestWpBOldStateWithoutAlias(unittest.TestCase):
             old_state = {
                 "queue_state": batch.QUEUE_RUNNING,
                 "created_at": "2026-01-01T00:00:00+00:00",
-                "cells": {c["cell_id"]: {"state": batch.PENDING, "reason": None} for c in resolved},
+                "cells": {c.cell_id: {"state": batch.PENDING, "reason": None} for c in resolved},
             }
             batch.save_state(batch.default_state_path(queue_path), old_state)
             result = batch.run_queue(
@@ -1887,7 +1969,7 @@ class TestCmdReArm(unittest.TestCase):
         cells = batch.resolve_queue_cells(queue)
         state = batch.init_state(cells)
         # cell 0: completed: cell 1: failed; cell 2: skipped-propagated; cell 3: left pending.
-        ids = [c["cell_id"] for c in cells]
+        ids = [c.cell_id for c in cells]
         state["cells"][ids[0]]["state"] = batch.COMPLETED
         state["cells"][ids[1]]["state"] = batch.FAILED
         state["cells"][ids[1]]["reason"] = "needle_failure"
@@ -2066,7 +2148,7 @@ class TestBtreRecordTimingFields(unittest.TestCase):
         # every new key is present-and-null rather than absent-and-ambiguous.
         with tempfile.TemporaryDirectory() as tmp:
             out = batch.write_cell_record(
-                Path(tmp) / "run", dict(_longcontext_cell()), self._battery_results(),
+                Path(tmp) / "run", _longcontext_cell(), self._battery_results(),
                 vram_baseline_bytes=1, vram_loaded_bytes=2,
                 sampling_arm_effective="capability",
             )
@@ -2081,8 +2163,7 @@ class TestBtreRecordTimingFields(unittest.TestCase):
 
     def test_new_kwargs_round_trip_verbatim(self):
         with tempfile.TemporaryDirectory() as tmp:
-            cell = dict(_longcontext_cell())
-            cell["model"] = "gemma-4-12b-qat"
+            cell = _longcontext_cell(model_id="gemma-4-12b-qat")
             out = batch.write_cell_record(
                 Path(tmp) / "run", cell, self._battery_results(),
                 vram_baseline_bytes=1, vram_loaded_bytes=2,
@@ -2102,10 +2183,13 @@ class TestBtreRecordTimingFields(unittest.TestCase):
             # under `model_load_seconds` (README honest-timing-semantics contract).
             self.assertNotIn("model_load_seconds", config)
 
-    def test_queue_model_id_is_accepted_as_the_model_fallback(self):
+    def test_queue_model_id_is_the_single_source_of_sweep_cell_model(self):
+        # WP-R1: pre-refactor a cell dict carried the queue model key under BOTH `model` and
+        # `_queue_model_id`, and `write_cell_record` read one with the other as a fallback.
+        # There is now exactly one spelling -- `QueueCellMetadata.model_id` -- so the dual-key
+        # fallback has no way to disagree with itself. The recorded value is unchanged.
         with tempfile.TemporaryDirectory() as tmp:
-            cell = dict(_longcontext_cell())
-            cell["_queue_model_id"] = "model-a"
+            cell = _longcontext_cell(model_id="model-a")
             out = batch.write_cell_record(
                 Path(tmp) / "run", cell, self._battery_results(),
                 vram_baseline_bytes=1, vram_loaded_bytes=2,
@@ -2117,11 +2201,13 @@ class TestBtreRecordTimingFields(unittest.TestCase):
     def test_resolved_cells_carry_the_queue_model_key_without_changing_cell_id(self):
         plain = batch.resolve_queue_cells(_minimal_queue())
         for cell in plain:
-            self.assertEqual(cell["model"], "model-a")
-            self.assertEqual(cell["model"], cell["_queue_model_id"])
-        # Identity is untouched by the new key (it is set after `compute_cell_id`).
-        recomputed = [sweep.compute_cell_id(c) for c in plain]
-        self.assertEqual(recomputed, [c["cell_id"] for c in plain])
+            self.assertEqual(cell.queue.model_id, "model-a")
+            self.assertEqual(cell.record_metadata().model_id, "model-a")
+        # Identity is untouched by the queue model key -- structurally, since `model_id` lives
+        # on `QueueCellMetadata` and `compute_cell_id` only ever sees `CellIdentity`.
+        recomputed = [sweep.compute_cell_id(c.as_sweep_cell()) for c in plain]
+        self.assertEqual(recomputed, [c.cell_id for c in plain])
+        self.assertNotIn("model", plain[0].as_sweep_cell())
 
     def test_runner_stamps_the_handles_clock_into_the_record(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2135,8 +2221,7 @@ class TestBtreRecordTimingFields(unittest.TestCase):
             handle = _handle()
             handle.started_at = "2026-08-25T09:00:00+00:00"
             handle.scratch_startup_seconds = 12.75
-            cell = _longcontext_cell()
-            cell["model"] = "model-a"
+            cell = _longcontext_cell(model_id="model-a")
             outcome = runner(handle, cell)
             config = json.loads(
                 (Path(outcome.detail["record_path"]) / "config.json").read_text()
@@ -2187,17 +2272,26 @@ class TestBtreTimingBatteryItem(unittest.TestCase):
         queue["cells"][0]["timing_rounds"] = 5
         with_override = batch.resolve_queue_cells(queue)
         for before, after in zip(plain, with_override):
-            self.assertEqual(before["cell_id"], after["cell_id"])
-        self.assertEqual(with_override[0]["timing_rounds"], 5)
-        self.assertIsNone(plain[0]["timing_rounds"])
+            self.assertEqual(before.cell_id, after.cell_id)
+        self.assertEqual(with_override[0].queue.timing_rounds, 5)
+        self.assertIsNone(plain[0].queue.timing_rounds)
 
     def test_rounds_default_to_three_and_honor_the_override(self):
         self.assertEqual(batch.TIMING_DEFAULT_ROUNDS, 3)
-        self.assertEqual(batch.timing_rounds_for_cell({}), 3)
-        self.assertEqual(batch.timing_rounds_for_cell({"timing_rounds": 7}), 7)
+        # WP-R1: the override arrives as a typed scalar (`QueueCellMetadata.timing_rounds`)
+        # rather than being re-indexed out of a cell dict, so the fallback rule is a pure
+        # function of that one value.
+        self.assertEqual(batch.resolve_timing_rounds(None), 3)
+        self.assertEqual(batch.resolve_timing_rounds(7), 7)
         # A malformed value never raises out of the timing arm -- it falls back.
-        for bad in ({"timing_rounds": 0}, {"timing_rounds": "5"}, {"timing_rounds": None}):
-            self.assertEqual(batch.timing_rounds_for_cell(bad), 3)
+        for bad in (0, -2, "5", True, 2.5):
+            self.assertEqual(batch.resolve_timing_rounds(bad), 3)
+        # ...and it reaches the arm off the resolved cell.
+        self.assertEqual(
+            batch.resolve_timing_rounds(
+                _longcontext_cell(timing_rounds=5).queue.timing_rounds,
+            ), 5,
+        )
 
     def test_round_schedule_is_cold_then_hot_with_indices_from_zero(self):
         round_fn = _fake_timing_round_fn()
@@ -2208,18 +2302,18 @@ class TestBtreTimingBatteryItem(unittest.TestCase):
         self.assertEqual([c["run_state"] for c in round_fn.calls], ["cold", "hot", "hot"])
         self.assertEqual({c["alias"] for c in round_fn.calls}, {"lc-alias"})
         self.assertEqual({c["max_tokens"] for c in round_fn.calls}, {batch.TIMING_MAX_TOKENS})
-        self.assertEqual(result["detail"]["rounds_recorded"], 3)
-        self.assertEqual(result["detail"]["rounds_succeeded"], 3)
-        self.assertIsNone(result["detail"]["error"])
+        self.assertEqual(result.detail["rounds_recorded"], 3)
+        self.assertEqual(result.detail["rounds_succeeded"], 3)
+        self.assertIsNone(result.detail["error"])
 
     def test_a_raising_round_keeps_partial_rows_and_never_propagates(self):
         round_fn = _fake_timing_round_fn(raise_at=1)
         result = batch.run_timing_rounds(
             _handle(), _longcontext_cell(battery=["timing"]), round_fn=round_fn,
         )
-        self.assertEqual(len(result["samples"]), 1)
-        self.assertIn("RuntimeError", result["detail"]["error"])
-        self.assertEqual(result["detail"]["rounds_recorded"], 1)
+        self.assertEqual(len(result.samples), 1)
+        self.assertIn("RuntimeError", result.detail["error"])
+        self.assertEqual(result.detail["rounds_recorded"], 1)
 
     def test_needle_plus_timing_appends_timing_rows_to_the_same_record(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2373,15 +2467,15 @@ class TestWp2SpecDecode(unittest.TestCase):
 
     def test_base_strips_md_and_spec_type_from_a_registry_entry_carrying_both(self):
         resolved = batch.resolve_queue_cells(self._mtp_queue(spec_decode="base"))[0]
-        self.assertNotIn("-md", resolved["server_flags"])
-        self.assertNotIn("--spec-type", resolved["server_flags"])
-        self.assertEqual(resolved["spec_decode"], "base")
+        self.assertNotIn("-md", resolved.server_flags)
+        self.assertNotIn("--spec-type", resolved.server_flags)
+        self.assertEqual(resolved.queue.spec_decode, "base")
 
     def test_mtp_passes_through_untouched_when_registry_carries_spec_type(self):
         resolved = batch.resolve_queue_cells(self._mtp_queue(spec_decode="mtp"))[0]
-        self.assertEqual(resolved["server_flags"]["--spec-type"], "draft-mtp")
-        self.assertEqual(resolved["server_flags"]["-md"], "/models/mtp/model-mtp-draft.gguf")
-        self.assertEqual(resolved["spec_decode"], "mtp")
+        self.assertEqual(resolved.server_flags["--spec-type"], "draft-mtp")
+        self.assertEqual(resolved.server_flags["-md"], "/models/mtp/model-mtp-draft.gguf")
+        self.assertEqual(resolved.queue.spec_decode, "mtp")
 
     def test_mtp_raises_when_registry_entry_carries_no_spec_type(self):
         queue = self._mtp_queue(spec_decode="mtp")
@@ -2391,18 +2485,21 @@ class TestWp2SpecDecode(unittest.TestCase):
 
     def test_absent_key_is_a_no_op_byte_identical_to_recomputed_cell_id(self):
         resolved = batch.resolve_queue_cells(self._mtp_queue())[0]  # no spec_decode key
-        self.assertIsNone(resolved["spec_decode"])
+        self.assertIsNone(resolved.queue.spec_decode)
         # The registry's MTP flags survive untouched -- absence means "as-is", never a strip.
-        self.assertEqual(resolved["server_flags"]["-md"], "/models/mtp/model-mtp-draft.gguf")
-        self.assertEqual(resolved["server_flags"]["--spec-type"], "draft-mtp")
+        self.assertEqual(resolved.server_flags["-md"], "/models/mtp/model-mtp-draft.gguf")
+        self.assertEqual(resolved.server_flags["--spec-type"], "draft-mtp")
         # Same recompute-and-compare shape as the `model`/`chars_per_token` precedents: identity
-        # is exactly what `sweep.compute_cell_id` derives from `server_flags` alone.
-        self.assertEqual(sweep.compute_cell_id(resolved), resolved["cell_id"])
+        # is exactly what `sweep.compute_cell_id` derives from the four identity fields alone.
+        self.assertEqual(sweep.compute_cell_id(resolved.as_sweep_cell()), resolved.cell_id)
+        self.assertEqual(
+            sweep.compute_cell_id(resolved.identity.identity_payload()), resolved.cell_id,
+        )
 
     def test_base_and_mtp_arms_of_the_same_cell_produce_distinct_cell_ids(self):
         base_cell = batch.resolve_queue_cells(self._mtp_queue(spec_decode="base"))[0]
         mtp_cell = batch.resolve_queue_cells(self._mtp_queue(spec_decode="mtp"))[0]
-        self.assertNotEqual(base_cell["cell_id"], mtp_cell["cell_id"])
+        self.assertNotEqual(base_cell.cell_id, mtp_cell.cell_id)
 
     # -- validate_queue: malformed values only ----------------------------------------------
 
@@ -2428,8 +2525,7 @@ class TestWp2SpecDecode(unittest.TestCase):
     def test_record_round_trip_persists_spec_decode(self):
         with tempfile.TemporaryDirectory() as tmp:
             for value in ("base", "mtp", None):
-                cell = dict(_longcontext_cell())
-                cell["spec_decode"] = value
+                cell = _longcontext_cell(spec_decode=value)
                 out = batch.write_cell_record(
                     Path(tmp) / f"run-{value}", cell, self._one_task_battery_results(),
                     vram_baseline_bytes=1, vram_loaded_bytes=2,
@@ -2441,7 +2537,7 @@ class TestWp2SpecDecode(unittest.TestCase):
     def test_record_defaults_to_none_when_cell_never_declared_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = batch.write_cell_record(
-                Path(tmp) / "run", dict(_longcontext_cell()), self._one_task_battery_results(),
+                Path(tmp) / "run", _longcontext_cell(), self._one_task_battery_results(),
                 vram_baseline_bytes=1, vram_loaded_bytes=2,
                 sampling_arm_effective="capability",
             )

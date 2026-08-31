@@ -157,7 +157,7 @@ else
             log "creating scratch container ${SCRATCH_CONTAINER}"
             docker run -d --name "${SCRATCH_CONTAINER}" \
                 --device /dev/dri --group-add 992 --group-add 44 \
-                -v /srv/models:/models:ro \
+                -v /models:/models:ro \
                 "${SCRATCH_IMAGE}" sleep infinity >/dev/null \
                 || log "ERROR: docker run failed"
         fi

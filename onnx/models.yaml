@@ -32,7 +32,7 @@
 #
 #   1. Export the checkpoint on a host with torch (NOT in this image — it has no torch):
 #        python onnx/tools/export_gliner2.py \
-#          --model fastino/<repo> --out /srv/models/fastino/<repo>-onnx
+#          --model fastino/<repo> --out /models/fastino/<repo>-onnx
 #      The exporter's parity gate compares its own ONNX output against the torch library and
 #      exits non-zero if they disagree. Do not ship an export that skipped it (`--no-verify`).
 #   2. Append a block below. `path` is the container-side path under the read-only /models mount.

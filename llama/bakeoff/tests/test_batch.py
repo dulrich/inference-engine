@@ -1781,6 +1781,20 @@ class TestHfRepoFromHostPath(unittest.TestCase):
             batch.hf_repo_from_host_path("/srv/models/unsloth/x.gguf"),
         )
 
+    def test_matches_org_repo_under_models_prefix(self):
+        # /models is the post-partition-migration prefix (models-partition-migration WP-2);
+        # /srv/models above must keep resolving forever as the frozen identity token.
+        host_path = "/models/unsloth/Qwen3.8-27B-GGUF/x.gguf"
+        self.assertEqual(
+            batch.hf_repo_from_host_path(host_path), "unsloth/Qwen3.8-27B-GGUF",
+        )
+
+    def test_path_with_only_two_segments_after_models_prefix_returns_none(self):
+        # Same too-few-segments shape as the shared_models case above, under the new prefix.
+        self.assertIsNone(
+            batch.hf_repo_from_host_path("/models/unsloth/x.gguf"),
+        )
+
 
 class TestWp5CliArgs(unittest.TestCase):
     def test_scratch_container_and_records_dir_default_to_none(self):

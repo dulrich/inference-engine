@@ -217,7 +217,7 @@ by a plain substring check against `expected_answer`.
 python3 llama/bakeoff/run_harness.py full \
   --alias nemotron-4b --experiment-id qwen36-35b-a3b-q4-xl-offload-b-100k-f16 \
   --hf-repo unsloth/Qwen3.6-35B-A3B-GGUF --hf-revision main \
-  --gguf-host-path /srv/models/unsloth/.../Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf \
+  --gguf-host-path /models/unsloth/.../Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf \
   --context-ceiling 131072
 ```
 
@@ -326,7 +326,7 @@ cell end-to-end.
     {
       "cell_id": "optional-explicit-override",
       "model_container_path": "/models/org/repo/file-Q4_K_M.gguf",
-      "model_host_path": "/srv/models/org/repo/file-Q4_K_M.gguf",
+      "model_host_path": "/models/org/repo/file-Q4_K_M.gguf",
       "kv_attention_layers": 16,
       "alias": "candidate-alias",
       "server_flags": {"-c": 40960, "-ctk": "q4_0", "-ctv": "q4_0", "-fa": "on", "-ngl": 99},
@@ -540,7 +540,7 @@ resolve against the queue's own `models:` map, so one queue file is one reproduc
   "stop_policy": "pause-at-deadline",
   "models": {
     "gemma-4-12b-qat": {
-      "model_host_path": "/srv/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+      "model_host_path": "/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
       "model_container_path": "/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
       "server_flags": {"--jinja": true},
       "model_family": "gemma4",
@@ -1386,7 +1386,7 @@ byte-identical-behavior guarantee for every pre-existing caller that doesn't pas
 - `config.json` — run-level metadata + the artifact-lineage field set (`hf_repo`, `hf_revision`,
   `filename`, `file_size`, `sha256`, `llama_cpp_build` — all six keys required, though a value
   may be `null` if genuinely unresolvable) + the `timing_summary` aggregate + `size_check`.
-- `batch.py`'s `write_cell_record` (queue-driven `matrix-*`/`ladder-*` records) derives `hf_repo` as `"<org>/<repo>"` from the cell's `model_host_path` when it matches `/srv/models/<org>/<repo>/<file>` (else `null`), and sets `llama_cpp_build` from `run_harness.resolve_llama_cpp_build()` (the pinned `llama/Dockerfile` tag) — both always attempted, `llama_cpp_build` never `null`. `hf_revision`/`sha256` stay explicit `null` on every queue-driven record; neither has a cheap derivation. Records written before this fill rule existed are never rewritten — their `hf_repo`/`llama_cpp_build` stay `null` forever, and a consumer reading historical records recovers the repo from `sweep_cell.model_host_path` itself.
+- `batch.py`'s `write_cell_record` (queue-driven `matrix-*`/`ladder-*` records) derives `hf_repo` as `"<org>/<repo>"` from the cell's `model_host_path` when it matches `/models/<org>/<repo>/<file>` or the older `/srv/models/<org>/<repo>/<file>` (else `null`) — both prefixes are accepted permanently, since `model_host_path` is baked into the frozen `cell_id` identity hash for every queue authored before the `/models` partition migration, and rewriting those host paths to the new prefix would fork their `cell_id`s — and sets `llama_cpp_build` from `run_harness.resolve_llama_cpp_build()` (the pinned `llama/Dockerfile` tag) — both always attempted, `llama_cpp_build` never `null`. `hf_revision`/`sha256` stay explicit `null` on every queue-driven record; neither has a cheap derivation. Records written before this fill rule existed are never rewritten — their `hf_repo`/`llama_cpp_build` stay `null` forever, and a consumer reading historical records recovers the repo from `sweep_cell.model_host_path` itself.
 - `prompts.jsonl` — the quality-corpus prompt text only (one line per corpus entry, copied
   verbatim from `quality_corpus.jsonl` at write time so the record is self-contained).
 - `completions.jsonl` — every raw completion verbatim: timing-sweep rounds, needle-probe answers,

@@ -127,7 +127,7 @@ The registry as served, one entry per alias, with the export manifest's provenan
 # 1. Export on a host with torch (a venv is fine; the image has no torch and never will).
 python onnx/tools/export_gliner2.py \
   --model fastino/gliner2-multi-v1 \
-  --out   /srv/models/fastino/gliner2-multi-v1-onnx
+  --out   /models/fastino/gliner2-multi-v1-onnx
 #    ... exports 5 graphs + tokenizer + manifest, then asserts its own ONNX output matches the
 #    torch library on a fixture set. Non-zero exit = do not ship it.
 

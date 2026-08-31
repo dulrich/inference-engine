@@ -107,14 +107,16 @@ def project_cell_record_size_bytes(context: Optional[int], trials: int) -> int:
 # Lineage derivation
 # -------------------------------------------------------------------------------------------
 
-_SHARED_MODELS_ORG_REPO_RE = re.compile(r"^/srv/models/([^/]+)/([^/]+)/[^/]+$")
+_SHARED_MODELS_ORG_REPO_RE = re.compile(r"^/(?:home/_shared_models|models)/([^/]+)/([^/]+)/[^/]+$")
 
 
 def hf_repo_from_host_path(host_path: Optional[str]) -> Optional[str]:
     """Derives `"<org>/<repo>"` from a `model_host_path` under the shared-models mount, else
-    `None`. `host_path` must match `^/srv/models/([^/]+)/([^/]+)/[^/]+$` exactly --
-    the mount prefix, then org, then repo, then a single filename segment. `None` input, a path
-    outside `/srv/models`, or a path with too few/many segments below the prefix (e.g.
+    `None`. `host_path` must match `^/(?:home/_shared_models|models)/([^/]+)/([^/]+)/[^/]+$`
+    exactly -- either accepted mount prefix (`/srv/models` is the frozen pre-migration
+    identity token, kept forever for existing queues/records; `/models` is the current
+    partition), then org, then repo, then a single filename segment. `None` input, a path
+    outside both accepted prefixes, or a path with too few/many segments below the prefix (e.g.
     only `org/file` with no repo directory) all return `None` rather than guessing; this is a
     display-side convenience derivation, never a substitute for real HF lineage capture."""
     if not host_path:

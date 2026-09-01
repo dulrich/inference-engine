@@ -26,9 +26,12 @@
 #                        plans/mtp-serving-rollout.md WP-2) — an explicit removal decision, NOT a
 #                        silent repoint. The consumers above still store `gemma-4-12b` and will
 #                        error until the user repoints them to `gemma-4-12b-qat` (now the full
-#                        replacement: chat + vision + MTP — see its entry below); tracked in
-#                        INITIATIVE.md "# Blocked on User". The alias name stays reserved forever —
-#                        never reuse it for different backing weights (append-only contract).
+#                        replacement: chat + vision + MTP — see its entry below). The removal
+#                        decision is durably recorded at plans/mtp-serving-rollout.md WP-2 above;
+#                        the consumer repoint itself is the user's call and is no longer tracked in
+#                        INITIATIVE.md (that entry was added at `55cac32` 2026-08-25 and retired by
+#                        the user at `cf0220d`). The alias name stays reserved forever — never
+#                        reuse it for different backing weights (append-only contract).
 #   nemotron-4b       obsidian-crucible   vault data.json provider modelId (chat)
 #                     seven-afterlives    same as gemma-4-12b
 #                     ── 2026-08-25 weights upgrade (user-directed, same alias,

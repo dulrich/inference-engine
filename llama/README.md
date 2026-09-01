@@ -344,6 +344,52 @@ after every rebuild, not only after a config change. The smoke script is the onl
 proves the rebuilt image can actually serve; the healthcheck only proves the router process
 started.
 
+## The bake-off image (`b10664-swap243`)
+
+`crucible-llamacpp-vulkan:b10664-swap243` is a second, additive image sitting alongside the production tag, built for the qwen4exp bake-off (`plans/qwen4exp-image-and-ple-spike.md`). `unsloth/Qwen3.8-Flash-Next-GGUF` declares `general.architecture: qwen4exp`, and upstream support for that architecture first appears in build `b10664` — at the pinned `b10534` the model cannot be loaded at all. Build it through the documented rebuild path above, overriding only the llama.cpp tag and letting `LLAMA_SWAP_TAG` / `LLAMA_SWAP_SHA256` default, so the router half of the image stays identical to production's:
+
+```bash
+docker build --build-arg LLAMA_CPP_TAG=b10664 -t crucible-llamacpp-vulkan:b10664-swap243 llama
+```
+
+**The `Dockerfile` default deliberately stays `b10534`, and the compose service is not repointed.** The new tag exists only as a build-arg override, reachable by the bake-off harness through `BAKEOFF_SCRATCH_IMAGE` (`bakeoff/run-window.sh`). Moving the default instead would drag all eight production models, the embedding agreement harness, and the whole glibc/Mesa ABI surface 130 upstream builds forward for the benefit of one experiment — and both traps above are on record from exactly that class of change. Keeping the experiment in its own tag is what contains the *image* risk. It does not contain the *availability* cost: a bake-off window stops the router regardless of which image it runs.
+
+One sharp edge on that seam: `run-window.sh` reads `BAKEOFF_SCRATCH_IMAGE` only on its `docker run` path. If a `bakeoff-scratch` container already exists but is stopped, the script `docker start`s it with the image and mounts it was *created* with, and the env var is silently ignored. Setting the variable is therefore not enough — `docker rm -f bakeoff-scratch` first, or inspect it and recreate it on an image mismatch.
+
+### Verifying a newly built image — retarget the ABI commands
+
+The ABI commands under "The ABI trap" are `docker exec inference-engine-llama …`. That is the right target for "is the running service pinned correctly" and the wrong one for "did the image I just built come out sound": run verbatim after a build they interrogate the live `b10534` service and pass green no matter how broken the new tag is. Point them at a container created from the tag under test, and assert the image id before believing anything it reports:
+
+```bash
+docker images crucible-llamacpp-vulkan --format '{{.Repository}}:{{.Tag}} {{.ID}}'   # the two ids must differ
+docker run -d --name qwen4exp-verify --device /dev/dri --group-add 992 --group-add 44 \
+  crucible-llamacpp-vulkan:b10664-swap243 sleep infinity
+docker logs qwen4exp-verify                                                 # entrypoint's GPU + ABI assertions
+docker exec qwen4exp-verify dpkg-query -W -f='${Version}' libc6
+docker exec qwen4exp-verify cat /usr/local/share/llama-abi/libc6.version    # must equal the line above
+docker exec qwen4exp-verify ldd -r /usr/local/bin/llama-server              # no unresolved symbols
+docker exec qwen4exp-verify llama-server --list-devices                     # must exit 0 and name the real GPU
+docker rm -f qwen4exp-verify
+```
+
+`sleep infinity` is not a way around the guards, it is the way through them: `entrypoint.sh` ends in `exec "$@"`, so the `PHYSICAL_DEVICE_TYPE_(DISCRETE|INTEGRATED)_GPU` assertion and the fail-closed `--list-devices` check both run first and land in `docker logs` — the container only reaches `sleep` if the image passed them. The device and group flags mirror the compose service (host `render`=992, `video`=44; re-read them with `getent group render video`), and are the same shape `run-window.sh` gives `bakeoff-scratch`. Never set `CRUCIBLE_ALLOW_CPU_VULKAN=1` to make this pass — that is the llvmpipe trap wearing a bypass flag. None of this replaces `smoke-inference.sh`, which remains the normative post-rebuild gate and is router-scoped by construction (`127.0.0.1:4811`, the `bge-m3` / `bge-reranker-v2` aliases through llama-swap); a scratch container cannot satisfy it, so a new bake-off tag earns a response-body probe of its own *in addition to* that smoke, not instead of it.
+
+### Confirming an architecture is actually compiled in
+
+Grep the library, never the binary. `/usr/local/bin/llama-server` is a ~17 KB ELF shim, and grepping *it* for an architecture name returns zero for every architecture, including ones that demonstrably work — measured here, `qwen3next`, `qwen3moe`, `nextn` and `gemma3n` all come back 0 from the shim on an image that serves them fine. `ldd` names three `libllama*` libraries, so match `libllama\.so` specifically; a looser pattern captures all three, and every read after it fails on a filename that is really three filenames. And always ask about a known-good architecture in the same invocation, because a probe that finds nothing is the expected output of a broken probe:
+
+```bash
+docker exec qwen4exp-verify sh -c '
+  lib=$(ldd /usr/local/bin/llama-server | awk "/libllama\.so/ {print \$3}")
+  for a in qwen4exp qwen3next qwen3moe nextn gemma3n; do
+    printf "%-10s %s\n" "$a" "$(LC_ALL=C grep -acF "$a" "$lib")"
+  done'
+```
+
+Measured: `b10534` reports `qwen4exp` 0 against controls `qwen3next` 5, `qwen3moe` 5, `nextn` 15, `gemma3n` 5; `b10664` reports `qwen4exp` 6 against 5, 5, 16, 5. If the controls come back 0, the probe is broken and the image is not what has been measured.
+
+The same technique answers finer questions than "is the architecture present", because llama.cpp's MTP assertions name their architecture inside the string literal (`"QWEN3NEXT MTP requires n_layer_nextn > 0"` and its siblings). At `b10664` no such string mentions `QWEN4EXP`, and the architecture's own symbols carry no NextN member — so the NextN/MTP draft head for qwen4exp is **not** in this build, and `--spec-type draft-mtp` is not an available arm for it. What the qwen4exp symbols do carry is `build_ple`, alongside the `per_layer_token_embd` tensor name and the `%s.ple.*` metadata keys — which is exactly the handle the on-disk PLE measurement needs.
+
 ## Upgrading llama-swap
 
 ```bash

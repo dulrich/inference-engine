@@ -1,15 +1,18 @@
 # router/Dockerfile — @the-next-ai/ai-gateway (https://github.com/The-NeXT-AI/ai-gateway),
-# built from source at a pinned commit with a four-patch vendored series. Never `npm install
+# built from source at a pinned commit with a five-patch vendored series. Never `npm install
 # @the-next-ai/ai-gateway` and never a moving branch/tag — the pin below is a commit SHA.
 #
 # See router/AGENTS.md for the patch rationale and the never-set-ANTHROPIC_API_KEY constraint,
-# and router/patches/000{1,2,3,4}-*.patch for the changes themselves: 0001 omits x-api-key for
+# and router/patches/000{1,2,3,4,5}-*.patch for the changes themselves: 0001 omits x-api-key for
 # the passthrough OAuth bearer, 0002 adds the local-leg prefill/idle-gap ping keepalive, 0003
 # relays upstream error bodies byte-verbatim to Anthropic-protocol clients on the final attempt,
-# and 0004 adds the POST /v1/messages/count_tokens route. This is a bounded stabilization
-# series (plans/router-prefill-keepalive-and-protocol-gaps.md) — the next semantic patch into
-# handler.ts/streaming-conversion.ts beyond it, or the first nontrivial pin-upgrade rebase,
-# triggers a replace-vs-integrate design spike before any patch 0005.
+# 0004 adds the POST /v1/messages/count_tokens route, and 0005 is a dependency-only lockfile
+# bump (find-my-way 9.9.0, fast-uri 3.1.6, brace-expansion 5.0.9 — transitive dependencies,
+# within their parents' already-declared semver ranges, no source change). This is a bounded
+# stabilization series (plans/router-prefill-keepalive-and-protocol-gaps.md) — the next semantic
+# patch into handler.ts/streaming-conversion.ts beyond it (0005 is explicitly not that patch),
+# or the first nontrivial pin-upgrade rebase, triggers a replace-vs-integrate design spike
+# before any further semantic patch.
 #
 # Deviation from the plan's literal example command (recorded in
 # runs/dispatch/resident-router-wp-1-report.md): `git fetch --depth 1 origin 782cd51` (the short
@@ -54,6 +57,10 @@ COPY patches/0004-count-tokens-route.patch /tmp/0004-count-tokens-route.patch
 RUN git apply --check /tmp/0004-count-tokens-route.patch \
     && git apply /tmp/0004-count-tokens-route.patch
 
+COPY patches/0005-dependency-security-bump.patch /tmp/0005-dependency-security-bump.patch
+RUN git apply --check /tmp/0005-dependency-security-bump.patch \
+    && git apply /tmp/0005-dependency-security-bump.patch
+
 # The repo's own package-lock.json — measured green 2026-08-25 (145 packages, <1s).
 RUN npm ci
 
@@ -78,7 +85,7 @@ RUN npm prune --omit=dev
 FROM node:24-slim AS runtime
 
 LABEL org.opencontainers.image.title="inference-engine-router" \
-      org.opencontainers.image.description="@the-next-ai/ai-gateway 1.0.18, source build at 782cd51, four-patch series: x-api-key passthrough-bearer omission, prefill/idle-gap ping keepalive, upstream error-body passthrough, /v1/messages/count_tokens route"
+      org.opencontainers.image.description="@the-next-ai/ai-gateway 1.0.18, source build at 782cd51, five-patch series: x-api-key passthrough-bearer omission, prefill/idle-gap ping keepalive, upstream error-body passthrough, /v1/messages/count_tokens route, dependency-only lockfile bump (find-my-way/fast-uri/brace-expansion)"
 
 WORKDIR /app
 
@@ -86,6 +93,11 @@ COPY --from=build /src/dist ./dist
 COPY --from=build /src/bin ./bin
 COPY --from=build /src/node_modules ./node_modules
 COPY --from=build /src/package.json ./package.json
+
+# The bundled npm CLI is dead weight at runtime — the entrypoint is `node bin/next-ai-gateway.js`,
+# never `npm`/`npx`, and it was the source of 1 CRITICAL + 7 HIGH findings in
+# fleet-tools/data/security-scan/inference-engine.images.json.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 
 # gateway.config.json is bind-mounted here at runtime (compose, WP-2) — never baked into the
 # image, matching this repo's config-is-never-baked convention (llama/config.yaml, onnx/models.yaml).

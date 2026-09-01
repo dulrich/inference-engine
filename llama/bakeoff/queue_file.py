@@ -50,6 +50,14 @@ SPEC_DECODE_VALUES = ("base", "mtp")
 # battery item's per-cell round-count override. Absent/None means `TIMING_DEFAULT_ROUNDS`.
 TIMING_ROUNDS_CELL_KEY = "timing_rounds"
 
+# WP-1 (qwen4exp-bakeoff-campaign, cycle-2 blocking 1): the harness's pre-existing factory
+# default for `harness_transport.py`'s per-recv socket timeout (`cell_runner.py`'s
+# `make_longcontext_cell_runner(timeout: float = 300)`). A queue's optional top-level
+# `request_timeout_s` overrides it; absence means every one of the five pre-WP-1 committed
+# queues is bit-identical in effective behavior. Lives here (not `queue_state.py`, which imports
+# FROM this module) so both `queue_state.init_state` and `batch.py` can reach it without a cycle.
+DEFAULT_REQUEST_TIMEOUT_S = 300
+
 _REQUIRED_ABBREVIATED_CELL_KEYS = (
     "model", "alias", "c", "ctk", "ctv", "fa", "battery", "sampling_arm", "trials",
 )
@@ -111,6 +119,25 @@ def _validate_models(models: Any) -> None:
             raise QueueValidationError(
                 f"models[{model_id!r}] chars_per_token {cpt!r} must be a positive number when present"
             )
+        # WP-1 (qwen4exp-bakeoff-campaign, C4-B1): optional geometry for a second (DSA indexer)
+        # KV cache the harness otherwise has no representation for -- f16-scoped, see
+        # `gguf_fit.kv_bytes_per_token`. Same optional-and-validated-when-present shape as
+        # `chars_per_token` above, but a dict with an exact key set rather than a bare scalar.
+        geometry = entry.get("kv_indexer_geometry")
+        if geometry is not None:
+            required_keys = ("layers", "key_length", "value_length")
+            if not isinstance(geometry, dict) or sorted(geometry) != sorted(required_keys):
+                raise QueueValidationError(
+                    f"models[{model_id!r}] kv_indexer_geometry {geometry!r} must be a dict "
+                    f"with exactly the keys {required_keys} when present"
+                )
+            for key in required_keys:
+                value = geometry[key]
+                if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                    raise QueueValidationError(
+                        f"models[{model_id!r}] kv_indexer_geometry[{key!r}] {value!r} must be "
+                        f"a positive int"
+                    )
 
 
 def _validate_cell(idx: int, cell: Dict[str, Any], models: Dict[str, Any]) -> None:
@@ -162,8 +189,26 @@ def validate_queue(queue: Dict[str, Any]) -> None:
     stop_policy = queue.get("stop_policy")
     if stop_policy not in STOP_POLICIES:
         raise QueueValidationError(f"queue stop_policy {stop_policy!r} must be one of {STOP_POLICIES}")
+    # WP-1 (qwen4exp-bakeoff-campaign, cycle-2 blocking 1): optional top-level per-recv transport
+    # timeout override -- same optional-and-validated-when-present shape as `chars_per_token`/
+    # `kv_indexer_geometry` above. Absent -> DEFAULT_REQUEST_TIMEOUT_S (300s), so every one of
+    # the five pre-WP-1 committed queues is bit-identical in effective behavior.
+    if "request_timeout_s" in queue:
+        request_timeout_s = queue["request_timeout_s"]
+        if not isinstance(request_timeout_s, int) or isinstance(request_timeout_s, bool) or request_timeout_s < 1:
+            raise QueueValidationError(
+                f"queue request_timeout_s {request_timeout_s!r} must be a positive integer when present"
+            )
     for idx, cell in enumerate(cells):
         _validate_cell(idx, cell, models)
+
+
+def effective_request_timeout_s(queue: Dict[str, Any]) -> int:
+    """The queue's effective per-request transport timeout (seconds): the top-level
+    `request_timeout_s` when present, else `DEFAULT_REQUEST_TIMEOUT_S` -- the same fallback rule
+    `validate_queue` enforces the shape of, exposed as a pure function so `batch.py`/
+    `queue_state.py` never re-derive it inline."""
+    return queue.get("request_timeout_s", DEFAULT_REQUEST_TIMEOUT_S)
 
 
 def load_queue(queue_path: Path) -> Dict[str, Any]:

@@ -356,6 +356,17 @@ cell end-to-end.
   by ~4x. Verified live during this WP against the real `Qwen3.8-27B-UD-IQ3_S.gguf` header: the
   16-layer override reproduces the doc's own measured **0.0625 MiB/token** f16/f16 KV growth rate
   exactly; the raw `block_count=65` gives 0.254 MiB/token, ~4.06x too high.
+- `kv_indexer_geometry` (optional, model-registry entry — WP-1, `plans/qwen4exp-bakeoff-
+  campaign.md`, C4-B1) — `{"layers": int, "key_length": int, "value_length": int}` describing a
+  SECOND, harness-invisible KV cache (a DSA indexer) some architectures allocate alongside the
+  main attention cache — qwen4exp measured 36 MiB at 4096 cells, 37.5% on top of the modeled main
+  cache. `gguf_fit.kv_bytes_per_token` adds a flat per-token rate on top of the main cache's when
+  present. **f16-scoped**: nothing in this repo establishes the indexer cache honours the main
+  cache's own `ctk`/`ctv` at a non-f16 KV type, so a cell carrying this field at a non-f16 KV type
+  classifies `unknown` (`ValueError` inside `classify_fit`) rather than a guessed number — measure
+  the indexer's storage type at that KV type first (a successor campaign's task, not this one's).
+  Carried all the way to the persisted record (`cell_model.RecordMetadata`), appended after
+  `spec_decode` alongside `gpu_weights_bytes`/`kv_attention_layers`/`swa_layer_spec`.
 - `battery` — subset of `{"vram", "timing", "needle", "quality"}`.
 - `cell_id` (optional) — explicit override for the deterministic per-cell ID; omit to have
   `compute_cell_id()` derive one from the cell's identity-bearing fields (never random, never
@@ -559,8 +570,9 @@ resolve against the queue's own `models:` map, so one queue file is one reproduc
 
 - `models` — model id → `{model_host_path, model_container_path, server_flags (base flags,
   e.g. `-ncmoe`/`--jinja`), gpu_weights_bytes (optional placement override), kv_attention_layers
-  (optional), swa_layer_spec (optional), model_family (optional — production-sampling lookup),
-  chars_per_token (optional — WP-6)}`.
+  (optional), swa_layer_spec (optional), kv_indexer_geometry (optional — WP-1, see "Spec format"
+  above), model_family (optional — production-sampling lookup), chars_per_token (optional —
+  WP-6)}`.
 - `chars_per_token` (optional, positive number) — the model family's MEASURED haystack-sizing
   ratio, replacing the static `CHARS_PER_TOKEN_ESTIMATE` (4.5) for this model's needle cells.
   WP-5's attended run measured the static estimate oversizing real Gutenberg-corpus prompts by
@@ -593,6 +605,17 @@ resolve against the queue's own `models:` map, so one queue file is one reproduc
   `config.json` (`None` when the cell never declared it) — schema-v2 additive, no version bump.
 - `vram_profile` — `"desktop-shared"` or `"headless"` (see VRAM budget profiles above); the CLI's
   `--vram-profile` flag, if given, overrides the queue file's own value.
+- `request_timeout_s` (optional, top-level, positive integer seconds — WP-1, `plans/qwen4exp-
+  bakeoff-campaign.md`, cycle-2 blocking 1) — overrides the per-recv transport socket timeout
+  (`harness_transport.py`'s `urlopen(..., timeout=...)`) that both the needle battery and the
+  timing rounds run under; llama-server sends no bytes during prefill, so a slow-prefilling model
+  at long context needs far more than the 300 s factory default. **Absent → 300 s**, so every
+  pre-WP-1 committed queue is bit-identical in effective behavior. Not a `cell_id` input — it is
+  **snapshotted into the queue state** at creation (`queue_state.init_state`) and compared on
+  resume: a queue file edited after its state exists (changing only this field) raises
+  `QueueValidationError` rather than silently resuming under a different timeout than the one the
+  state file's evidence was captured under; a state file written before this key simply lacks it,
+  and absence reads as the same 300 s default.
 - `deadline` — an `"HH:MM"` **UTC** wall-clock cutoff (WP-5 finding #4: `run_queue`'s clock is
   `datetime.now(timezone.utc)`, so a deadline authored in local time fires hours off — this
   host is `America/Mexico_City`, permanent UTC-6 with no DST since 2022, so 07:00 local is

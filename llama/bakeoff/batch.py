@@ -116,12 +116,14 @@ from hang_rail import (  # noqa: F401
     poll_journal_for_hang,
 )
 from queue_file import (  # noqa: F401
+    DEFAULT_REQUEST_TIMEOUT_S,
     QUEUE_FORMAT_VERSION,
     SPEC_DECODE_VALUES,
     STOP_POLICIES,
     TIMING_ROUNDS_CELL_KEY,
     QueueValidationError,
     compute_deadline_dt,
+    effective_request_timeout_s,
     load_queue,
     resolve_cell,
     resolve_queue_cells,
@@ -240,6 +242,7 @@ def _load_or_init_state(
     resolved_cells: List[ResolvedCell],
     re_arm: bool,
     re_arm_cell_names: Optional[List[str]],
+    request_timeout_s: int = DEFAULT_REQUEST_TIMEOUT_S,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """Returns `(state, noop_result)`: exactly one is not `None`. A queue whose state file is
     already terminal (and that was not re-armed) yields the `noop_result` `run_queue` returns
@@ -249,10 +252,17 @@ def _load_or_init_state(
     its state file exists (cell added/removed, or any server-flag change -- cell_ids hash the
     flags dict) would otherwise surface as a bare KeyError deep in the cell loop. Fail loudly, up
     front, with the operator's actual options.
+
+    `request_timeout_s` (WP-1, qwen4exp-bakeoff-campaign, cycle-3 M1) is the queue's current
+    EFFECTIVE per-request transport timeout -- passed to `init_state` on first run, and compared
+    against the existing state's own snapshot on resume: `cell_id` excludes this field, so a
+    queue file edited after its state exists (changing only `request_timeout_s`) would otherwise
+    resume undetected under a different timeout than the one the state file's evidence was
+    captured under.
     """
     existing = load_state(state_path)
     if existing is None:
-        return init_state(resolved_cells), None
+        return init_state(resolved_cells, request_timeout_s=request_timeout_s), None
 
     state = existing
     state_ids = set(state["cells"])
@@ -264,6 +274,14 @@ def _load_or_init_state(
             f"{sorted(queue_ids - state_ids)}) -- a queue file is immutable once its state "
             f"exists; move the edited queue to a new file (fresh state) or delete/archive "
             f"the stale state file deliberately"
+        )
+    state_request_timeout_s = state.get("request_timeout_s", DEFAULT_REQUEST_TIMEOUT_S)
+    if state_request_timeout_s != request_timeout_s:
+        raise QueueValidationError(
+            f"queue {queue_path}'s effective request_timeout_s ({request_timeout_s}) no longer "
+            f"matches its state file {state_path}'s snapshot ({state_request_timeout_s}) -- a "
+            f"queue file is immutable once its state exists; move the edited queue to a new "
+            f"file (fresh state) or delete/archive the stale state file deliberately"
         )
     if state["queue_state"] in TERMINAL_QUEUE_STATES and not re_arm and not re_arm_cell_names:
         return None, {
@@ -334,6 +352,7 @@ def run_queue(
     queue = load_queue(queue_path)
     resolved_cells = resolve_queue_cells(queue)
     effective_vram_profile = vram_profile or queue["vram_profile"]
+    effective_timeout = effective_request_timeout_s(queue)
 
     now_fn = now_fn or (lambda: datetime.now(timezone.utc))
     vram_total_bytes_fn = vram_total_bytes_fn or sweep.read_vram_total_bytes
@@ -352,6 +371,7 @@ def run_queue(
 
     state, noop_result = _load_or_init_state(
         queue_path, state_path, resolved_cells, re_arm, re_arm_cell_names,
+        request_timeout_s=effective_timeout,
     )
     if noop_result is not None:
         return noop_result
@@ -491,14 +511,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     controller = None
     if not args.dry_run and not args.no_container_control:
         controller = ContainerController(container=args.container)
-    # `make_longcontext_cell_runner` needs the effective `vram_profile` string to stamp into
-    # every record it writes, but `run_queue` (below) only resolves that value internally
-    # (`--vram-profile` override, else the queue's own `vram_profile`) after it has already
-    # loaded the queue file -- this cell_runner is built BEFORE that call, so the same resolution
-    # is repeated here from the queue file this CLI path is about to hand to `run_queue` anyway.
-    # A malformed queue file raises `QueueValidationError` here exactly as it would have inside
-    # `run_queue`, just slightly earlier.
-    effective_vram_profile = args.vram_profile or load_queue(Path(args.queue))["vram_profile"]
+    # `make_longcontext_cell_runner` needs the effective `vram_profile` string (and, since WP-1,
+    # the effective `request_timeout_s`) to stamp into/thread through every record it writes, but
+    # `run_queue` (below) only resolves those values internally (`--vram-profile` override, else
+    # the queue's own `vram_profile`; the queue's own effective `request_timeout_s`) after it has
+    # already loaded the queue file -- this cell_runner is built BEFORE that call, so the same
+    # resolution is repeated here from ONE `load_queue` of the queue file this CLI path is about
+    # to hand to `run_queue` anyway. A malformed queue file raises `QueueValidationError` here
+    # exactly as it would have inside `run_queue`, just slightly earlier.
+    loaded_queue = load_queue(Path(args.queue))
+    effective_vram_profile = args.vram_profile or loaded_queue["vram_profile"]
+    effective_timeout = effective_request_timeout_s(loaded_queue)
     try:
         result = run_queue(
             Path(args.queue),
@@ -510,11 +533,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             # The real CLI-driven path always runs the longcontext-aware cell runner (it takes
             # the startup-only path per-cell for anything without a `"needle"` battery item).
             # `run_queue`'s own internal default stays `default_cell_runner` -- untouched -- so
-            # every direct `run_queue(...)` caller that doesn't pass `cell_runner=` is
-            # unaffected.
+            # every direct `run_queue(...)` caller that omits `cell_runner=` is unaffected.
             cell_runner=make_longcontext_cell_runner(
                 records_dir=Path(args.records_dir) if args.records_dir else None,
                 vram_profile=effective_vram_profile,
+                timeout=effective_timeout,
             ),
             container_controller=controller,
             # WP-5: wire the real kernel-log hang rail for live (non-dry-run) invocations;

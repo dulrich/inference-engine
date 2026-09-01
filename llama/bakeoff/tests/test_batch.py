@@ -15,16 +15,20 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, ClassVar
+from unittest import mock
 
 BAKEOFF_DIR = Path(__file__).resolve().parent.parent
 if str(BAKEOFF_DIR) not in sys.path:
     sys.path.insert(0, str(BAKEOFF_DIR))
 
 import batch  # noqa: E402
+import gguf_fit  # noqa: E402
 import longcontext  # noqa: E402
 import run_harness  # noqa: E402
 import sampling_table  # noqa: E402
 import sweep  # noqa: E402
+import verify_run  # noqa: E402
 
 # -------------------------------------------------------------------------------------------
 # Fixtures
@@ -682,12 +686,13 @@ def _fake_battery_fn_factory(samples_by_task):
         # prompt-fit collaborators `_runner` now passes through this seam unconditionally
         # (same as `chars_per_token`) -- accepted and recorded here so pre-WP-2 tests that never
         # asserted on them keep passing unmodified, and `TestBudgetArithmeticThroughBatteryFn`
-        # below can assert the exact values `_runner` computed.
+        # below can assert the exact values `_runner` computed. `timeout` (WP-1, qwen4exp-
+        # bakeoff-campaign, cycle-2 blocking 1) is recorded the same additive way.
         calls.append({
             "base_url": base_url, "alias": alias, "cell_id_prefix": cell_id_prefix,
             "target_tokens": target_tokens, "sampling_arm": sampling_arm,
             "sampling_payload": dict(sampling_payload), "n_trials": n_trials,
-            "chars_per_token": chars_per_token,
+            "chars_per_token": chars_per_token, "timeout": timeout,
             "max_tokens_by_task": dict(max_tokens_by_task) if max_tokens_by_task else None,
             "tokenize_fn": tokenize_fn, "token_budget": token_budget,
         })
@@ -2555,6 +2560,322 @@ class TestWp2SpecDecode(unittest.TestCase):
             config = json.loads((out / "config.json").read_text())
             self.assertIn("spec_decode", config["sweep_cell"])  # key present, not just absent
             self.assertIsNone(config["sweep_cell"]["spec_decode"])
+
+
+# -------------------------------------------------------------------------------------------
+# WP-1 (qwen4exp-bakeoff-campaign.md): the model-registry `kv_indexer_geometry` field --
+# validation and passthrough. See gguf_fit.kv_bytes_per_token / cell_model.SWEEP_PASSTHROUGH_KEYS
+# for the fit-math and carrying-seam halves of this change; the tests below cover queue_file's
+# validation contract and resolve_queue_cells's propagation only.
+# -------------------------------------------------------------------------------------------
+
+
+class TestWp1KvIndexerGeometryValidation(unittest.TestCase):
+    """C4-B1: the optional per-model `kv_indexer_geometry` -- a dict with EXACTLY the keys
+    `layers`/`key_length`/`value_length`, each a positive int."""
+
+    def test_validate_queue_accepts_a_well_formed_geometry(self):
+        queue = _minimal_queue()
+        queue["models"]["model-a"]["kv_indexer_geometry"] = {
+            "layers": 12, "key_length": 128, "value_length": 256,
+        }
+        batch.validate_queue(queue)  # must not raise
+
+    def test_validate_queue_accepts_absence(self):
+        batch.validate_queue(_minimal_queue())  # must not raise
+
+    def test_validate_queue_rejects_a_missing_key(self):
+        queue = _minimal_queue()
+        queue["models"]["model-a"]["kv_indexer_geometry"] = {"layers": 12, "key_length": 128}
+        with self.assertRaises(batch.QueueValidationError):
+            batch.validate_queue(queue)
+
+    def test_validate_queue_rejects_an_extra_key(self):
+        queue = _minimal_queue()
+        queue["models"]["model-a"]["kv_indexer_geometry"] = {
+            "layers": 12, "key_length": 128, "value_length": 256, "extra": 1,
+        }
+        with self.assertRaises(batch.QueueValidationError):
+            batch.validate_queue(queue)
+
+    def test_validate_queue_rejects_a_non_positive_member(self):
+        for bad in (0, -1):
+            with self.subTest(bad=bad):
+                queue = _minimal_queue()
+                queue["models"]["model-a"]["kv_indexer_geometry"] = {
+                    "layers": bad, "key_length": 128, "value_length": 256,
+                }
+                with self.assertRaises(batch.QueueValidationError):
+                    batch.validate_queue(queue)
+
+    def test_validate_queue_rejects_a_bool_member(self):
+        queue = _minimal_queue()
+        queue["models"]["model-a"]["kv_indexer_geometry"] = {
+            "layers": True, "key_length": 128, "value_length": 256,
+        }
+        with self.assertRaises(batch.QueueValidationError):
+            batch.validate_queue(queue)
+
+    def test_validate_queue_rejects_a_non_dict(self):
+        queue = _minimal_queue()
+        queue["models"]["model-a"]["kv_indexer_geometry"] = "not-a-dict"
+        with self.assertRaises(batch.QueueValidationError):
+            batch.validate_queue(queue)
+
+    def test_resolved_cell_carries_the_geometry_to_the_sweep_adapter(self):
+        queue = _minimal_queue()
+        geometry = {"layers": 12, "key_length": 128, "value_length": 256}
+        queue["models"]["model-a"]["kv_indexer_geometry"] = geometry
+        resolved = batch.resolve_queue_cells(queue)
+        self.assertEqual(resolved[0].sweep_passthrough["kv_indexer_geometry"], geometry)
+        self.assertEqual(resolved[0].as_sweep_cell()["kv_indexer_geometry"], geometry)
+
+    def test_resolved_cell_carries_the_geometry_without_changing_cell_id(self):
+        plain = batch.resolve_queue_cells(_minimal_queue())
+        queue = _minimal_queue()
+        queue["models"]["model-a"]["kv_indexer_geometry"] = {
+            "layers": 12, "key_length": 128, "value_length": 256,
+        }
+        with_geometry = batch.resolve_queue_cells(queue)
+        for before, after in zip(plain, with_geometry):
+            self.assertEqual(before.cell_id, after.cell_id)
+
+
+# -------------------------------------------------------------------------------------------
+# WP-1 (qwen4exp-bakeoff-campaign.md, cycle-2 blocking 1 / cycle-3 M1): the queue-level
+# `request_timeout_s` -- validation, runner threading, and the state-file snapshot/resume rail.
+# -------------------------------------------------------------------------------------------
+
+
+class TestWp1RequestTimeoutSValidation(unittest.TestCase):
+    def test_validate_queue_accepts_a_positive_int(self):
+        batch.validate_queue(_minimal_queue(request_timeout_s=1800))  # must not raise
+
+    def test_validate_queue_rejects_non_positive_or_non_integer(self):
+        for bad in (0, -1, 1.5, "1800", True):
+            with self.subTest(bad=bad):
+                with self.assertRaises(batch.QueueValidationError):
+                    batch.validate_queue(_minimal_queue(request_timeout_s=bad))
+
+    def test_absent_reads_as_300_for_every_committed_queue_that_omits_it(self):
+        # The "five committed queues unchanged" proof (plan Test Plan (a)): every committed
+        # queue file that does not itself declare request_timeout_s must still resolve its
+        # EFFECTIVE value to today's factory default. Iterates every queues/*.json on disk
+        # (excluding .state.json siblings) rather than a hand-picked subset, so this proof stays
+        # accurate however many committed queues exist by the time this test runs.
+        queues_dir = BAKEOFF_DIR / "queues"
+        committed = [p for p in queues_dir.glob("*.json") if not p.name.endswith(".state.json")]
+        self.assertTrue(committed)  # sanity: the glob actually found something
+        checked_absent = 0
+        for path in committed:
+            with self.subTest(queue=path.name):
+                raw = json.loads(path.read_text())
+                if "request_timeout_s" in raw:
+                    continue  # a queue that declares its own value is checked elsewhere
+                queue = batch.load_queue(path)
+                self.assertEqual(batch.effective_request_timeout_s(queue), 300)
+                checked_absent += 1
+        self.assertGreaterEqual(checked_absent, 5)  # the five pre-WP-1 queues actually ran
+
+
+class TestWp1RequestTimeoutSRunnerThreading(unittest.TestCase):
+    """The transport timeout is a per-recv socket timeout (`harness_transport.py:58-64`) with no
+    override anywhere except `make_longcontext_cell_runner`'s own `timeout` parameter, which
+    reaches both the needle battery (`cell_runner.py:376-388`) and the timing rounds
+    (`cell_runner.py:439`)."""
+
+    def test_needle_battery_and_timing_rounds_both_receive_the_configured_timeout(self):
+        battery_fn = _fake_battery_fn_factory(
+            {"single_needle": [_sample("single_needle", "correct", True)]},
+        )
+        round_fn = _fake_timing_round_fn()
+        runner = batch.make_longcontext_cell_runner(
+            battery_fn=battery_fn, timing_round_fn=round_fn, vram_used_bytes_fn=lambda: 5000,
+            timeout=1800,
+        )
+        outcome = runner(_handle(), _longcontext_cell(battery=["timing", "needle"]))
+        self.assertEqual(outcome.status, "completed")
+        self.assertEqual(battery_fn.calls[0]["timeout"], 1800)
+        self.assertTrue(round_fn.calls)
+        self.assertTrue(all(c["timeout"] == 1800 for c in round_fn.calls))
+
+    def test_cli_dry_run_threads_the_queues_own_effective_timeout(self):
+        # Worker discretion (brief): additionally patch batch.make_longcontext_cell_runner and
+        # drive a --dry-run over a temp queue carrying request_timeout_s to assert the CLI
+        # threads it through the SAME load_queue effective_vram_profile already uses.
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = _write_queue(tmp, _minimal_queue(request_timeout_s=1800))
+            captured = {}
+            real_factory = batch.make_longcontext_cell_runner
+
+            def spy_factory(*args, **kwargs):
+                captured["timeout"] = kwargs.get("timeout")
+                return real_factory(*args, **kwargs)
+
+            with mock.patch.object(batch, "make_longcontext_cell_runner", spy_factory):
+                code = batch.main(["run", "--queue", str(queue_path), "--dry-run"])
+            self.assertEqual(code, 0)
+            self.assertEqual(captured["timeout"], 1800)
+
+
+class TestWp1RequestTimeoutSStateSnapshot(unittest.TestCase):
+    """`request_timeout_s` is excluded from `cell_id` (cell_spec.py:86-94), so it is snapshotted
+    into the queue state at creation (`queue_state.init_state`) and compared on resume
+    (`batch._load_or_init_state`) -- otherwise a queue edited after its state exists could change
+    the effective timeout across a pause/resume undetected."""
+
+    def test_init_state_snapshots_the_effective_value(self):
+        resolved = batch.resolve_queue_cells(_minimal_queue())
+        state = batch.init_state(resolved, request_timeout_s=1800)
+        self.assertEqual(state["request_timeout_s"], 1800)
+
+    def test_init_state_defaults_to_300(self):
+        resolved = batch.resolve_queue_cells(_minimal_queue())
+        state = batch.init_state(resolved)
+        self.assertEqual(state["request_timeout_s"], batch.DEFAULT_REQUEST_TIMEOUT_S)
+        self.assertEqual(state["request_timeout_s"], 300)
+
+    def test_resume_with_a_changed_effective_timeout_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = _write_queue(tmp, _minimal_queue())
+            batch.run_queue(
+                queue_path,
+                scratch_server_fn=fake_scratch_server_factory(),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
+                vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
+            )
+            edited = _minimal_queue(request_timeout_s=1800)  # same cells -- only the timeout moved
+            edited_path = _write_queue(tmp, edited)  # same path: same sibling state file
+            with self.assertRaises(batch.QueueValidationError) as ctx:
+                batch.run_queue(
+                    edited_path,
+                    re_arm=True,  # even an explicit re-arm never bridges a mismatched timeout
+                    scratch_server_fn=fake_scratch_server_factory(),
+                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                    vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
+                    vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
+                )
+            self.assertIn("immutable", str(ctx.exception))
+
+    def test_resume_with_an_old_state_missing_the_key_loads_cleanly(self):
+        # Absent-key compatibility: a state file written before this WP has no
+        # request_timeout_s key at all; against a queue whose effective value is also the
+        # default (300), resume must load cleanly, never require the field on read.
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = _write_queue(tmp, _minimal_queue())  # no override -> effective 300
+            resolved = batch.resolve_queue_cells(_minimal_queue())
+            old_state = {
+                "queue_state": batch.QUEUE_RUNNING,
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "cells": {c.cell_id: {"state": batch.PENDING, "reason": None} for c in resolved},
+            }
+            batch.save_state(batch.default_state_path(queue_path), old_state)
+            result = batch.run_queue(
+                queue_path,
+                scratch_server_fn=fake_scratch_server_factory(),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
+                vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
+            )
+            self.assertEqual(result["queue_state"], batch.QUEUE_COMPLETED)
+
+
+# -------------------------------------------------------------------------------------------
+# WP-1 (qwen4exp-bakeoff-campaign.md, cycle-2 blocking 2 / Test Plan (b)): the required
+# queue -> resolve_cell -> record -> verify_run round trip. Both halves of harness change 1 --
+# `as_sweep_cell()`'s live fit math and the PERSISTED `sweep_cell` block `verify_run.py` reads --
+# pass in isolation; only this round trip catches the two drifting apart (the actual rev-2 defect
+# this WP's brief is grounded against).
+# -------------------------------------------------------------------------------------------
+
+
+class TestWp1KvGeometryVerifyRunRoundTrip(unittest.TestCase):
+    """`gguf_fit._resolve_geometry_and_weights_raw` calls `read_gguf_metadata` through gguf_fit's
+    OWN module binding; `verify_run._resolve_geometry` calls it through `sweep.read_gguf_
+    metadata` -- a SEPARATE binding (`sweep.py` re-exports the name by import, which binds the
+    object once, not a live module-attribute lookup). Both must be patched or one side silently
+    falls through to the real, disk-dependent reader."""
+
+    SYNTHETIC_HEADER: ClassVar[dict[str, Any]] = {
+        "general.architecture": "qwen4exp",
+        "qwen4exp.block_count": 48,
+        "qwen4exp.attention.head_count": 24,
+        "qwen4exp.attention.head_count_kv": 2,
+        "qwen4exp.attention.key_length": 256,
+        "qwen4exp.attention.value_length": 256,
+        "qwen4exp.context_length": 262144,
+    }
+
+    def test_persisted_record_and_verifier_agree_on_the_fits_kv_bytes_per_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_gguf = Path(tmp) / "fake-qwen4exp.gguf"
+            fake_gguf.write_bytes(b"x" * 128)  # disk-independent: the header read is mocked below
+            queue = {
+                "queue_format": 1,
+                "vram_profile": "desktop-shared",
+                "deadline": "23:59",
+                "stop_policy": "pause-at-deadline",
+                "models": {
+                    "qwen4exp-cmoe": {
+                        "model_host_path": str(fake_gguf),
+                        "model_container_path": "/models/synthetic/qwen4exp.gguf",
+                        "server_flags": {"-ngl": 99},
+                        "gpu_weights_bytes": 3536007987,
+                        "kv_attention_layers": 12,
+                        "kv_indexer_geometry": {
+                            "layers": 12, "key_length": 128, "value_length": 256,
+                        },
+                    },
+                },
+                "cells": [{
+                    "model": "qwen4exp-cmoe", "alias": "q4x-roundtrip-c4k-f16", "c": 4096,
+                    "ctk": "f16", "ctv": "f16", "fa": "auto", "battery": ["vram"],
+                    "sampling_arm": "capability", "trials": 1,
+                }],
+            }
+            batch.validate_queue(queue)
+            cell = batch.resolve_queue_cells(queue)[0]
+
+            with mock.patch.object(gguf_fit, "read_gguf_metadata", return_value=self.SYNTHETIC_HEADER), \
+                 mock.patch.object(sweep, "read_gguf_metadata", return_value=self.SYNTHETIC_HEADER):
+                out = batch.write_cell_record(
+                    Path(tmp) / "records", cell, {},
+                    vram_baseline_bytes=1000, vram_loaded_bytes=9000,
+                    sampling_arm_effective="capability",
+                )
+                config = json.loads((out / "config.json").read_text())
+                sweep_cell = config["sweep_cell"]
+
+                # (i) the persisted sweep_cell carries all four passthroughs, positioned
+                # immediately after spec_decode, with the queue's own values.
+                keys = list(sweep_cell)
+                after_spec_decode = keys[keys.index("spec_decode") + 1:]
+                self.assertEqual(
+                    after_spec_decode,
+                    ["gpu_weights_bytes", "kv_attention_layers", "swa_layer_spec", "kv_indexer_geometry"],
+                )
+                self.assertEqual(sweep_cell["gpu_weights_bytes"], 3536007987)
+                self.assertEqual(sweep_cell["kv_attention_layers"], 12)
+                self.assertIsNone(sweep_cell["swa_layer_spec"])
+                self.assertEqual(
+                    sweep_cell["kv_indexer_geometry"],
+                    {"layers": 12, "key_length": 128, "value_length": 256},
+                )
+
+                item = verify_run.check_vram_arithmetic(cell.cell_id, config)
+                fit = sweep.classify_fit(cell.as_sweep_cell(), "desktop-shared")
+
+            # (ii) the verifier's observed kv_bytes_per_token equals the fit's, and both equal
+            # the hand-derived 33,792 B/token (24,576 main + 9,216 indexer).
+            self.assertEqual(fit["kv_bytes_per_token"], 33792.0)
+            self.assertEqual(item["observed"]["kv_bytes_per_token"], 33792.0)
+            self.assertEqual(item["observed"]["kv_bytes_per_token"], fit["kv_bytes_per_token"])
+            # (iii) observed weights_bytes is the queue's gpu_weights_bytes override, never the
+            # fake file's on-disk size (128 bytes) -- the multi-shard fit trap this override
+            # exists to close.
+            self.assertEqual(item["observed"]["weights_bytes"], 3536007987)
+            self.assertEqual(fit["weights_bytes"], 3536007987)
 
 
 if __name__ == "__main__":

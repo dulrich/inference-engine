@@ -384,6 +384,7 @@ def check_vram_arithmetic(cell_id: str, config: Optional[Dict[str, Any]]) -> Dic
             kv_attention_layers=sweep_cell.get("kv_attention_layers"),
             context=context,
             swa_layer_spec=sweep_cell.get("swa_layer_spec"),
+            kv_indexer_geometry=sweep_cell.get("kv_indexer_geometry"),
         )
     except (sweep.GGUFParseError, ValueError) as exc:
         return _item(CHECK_VRAM_ARITHMETIC, cell_id, expected, {"reason": f"kv_bytes_per_token failed: {exc}"}, "unknown")

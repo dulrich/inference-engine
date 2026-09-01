@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from cell_model import ResolvedCell
-from queue_file import QueueValidationError
+from queue_file import DEFAULT_REQUEST_TIMEOUT_S, QueueValidationError
 
 PENDING = "pending"
 RUNNING = "running"
@@ -54,10 +54,21 @@ def default_state_path(queue_path: Path) -> Path:
     return queue_path.with_name(queue_path.stem + ".state.json")
 
 
-def init_state(resolved_cells: Sequence[ResolvedCell]) -> Dict[str, Any]:
+def init_state(
+    resolved_cells: Sequence[ResolvedCell],
+    request_timeout_s: int = DEFAULT_REQUEST_TIMEOUT_S,
+) -> Dict[str, Any]:
     return {
         "queue_state": QUEUE_RUNNING,
         "created_at": utc_now_iso(),
+        # WP-1 (qwen4exp-bakeoff-campaign, cycle-3 M1): the effective per-request transport
+        # timeout this run started under, snapshotted at creation time -- `cell_id` excludes
+        # `request_timeout_s` (it is not an identity input), so without this snapshot a queue
+        # file edited after its state exists could change the timeout across a pause/resume
+        # undetected. `_load_or_init_state` compares this against the queue's current effective
+        # value on resume. A state file written before this key simply lacks it; absence reads
+        # as DEFAULT_REQUEST_TIMEOUT_S, same as an unedited queue's own effective value.
+        "request_timeout_s": request_timeout_s,
         # WP-B: each cell's already-resolved `alias` at the cell-entry TOP LEVEL (beside
         # `state`/`reason`), so a reader (the dashboard) can alias-join every cell -- including a
         # still-`pending` one -- without waiting for a `detail` to exist. An older state file

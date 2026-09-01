@@ -51,10 +51,14 @@ __all__ = [
 
 # The optional model-registry pass-throughs that are neither identity nor queue-only metadata:
 # `sweep.py` reads them off the plain cell dict for its own fit math (`gpu_weights_bytes`,
-# `kv_attention_layers`, `swa_layer_spec`), and `model_family` is read by the live cell runner to
-# pick a `sampling_table.production_sampling` entry. They ride through the adapter verbatim.
+# `kv_attention_layers`, `swa_layer_spec`, `kv_indexer_geometry`), and `model_family` is read by
+# the live cell runner to pick a `sampling_table.production_sampling` entry. They ride through
+# the adapter verbatim. `kv_indexer_geometry` (WP-1, qwen4exp-bakeoff-campaign, C4-B1) is the
+# newest addition: a second-KV-cache (DSA indexer) geometry block `gguf_fit.kv_bytes_per_token`
+# adds on top of the main cache's bytes/token, f16-scoped.
 SWEEP_PASSTHROUGH_KEYS: Tuple[str, ...] = (
     "gpu_weights_bytes", "kv_attention_layers", "swa_layer_spec", "model_family",
+    "kv_indexer_geometry",
 )
 
 
@@ -151,6 +155,14 @@ class RecordMetadata:
     `sampling_arm` is deliberately NOT a field: the persisted arm is the *effective* one the
     runner resolved (a `production` request can fall back to `capability`), which is a run-time
     fact supplied by the caller, not a property of the resolved cell.
+
+    The four fields after `spec_decode` (WP-1, qwen4exp-bakeoff-campaign, cycle-2 blocking 2) are
+    the fit-bearing `sweep_passthrough` facts -- `gpu_weights_bytes`, `kv_attention_layers`,
+    `swa_layer_spec`, `kv_indexer_geometry` -- that `as_sweep_cell()` already reached but the
+    persisted record never did (`verify_run.py` was silently falling back to `lineage.file_size`
+    and main-cache-only geometry for every historical record). **Appended, never inserted**: key
+    order below is load-bearing (`sweep_cell_block`'s own docstring) so a new record diffs
+    cleanly against a historical one.
     """
 
     cell_id: str
@@ -160,11 +172,17 @@ class RecordMetadata:
     battery: Optional[List[str]]
     model_id: Optional[str]
     spec_decode: Optional[str]
+    gpu_weights_bytes: Optional[int] = None
+    kv_attention_layers: Optional[int] = None
+    swa_layer_spec: Optional[List[bool]] = None
+    kv_indexer_geometry: Optional[Dict[str, Any]] = None
 
     def sweep_cell_block(self, sampling_arm_effective: Optional[str]) -> Dict[str, Any]:
         """The `config.json` `sweep_cell` mapping, key order preserved from the pre-WP-R1
         `write_cell_record` literal so a newly written record diffs cleanly against a historical
-        one."""
+        one. The four fit-passthrough keys are appended after `spec_decode`, always present
+        (`null` when unset) -- a deterministic record shape; `verify_run.py` reads every one of
+        them with `.get()`."""
         return {
             "cell_id": self.cell_id,
             "alias": self.alias,
@@ -174,6 +192,10 @@ class RecordMetadata:
             "sampling_arm": sampling_arm_effective,
             "model": self.model_id,
             "spec_decode": self.spec_decode,
+            "gpu_weights_bytes": self.gpu_weights_bytes,
+            "kv_attention_layers": self.kv_attention_layers,
+            "swa_layer_spec": self.swa_layer_spec,
+            "kv_indexer_geometry": self.kv_indexer_geometry,
         }
 
 
@@ -249,6 +271,8 @@ class ResolvedCell:
         return cell
 
     def record_metadata(self) -> RecordMetadata:
+        # `model_family` is deliberately NOT read here -- it's not fit-bearing, and
+        # `cell_runner.py` already records it elsewhere in the live run path.
         return RecordMetadata(
             cell_id=self.cell_id,
             alias=self.identity.alias,
@@ -257,4 +281,8 @@ class ResolvedCell:
             battery=list(self.execution.battery),
             model_id=self.queue.model_id,
             spec_decode=self.queue.spec_decode,
+            gpu_weights_bytes=self.sweep_passthrough.get("gpu_weights_bytes"),
+            kv_attention_layers=self.sweep_passthrough.get("kv_attention_layers"),
+            swa_layer_spec=self.sweep_passthrough.get("swa_layer_spec"),
+            kv_indexer_geometry=self.sweep_passthrough.get("kv_indexer_geometry"),
         )

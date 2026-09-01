@@ -526,5 +526,76 @@ class TestScratchStartupTimer(unittest.TestCase):
         self.assertIsNone(handle.scratch_startup_seconds)
 
 
+class TestKVIndexerGeometry(unittest.TestCase):
+    """C4-B1 (`plans/qwen4exp-bakeoff-campaign.md` WP-1): some architectures (qwen4exp) allocate
+    a SECOND KV cache -- a DSA indexer cache -- this harness otherwise has no representation for.
+    `kv_indexer_geometry` adds a flat per-token rate on top of the main cache's, f16-scoped."""
+
+    # A main-cache geometry shaped like qwen4exp's real header: 12 real-attention layers
+    # (kv_attention_layers override), head_count_kv=2, key_length=value_length=256.
+    GEOMETRY: ClassVar[dict[str, Any]] = {
+        "block_count": 48,
+        "head_count_kv": 2,
+        "key_length": 256,
+        "value_length": 256,
+    }
+    # The pinned indexer geometry this campaign's queue carries (plans/qwen4exp-bakeoff-
+    # campaign.md, Constraints settled since rev 0, C4-B1): measured 36 MiB at 4096 cells.
+    INDEXER_GEOMETRY: ClassVar[dict[str, Any]] = {"layers": 12, "key_length": 128, "value_length": 256}
+
+    def test_pinned_geometry_at_f16_f16_adds_the_indexer_term(self):
+        main_only = sweep.kv_bytes_per_token(
+            self.GEOMETRY, "f16", "f16", kv_attention_layers=12, context=4096,
+        )
+        with_indexer = sweep.kv_bytes_per_token(
+            self.GEOMETRY, "f16", "f16", kv_attention_layers=12, context=4096,
+            kv_indexer_geometry=self.INDEXER_GEOMETRY,
+        )
+        # 12 * (128*2 + 256*2) = 9,216 B/token (plan's own hand-derivation).
+        self.assertEqual(main_only, 24576.0)
+        self.assertEqual(with_indexer, main_only + 9216.0)
+        self.assertEqual(with_indexer, 33792.0)
+
+    def test_absent_geometry_leaves_the_rate_unchanged(self):
+        rate = sweep.kv_bytes_per_token(
+            self.GEOMETRY, "f16", "f16", kv_attention_layers=12, context=4096,
+        )
+        rate_explicit_none = sweep.kv_bytes_per_token(
+            self.GEOMETRY, "f16", "f16", kv_attention_layers=12, context=4096,
+            kv_indexer_geometry=None,
+        )
+        self.assertEqual(rate, rate_explicit_none)
+
+    def test_a_non_f16_ctk_or_ctv_raises(self):
+        for ctk, ctv in (("q4_0", "f16"), ("f16", "q4_0"), ("q8_0", "q8_0")):
+            with self.subTest(ctk=ctk, ctv=ctv):
+                with self.assertRaises(ValueError):
+                    sweep.kv_bytes_per_token(
+                        self.GEOMETRY, ctk, ctv, kv_attention_layers=12, context=4096,
+                        kv_indexer_geometry=self.INDEXER_GEOMETRY,
+                    )
+
+    def test_classify_fit_returns_unknown_with_a_reason_naming_the_indexer_at_a_quantized_kv_type(self):
+        synthetic = {
+            "weights_bytes": 6 * GIB,
+            "block_count": 48,
+            "head_count_kv": 2,
+            "key_length": 256,
+            "value_length": 256,
+        }
+        cell = sweep.normalize_cell({
+            "alias": "synthetic-geometry-indexer",
+            "model_container_path": "/models/synthetic/qwen4exp.gguf",
+            "synthetic_geometry": synthetic,
+            "kv_attention_layers": 12,
+            "kv_indexer_geometry": self.INDEXER_GEOMETRY,
+            "server_flags": {"-c": 4096, "-ctk": "q4_0", "-ctv": "q4_0"},
+            "battery": ["vram"],
+        })
+        fit = sweep.classify_fit(cell, vram_profile="desktop-shared")
+        self.assertEqual(fit["classification"], "unknown")
+        self.assertIn("indexer", fit["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

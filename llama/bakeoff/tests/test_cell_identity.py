@@ -134,6 +134,12 @@ GOLDEN_CELL_IDS = {
         "ling-c32768-f16-prod-ctkf16-ctvf16-faon-c32768-8c361420",
         "nemotron-c65536-f16-prodfallback-ctkf16-ctvf16-faon-c65536-26b464a7",
     ],
+    "qwen4exp-viability-v1": [  # 4 cells, sha256(chr(10).join(ids))[:16] == "a5b19c63040bced4"
+        "q4x-cmoe-c4k-f16-ctkf16-ctvf16-faauto-c4096-d29f605c",
+        "q4x-ncmoe38-c4k-f16-ctkf16-ctvf16-faauto-c4096-ea726295",
+        "q4x-cmoe-c16k-f16-ctkf16-ctvf16-faauto-c16384-d181c845",
+        "q4x-ncmoe38-c16k-f16-ctkf16-ctvf16-faauto-c16384-64cfbaa3",
+    ],
 }
 
 GOLDEN_DIGESTS = {
@@ -142,6 +148,7 @@ GOLDEN_DIGESTS = {
     "matrix-v1-dedicated-prod": (14, "bbdc3f60c9cf87fe"),
     "matrix-v1-shared": (18, "8906e79b9200afe4"),
     "wp5-validation": (5, "a25b59a3c6ef2a3a"),
+    "qwen4exp-viability-v1": (4, "a5b19c63040bced4"),
 }
 
 

@@ -378,6 +378,7 @@ def kv_bytes_per_token(
     kv_attention_layers: Optional[int] = None,
     context: Optional[int] = None,
     swa_layer_spec: Optional[List[bool]] = None,
+    kv_indexer_geometry: Optional[Dict[str, Any]] = None,
 ) -> float:
     """KV-cache bytes/token = attention_layers * (head_count_kv*key_length*bpe(ctk) +
     head_count_kv*value_length*bpe(ctv)) -- llama.cpp's own per-layer K+V cache tensor sizing.
@@ -416,6 +417,23 @@ def kv_bytes_per_token(
     silently reverts to the pre-existing conservative behavior -- every array entry scales with
     the full context, i.e. today's (over-estimating, not under-estimating) behavior -- rather than
     ever guessing which layers are SWA from `head_count_kv` magnitude alone.
+
+    **`kv_indexer_geometry` (WP-1, qwen4exp-bakeoff-campaign, C4-B1)**: some architectures (qwen4exp)
+    allocate a SECOND KV cache -- a DSA indexer cache -- this module otherwise has no
+    representation for at all. When given, `{"layers": int, "key_length": int, "value_length":
+    int}` describes that cache's own geometry (distinct from the main cache's `head_count_kv`/
+    `key_length`/`value_length` -- the indexer's K and V dims routinely differ from the main
+    cache's, so it cannot be modeled by inflating `kv_attention_layers`), and this function adds
+    a FLAT per-token rate, `layers * (key_length + value_length) * KV_TYPE_BYTES_PER_ELEMENT
+    ["f16"]`, on top of the main-cache rate above -- independent of `context` and of the
+    SWA path (the indexer cache is not window-capped; measured: 36 MiB at 4096 cells with
+    `layers=12, key_length=128, value_length=256` is exactly `12 * (128*2 + 256*2) = 9,216`
+    B/token * 4096). **Scoped to measured f16 behaviour**: nothing in this repo establishes that
+    the indexer cache honours the main cache's own `ctk`/`ctv` at a non-f16 KV type, so when
+    `kv_indexer_geometry` is given and `ctk`/`ctv` are not BOTH `"f16"`, this raises `ValueError`
+    (which `classify_fit` turns into `{"classification": "unknown", ...}`, never a guessed
+    number) rather than silently misclassifying a quantized-KV cell. Absent `kv_indexer_geometry`
+    is byte-identical to pre-C4-B1 behavior.
     """
     layers = kv_attention_layers if kv_attention_layers is not None else geometry.get("block_count")
     head_count_kv = geometry.get("head_count_kv")
@@ -451,9 +469,26 @@ def kv_bytes_per_token(
                 for h, is_swa in zip(head_count_kv, spec)
                 if h
             )
-            return total_bytes / context
-        return float(sum(h * per_token_both for h in head_count_kv if h))
-    return layers * head_count_kv * per_token_both
+            main_rate = total_bytes / context
+        else:
+            main_rate = float(sum(h * per_token_both for h in head_count_kv if h))
+    else:
+        main_rate = layers * head_count_kv * per_token_both
+
+    if kv_indexer_geometry is None:
+        return main_rate
+    if ctk != "f16" or ctv != "f16":
+        raise ValueError(
+            f"kv_indexer_geometry given but the indexer cache's storage type at ctk={ctk!r}/"
+            f"ctv={ctv!r} is unmeasured (C4-B1 scopes the indexer term to f16/f16 only) -- "
+            f"measure the indexer's storage type at this KV type before classifying this cell"
+        )
+    indexer_rate = (
+        kv_indexer_geometry["layers"]
+        * (kv_indexer_geometry["key_length"] + kv_indexer_geometry["value_length"])
+        * KV_TYPE_BYTES_PER_ELEMENT["f16"]
+    )
+    return main_rate + indexer_rate
 
 
 # -------------------------------------------------------------------------------------------
@@ -566,6 +601,7 @@ def classify_fit(
             kv_attention_layers=cell.get("kv_attention_layers"),
             context=context,
             swa_layer_spec=cell.get("swa_layer_spec"),
+            kv_indexer_geometry=cell.get("kv_indexer_geometry"),
         )
     except (GGUFParseError, ValueError) as exc:
         return {"classification": "unknown", "reason": str(exc)}

@@ -8,10 +8,13 @@ attempted at all, and the built command is the exact process a bake-off measures
 that silently shifts either does not error -- it quietly changes what the fleet runs and what
 its recorded numbers mean.
 
-Captured at commit `27e1153` (pre-WP-R3) across all 5 committed queues, 94 cells:
+Captured at commit `27e1153` (pre-WP-R3) across all 5 committed queues, 94 cells; extended at
+WP-1 (`plans/qwen4exp-bakeoff-campaign.md`) to 6 committed queues, 98 cells (`qwen4exp-viability-
+v1.json` joined; the five-queue/94-cell digests below are re-derived unchanged by the
+WP-1 additivity proof, re-run by the orchestrator at landing -- `d8b09bba7a47d2b0`/`56bfd847eaf30d3a`, n=94):
 
-    fit_classifications  d8b09bba7a47d2b0  n=94
-    build_commands       56bfd847eaf30d3a  n=94
+    fit_classifications  c049cba53b8962b5  n=98
+    build_commands       ec2214347c80c9e2  n=98
     vram_budgets         2f795a1ad011a72b
     geometry_shape       89c2f041b8feb1bf
     kv_bytes_table       5cc5a673e0dffe7b
@@ -575,13 +578,47 @@ GOLDEN = {
             ),
         ],
     ),
+    # WP-1 (qwen4exp-bakeoff-campaign.md): both `-cmoe` cells classify `fits`, both `-ncmoe 38`
+    # cells classify `excluded` -- pinned by the plan (cycle-3 B1) and hand-verified against the
+    # 33,792 B/token (24,576 main + 9,216 indexer) KV rate before being pinned here (see this
+    # WP's report for the margin arithmetic). An `excluded` `-ncmoe 38` cell here is the
+    # classifier's conservative verdict under the lock's injected 11.3 GiB headless budget, not
+    # a broken input -- the queue runner never consults this classification (batch.py only calls
+    # classify_fit from _dry_run_report); all four cells still execute in a live run.
+    "qwen4exp-viability-v1": GoldenQueue(
+        vram_profile="headless",
+        cells=[
+            GoldenCell(
+                cell_id="q4x-cmoe-c4k-f16-ctkf16-ctvf16-faauto-c4096-d29f605c",
+                classification="fits",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 4096 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -cmoe -lm mmap -lv 9 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+            GoldenCell(
+                cell_id="q4x-ncmoe38-c4k-f16-ctkf16-ctvf16-faauto-c4096-ea726295",
+                classification="excluded",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 4096 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lm mmap -lv 9 -ncmoe 38 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+            GoldenCell(
+                cell_id="q4x-cmoe-c16k-f16-ctkf16-ctvf16-faauto-c16384-d181c845",
+                classification="fits",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 16384 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -cmoe -lm mmap -lv 9 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+            GoldenCell(
+                cell_id="q4x-ncmoe38-c16k-f16-ctkf16-ctvf16-faauto-c16384-64cfbaa3",
+                classification="excluded",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 16384 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lm mmap -lv 9 -ncmoe 38 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+        ],
+    ),
 }
 
 # sha256(json.dumps(x, sort_keys=True, default=str))[:16] over the FULL per-cell fit dicts and
-# the FULL argv lists, in committed-queue order across all 5 queues.
-GOLDEN_FIT_DIGEST = "d8b09bba7a47d2b0"
-GOLDEN_COMMAND_DIGEST = "56bfd847eaf30d3a"
-GOLDEN_CELL_COUNT = 94
+# the FULL argv lists, in committed-queue order across all 6 queues (WP-1 added
+# qwen4exp-viability-v1; the pre-WP-1 5-queue/94-cell digests were re-derived unchanged by
+# the WP-1 additivity proof -- see this file's module docstring).
+GOLDEN_FIT_DIGEST = "c049cba53b8962b5"
+GOLDEN_COMMAND_DIGEST = "ec2214347c80c9e2"
+GOLDEN_CELL_COUNT = 98
 
 # `compute_vram_budget_bytes` for both profiles under the pinned injections. `desktop-shared` is
 # the static REALISTIC_FREE_VRAM_GIB cap and touches neither reader; `headless` is

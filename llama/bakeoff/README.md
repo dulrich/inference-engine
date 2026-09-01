@@ -92,7 +92,7 @@ its review finding in its own docstring, so `head -3 <module>.py` tells you why 
   assembles trials from, plus `corpus/manifest.json`'s provenance record.
 - `examples/sweep-example.json` — a 3-cell fixture for `sweep.py --dry-run` (synthetic geometry,
   no real model file required).
-- `queues/` — committed queue files and their durable `.state.json` run state.
+- `queues/` — committed queue files and their durable `.state.json` run state. **State files are always tracked, at every `queue_state`** — commit a `.state.json` whenever it changes (a `paused-resumable` checkpoint between windows is committed like any other data), so a queue never leaves an untracked file in the tree. User decision 2026-09-01, superseding the earlier terminal-only convention (`fb5465e`) under which live state stayed untracked until the queue completed.
 - `quality_corpus.jsonl` — 12 fixed prompts across the 8 categories in
   `references/serving-harness-test-round-2.md` §5, including 2 deterministic sentinels (`qa-2`,
   `longctx-1`) that do not dominate the set. Reused identically across every quant of a given

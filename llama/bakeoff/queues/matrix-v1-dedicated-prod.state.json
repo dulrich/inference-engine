@@ -1,0 +1,288 @@
+{
+  "queue_state": "paused-resumable",
+  "created_at": "2026-08-26T05:42:02+00:00",
+  "cells": {
+    "mxdp-gemma-qat-c128k-f16-mtp-prod-ctkf16-ctvf16-faauto-c131072-64f3cf26": {
+      "state": "failed",
+      "reason": "degenerate",
+      "alias": "mxdp-gemma-qat-c128k-f16-mtp-prod",
+      "detail": {
+        "sampling_arm_requested": "production",
+        "sampling_arm_effective": "production",
+        "production_sampling_fallback_reason": null,
+        "model_family": "gemma4",
+        "target_tokens": 111411,
+        "chars_per_token": 4.3,
+        "vram_before_bytes": 409505792,
+        "vram_after_bytes": 11893583872,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "runs/bakeoff/matrix-v1-dedicated-prod/mxdp-gemma-qat-c128k-f16-mtp-prod-ctkf16-ctvf16-faauto-c131072-64f3cf26",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null
+        }
+      }
+    },
+    "mxdp-qwen36-c128k-f16-mtp-prod-ctkf16-ctvf16-faauto-c131072-f330211a": {
+      "state": "completed",
+      "reason": null,
+      "alias": "mxdp-qwen36-c128k-f16-mtp-prod",
+      "detail": {
+        "sampling_arm_requested": "production",
+        "sampling_arm_effective": "production",
+        "production_sampling_fallback_reason": null,
+        "model_family": "qwen35moe",
+        "target_tokens": 111411,
+        "chars_per_token": 4.0,
+        "vram_before_bytes": 409485312,
+        "vram_after_bytes": 12901322752,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "runs/bakeoff/matrix-v1-dedicated-prod/mxdp-qwen36-c128k-f16-mtp-prod-ctkf16-ctvf16-faauto-c131072-f330211a",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null
+        }
+      }
+    },
+    "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-ctkq4_0-ctvq4_0-faon-c131072-0d8108e6": {
+      "state": "completed",
+      "reason": null,
+      "alias": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod",
+      "detail": {
+        "sampling_arm_requested": "production",
+        "sampling_arm_effective": "production",
+        "production_sampling_fallback_reason": null,
+        "model_family": "qwen35",
+        "target_tokens": 111411,
+        "chars_per_token": 4.0,
+        "vram_before_bytes": 423763968,
+        "vram_after_bytes": 14951665664,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "runs/bakeoff/matrix-v1-dedicated-prod/mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-ctkq4_0-ctvq4_0-faon-c131072-0d8108e6",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null
+        }
+      }
+    },
+    "mxdp-qwen36-c128k-f16-mtp-prod-nothink-ctkf16-ctvf16-faauto-c131072-2033109b": {
+      "state": "completed",
+      "reason": null,
+      "alias": "mxdp-qwen36-c128k-f16-mtp-prod-nothink",
+      "detail": {
+        "sampling_arm_requested": "production",
+        "sampling_arm_effective": "production",
+        "production_sampling_fallback_reason": null,
+        "model_family": "qwen35moe",
+        "target_tokens": 111411,
+        "chars_per_token": 4.0,
+        "vram_before_bytes": 409485312,
+        "vram_after_bytes": 12900294656,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "runs/bakeoff/matrix-v1-dedicated-prod/mxdp-qwen36-c128k-f16-mtp-prod-nothink-ctkf16-ctvf16-faauto-c131072-2033109b",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null
+        }
+      }
+    },
+    "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-nothink-ctkq4_0-ctvq4_0-faon-c131072-41f57002": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-nothink"
+    },
+    "mxdp-qwen36-c128k-f16-mtp-prod-rb128-ctkf16-ctvf16-faauto-c131072-feb547bf": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mxdp-qwen36-c128k-f16-mtp-prod-rb128"
+    },
+    "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-rb128-ctkq4_0-ctvq4_0-faon-c131072-62da3ac9": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-rb128"
+    },
+    "mxdp-ling-ud-q4-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-9f2929eb": {
+      "state": "completed",
+      "reason": null,
+      "alias": "mxdp-ling-ud-q4-c128k-f16-prod",
+      "detail": {
+        "sampling_arm_requested": "production",
+        "sampling_arm_effective": "production",
+        "production_sampling_fallback_reason": null,
+        "model_family": "bailingmoe3",
+        "target_tokens": 111411,
+        "chars_per_token": 4.2,
+        "vram_before_bytes": 409509888,
+        "vram_after_bytes": 6792286208,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "runs/bakeoff/matrix-v1-dedicated-prod/mxdp-ling-ud-q4-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-9f2929eb",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null
+        }
+      }
+    },
+    "mxdp-ling-ud-q6-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-85d4f581": {
+      "state": "completed",
+      "reason": null,
+      "alias": "mxdp-ling-ud-q6-c128k-f16-prod",
+      "detail": {
+        "sampling_arm_requested": "production",
+        "sampling_arm_effective": "production",
+        "production_sampling_fallback_reason": null,
+        "model_family": "bailingmoe3",
+        "target_tokens": 111411,
+        "chars_per_token": 4.2,
+        "vram_before_bytes": 409505792,
+        "vram_after_bytes": 8667750400,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "runs/bakeoff/matrix-v1-dedicated-prod/mxdp-ling-ud-q6-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-85d4f581",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null
+        }
+      }
+    },
+    "mxdp-ling-q8-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-9e8a463f": {
+      "state": "completed",
+      "reason": null,
+      "alias": "mxdp-ling-q8-c128k-f16-prod",
+      "detail": {
+        "sampling_arm_requested": "production",
+        "sampling_arm_effective": "production",
+        "production_sampling_fallback_reason": null,
+        "model_family": "bailingmoe3",
+        "target_tokens": 111411,
+        "chars_per_token": 4.2,
+        "vram_before_bytes": 409505792,
+        "vram_after_bytes": 9801150464,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "runs/bakeoff/matrix-v1-dedicated-prod/mxdp-ling-q8-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-9e8a463f",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null
+        }
+      }
+    },
+    "mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mxdp-qwen36-c128k-f16-timing-mtp-think"
+    },
+    "mxdp-qwen36-c128k-f16-timing-base-think-ctkf16-ctvf16-faauto-c131072-447e38a2": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mxdp-qwen36-c128k-f16-timing-base-think"
+    },
+    "mxdp-qwen36-c128k-f16-timing-mtp-nothink-ctkf16-ctvf16-faauto-c131072-27ef8a46": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mxdp-qwen36-c128k-f16-timing-mtp-nothink"
+    },
+    "mxdp-qwen36-c128k-f16-timing-base-nothink-ctkf16-ctvf16-faauto-c131072-60601124": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mxdp-qwen36-c128k-f16-timing-base-nothink"
+    }
+  },
+  "updated_at": "2026-08-26T16:33:46+00:00",
+  "paused_reason": "stop-requested"
+}

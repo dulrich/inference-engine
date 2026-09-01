@@ -140,6 +140,31 @@ GOLDEN_CELL_IDS = {
         "q4x-cmoe-c16k-f16-ctkf16-ctvf16-faauto-c16384-d181c845",
         "q4x-ncmoe38-c16k-f16-ctkf16-ctvf16-faauto-c16384-64cfbaa3",
     ],
+    # plans/qwen4exp-ram-ab-spike.md WP-1 -- three byte-identical queues (the memory state is
+    # carried by the file name and measurement directory, not by content): the four
+    # qwen4exp-viability-v1 cells verbatim plus the matrix-v1-dedicated-prod control cell
+    # verbatim, control last. All three resolve to the same ordered five-id list.
+    "qwen4exp-ram-2dimm-jedec-v1": [  # 5 cells, sha256(chr(10).join(ids))[:16] == "bb0d3aa0f7c1a683"
+        "q4x-cmoe-c4k-f16-ctkf16-ctvf16-faauto-c4096-d29f605c",
+        "q4x-ncmoe38-c4k-f16-ctkf16-ctvf16-faauto-c4096-ea726295",
+        "q4x-cmoe-c16k-f16-ctkf16-ctvf16-faauto-c16384-d181c845",
+        "q4x-ncmoe38-c16k-f16-ctkf16-ctvf16-faauto-c16384-64cfbaa3",
+        "mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5",
+    ],
+    "qwen4exp-ram-2dimm-expo-v1": [  # 5 cells, sha256(chr(10).join(ids))[:16] == "bb0d3aa0f7c1a683"
+        "q4x-cmoe-c4k-f16-ctkf16-ctvf16-faauto-c4096-d29f605c",
+        "q4x-ncmoe38-c4k-f16-ctkf16-ctvf16-faauto-c4096-ea726295",
+        "q4x-cmoe-c16k-f16-ctkf16-ctvf16-faauto-c16384-d181c845",
+        "q4x-ncmoe38-c16k-f16-ctkf16-ctvf16-faauto-c16384-64cfbaa3",
+        "mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5",
+    ],
+    "qwen4exp-ram-4dimm-v1": [  # 5 cells, sha256(chr(10).join(ids))[:16] == "bb0d3aa0f7c1a683"
+        "q4x-cmoe-c4k-f16-ctkf16-ctvf16-faauto-c4096-d29f605c",
+        "q4x-ncmoe38-c4k-f16-ctkf16-ctvf16-faauto-c4096-ea726295",
+        "q4x-cmoe-c16k-f16-ctkf16-ctvf16-faauto-c16384-d181c845",
+        "q4x-ncmoe38-c16k-f16-ctkf16-ctvf16-faauto-c16384-64cfbaa3",
+        "mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5",
+    ],
 }
 
 GOLDEN_DIGESTS = {
@@ -149,6 +174,9 @@ GOLDEN_DIGESTS = {
     "matrix-v1-shared": (18, "8906e79b9200afe4"),
     "wp5-validation": (5, "a25b59a3c6ef2a3a"),
     "qwen4exp-viability-v1": (4, "a5b19c63040bced4"),
+    "qwen4exp-ram-2dimm-jedec-v1": (5, "bb0d3aa0f7c1a683"),
+    "qwen4exp-ram-2dimm-expo-v1": (5, "bb0d3aa0f7c1a683"),
+    "qwen4exp-ram-4dimm-v1": (5, "bb0d3aa0f7c1a683"),
 }
 
 
@@ -258,6 +286,40 @@ class TestIdentityIsStructurallyIsolated(unittest.TestCase):
             cell, identity=dataclasses.replace(cell.identity, alias="different-alias"),
         )
         self.assertNotEqual(renamed.cell_id, cell.cell_id)
+
+
+class RamAbQueuesAreIdentical(unittest.TestCase):
+    """plans/qwen4exp-ram-ab-spike.md WP-1 -- the three RAM A/B queues are byte-identical
+    files; this asserts it at the parsed-JSON level (not just cell identity) so a future edit
+    that touched one queue's `models`/`cells` without touching the other two would fail here
+    even if it somehow left `cell_id` unchanged."""
+
+    QUEUE_NAMES = (
+        "qwen4exp-ram-2dimm-jedec-v1",
+        "qwen4exp-ram-2dimm-expo-v1",
+        "qwen4exp-ram-4dimm-v1",
+    )
+
+    def _load(self, name):
+        import json
+
+        return json.loads((QUEUES_DIR / f"{name}.json").read_text())
+
+    def test_models_and_cells_are_pairwise_equal(self):
+        queues = {name: self._load(name) for name in self.QUEUE_NAMES}
+        baseline_name = self.QUEUE_NAMES[0]
+        baseline = queues[baseline_name]
+        for name in self.QUEUE_NAMES[1:]:
+            with self.subTest(queue=name):
+                self.assertEqual(queues[name]["models"], baseline["models"])
+                self.assertEqual(queues[name]["cells"], baseline["cells"])
+
+    def test_cell_id_lists_equal_the_golden_jedec_entry(self):
+        expected = GOLDEN_CELL_IDS["qwen4exp-ram-2dimm-jedec-v1"]
+        for name in self.QUEUE_NAMES:
+            with self.subTest(queue=name):
+                actual = [c.cell_id for c in _resolve(name)]
+                self.assertEqual(actual, expected)
 
 
 if __name__ == "__main__":

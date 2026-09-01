@@ -610,15 +610,111 @@ GOLDEN = {
             ),
         ],
     ),
+    # plans/qwen4exp-ram-ab-spike.md WP-1 -- three byte-identical queues (four qwen4exp-
+    # viability-v1 cells plus the matrix-v1-dedicated-prod control cell, control last); same
+    # `-cmoe`/`-ncmoe 38` fits/excluded flicker as qwen4exp-viability-v1 above (same cells,
+    # same headless injection), plus the control cell's `fits`/command copied from its existing
+    # entry under matrix-v1-dedicated-prod (same cell_id, same headless injection).
+    "qwen4exp-ram-2dimm-jedec-v1": GoldenQueue(
+        vram_profile="headless",
+        cells=[
+            GoldenCell(
+                cell_id="q4x-cmoe-c4k-f16-ctkf16-ctvf16-faauto-c4096-d29f605c",
+                classification="fits",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 4096 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -cmoe -lm mmap -lv 9 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+            GoldenCell(
+                cell_id="q4x-ncmoe38-c4k-f16-ctkf16-ctvf16-faauto-c4096-ea726295",
+                classification="excluded",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 4096 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lm mmap -lv 9 -ncmoe 38 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+            GoldenCell(
+                cell_id="q4x-cmoe-c16k-f16-ctkf16-ctvf16-faauto-c16384-d181c845",
+                classification="fits",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 16384 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -cmoe -lm mmap -lv 9 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+            GoldenCell(
+                cell_id="q4x-ncmoe38-c16k-f16-ctkf16-ctvf16-faauto-c16384-64cfbaa3",
+                classification="excluded",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 16384 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lm mmap -lv 9 -ncmoe 38 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+            GoldenCell(
+                cell_id="mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5",
+                classification="fits",
+                command="llama-server -m /models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --spec-type draft-mtp -lv 9 -ncmoe 32 -ub 2048",
+            ),
+        ],
+    ),
+    "qwen4exp-ram-2dimm-expo-v1": GoldenQueue(
+        vram_profile="headless",
+        cells=[
+            GoldenCell(
+                cell_id="q4x-cmoe-c4k-f16-ctkf16-ctvf16-faauto-c4096-d29f605c",
+                classification="fits",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 4096 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -cmoe -lm mmap -lv 9 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+            GoldenCell(
+                cell_id="q4x-ncmoe38-c4k-f16-ctkf16-ctvf16-faauto-c4096-ea726295",
+                classification="excluded",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 4096 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lm mmap -lv 9 -ncmoe 38 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+            GoldenCell(
+                cell_id="q4x-cmoe-c16k-f16-ctkf16-ctvf16-faauto-c16384-d181c845",
+                classification="fits",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 16384 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -cmoe -lm mmap -lv 9 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+            GoldenCell(
+                cell_id="q4x-ncmoe38-c16k-f16-ctkf16-ctvf16-faauto-c16384-64cfbaa3",
+                classification="excluded",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 16384 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lm mmap -lv 9 -ncmoe 38 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+            GoldenCell(
+                cell_id="mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5",
+                classification="fits",
+                command="llama-server -m /models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --spec-type draft-mtp -lv 9 -ncmoe 32 -ub 2048",
+            ),
+        ],
+    ),
+    "qwen4exp-ram-4dimm-v1": GoldenQueue(
+        vram_profile="headless",
+        cells=[
+            GoldenCell(
+                cell_id="q4x-cmoe-c4k-f16-ctkf16-ctvf16-faauto-c4096-d29f605c",
+                classification="fits",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 4096 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -cmoe -lm mmap -lv 9 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+            GoldenCell(
+                cell_id="q4x-ncmoe38-c4k-f16-ctkf16-ctvf16-faauto-c4096-ea726295",
+                classification="excluded",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 4096 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lm mmap -lv 9 -ncmoe 38 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+            GoldenCell(
+                cell_id="q4x-cmoe-c16k-f16-ctkf16-ctvf16-faauto-c16384-d181c845",
+                classification="fits",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 16384 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -cmoe -lm mmap -lv 9 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+            GoldenCell(
+                cell_id="q4x-ncmoe38-c16k-f16-ctkf16-ctvf16-faauto-c16384-64cfbaa3",
+                classification="excluded",
+                command="llama-server -m /models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf --port 8080 -c 16384 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lm mmap -lv 9 -ncmoe 38 -ot 'per_layer_token_embd\\.weight=CPU'",
+            ),
+            GoldenCell(
+                cell_id="mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5",
+                classification="fits",
+                command="llama-server -m /models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --spec-type draft-mtp -lv 9 -ncmoe 32 -ub 2048",
+            ),
+        ],
+    ),
 }
 
 # sha256(json.dumps(x, sort_keys=True, default=str))[:16] over the FULL per-cell fit dicts and
-# the FULL argv lists, in committed-queue order across all 6 queues (WP-1 added
-# qwen4exp-viability-v1; the pre-WP-1 5-queue/94-cell digests were re-derived unchanged by
-# the WP-1 additivity proof -- see this file's module docstring).
-GOLDEN_FIT_DIGEST = "c049cba53b8962b5"
-GOLDEN_COMMAND_DIGEST = "ec2214347c80c9e2"
-GOLDEN_CELL_COUNT = 98
+# the FULL argv lists, in committed-queue order across all 9 queues (WP-1 of
+# plans/qwen4exp-ram-ab-spike.md added the three qwen4exp-ram-* queues; the pre-WP-1 6-queue/
+# 98-cell digests were re-derived unchanged by this WP's additivity proof -- see this file's
+# module docstring).
+GOLDEN_FIT_DIGEST = "6671bd6204d1e66d"
+GOLDEN_COMMAND_DIGEST = "97ddbd1bdfe55d6a"
+GOLDEN_CELL_COUNT = 113
 
 # `compute_vram_budget_bytes` for both profiles under the pinned injections. `desktop-shared` is
 # the static REALISTIC_FREE_VRAM_GIB cap and touches neither reader; `headless` is

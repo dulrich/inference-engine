@@ -21,6 +21,15 @@
 #                                         `_short_id` drops the HF org prefix from
 #                                         `fastino/gliner2-base-v1`), because 19k rows already
 #                                         carry it. Changing either one forks the store.
+#   gliner2-base      eval-harness/transcript_enrichment
+#                                         SQLite `runs.model` column (the tool's `APP_DB_PATH`
+#                                         DB), as the FULL persisted id `fastino/gliner2-base-v1`
+#                                         -- never in vault note frontmatter (`notes.py:48-69`
+#                                         writes the `entities:` mapping only). NOTE this
+#                                         deliberately differs from news-ingestion's
+#                                         `_short_id`-trimmed `gliner2-base-v1` above: the two
+#                                         consumers persist different strings for the same alias
+#                                         on purpose.
 #   gliner2-pii       (prospective)       eval-harness / news-ingestion PII sprints — append the
 #                                         row here when the first consumer lands.
 #

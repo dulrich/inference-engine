@@ -346,11 +346,13 @@ started.
 
 ## The bake-off image (`b10664-swap243`)
 
-`crucible-llamacpp-vulkan:b10664-swap243` is a second, additive image sitting alongside the production tag, built for the qwen4exp bake-off (`plans/qwen4exp-image-and-ple-spike.md`). `unsloth/Qwen3.8-Flash-Next-GGUF` declares `general.architecture: qwen4exp`, and upstream support for that architecture first appears in build `b10664` — at the pinned `b10534` the model cannot be loaded at all. Build it through the documented rebuild path above, overriding only the llama.cpp tag and letting `LLAMA_SWAP_TAG` / `LLAMA_SWAP_SHA256` default, so the router half of the image stays identical to production's:
+`crucible-llamacpp-vulkan:b10664-swap243` is a second, additive image sitting alongside the production tag, built for the qwen4exp bake-off (`plans/qwen4exp-image-and-ple-spike.md`). `unsloth/Qwen3.8-Flash-Next-GGUF` declares `general.architecture: qwen4exp`, and upstream support for that architecture first appears in build `b10664` — at the pinned `b10534` the model cannot be loaded at all. Build it through the documented rebuild path above, overriding only the llama.cpp tag and letting `LLAMA_SWAP_TAG` / `LLAMA_SWAP_COMMIT` default, so the router half of the image stays identical to production's:
 
 ```bash
 docker build --build-arg LLAMA_CPP_TAG=b10664 -t crucible-llamacpp-vulkan:b10664-swap243 llama
 ```
+
+A future rebuild of that tag through this same build-arg path inherits the source-build `swap` stage automatically; the existing `b10664-swap243` image is deliberately left as built rather than rebuilt now (`plans/container-critical-high-cve-remediation.md`, "Decisions locked").
 
 **The `Dockerfile` default deliberately stays `b10534`, and the compose service is not repointed.** The new tag exists only as a build-arg override, reachable by the bake-off harness through `BAKEOFF_SCRATCH_IMAGE` (`bakeoff/run-window.sh`). Moving the default instead would drag all eight production models, the embedding agreement harness, and the whole glibc/Mesa ABI surface 130 upstream builds forward for the benefit of one experiment — and both traps above are on record from exactly that class of change. Keeping the experiment in its own tag is what contains the *image* risk. It does not contain the *availability* cost: a bake-off window stops the router regardless of which image it runs.
 
@@ -393,14 +395,11 @@ The same technique answers finer questions than "is the architecture present", b
 ## Upgrading llama-swap
 
 ```bash
-docker build --build-arg LLAMA_SWAP_TAG=vNNN --build-arg LLAMA_SWAP_SHA256=<sha256> \
+docker build --build-arg LLAMA_SWAP_TAG=vNNN --build-arg LLAMA_SWAP_COMMIT=<full 40-char sha> \
   -t crucible-llamacpp-vulkan:b10534-swapNNN llama
 ```
 
-Pinned to ≥v242 (the release that fixed a TTL-unload deadlock) by tag *and* checksum. Get the
-checksum from the new release's own `llama-swap_<ver>_checksums.txt` asset (pick the
-`linux_amd64.tar.gz` line) — don't hand-type it, and don't trust a value that isn't sourced from
-that file. `docker build` fails closed on a mismatch (`sha256sum -c -`).
+Pinned to ≥v242 (the release that fixed a TTL-unload deadlock) by tag *and* commit SHA. Bump `LLAMA_SWAP_TAG` and `LLAMA_SWAP_COMMIT` together, deliberately, never independently — resolve the new tag's full commit SHA via `git ls-remote https://github.com/mostlygeek/llama-swap.git refs/tags/vNNN` or the GitHub refs API; if `vNNN` is an annotated tag, the SHA to pin is the *commit that tag points at*, not the tag object itself, so use `git ls-remote --tags` and take the peeled `^{}` line for that tag rather than its own line. There is no checksum argument any more — the stage builds llama-swap from source under a pinned Go toolchain rather than downloading and verifying a release asset, so the audited full commit SHA is what pins the build, never a hash.
 
 An image rebuild is never complete on a green healthcheck — run `llama/smoke-inference.sh`
 after every rebuild, not only after a config change. The smoke script is the only thing that

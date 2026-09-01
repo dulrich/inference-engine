@@ -89,40 +89,67 @@ RUN cmake -B build \
       -DLLAMA_CURL=OFF \
     && cmake --build build --config Release --target llama-server -j"$(nproc)"
 
-# ── llama-swap fetch stage ───────────────────────────────────────────────────────────────────
+# ── llama-swap source-build stage ───────────────────────────────────────────────────────────
 #
 # llama-swap turns this image from "one model, one process" into a multi-model router: it spawns
 # llama-server children on demand per request (holding the client's request until the child
 # reports healthy on its `checkEndpoint`), swaps/unloads them per `ttl`, and exposes one stable
 # set of aliases across `/v1/chat/completions`, `/v1/embeddings`, `/v1/models` (aggregated), and
-# `/rerank` + `/v1/rerank`. It is a static Go binary published as a GitHub release asset, so
-# there is no source build to reproduce here — only a download to pin and verify, the same shape
-# as any other pinned third-party binary in this fleet.
+# `/rerank` + `/v1/rerank`.
 #
-# Pinned to >= v242 specifically: v242 fixed a TTL-unload deadlock, and llama-swap has no
-# stability guarantee below that. v243 is the release this was authored against (2026-07-26).
-# The checksum is not hand-typed: it is the `llama-swap_<ver>_linux_amd64.tar.gz` line from that
-# release's own `llama-swap_<ver>_checksums.txt`, cross-checked here by downloading the asset
-# and hashing it independently. Bump `LLAMA_SWAP_TAG` deliberately, and re-derive
-# `LLAMA_SWAP_SHA256` from the new release's checksums file the same way — never hand-edit the
-# hash to make a build pass.
-FROM debian:sid-slim AS swap
+# Built from source, not downloaded as a GitHub release asset, because the release binary's Go
+# stdlib version is not something a tag bump can fix: upstream's release CI (`.goreleaser.yaml`)
+# pins its own toolchain via `actions/setup-go`'s `go-version-file: go.mod`, and `go.mod`'s `go
+# 1.26.1` line is a *minimum*, not a `toolchain` pin — every prebuilt release, including ones
+# newer than this fleet's scan, links against that same go1.26.1 stdlib. All 20 HIGH `gobinary`
+# findings in `fleet-tools/data/security-scan/inference-engine.images.json` are CVEs fixed
+# somewhere between go1.25.9 and go1.26.6/1.27.0-rc.3 — i.e. closed by any newer toolchain, with
+# zero code or config change, since llama-swap's own module carries no `toolchain` directive that
+# would override it. Building here under `golang:1.26.7-trixie` closes all 20.
+#
+# Pinned to v243 specifically, not upstream's current v251: measured, the `v243..v251` diff
+# touches `config-schema.json` and `internal/config/load.go`/`matrix.go` — real config-parsing
+# surface this fleet's `config.yaml` has never run against. v243 is the release this fleet was
+# authored against and is already validated; v242 fixed a TTL-unload deadlock and llama-swap has
+# no stability guarantee below that. Bump `LLAMA_SWAP_TAG` and `LLAMA_SWAP_COMMIT` together,
+# deliberately, per "Upgrading llama-swap" in README.md — never independently.
+#
+# No `-tags embed_ui`: the ldflags below mirror `.goreleaser.yaml`'s own release recipe (as
+# checked out at LLAMA_SWAP_COMMIT) minus that one tag. `embed_ui` requires `make ui` (Node/npm)
+# to populate `ui_dist` for `//go:embed`; llama-swap's own `internal/server/embed_notag.go` is
+# the documented `!embed_ui` fallback that serves no UI files and needs no Node toolchain. This
+# fleet never calls llama-swap's own web UI (nothing in README.md/AGENTS.md/config.yaml
+# references it; the fleet has its own bench dashboard on :4810), so building without it is a
+# lower-complexity substitute for the release binary, not a functionality cut.
+FROM golang:1.26.7-trixie AS swap
 
 ARG LLAMA_SWAP_TAG=v243
-ARG LLAMA_SWAP_SHA256=1bb27ccbdaff0c4e42ef2356e2e7b5c693073dd57f9dcecf6c35ae6847f0b140
+# Full commit SHA the v243 tag points at (a commit object, not an annotated tag), resolved
+# 2026-09-01 via the GitHub refs API. Bump LLAMA_SWAP_TAG and this SHA together — see
+# "Upgrading llama-swap" in README.md for how to resolve the next one.
+ARG LLAMA_SWAP_COMMIT=4c50064e3d7ff44834cf1b12ab529befa79f22d6
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
+# git and ca-certificates already ship in golang:1.26.7-trixie (verified via `docker run
+# golang:1.26.7-trixie sh -c 'which git; git --version'` before writing this stage) — no
+# apt-get install needed here, unlike router/Dockerfile's node:24-slim build stage.
+WORKDIR /src
+# Full SHA fetch, never the tag or an abbreviation: GitHub's fetch-by-commit protocol
+# (allowReachableSHA1InWant) only resolves a full 40-character SHA — the same constraint
+# router/Dockerfile's AI_GATEWAY_COMMIT comment records, and it applies identically here.
+RUN git init -q \
+    && git remote add origin https://github.com/mostlygeek/llama-swap.git \
+    && git fetch --depth 1 origin "${LLAMA_SWAP_COMMIT}" \
+    && git checkout -q FETCH_HEAD
 
-WORKDIR /swap
-# The release asset name drops the leading "v" from the tag (llama-swap_243_..., not
-# llama-swap_v243_...) — `${LLAMA_SWAP_TAG#v}` strips it.
-RUN curl -fsSL -o llama-swap.tar.gz \
-      "https://github.com/mostlygeek/llama-swap/releases/download/${LLAMA_SWAP_TAG}/llama-swap_${LLAMA_SWAP_TAG#v}_linux_amd64.tar.gz" \
-    && echo "${LLAMA_SWAP_SHA256}  llama-swap.tar.gz" | sha256sum -c - \
-    && tar -xzf llama-swap.tar.gz llama-swap \
-    && chmod +x llama-swap
+# ldflags variable names verified against the checked-out source (repo-root `llama-swap.go`,
+# package main: `var ( version = "0"; commit = "abcd1234"; date = "unknown" )`) and against
+# `.goreleaser.yaml`'s own release recipe, which sets exactly these three via `-X
+# main.version=... -X main.commit=... -X main.date=...`. Short SHA and RFC3339 date are computed
+# in-shell: Dockerfile ARG interpolation has no bash substring expansion, and .goreleaser.yaml's
+# own `{{ .ShortCommit }}` / `{{ .Date }}` are the short SHA and RFC3339 UTC respectively.
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+      -ldflags="-s -w -X main.version=${LLAMA_SWAP_TAG} -X main.commit=$(echo "${LLAMA_SWAP_COMMIT}" | cut -c1-7) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      -o /src/llama-swap .
 
 # ── Runtime stage ────────────────────────────────────────────────────────────────────────────
 FROM debian:sid-slim
@@ -165,7 +192,7 @@ COPY --from=build /src/build/bin/llama-server /usr/local/bin/llama-server
 COPY --from=build /src/build/bin/*.so /usr/local/lib/
 RUN ldconfig
 
-COPY --from=swap /swap/llama-swap /usr/local/bin/llama-swap
+COPY --from=swap /src/llama-swap /usr/local/bin/llama-swap
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

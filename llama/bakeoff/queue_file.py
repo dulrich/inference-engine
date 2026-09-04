@@ -18,9 +18,10 @@ Zero new runtime dependencies: Python 3 stdlib only.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import sweep
 from cell_model import (
@@ -325,3 +326,49 @@ def resolve_queue_cells(queue: Dict[str, Any]) -> List[ResolvedCell]:
         seen_ids.add(cell_id)
         out.append(cell)
     return out
+
+
+# -------------------------------------------------------------------------------------------
+# WP-R1: the once-loaded queue-run value. `batch.run_queue` and `batch.cmd_run` both used to
+# call `load_queue`/`resolve_queue_cells` themselves (and `cmd_run` separately re-derived the
+# effective vram_profile/request_timeout_s) -- two on-disk reads and two independent
+# resolutions of the SAME queue file per CLI invocation, with nothing enforcing they'd agree if
+# the file changed between them. `load_resolved_queue` is the one seam that reads and resolves a
+# queue; every caller (CLI, `run_queue`) is expected to call it exactly once and route cells,
+# the effective vram_profile/request_timeout_s, the runner, and the state snapshot through the
+# returned value.
+# -------------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ResolvedQueue:
+    """One queue file, loaded and resolved exactly once. `queue` is the validated raw mapping --
+    kept whole, not stripped to a settings bag, because `batch._run_resolved_queue` still reads
+    the `deadline` HH:MM policy off it directly (`compute_deadline_dt(resolved.queue["deadline"],
+    ...)`). `cells` are already-resolved `ResolvedCell`s in queue order. `vram_profile` and
+    `request_timeout_s` are EFFECTIVE values (CLI override / queue default already applied,
+    absent-field defaulting already applied) -- never re-derive either from `queue` again."""
+
+    queue_path: Path
+    queue: Dict[str, Any]
+    cells: List[ResolvedCell]
+    vram_profile: str
+    request_timeout_s: int
+
+
+def load_resolved_queue(
+    queue_path: Path, vram_profile_override: Optional[str] = None
+) -> ResolvedQueue:
+    """Loads and resolves `queue_path` exactly once: one `load_queue` call, one
+    `resolve_queue_cells` call. `vram_profile_override` is the CLI's `--vram-profile`; when given
+    it wins over the queue's own `vram_profile`, matching the effective-profile rule `run_queue`
+    and `cmd_run` each used to compute separately before this seam existed."""
+    queue = load_queue(queue_path)
+    cells = resolve_queue_cells(queue)
+    return ResolvedQueue(
+        queue_path=queue_path,
+        queue=queue,
+        cells=cells,
+        vram_profile=vram_profile_override or queue["vram_profile"],
+        request_timeout_s=effective_request_timeout_s(queue),
+    )

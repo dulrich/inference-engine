@@ -25,6 +25,7 @@ if str(BAKEOFF_DIR) not in sys.path:
 import batch  # noqa: E402
 import gguf_fit  # noqa: E402
 import longcontext  # noqa: E402
+import queue_file  # noqa: E402
 import run_harness  # noqa: E402
 import sampling_table  # noqa: E402
 import sweep  # noqa: E402
@@ -1441,6 +1442,10 @@ class TestControlWp2CliArgs(unittest.TestCase):
                 parser.parse_args(["run", "--queue", "q.json", "--deadline-minutes", bad])
 
     def test_cmd_run_forwards_stop_marker_and_deadline_minutes_to_run_queue(self):
+        # WP-R1: `cmd_run` now calls the internal run core (`_run_resolved_queue`) directly with
+        # its own already-loaded `ResolvedQueue`, rather than the public `run_queue` wrapper
+        # (which would load/resolve the queue file a second time) -- so this spies on
+        # `_run_resolved_queue`, the CLI's actual forwarding target, instead of `run_queue`.
         import io
         from contextlib import redirect_stdout
         from unittest import mock
@@ -1450,12 +1455,12 @@ class TestControlWp2CliArgs(unittest.TestCase):
             marker_path = Path(tmp) / "stop.marker"
             captured = {}
 
-            def _fake_run_queue(*args, **kwargs):
+            def _fake_run_resolved_queue(*args, **kwargs):
                 captured.update(kwargs)
                 return {"noop": True, "queue_state": batch.QUEUE_COMPLETED}
 
             buf = io.StringIO()
-            with mock.patch("batch.run_queue", side_effect=_fake_run_queue):
+            with mock.patch("batch._run_resolved_queue", side_effect=_fake_run_resolved_queue):
                 with redirect_stdout(buf):
                     code = batch.main([
                         "run", "--queue", str(queue_path),
@@ -1504,6 +1509,84 @@ class TestCLI(unittest.TestCase):
             code = batch.main(["verify", "--run", "/tmp/does-not-matter"])
         self.assertEqual(code, 2)
         self.assertIn("verify_run.py not found", buf.getvalue())
+
+
+class TestCmdRunLoadsQueueOnce(unittest.TestCase):
+    """WP-R1 regression: `cmd_run` must resolve its queue file exactly once (one `load_queue`
+    call, one `resolve_queue_cells` call, both inside `queue_file.load_resolved_queue`) and
+    thread that SAME resolved value into both the CLI-composed cell runner and the dry-run
+    report / state snapshot. Pre-WP-R1, `cmd_run` called `load_queue` itself to build
+    `make_longcontext_cell_runner`'s `vram_profile`/`timeout`, and `run_queue` loaded the same
+    file a second time internally -- two independent reads/resolutions that could silently
+    disagree if the file changed between them (or, as proven here, simply differ because nothing
+    enforced they came from the same load).
+
+    `queue_file.load_queue` is patched, not `batch.load_queue`: `batch.load_queue` is a separate
+    binding of the same function object (`from queue_file import load_queue`), and
+    `queue_file.load_resolved_queue`'s own call to `load_queue` resolves the name against
+    `queue_file`'s module globals, not `batch`'s -- patching `batch.load_queue` would silently
+    not intercept anything.
+    """
+
+    def test_dry_run_uses_a_single_load_and_threads_it_into_runner_and_report(self):
+        # Two distinct valid queues (differing vram_profile AND request_timeout_s) so a stray
+        # second `load_queue` call would be caught two different ways: the dry-run report's
+        # `vram_profile` and the cell-runner factory's stamped `vram_profile`/`timeout` would
+        # disagree with each other (one from queue_a, one from queue_b) instead of both reading
+        # queue_a.
+        queue_a = _minimal_queue(request_timeout_s=1800, vram_profile="desktop-shared")
+        queue_b = _minimal_queue(request_timeout_s=900, vram_profile="headless")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = _write_queue(tmp, queue_a)  # on-disk bytes are irrelevant once mocked
+            captured_runner_kwargs = {}
+            real_factory = batch.make_longcontext_cell_runner
+
+            def spy_factory(*args, **kwargs):
+                captured_runner_kwargs.update(kwargs)
+                return real_factory(*args, **kwargs)
+
+            import io
+            from contextlib import redirect_stdout
+
+            buf = io.StringIO()
+            with mock.patch("queue_file.load_queue", side_effect=[queue_a, queue_b]) as mock_load:
+                with mock.patch.object(batch, "make_longcontext_cell_runner", spy_factory):
+                    with redirect_stdout(buf):
+                        code = batch.main(["run", "--queue", str(queue_path), "--dry-run"])
+
+            self.assertEqual(code, 0)
+            self.assertEqual(mock_load.call_count, 1)  # exactly one load per CLI invocation
+
+            payload = json.loads(buf.getvalue())
+            self.assertEqual(payload["vram_profile"], "desktop-shared")  # queue_a, never queue_b
+            self.assertEqual(captured_runner_kwargs["vram_profile"], "desktop-shared")
+            self.assertEqual(captured_runner_kwargs["timeout"], 1800)
+
+
+class TestRunQueueLoadsQueueOnce(unittest.TestCase):
+    """Direct-`run_queue` counterpart to `TestCmdRunLoadsQueueOnce`: the public wrapper
+    (`batch.run_queue`) still loads and resolves its queue file itself -- exactly once, via its
+    own `load_resolved_queue` call -- and its dry-run behavior is unchanged from before the
+    WP-R1 split into `run_queue` + `_run_resolved_queue`."""
+
+    def test_run_queue_dry_run_calls_load_queue_and_resolve_queue_cells_exactly_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_path = _write_queue(tmp, _minimal_queue())
+            real_load_queue = queue_file.load_queue
+            real_resolve_queue_cells = queue_file.resolve_queue_cells
+            with mock.patch(
+                "queue_file.load_queue", side_effect=real_load_queue,
+            ) as mock_load, mock.patch(
+                "queue_file.resolve_queue_cells", side_effect=real_resolve_queue_cells,
+            ) as mock_resolve:
+                result = batch.run_queue(queue_path, dry_run=True)
+
+            self.assertEqual(mock_load.call_count, 1)
+            self.assertEqual(mock_resolve.call_count, 1)
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["cell_count"], 4)
+            self.assertEqual(result["vram_profile"], "desktop-shared")
 
 
 class TestWp5DetailPersistence(unittest.TestCase):

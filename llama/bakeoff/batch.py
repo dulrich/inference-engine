@@ -122,9 +122,11 @@ from queue_file import (  # noqa: F401
     STOP_POLICIES,
     TIMING_ROUNDS_CELL_KEY,
     QueueValidationError,
+    ResolvedQueue,
     compute_deadline_dt,
     effective_request_timeout_s,
     load_queue,
+    load_resolved_queue,
     resolve_cell,
     resolve_queue_cells,
     validate_queue,
@@ -347,12 +349,65 @@ def run_queue(
     that's the wrapper's job, plan cycle-1 B1). `deadline_minutes` (also WP-2): when given,
     overrides the queue file's HH:MM `deadline` with `start_dt + timedelta(minutes=N)` for this
     invocation only -- the queue file itself stays immutable (req 7).
+
+    WP-R1: loads and resolves `queue_path` through `load_resolved_queue` (one `load_queue` call,
+    one `resolve_queue_cells` call) and delegates the rest to `_run_resolved_queue`, the internal
+    run core `cmd_run` also drives directly off its own already-loaded `ResolvedQueue` -- so this
+    wrapper and the CLI path never resolve the same queue file twice.
     """
-    queue_path = Path(queue_path)
-    queue = load_queue(queue_path)
-    resolved_cells = resolve_queue_cells(queue)
-    effective_vram_profile = vram_profile or queue["vram_profile"]
-    effective_timeout = effective_request_timeout_s(queue)
+    resolved = load_resolved_queue(Path(queue_path), vram_profile)
+    return _run_resolved_queue(
+        resolved,
+        state_path=state_path,
+        dry_run=dry_run,
+        re_arm=re_arm,
+        re_arm_cell_names=re_arm_cell_names,
+        cell_runner=cell_runner,
+        container_controller=container_controller,
+        hang_check_fn=hang_check_fn,
+        now_fn=now_fn,
+        vram_total_bytes_fn=vram_total_bytes_fn,
+        vram_used_bytes_fn=vram_used_bytes_fn,
+        scratch_server_fn=scratch_server_fn,
+        port=port,
+        container=container,
+        stop_marker_path=stop_marker_path,
+        deadline_minutes=deadline_minutes,
+    )
+
+
+def _run_resolved_queue(
+    resolved: ResolvedQueue,
+    *,
+    state_path: Optional[Path] = None,
+    dry_run: bool = False,
+    re_arm: bool = False,
+    re_arm_cell_names: Optional[List[str]] = None,
+    cell_runner: Optional[Callable[["sweep.ScratchServerHandle", ResolvedCell], CellOutcome]] = None,
+    container_controller: Optional[ContainerController] = None,
+    hang_check_fn: Optional[Callable[[], Optional[str]]] = None,
+    now_fn: Optional[Callable[[], datetime]] = None,
+    vram_total_bytes_fn: Optional[Callable[[], int]] = None,
+    vram_used_bytes_fn: Optional[Callable[[], int]] = None,
+    scratch_server_fn: Optional[Callable[..., Any]] = None,
+    port: int = 8899,
+    container: str = sweep.DEFAULT_CONTAINER_NAME,
+    stop_marker_path: Optional[Path] = None,
+    deadline_minutes: Optional[int] = None,
+) -> Dict[str, Any]:
+    """The once-loaded run core (WP-R1): everything `run_queue` used to do after its own
+    `load_queue`/`resolve_queue_cells` calls, now driven from a single already-resolved
+    `ResolvedQueue` so `run_queue` and `cmd_run` build cells, the effective VRAM profile/request
+    timeout, the runner, and the state snapshot from the exact same loaded bytes -- never two
+    independent reads/resolutions of the same queue file per invocation. Every parameter here is
+    the same injectable seam `run_queue` takes (same defaults, same semantics); see that
+    function's docstring for what each one does and raises.
+    """
+    queue_path = resolved.queue_path
+    queue = resolved.queue
+    resolved_cells = resolved.cells
+    effective_vram_profile = resolved.vram_profile
+    effective_timeout = resolved.request_timeout_s
 
     now_fn = now_fn or (lambda: datetime.now(timezone.utc))
     vram_total_bytes_fn = vram_total_bytes_fn or sweep.read_vram_total_bytes
@@ -511,22 +566,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     controller = None
     if not args.dry_run and not args.no_container_control:
         controller = ContainerController(container=args.container)
-    # `make_longcontext_cell_runner` needs the effective `vram_profile` string (and, since WP-1,
-    # the effective `request_timeout_s`) to stamp into/thread through every record it writes, but
-    # `run_queue` (below) only resolves those values internally (`--vram-profile` override, else
-    # the queue's own `vram_profile`; the queue's own effective `request_timeout_s`) after it has
-    # already loaded the queue file -- this cell_runner is built BEFORE that call, so the same
-    # resolution is repeated here from ONE `load_queue` of the queue file this CLI path is about
-    # to hand to `run_queue` anyway. A malformed queue file raises `QueueValidationError` here
-    # exactly as it would have inside `run_queue`, just slightly earlier.
-    loaded_queue = load_queue(Path(args.queue))
-    effective_vram_profile = args.vram_profile or loaded_queue["vram_profile"]
-    effective_timeout = effective_request_timeout_s(loaded_queue)
+    # WP-R1 (once-loaded queue contract): `load_resolved_queue` reads and resolves this CLI
+    # invocation's queue file exactly once, `--vram-profile` override applied here. `resolved.
+    # vram_profile`/`resolved.request_timeout_s` are the SAME effective values stamped into
+    # `make_longcontext_cell_runner` below and threaded into the state snapshot by
+    # `_run_resolved_queue` (the internal run core, called directly -- not the public `run_queue`
+    # wrapper, which would load and resolve the same file a second time). A malformed queue file
+    # raises `QueueValidationError` here, before anything is spawned.
+    resolved = load_resolved_queue(Path(args.queue), args.vram_profile)
     try:
-        result = run_queue(
-            Path(args.queue),
+        result = _run_resolved_queue(
+            resolved,
             state_path=Path(args.state) if args.state else None,
-            vram_profile=args.vram_profile,
             dry_run=args.dry_run,
             re_arm=args.re_arm,
             re_arm_cell_names=args.re_arm_cell or None,
@@ -536,8 +587,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             # every direct `run_queue(...)` caller that omits `cell_runner=` is unaffected.
             cell_runner=make_longcontext_cell_runner(
                 records_dir=Path(args.records_dir) if args.records_dir else None,
-                vram_profile=effective_vram_profile,
-                timeout=effective_timeout,
+                vram_profile=resolved.vram_profile,
+                timeout=resolved.request_timeout_s,
             ),
             container_controller=controller,
             # WP-5: wire the real kernel-log hang rail for live (non-dry-run) invocations;

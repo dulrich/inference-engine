@@ -25,9 +25,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import sweep
 from cell_model import (
-    SWEEP_PASSTHROUGH_KEYS,
     CellIdentity,
     ExecutionSettings,
+    FitMetadata,
+    IndexerGeometry,
     QueueCellMetadata,
     ResolvedCell,
 )
@@ -124,21 +125,16 @@ def _validate_models(models: Any) -> None:
         # KV cache the harness otherwise has no representation for -- f16-scoped, see
         # `gguf_fit.kv_bytes_per_token`. Same optional-and-validated-when-present shape as
         # `chars_per_token` above, but a dict with an exact key set rather than a bare scalar.
+        # WP-R2: the rule itself lives on `IndexerGeometry` (the value that will hold it), so the
+        # queue gate and the fit math cannot drift; the parsed value is discarded here because
+        # validation runs BEFORE resolution -- this is a gate, not a parse. The message text is
+        # `IndexerGeometry`'s, prefixed to the byte-identical pre-WP-R2 wording.
         geometry = entry.get("kv_indexer_geometry")
         if geometry is not None:
-            required_keys = ("layers", "key_length", "value_length")
-            if not isinstance(geometry, dict) or sorted(geometry) != sorted(required_keys):
-                raise QueueValidationError(
-                    f"models[{model_id!r}] kv_indexer_geometry {geometry!r} must be a dict "
-                    f"with exactly the keys {required_keys} when present"
-                )
-            for key in required_keys:
-                value = geometry[key]
-                if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-                    raise QueueValidationError(
-                        f"models[{model_id!r}] kv_indexer_geometry[{key!r}] {value!r} must be "
-                        f"a positive int"
-                    )
+            try:
+                IndexerGeometry.from_mapping(geometry, prefix=f"models[{model_id!r}] ")
+            except ValueError as exc:
+                raise QueueValidationError(str(exc)) from exc
 
 
 def _validate_cell(idx: int, cell: Dict[str, Any], models: Dict[str, Any]) -> None:
@@ -260,8 +256,15 @@ def resolve_cell(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]) -> Re
     The flags are normalized through `sweep.normalize_cell` (the shared normal form every
     `sweep.py` function expects, defaults filled and battery items validated) and only THEN split
     into typed values. `CellIdentity` gets the four identity-bearing fields; every non-identity
-    fact lands on `ExecutionSettings`/`QueueCellMetadata`/`sweep_passthrough`, where it is
-    physically incapable of perturbing `cell_id`.
+    fact lands on `ExecutionSettings`/`QueueCellMetadata`/`FitMetadata`, where it is physically
+    incapable of perturbing `cell_id`.
+
+    This is the ONE place queue JSON becomes typed fit metadata (WP-R2). The optional registry
+    facts never enter `raw` at all now -- pre-WP-R2 they were copied in, carried through
+    `normalize_cell` untouched (it only ever fills `server_flags` defaults and validates
+    `battery`), and read back out into a dict keyed by magic strings. `cell_id` is unaffected:
+    `compute_cell_id` reads only the four identity fields, which is what
+    `tests/test_cell_identity.py` pins.
     """
     flags = _merge_server_flags(model_entry, abbreviated)
 
@@ -273,14 +276,6 @@ def resolve_cell(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]) -> Re
     }
     if model_entry.get("model_host_path"):
         raw["model_host_path"] = model_entry["model_host_path"]
-    # Optional pass-throughs `sweep.py` reads for its own fit math, plus `model_family` -- a GGUF
-    # `general.architecture` string the queue author already knows when writing the registry
-    # entry, which is how the live runner selects a `sampling_table.production_sampling` entry
-    # without re-parsing the GGUF header on every cell. A queue that omits it simply never gets
-    # the `production` arm resolved (falls back to `capability`).
-    for key in SWEEP_PASSTHROUGH_KEYS:
-        if model_entry.get(key) is not None:
-            raw[key] = model_entry[key]
 
     normalized = sweep.normalize_cell(raw)
     normalized_flags = normalized["server_flags"]
@@ -300,8 +295,14 @@ def resolve_cell(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]) -> Re
             chars_per_token=model_entry.get("chars_per_token"),
             timing_rounds=abbreviated.get(TIMING_ROUNDS_CELL_KEY),
             spec_decode=abbreviated.get("spec_decode"),
+            # A GGUF `general.architecture` string the queue author already knows when writing
+            # the registry entry -- how the live runner selects a
+            # `sampling_table.production_sampling` entry without re-parsing a GGUF header per
+            # cell. A queue that omits it simply never gets the `production` arm resolved (it
+            # falls back to `capability`).
+            model_family=model_entry.get("model_family"),
         ),
-        sweep_passthrough={k: normalized[k] for k in SWEEP_PASSTHROUGH_KEYS if k in normalized},
+        fit=FitMetadata.from_mapping(model_entry),
     )
 
 

@@ -271,6 +271,10 @@ class TestIdentityIsStructurallyIsolated(unittest.TestCase):
             dataclasses.replace(cell.queue, chars_per_token=4.06),
             dataclasses.replace(cell.queue, timing_rounds=11),
             dataclasses.replace(cell.queue, spec_decode="mtp"),
+            # WP-R2 moved `model_family` onto this value (it used to ride an untyped bag). It
+            # DOES reach the sweep adapter -- deliberately, the live runner reads it there --
+            # but it is not one of the four fields `compute_cell_id` hashes.
+            dataclasses.replace(cell.queue, model_family="gemma4"),
         ]
         for variant in variants:
             with self.subTest(queue_meta=variant):

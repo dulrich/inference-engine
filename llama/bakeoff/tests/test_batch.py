@@ -249,8 +249,8 @@ class TestResolveQueueCells(unittest.TestCase):
             "fa": "on", "battery": ["vram"], "sampling_arm": "capability", "trials": 1,
         }])
         resolved = batch.resolve_queue_cells(q)
-        self.assertEqual(resolved[0].sweep_passthrough["gpu_weights_bytes"], 6 * sweep.GIB)
-        self.assertEqual(resolved[0].sweep_passthrough["kv_attention_layers"], 10)
+        self.assertEqual(resolved[0].fit.gpu_weights_bytes, 6 * sweep.GIB)
+        self.assertEqual(resolved[0].fit.kv_attention_layers, 10)
         self.assertEqual(resolved[0].server_flags["-ncmoe"], 32)
         # ...and they reach sweep.py through the one dict adapter, unchanged.
         self.assertEqual(resolved[0].as_sweep_cell()["gpu_weights_bytes"], 6 * sweep.GIB)
@@ -662,9 +662,8 @@ def _longcontext_cell(battery=("vram", "needle"), sampling_arm="capability", tri
         queue=batch.QueueCellMetadata(
             model_id=model_id, sampling_arm=sampling_arm, trials=trials,
             chars_per_token=chars_per_token, timing_rounds=timing_rounds,
-            spec_decode=spec_decode,
+            spec_decode=spec_decode, model_family=model_family,
         ),
-        sweep_passthrough={} if model_family is None else {"model_family": model_family},
     )
 
 
@@ -2647,8 +2646,8 @@ class TestWp2SpecDecode(unittest.TestCase):
 
 # -------------------------------------------------------------------------------------------
 # WP-1 (qwen4exp-bakeoff-campaign.md): the model-registry `kv_indexer_geometry` field --
-# validation and passthrough. See gguf_fit.kv_bytes_per_token / cell_model.SWEEP_PASSTHROUGH_KEYS
-# for the fit-math and carrying-seam halves of this change; the tests below cover queue_file's
+# validation and passthrough. See gguf_fit.kv_bytes_per_token / cell_model.FitMetadata for the
+# fit-math and carrying-seam halves of this change; the tests below cover queue_file's
 # validation contract and resolve_queue_cells's propagation only.
 # -------------------------------------------------------------------------------------------
 
@@ -2710,8 +2709,17 @@ class TestWp1KvIndexerGeometryValidation(unittest.TestCase):
         geometry = {"layers": 12, "key_length": 128, "value_length": 256}
         queue["models"]["model-a"]["kv_indexer_geometry"] = geometry
         resolved = batch.resolve_queue_cells(queue)
-        self.assertEqual(resolved[0].sweep_passthrough["kv_indexer_geometry"], geometry)
+        self.assertEqual(
+            resolved[0].fit.indexer_geometry,
+            batch.IndexerGeometry(layers=12, key_length=128, value_length=256),
+        )
+        # ...and the adapter still emits the plain, ordered mapping the fit math and the record
+        # writer both consume -- byte-identical to the queue's own block.
         self.assertEqual(resolved[0].as_sweep_cell()["kv_indexer_geometry"], geometry)
+        self.assertEqual(
+            list(resolved[0].as_sweep_cell()["kv_indexer_geometry"]),
+            ["layers", "key_length", "value_length"],
+        )
 
     def test_resolved_cell_carries_the_geometry_without_changing_cell_id(self):
         plain = batch.resolve_queue_cells(_minimal_queue())
@@ -2723,6 +2731,204 @@ class TestWp1KvIndexerGeometryValidation(unittest.TestCase):
         for before, after in zip(plain, with_geometry):
             self.assertEqual(before.cell_id, after.cell_id)
 
+
+# -------------------------------------------------------------------------------------------
+# WP-R2 (queue-contract-and-test-decomposition-remediation.md): the typed fit metadata that
+# replaced `ResolvedCell`'s untyped pass-through bag. The bag's two emission rules used to be
+# implicit in one string-keyed loop apiece; they are pinned explicitly below, because they are
+# NOT the same rule -- the `sweep.py` adapter emits a fact only when it is set, while the
+# persisted record always emits all four keys and writes `null` when unset. The third pin is
+# the historical/current record equivalence `verify_run` depends on: a record written before
+# these keys existed omits them, a current one carries them as `null`, and both must verify
+# identically.
+# -------------------------------------------------------------------------------------------
+
+
+def _fit_cell(fit=None, model_family=None):
+    """A `ResolvedCell` with a fully literal identity, so `sweep_cell_block()` renders to a
+    deterministic byte string (`cell_id` included -- it is a pure hash of the four literal
+    identity fields below)."""
+    flags = {
+        "--host": "0.0.0.0", "-lv": 9, "-ctk": "f16", "-ctv": "f16", "-fa": "on", "-ngl": 99,
+        "-c": 4096,
+    }
+    return batch.ResolvedCell(
+        identity=batch.CellIdentity(
+            alias="wpr2-fit-alias",
+            model_container_path="/models/wpr2/fit-model.gguf",
+            server_flags=flags,
+        ),
+        execution=batch.ExecutionSettings.from_flags(flags, ("vram",)),
+        queue=batch.QueueCellMetadata(model_id="wpr2-fit-model", model_family=model_family),
+        fit=batch.FitMetadata() if fit is None else fit,
+    )
+
+
+class TestWpR2TypedFitMetadataEmission(unittest.TestCase):
+    """The two dict boundaries `FitMetadata` feeds, both pinned at the byte level."""
+
+    GEOMETRY: ClassVar[Any] = batch.IndexerGeometry(layers=12, key_length=128, value_length=256)
+
+    def test_sweep_cell_block_bytes_with_indexer_geometry(self):
+        cell = _fit_cell(fit=batch.FitMetadata(
+            gpu_weights_bytes=3536007987,
+            kv_attention_layers=12,
+            swa_layer_spec=(True, False),
+            indexer_geometry=self.GEOMETRY,
+        ))
+        block = cell.record_metadata().sweep_cell_block("capability")
+        self.assertEqual(
+            json.dumps(block, sort_keys=False),
+            '{"cell_id": "wpr2-fit-alias-ctkf16-ctvf16-faon-c4096-8cefe4a5", '
+            '"alias": "wpr2-fit-alias", '
+            '"server_flags": {"--host": "0.0.0.0", "-lv": 9, "-ctk": "f16", "-ctv": "f16", '
+            '"-fa": "on", "-ngl": 99, "-c": 4096}, '
+            '"model_host_path": null, "battery": ["vram"], "sampling_arm": "capability", '
+            '"model": "wpr2-fit-model", "spec_decode": null, '
+            '"gpu_weights_bytes": 3536007987, "kv_attention_layers": 12, '
+            '"swa_layer_spec": [true, false], '
+            '"kv_indexer_geometry": {"layers": 12, "key_length": 128, "value_length": 256}}',
+        )
+
+    def test_sweep_cell_block_bytes_without_indexer_geometry(self):
+        block = _fit_cell().record_metadata().sweep_cell_block("capability")
+        self.assertEqual(
+            json.dumps(block, sort_keys=False),
+            '{"cell_id": "wpr2-fit-alias-ctkf16-ctvf16-faon-c4096-8cefe4a5", '
+            '"alias": "wpr2-fit-alias", '
+            '"server_flags": {"--host": "0.0.0.0", "-lv": 9, "-ctk": "f16", "-ctv": "f16", '
+            '"-fa": "on", "-ngl": 99, "-c": 4096}, '
+            '"model_host_path": null, "battery": ["vram"], "sampling_arm": "capability", '
+            '"model": "wpr2-fit-model", "spec_decode": null, '
+            '"gpu_weights_bytes": null, "kv_attention_layers": null, '
+            '"swa_layer_spec": null, "kv_indexer_geometry": null}',
+        )
+
+    def test_swa_layer_spec_serializes_as_a_json_list_never_a_tuple_repr(self):
+        # The typed field is a tuple (frozen values only); every emission must be a list, or the
+        # record's JSON and every dict-equality assertion downstream would drift.
+        cell = _fit_cell(fit=batch.FitMetadata(swa_layer_spec=(True, False, True)))
+        block = cell.record_metadata().sweep_cell_block("capability")
+        self.assertIsInstance(block["swa_layer_spec"], list)
+        self.assertEqual(block["swa_layer_spec"], [True, False, True])
+        self.assertIn('"swa_layer_spec": [true, false, true]', json.dumps(block))
+        adapter = cell.as_sweep_cell()
+        self.assertIsInstance(adapter["swa_layer_spec"], list)
+        self.assertEqual(json.dumps(adapter["swa_layer_spec"]), "[true, false, true]")
+
+    def test_unset_facts_are_omitted_by_the_adapter_but_null_in_the_record(self):
+        cell = _fit_cell()
+        adapter = cell.as_sweep_cell()
+        for key in ("gpu_weights_bytes", "kv_attention_layers", "swa_layer_spec",
+                    "model_family", "kv_indexer_geometry"):
+            with self.subTest(key=key):
+                self.assertNotIn(key, adapter)
+        block = cell.record_metadata().sweep_cell_block("capability")
+        for key in ("gpu_weights_bytes", "kv_attention_layers", "swa_layer_spec",
+                    "kv_indexer_geometry"):
+            with self.subTest(key=key):
+                self.assertIn(key, block)
+                self.assertIsNone(block[key])
+
+    def test_the_adapter_emits_set_facts_in_the_pre_wpr2_key_order(self):
+        cell = _fit_cell(
+            fit=batch.FitMetadata(
+                gpu_weights_bytes=1, kv_attention_layers=2, swa_layer_spec=(True,),
+                indexer_geometry=self.GEOMETRY,
+            ),
+            model_family="gemma4",
+        )
+        self.assertEqual(
+            list(cell.as_sweep_cell()),
+            ["alias", "model_container_path", "server_flags", "battery", "gpu_weights_bytes",
+             "kv_attention_layers", "swa_layer_spec", "model_family", "kv_indexer_geometry",
+             "cell_id"],
+        )
+
+    def test_an_explicit_registry_null_is_indistinguishable_from_absence(self):
+        # The rule inherited verbatim from the pre-WP-R2 `if model_entry.get(key) is not None`
+        # filter in `queue_file.resolve_cell`: an explicit JSON `null` never reached the cell.
+        queue = _minimal_queue()
+        queue["models"]["model-a"].update({
+            "gpu_weights_bytes": None, "kv_attention_layers": None, "swa_layer_spec": None,
+            "kv_indexer_geometry": None, "model_family": None,
+        })
+        nulled = batch.resolve_queue_cells(queue)[0]
+        absent = batch.resolve_queue_cells(_minimal_queue())[0]
+        self.assertEqual(nulled.fit, batch.FitMetadata())
+        self.assertEqual(nulled.fit, absent.fit)
+        self.assertIsNone(nulled.model_family)
+        self.assertEqual(nulled.as_sweep_cell(), absent.as_sweep_cell())
+        self.assertEqual(nulled.cell_id, absent.cell_id)
+
+
+class TestWpR2VerifyRunReadsBothRecordGenerations(unittest.TestCase):
+    """`verify_run.check_vram_arithmetic` reads the fit facts off a committed record. Two
+    generations exist on disk and neither may be re-judged by this refactor: historical records
+    (`records/wp5-validation/*/config.json`) predate the four keys and omit them entirely;
+    current ones always carry all four, `null` when unset."""
+
+    SYNTHETIC: ClassVar[dict] = {
+        "weights_bytes": 6 * sweep.GIB,
+        "block_count": 48,
+        "head_count_kv": 2,
+        "key_length": 256,
+        "value_length": 256,
+    }
+
+    def _config(self, **fit_keys):
+        sweep_cell = {
+            "cell_id": "wpr2-record-cell",
+            "alias": "wpr2-record-alias",
+            "server_flags": {"-c": 4096, "-ctk": "f16", "-ctv": "f16"},
+            "battery": ["vram"],
+            "sampling_arm": "capability",
+            "synthetic_geometry": dict(self.SYNTHETIC),
+        }
+        sweep_cell.update(fit_keys)
+        return {
+            "sweep_cell": sweep_cell,
+            "vram": {"baseline_bytes": 1000, "loaded_bytes": 1000 + 6845104128},
+        }
+
+    def test_absent_and_explicitly_null_fit_keys_produce_the_same_verdict_item(self):
+        historical = verify_run.check_vram_arithmetic("wpr2-record-cell", self._config())
+        current = verify_run.check_vram_arithmetic(
+            "wpr2-record-cell",
+            self._config(
+                gpu_weights_bytes=None, kv_attention_layers=None,
+                swa_layer_spec=None, kv_indexer_geometry=None,
+            ),
+        )
+        self.assertEqual(historical, current)
+        # Not vacuous: the shared verdict is a real computed one, off the synthetic geometry's
+        # own weights_bytes (48 layers * 2 heads * (256+256) * 2 B = 98,304 B/token).
+        self.assertEqual(historical["verdict"], "pass")
+        self.assertEqual(historical["observed"]["weights_bytes"], 6 * sweep.GIB)
+        self.assertEqual(historical["observed"]["kv_bytes_per_token"], 98304.0)
+
+    def test_populated_current_shape_overrides_weights_and_adds_the_indexer_term(self):
+        item = verify_run.check_vram_arithmetic(
+            "wpr2-record-cell",
+            self._config(
+                gpu_weights_bytes=3 * sweep.GIB,
+                kv_attention_layers=12,
+                swa_layer_spec=None,
+                kv_indexer_geometry={"layers": 12, "key_length": 128, "value_length": 256},
+            ),
+        )
+        # 12 * 2 * (256+256) * 2 = 24,576 main + 12 * (128+256) * 2 = 9,216 indexer.
+        self.assertEqual(item["observed"]["kv_bytes_per_token"], 33792.0)
+        self.assertEqual(item["observed"]["weights_bytes"], 3 * sweep.GIB)
+
+    def test_a_malformed_recorded_geometry_stays_an_unknown_verdict(self):
+        # The typed parse runs inside the same try the fit math does, so a record carrying a
+        # half-written geometry block is still a verdict, never an exception out of the verifier.
+        item = verify_run.check_vram_arithmetic(
+            "wpr2-record-cell", self._config(kv_indexer_geometry={"layers": 12}),
+        )
+        self.assertEqual(item["verdict"], "unknown")
+        self.assertIn("kv_indexer_geometry", item["observed"]["reason"])
 
 # -------------------------------------------------------------------------------------------
 # WP-1 (qwen4exp-bakeoff-campaign.md, cycle-2 blocking 1 / cycle-3 M1): the queue-level
@@ -2945,6 +3151,13 @@ class TestWp1KvGeometryVerifyRunRoundTrip(unittest.TestCase):
                     sweep_cell["kv_indexer_geometry"],
                     {"layers": 12, "key_length": 128, "value_length": 256},
                 )
+                # ...and the cell carried it as the typed value the whole way (WP-R2): the
+                # plain mapping above is rendered at the record boundary, not stored.
+                self.assertEqual(
+                    cell.fit.indexer_geometry,
+                    batch.IndexerGeometry(layers=12, key_length=128, value_length=256),
+                )
+                self.assertEqual(cell.fit.gpu_weights_bytes, 3536007987)
 
                 item = verify_run.check_vram_arithmetic(cell.cell_id, config)
                 fit = sweep.classify_fit(cell.as_sweep_cell(), "desktop-shared")

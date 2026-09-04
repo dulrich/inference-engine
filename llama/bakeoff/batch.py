@@ -71,6 +71,8 @@ import sweep
 from cell_model import (  # noqa: F401
     CellIdentity,
     ExecutionSettings,
+    FitMetadata,
+    IndexerGeometry,
     QueueCellMetadata,
     RecordMetadata,
     ResolvedCell,

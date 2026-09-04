@@ -575,6 +575,36 @@ class TestKVIndexerGeometry(unittest.TestCase):
                         kv_indexer_geometry=self.INDEXER_GEOMETRY,
                     )
 
+    def test_a_typed_geometry_and_its_plain_mapping_are_interchangeable(self):
+        """WP-R2: `gguf_fit` does the indexer arithmetic on a typed `IndexerGeometry`, but the
+        public keyword still takes the plain mapping `verify_run` and `classify_fit` read off a
+        record/cell dict. The two spellings must produce the same number, not merely both work."""
+        typed = sweep.IndexerGeometry(layers=12, key_length=128, value_length=256)
+        self.assertEqual(typed.to_mapping(), self.INDEXER_GEOMETRY)
+        self.assertEqual(
+            sweep.kv_bytes_per_token(
+                self.GEOMETRY, "f16", "f16", kv_attention_layers=12, context=4096,
+                kv_indexer_geometry=typed,
+            ),
+            sweep.kv_bytes_per_token(
+                self.GEOMETRY, "f16", "f16", kv_attention_layers=12, context=4096,
+                kv_indexer_geometry=self.INDEXER_GEOMETRY,
+            ),
+        )
+
+    def test_a_malformed_mapping_raises_valueerror_at_the_conversion_boundary(self):
+        """A half-written geometry used to reach the arithmetic and die on a `KeyError`, which
+        `classify_fit`/`verify_run` do not catch. It is now a `ValueError` -- the class both of
+        them already turn into an `unknown` classification with a reason."""
+        for bad in ({"layers": 12}, {"layers": 12, "key_length": 128, "value_length": 0},
+                    {"layers": 12, "key_length": 128, "value_length": 256, "extra": 1}):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    sweep.kv_bytes_per_token(
+                        self.GEOMETRY, "f16", "f16", kv_attention_layers=12, context=4096,
+                        kv_indexer_geometry=bad,
+                    )
+
     def test_classify_fit_returns_unknown_with_a_reason_naming_the_indexer_at_a_quantized_kv_type(self):
         synthetic = {
             "weights_bytes": 6 * GIB,

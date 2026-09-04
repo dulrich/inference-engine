@@ -19,10 +19,14 @@ The split here is structural instead of clerical:
   context ceiling and the KV/flash-attention arm) plus the `battery` list.
 - `QueueCellMetadata` carries what the underscore keys used to: the queue registry key, the
   sampling arm, the trial count, the measured chars-per-token knob, the per-cell timing-round
-  override, and the base-vs-MTP arm.
+  override, the base-vs-MTP arm, and (WP-R2) the `model_family` string the live runner picks a
+  sampling preset with.
+- `FitMetadata` (WP-R2) carries the optional model-registry facts `sweep.py`'s fit math reads --
+  `gpu_weights_bytes`, `kv_attention_layers`, `swa_layer_spec`, and an `IndexerGeometry` -- as
+  named, typed fields. It replaced a `Dict[str, Any]` bag keyed by a tuple of magic strings.
 - `RecordMetadata` carries exactly what `cell_record.write_cell_record` stamps into a record's
   `config.json` `sweep_cell` block.
-- `ResolvedCell` composes the four and owns the **one** dict adapter (`as_sweep_cell`) at the
+- `ResolvedCell` composes the five and owns the **one** dict adapter (`as_sweep_cell`) at the
   `sweep.py` boundary. `sweep.normalize_cell`/`build_command`/`classify_fit`/`scratch_server`
   all take plain dicts and are deliberately not changed; typed values stop at that seam.
 
@@ -40,26 +44,75 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 # plain top-level import works because the importer has already put this directory on sys.path.
 import sweep
 
+# `IndexerGeometry` is DEFINED in `gguf_fit` (the module whose KV arithmetic consumes it) and
+# re-exported here so the domain-value surface is one import for every consumer. Defining it in
+# this module instead would close an import cycle: `cell_model` -> `sweep` -> `gguf_fit`.
+from gguf_fit import IndexerGeometry
+
 __all__ = [
     "CellIdentity",
     "ExecutionSettings",
+    "FitMetadata",
+    "IndexerGeometry",
     "QueueCellMetadata",
     "RecordMetadata",
     "ResolvedCell",
     "replace",
 ]
 
-# The optional model-registry pass-throughs that are neither identity nor queue-only metadata:
-# `sweep.py` reads them off the plain cell dict for its own fit math (`gpu_weights_bytes`,
-# `kv_attention_layers`, `swa_layer_spec`, `kv_indexer_geometry`), and `model_family` is read by
-# the live cell runner to pick a `sampling_table.production_sampling` entry. They ride through
-# the adapter verbatim. `kv_indexer_geometry` (WP-1, qwen4exp-bakeoff-campaign, C4-B1) is the
-# newest addition: a second-KV-cache (DSA indexer) geometry block `gguf_fit.kv_bytes_per_token`
-# adds on top of the main cache's bytes/token, f16-scoped.
-SWEEP_PASSTHROUGH_KEYS: Tuple[str, ...] = (
-    "gpu_weights_bytes", "kv_attention_layers", "swa_layer_spec", "model_family",
-    "kv_indexer_geometry",
-)
+
+@dataclass(frozen=True)
+class FitMetadata:
+    """The optional model-registry facts `sweep.py`'s fit math reads, as one frozen value
+    (WP-R2 of `plans/queue-contract-and-test-decomposition-remediation.md`; review finding F2).
+
+    Before WP-R2 these rode in one untyped `Dict[str, Any]` pass-through bag on `ResolvedCell`,
+    keyed by a module-level tuple of five wire-name strings -- names spelled in three places,
+    with nothing but that tuple keeping the queue reader, the `sweep.py` adapter and the record
+    writer agreeing on them, and no type on any value. The fields below are the same five facts
+    minus `model_family` (which is not fit-bearing and now lives explicitly on
+    `QueueCellMetadata`, where the live runner reads it).
+
+    **`None` means "unset", and unset is the only absence there is.** Both an omitted registry
+    key and an explicit JSON `null` parse to `None` -- exactly what the pre-WP-R2
+    `if model_entry.get(key) is not None` filter did (`queue_file.resolve_cell`, lines 281-283 at
+    69593b3): an explicit `null` never reached the passthrough dict, so it was indistinguishable
+    from absence. That equivalence is what lets `from_mapping` below read a queue registry entry
+    and a persisted `sweep_cell` block with the same code.
+    """
+
+    gpu_weights_bytes: Optional[int] = None
+    kv_attention_layers: Optional[int] = None
+    swa_layer_spec: Optional[Tuple[bool, ...]] = None
+    indexer_geometry: Optional[IndexerGeometry] = None
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> "FitMetadata":
+        """The ONE JSON -> typed adapter. Two callers, both reading a plain mapping whose keys
+        are the wire names: `queue_file.resolve_cell` (a queue's `models[*]` registry entry) and
+        `verify_run.check_vram_arithmetic` (a committed record's `config.json` `sweep_cell`
+        block, which for historical records omits these keys entirely and for current ones
+        carries them as explicit `null` -- `.get()` maps both to `None`, so the two record
+        generations verify identically).
+        """
+        spec = raw.get("swa_layer_spec")
+        geometry = raw.get("kv_indexer_geometry")
+        return cls(
+            gpu_weights_bytes=raw.get("gpu_weights_bytes"),
+            kv_attention_layers=raw.get("kv_attention_layers"),
+            swa_layer_spec=None if spec is None else tuple(spec),
+            indexer_geometry=None if geometry is None else IndexerGeometry.coerce(geometry),
+        )
+
+    # -- JSON emission forms (both directions of the dict boundary use these, never a cast) ---
+
+    def swa_layer_spec_json(self) -> Optional[List[bool]]:
+        """A JSON list, never a tuple -- `json.dumps` cannot tell the two apart, but the record
+        writer's `config.json` and every dict-equality assertion downstream can."""
+        return None if self.swa_layer_spec is None else list(self.swa_layer_spec)
+
+    def indexer_geometry_json(self) -> Optional[Dict[str, int]]:
+        return None if self.indexer_geometry is None else self.indexer_geometry.to_mapping()
 
 
 @dataclass(frozen=True)
@@ -138,6 +191,11 @@ class QueueCellMetadata:
     `timing_rounds` are measurement-depth knobs, and `spec_decode` records which base/MTP arm
     already shaped `server_flags` upstream -- recording it a second time is a record-carrying
     fact, not an identity fact.
+
+    `model_family` (WP-R2) is the GGUF `general.architecture` string the queue author writes into
+    the model registry, which `cell_runner` uses to pick a `sampling_table.production_sampling`
+    entry without re-parsing a GGUF header per cell. It sits here rather than on `FitMetadata`
+    because nothing about it is fit-bearing -- it selects a sampling preset, not a byte count.
     """
 
     model_id: str
@@ -146,6 +204,7 @@ class QueueCellMetadata:
     chars_per_token: Optional[float] = None
     timing_rounds: Optional[int] = None
     spec_decode: Optional[str] = None
+    model_family: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -157,12 +216,14 @@ class RecordMetadata:
     fact supplied by the caller, not a property of the resolved cell.
 
     The four fields after `spec_decode` (WP-1, qwen4exp-bakeoff-campaign, cycle-2 blocking 2) are
-    the fit-bearing `sweep_passthrough` facts -- `gpu_weights_bytes`, `kv_attention_layers`,
-    `swa_layer_spec`, `kv_indexer_geometry` -- that `as_sweep_cell()` already reached but the
-    persisted record never did (`verify_run.py` was silently falling back to `lineage.file_size`
-    and main-cache-only geometry for every historical record). **Appended, never inserted**: key
-    order below is load-bearing (`sweep_cell_block`'s own docstring) so a new record diffs
-    cleanly against a historical one.
+    the `FitMetadata` facts -- `gpu_weights_bytes`, `kv_attention_layers`, `swa_layer_spec`,
+    `kv_indexer_geometry` -- that `as_sweep_cell()` already reached but the persisted record
+    never did (`verify_run.py` was silently falling back to `lineage.file_size` and
+    main-cache-only geometry for every historical record). They stay FLAT and JSON-shaped here
+    (a list, an ordered plain mapping) rather than holding a `FitMetadata`, because this value's
+    entire job is "exactly what the record stamps"; `ResolvedCell.record_metadata()` is the one
+    place that converts. **Appended, never inserted**: key order below is load-bearing
+    (`sweep_cell_block`'s own docstring) so a new record diffs cleanly against a historical one.
     """
 
     cell_id: str
@@ -202,18 +263,19 @@ class RecordMetadata:
 @dataclass(frozen=True)
 class ResolvedCell:
     """One fully resolved queue cell: identity + execution settings + queue metadata + the
-    optional `sweep.py` fit pass-throughs.
+    optional typed fit metadata.
 
     This is the value `resolve_queue_cells` returns, the state machine keys off, the cell runner
-    receives, and the record writer stamps. It never grows a dict-shaped back door: the single
-    adapter to the plain-dict world is `as_sweep_cell()`, and it is the only thing handed to
-    `sweep.py`.
+    receives, and the record writer stamps. Every one of its four sub-values is a frozen
+    dataclass with named fields -- there is no dict-shaped back door left (WP-R2 closed the last
+    one, an untyped pass-through bag). The single adapter down to the plain-dict world is
+    `as_sweep_cell()`, and it is the only thing handed to `sweep.py`.
     """
 
     identity: CellIdentity
     execution: ExecutionSettings
     queue: QueueCellMetadata
-    sweep_passthrough: Dict[str, Any] = field(default_factory=dict)
+    fit: FitMetadata = field(default_factory=FitMetadata)
 
     # -- convenience readers (all derived; none of them is separate state) --------------------
 
@@ -243,7 +305,7 @@ class ResolvedCell:
 
     @property
     def model_family(self) -> Optional[str]:
-        return self.sweep_passthrough.get("model_family")
+        return self.queue.model_family
 
     # -- the one dict adapter at the sweep.py boundary ---------------------------------------
 
@@ -264,9 +326,22 @@ class ResolvedCell:
         }
         if self.identity.model_host_path is not None:
             cell["model_host_path"] = self.identity.model_host_path
-        for key in SWEEP_PASSTHROUGH_KEYS:
-            if key in self.sweep_passthrough:
-                cell[key] = self.sweep_passthrough[key]
+        # Each optional fact is emitted ONLY when set, and in the pre-WP-R2 key order -- the
+        # key-is-in-the-bag rule the old string-keyed loop implemented. "Unset" is `None` here
+        # and was "the key never entered the bag" there; they mean the same thing, because
+        # `resolve_cell` only ever put a non-`None` registry value in (see
+        # `FitMetadata.from_mapping`). `record_metadata()` below is the OTHER rule: all four
+        # keys always present, `null` when unset.
+        if self.fit.gpu_weights_bytes is not None:
+            cell["gpu_weights_bytes"] = self.fit.gpu_weights_bytes
+        if self.fit.kv_attention_layers is not None:
+            cell["kv_attention_layers"] = self.fit.kv_attention_layers
+        if self.fit.swa_layer_spec is not None:
+            cell["swa_layer_spec"] = self.fit.swa_layer_spec_json()
+        if self.queue.model_family is not None:
+            cell["model_family"] = self.queue.model_family
+        if self.fit.indexer_geometry is not None:
+            cell["kv_indexer_geometry"] = self.fit.indexer_geometry_json()
         cell["cell_id"] = self.cell_id
         return cell
 
@@ -281,8 +356,8 @@ class ResolvedCell:
             battery=list(self.execution.battery),
             model_id=self.queue.model_id,
             spec_decode=self.queue.spec_decode,
-            gpu_weights_bytes=self.sweep_passthrough.get("gpu_weights_bytes"),
-            kv_attention_layers=self.sweep_passthrough.get("kv_attention_layers"),
-            swa_layer_spec=self.sweep_passthrough.get("swa_layer_spec"),
-            kv_indexer_geometry=self.sweep_passthrough.get("kv_indexer_geometry"),
+            gpu_weights_bytes=self.fit.gpu_weights_bytes,
+            kv_attention_layers=self.fit.kv_attention_layers,
+            swa_layer_spec=self.fit.swa_layer_spec_json(),
+            kv_indexer_geometry=self.fit.indexer_geometry_json(),
         )

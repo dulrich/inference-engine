@@ -90,6 +90,7 @@ from gguf_fit import (  # noqa: E402,F401
     REALISTIC_FREE_VRAM_GIB,
     VRAM_PROFILES,
     GGUFParseError,
+    IndexerGeometry,
     VRAMProfileRefused,
     _resolve_geometry_and_weights,
     _resolve_geometry_and_weights_raw,

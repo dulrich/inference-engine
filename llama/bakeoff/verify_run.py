@@ -119,16 +119,18 @@ from typing import Any, Dict, List, Optional, Tuple
 # directory on `sys.path` (true when this file is run directly as a script, and when a test
 # under `tests/` inserts this directory itself).
 #
-# Every one of these four is consumed READ-ONLY -- this module verifies a finished run against
+# Every one of these five is consumed READ-ONLY -- this module verifies a finished run against
 # the production definitions, so re-pinning any of them here would make the check vacuous:
 #   batch        -- constants + default_state_path only; never edited or mutated
 #   longcontext  -- MIN_TRIALS_FOR_WILSON, VERDICTS: consumed, never re-pinned
 #   run_harness  -- REQUIRED_LINEAGE_FIELDS: consumed, never re-pinned
 #   sweep        -- kv_bytes_per_token / gguf geometry: consumed, never reimplemented
+#   cell_model   -- FitMetadata: the record-JSON -> typed fit adapter, consumed, never re-spelled
 import batch
 import longcontext
 import run_harness
 import sweep
+from cell_model import FitMetadata
 
 VERDICTS = ("pass", "fail", "unknown", "informational")
 
@@ -378,19 +380,26 @@ def check_vram_arithmetic(cell_id: str, config: Optional[Dict[str, Any]]) -> Dic
     if geometry is None:
         return _item(CHECK_VRAM_ARITHMETIC, cell_id, expected, {"reason": reason}, "unknown")
 
+    # WP-R2: the persisted fit facts are parsed ONCE, typed, at this boundary. Two record
+    # generations reach here and must verify identically -- historical ones (written before the
+    # four keys existed) omit them entirely, current ones always carry all four with `null` when
+    # unset -- and `FitMetadata.from_mapping` maps absence and `null` alike to `None`, which is
+    # exactly what the `.get()` calls this replaced did. The parse sits INSIDE the try because a
+    # malformed geometry must stay an "unknown" verdict, never an exception out of the verifier.
     try:
+        fit = FitMetadata.from_mapping(sweep_cell)
         bytes_per_token = sweep.kv_bytes_per_token(
             geometry, ctk, ctv,
-            kv_attention_layers=sweep_cell.get("kv_attention_layers"),
+            kv_attention_layers=fit.kv_attention_layers,
             context=context,
-            swa_layer_spec=sweep_cell.get("swa_layer_spec"),
-            kv_indexer_geometry=sweep_cell.get("kv_indexer_geometry"),
+            swa_layer_spec=fit.swa_layer_spec_json(),
+            kv_indexer_geometry=fit.indexer_geometry,
         )
     except (sweep.GGUFParseError, ValueError) as exc:
         return _item(CHECK_VRAM_ARITHMETIC, cell_id, expected, {"reason": f"kv_bytes_per_token failed: {exc}"}, "unknown")
 
     weights_bytes = (
-        sweep_cell.get("gpu_weights_bytes")
+        fit.gpu_weights_bytes
         or geometry.get("weights_bytes")
         or (config.get("lineage") or {}).get("file_size")
     )

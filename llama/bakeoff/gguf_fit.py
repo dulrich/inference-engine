@@ -26,8 +26,9 @@ v2.md` Key Changes/WP-1). See `classify_fit`.
 from __future__ import annotations
 
 import struct
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 GIB = 1024 ** 3
 
@@ -370,6 +371,67 @@ KV_TYPE_BYTES_PER_ELEMENT: Dict[str, float] = {
     "q4_1": 20 / 32,
 }
 
+# The exact key set a DSA-indexer geometry block carries, in emission order (WP-1,
+# qwen4exp-bakeoff-campaign, C4-B1). Named once, here, because `IndexerGeometry` below is the
+# ONLY thing in this repo allowed to spell them -- there is no second registry of these strings.
+INDEXER_GEOMETRY_KEYS: Tuple[str, ...] = ("layers", "key_length", "value_length")
+
+
+@dataclass(frozen=True)
+class IndexerGeometry:
+    """The second (DSA indexer) KV cache's own geometry, as a frozen value (WP-R2 of
+    `plans/queue-contract-and-test-decomposition-remediation.md`).
+
+    Lives HERE rather than in `cell_model.py` for one structural reason: `kv_bytes_per_token`
+    below consumes it, and `cell_model` already imports `sweep`, which imports this module --
+    defining it upward would close an import cycle. `cell_model` re-exports the name, so
+    `cell_model.IndexerGeometry` / `batch.IndexerGeometry` / `sweep.IndexerGeometry` all resolve.
+
+    `from_mapping` owns the validation that used to sit inline in `queue_file._validate_models`,
+    message text included, so the queue-file gate and the fit math can never drift apart on what
+    a well-formed geometry is. `to_mapping` is the one JSON emission form, key order fixed.
+    """
+
+    layers: int
+    key_length: int
+    value_length: int
+
+    @classmethod
+    def from_mapping(cls, raw: Any, *, prefix: str = "") -> "IndexerGeometry":
+        """Parses (and fully validates) a plain geometry mapping. `prefix` is prepended to the
+        message of every `ValueError` raised here -- `queue_file` passes `"models[<id>] "` so the
+        queue-validation text stays byte-identical to the pre-WP-R2 inline check."""
+        if not isinstance(raw, dict) or sorted(raw) != sorted(INDEXER_GEOMETRY_KEYS):
+            raise ValueError(
+                f"{prefix}kv_indexer_geometry {raw!r} must be a dict "
+                f"with exactly the keys {INDEXER_GEOMETRY_KEYS} when present"
+            )
+        for key in INDEXER_GEOMETRY_KEYS:
+            value = raw[key]
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(
+                    f"{prefix}kv_indexer_geometry[{key!r}] {value!r} must be "
+                    f"a positive int"
+                )
+        return cls(
+            layers=raw["layers"], key_length=raw["key_length"], value_length=raw["value_length"],
+        )
+
+    @classmethod
+    def coerce(cls, raw: Union[Mapping[str, Any], "IndexerGeometry"]) -> "IndexerGeometry":
+        """The thin compatibility adapter at the legacy plain-dict seam: `verify_run` and
+        `classify_fit` still hand this module a mapping read straight off a record/cell dict."""
+        return raw if isinstance(raw, cls) else cls.from_mapping(raw)
+
+    def to_mapping(self) -> Dict[str, int]:
+        """The one JSON emission form -- ordered `layers`/`key_length`/`value_length`, which is
+        the order every committed record's `sweep_cell.kv_indexer_geometry` block already has."""
+        return {
+            "layers": self.layers,
+            "key_length": self.key_length,
+            "value_length": self.value_length,
+        }
+
 
 def kv_bytes_per_token(
     geometry: Dict[str, Optional[int]],
@@ -378,7 +440,7 @@ def kv_bytes_per_token(
     kv_attention_layers: Optional[int] = None,
     context: Optional[int] = None,
     swa_layer_spec: Optional[List[bool]] = None,
-    kv_indexer_geometry: Optional[Dict[str, Any]] = None,
+    kv_indexer_geometry: Optional[Union[Mapping[str, Any], IndexerGeometry]] = None,
 ) -> float:
     """KV-cache bytes/token = attention_layers * (head_count_kv*key_length*bpe(ctk) +
     head_count_kv*value_length*bpe(ctv)) -- llama.cpp's own per-layer K+V cache tensor sizing.
@@ -433,7 +495,8 @@ def kv_bytes_per_token(
     `kv_indexer_geometry` is given and `ctk`/`ctv` are not BOTH `"f16"`, this raises `ValueError`
     (which `classify_fit` turns into `{"classification": "unknown", ...}`, never a guessed
     number) rather than silently misclassifying a quantized-KV cell. Absent `kv_indexer_geometry`
-    is byte-identical to pre-C4-B1 behavior.
+    is byte-identical to pre-C4-B1 behavior. Either an `IndexerGeometry` or the plain mapping
+    every legacy caller passes is accepted; the mapping is parsed (and validated) at this seam.
     """
     layers = kv_attention_layers if kv_attention_layers is not None else geometry.get("block_count")
     head_count_kv = geometry.get("head_count_kv")
@@ -483,9 +546,14 @@ def kv_bytes_per_token(
             f"ctv={ctv!r} is unmeasured (C4-B1 scopes the indexer term to f16/f16 only) -- "
             f"measure the indexer's storage type at this KV type before classifying this cell"
         )
+    # Typed from here down: the arithmetic reads named fields, never string keys. `coerce` is
+    # a no-op for a caller that already holds the typed value (`verify_run`) and the parse for
+    # one that hands over a plain mapping off a record/cell dict (`classify_fit`). It runs AFTER
+    # the f16 check above so a quantized-KV cell still gets the indexer-naming message first.
+    indexer = IndexerGeometry.coerce(kv_indexer_geometry)
     indexer_rate = (
-        kv_indexer_geometry["layers"]
-        * (kv_indexer_geometry["key_length"] + kv_indexer_geometry["value_length"])
+        indexer.layers
+        * (indexer.key_length + indexer.value_length)
         * KV_TYPE_BYTES_PER_ELEMENT["f16"]
     )
     return main_rate + indexer_rate

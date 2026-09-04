@@ -9,7 +9,9 @@ tool's existing Bun workspace globs as a real import.
 **Vendored copies are never edited.** Fix things here, then re-sync
 (`bash signalworks/install.sh --all`) — `install.sh --verify` hash-checks every
 registered consumer against this source (CC-13's byte-identical rule, machine-enforced)
-and `scripts/check-contrast.mjs --signalworks` gates the token/contract rules.
+and `signalworks/scripts/check-contrast.mjs --signalworks` (source location; consumers run
+the vendored copy at `packages/signalworks/scripts/check-contrast.mjs`) gates the
+token/contract rules.
 
 ## Provenance
 
@@ -71,7 +73,7 @@ peerDependencies: `svelte ^5`, `lucide-svelte`.
    COPY packages/signalworks/package.json packages/signalworks/
    ```
 7. Gates: `test:theme` runs
-   `bun <repo-root>/scripts/check-contrast.mjs --signalworks packages/signalworks/css apps/web/src/app.css`;
+   `bun packages/signalworks/scripts/check-contrast.mjs --signalworks packages/signalworks/css apps/web/src`;
    `design:verify` runs `bash <repo-root>/signalworks/install.sh --verify --dest .`.
 
 ## Components

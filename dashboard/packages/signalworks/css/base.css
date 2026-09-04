@@ -2,7 +2,8 @@
  * Signalworks base — the fleet-uniform contract surface, expressed only in
  * var(--…) tokens (CC-01). Values are lifted from the design bundle's component
  * cards (buttons, inputs, pills, list rows, type, layout); the machine gate is
- * scripts/check-contrast.mjs --signalworks, the human pass is
+ * signalworks/scripts/check-contrast.mjs --signalworks (vendored into consumers at
+ * packages/signalworks/scripts/check-contrast.mjs), the human pass is
  * skills/signalworks-design/checklist.html.
  */
 

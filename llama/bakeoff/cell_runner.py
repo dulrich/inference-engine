@@ -25,7 +25,7 @@ Zero new runtime dependencies: Python 3 stdlib only.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Dict, List, NamedTuple, Optional
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 import longcontext
 import run_harness
@@ -69,6 +69,19 @@ TIMING_PROMPT = (
     "Explain, in one short paragraph, why a warm cache makes a repeated request faster."
 )
 TIMING_MAX_TOKENS = 64
+
+# WP-1 (small-dense-decode-roofline-spike): the timing arm's optional prompt-depth override,
+# `timing_prompt_tokens`, swaps TIMING_PROMPT above for fixture filler at that token target
+# (`harness_fixture._build_filler_text`, reused verbatim via `run_harness`, never reimplemented)
+# plus this pinned CAP-EXHAUSTING continuation instruction -- distinct from `harness_fixture.
+# FIXTURE_INSTRUCTION` (a bounded three-topic-summary ask), because a depth timing round needs a
+# `max_tokens`-bound completion, not a self-terminating one, so the round's own decode window is
+# guaranteed rather than hoped for (plan "Decisions locked", audit B4: an admissible round is one
+# whose `finish_reason == "length"`, checked downstream, never here).
+TIMING_DEPTH_INSTRUCTION = (
+    "\n\nContinue the text above in the same style for as long as you can, without stopping or "
+    "summarizing."
+)
 
 # Round 0 runs against a freshly started, just-verified scratch server with an empty KV cache;
 # rounds 1+ resend the identical prompt, so they are cache-hitting `hot` rounds and `run_round`'s
@@ -137,6 +150,38 @@ def resolve_timing_rounds(override: Optional[int]) -> int:
     return TIMING_DEFAULT_ROUNDS
 
 
+def resolve_timing_prompt(prompt_tokens_target: Optional[int]) -> Tuple[str, str]:
+    """The per-cell `timing_prompt_tokens` override resolved to `(prompt, prompt_source)`. Same
+    defensive fallback shape as `resolve_timing_rounds`: a non-int or non-positive value reads as
+    absent rather than raising.
+
+    Absent (or malformed) -> today's fixed short `TIMING_PROMPT`, `prompt_source="fixed-short"`.
+    A positive int -> `run_harness._build_filler_text(target, seed=run_harness.FIXTURE_SEED)`
+    (reused verbatim, never reimplemented) plus `TIMING_DEPTH_INSTRUCTION`, `prompt_source=
+    "fixture-filler"`. The on-wire depth is never assumed from `target` -- every caller reads it
+    back from the round's own `usage.prompt_tokens`.
+    """
+    if (
+        isinstance(prompt_tokens_target, int)
+        and not isinstance(prompt_tokens_target, bool)
+        and prompt_tokens_target >= 1
+    ):
+        # The load-bearing fixture reuse this whole WP pins: `run_harness` re-exports
+        # `harness_fixture`'s underscore-prefixed name at its historical home for exactly this
+        # kind of caller (its own module docstring names `_build_filler_text` explicitly).
+        filler = run_harness._build_filler_text(prompt_tokens_target, seed=run_harness.FIXTURE_SEED)
+        return filler + TIMING_DEPTH_INSTRUCTION, "fixture-filler"
+    return TIMING_PROMPT, "fixed-short"
+
+
+def resolve_timing_max_tokens(override: Optional[int]) -> int:
+    """The per-cell `timing_max_tokens` override, else `TIMING_MAX_TOKENS` -- same defensive
+    fallback shape as `resolve_timing_rounds`."""
+    if isinstance(override, int) and not isinstance(override, bool) and override >= 1:
+        return override
+    return TIMING_MAX_TOKENS
+
+
 def run_timing_rounds(
     handle: "sweep.ScratchServerHandle",
     cell: ResolvedCell,
@@ -163,9 +208,20 @@ def run_timing_rounds(
     and startup-verified before round 0 -- there is no residency transition left to OBSERVE. The
     honest field for the startup cost is `config.json`'s `scratch_startup_seconds`; nothing here
     subtracts an assumed constant from another timing field to manufacture a value.
+
+    WP-1 (small-dense-decode-roofline-spike): `cell.queue.timing_prompt_tokens`/
+    `timing_max_tokens` (`resolve_timing_prompt`/`resolve_timing_max_tokens`) swap the fixed
+    short prompt/64-token cap for fixture filler at a requested depth plus a pinned cap-exhausting
+    continuation instruction, when set -- every round of THIS cell's timing pass uses the same
+    resolved prompt/cap, exactly as the pre-WP-1 fixed prompt/cap did. `detail` gains the four
+    `timing_geometry` fields (`prompt_tokens_target`, `max_tokens`, `prompt_source`,
+    `instruction_pinned`) unconditionally -- `_persist` below is the seam that decides whether
+    they reach the record.
     """
     round_fn = round_fn or run_harness.run_round
     rounds = resolve_timing_rounds(cell.queue.timing_rounds)
+    prompt, prompt_source = resolve_timing_prompt(cell.queue.timing_prompt_tokens)
+    max_tokens = resolve_timing_max_tokens(cell.queue.timing_max_tokens)
     samples: List[Dict[str, Any]] = []
     completions: List[Dict[str, Any]] = []
     error: Optional[str] = None
@@ -174,7 +230,7 @@ def run_timing_rounds(
         try:
             sample, completion = round_fn(
                 handle.base_url, cell.alias, run_state, round_index,
-                TIMING_PROMPT, TIMING_MAX_TOKENS, timeout=timeout,
+                prompt, max_tokens, timeout=timeout,
             )
         except Exception as exc:  # noqa: BLE001 -- a timing arm never fails an otherwise-good
             # cell: the partial rounds already collected are kept, the reason is surfaced in
@@ -188,6 +244,10 @@ def run_timing_rounds(
         "rounds_recorded": len(samples),
         "rounds_succeeded": sum(1 for s in samples if s.get("success") is True),
         "error": error,
+        "prompt_tokens_target": cell.queue.timing_prompt_tokens,
+        "max_tokens": max_tokens,
+        "prompt_source": prompt_source,
+        "instruction_pinned": prompt_source == "fixture-filler",
     })
 
 
@@ -255,6 +315,28 @@ def _read_vram(vram_used_bytes_fn: Callable[[], int]) -> Optional[int]:
         return None
 
 
+def _timing_geometry_for_record(cell: ResolvedCell, timing: TimingArm) -> Optional[Dict[str, Any]]:
+    """The record's optional `config.json` `timing_geometry` block (plan "Decisions locked",
+    audit B2), or `None` when it must be omitted.
+
+    Omitted -- not `_persist`'s `write_cell_record` call passed a keyword at all -- for a cell
+    with no `"timing"` battery item (`timing.detail is None`) AND for a cell that ran the timing
+    arm but set NEITHER `timing_prompt_tokens` NOR `timing_max_tokens`: both cases are today's
+    exact pre-WP-1 behavior, so their records stay byte-identical. Present only when at least one
+    knob was set, taken from the SAME `timing.detail` `run_timing_rounds` already computed --
+    never recomputed here, so there is exactly one place that resolves prompt/cap."""
+    if timing.detail is None:
+        return None
+    if cell.queue.timing_prompt_tokens is None and cell.queue.timing_max_tokens is None:
+        return None
+    return {
+        "prompt_tokens_target": timing.detail["prompt_tokens_target"],
+        "max_tokens": timing.detail["max_tokens"],
+        "prompt_source": timing.detail["prompt_source"],
+        "instruction_pinned": timing.detail["instruction_pinned"],
+    }
+
+
 def _persist(
     records_dir: Optional[Path],
     cell: ResolvedCell,
@@ -281,6 +363,7 @@ def _persist(
             response_caps=response_caps,
             extra_samples=timing.samples,
             extra_completions=timing.completions,
+            timing_geometry=_timing_geometry_for_record(cell, timing),
             **cell_timing_fields(handle),
         )
         return str(path), None

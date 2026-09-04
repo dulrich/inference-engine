@@ -165,6 +165,24 @@ GOLDEN_CELL_IDS = {
         "q4x-ncmoe38-c16k-f16-ctkf16-ctvf16-faauto-c16384-64cfbaa3",
         "mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5",
     ],
+    # plans/small-dense-decode-roofline-spike.md WP-1: 11 measurement cells (Qwen3.5-4B/0.8B
+    # BF16/Q8_0/Q6_K/Q4_0, MiniCPM5-1B F16/Q8_0/Q4_K_M) plus one matched control cell against the
+    # live `nemotron-4b` alias's own served file. `timing_prompt_tokens`/`timing_max_tokens` are
+    # non-identity (`cell_model.QueueCellMetadata`, not `CellIdentity`) -- absent from every id.
+    "small-dense-roofline-v1": [  # 12 cells, sha256(chr(10).join(ids))[:16] == "2eb1ece7aa19452e"
+        "sdr-qwen35-4b-bf16-ctkf16-ctvf16-faauto-c16384-08af6261",
+        "sdr-qwen35-4b-q8-ctkf16-ctvf16-faauto-c16384-6fb6a377",
+        "sdr-qwen35-4b-q6k-ctkf16-ctvf16-faauto-c16384-6f308247",
+        "sdr-qwen35-4b-q40-ctkf16-ctvf16-faauto-c16384-68f790d1",
+        "sdr-qwen35-08b-bf16-ctkf16-ctvf16-faauto-c16384-3bf7fca9",
+        "sdr-qwen35-08b-q8-ctkf16-ctvf16-faauto-c16384-45c7f57b",
+        "sdr-qwen35-08b-q6k-ctkf16-ctvf16-faauto-c16384-107c38d7",
+        "sdr-qwen35-08b-q40-ctkf16-ctvf16-faauto-c16384-5783a120",
+        "sdr-minicpm5-1b-f16-ctkf16-ctvf16-faauto-c16384-3c124316",
+        "sdr-minicpm5-1b-q8-ctkf16-ctvf16-faauto-c16384-4d2ae2db",
+        "sdr-minicpm5-1b-q4km-ctkf16-ctvf16-faauto-c16384-cf888fc6",
+        "sdr-nemotron-4b-udq4xl-ctl-ctkf16-ctvf16-faauto-c16384-3c7a0785",
+    ],
 }
 
 GOLDEN_DIGESTS = {
@@ -177,6 +195,7 @@ GOLDEN_DIGESTS = {
     "qwen4exp-ram-2dimm-jedec-v1": (5, "bb0d3aa0f7c1a683"),
     "qwen4exp-ram-2dimm-expo-v1": (5, "bb0d3aa0f7c1a683"),
     "qwen4exp-ram-4dimm-v1": (5, "bb0d3aa0f7c1a683"),
+    "small-dense-roofline-v1": (12, "2eb1ece7aa19452e"),
 }
 
 
@@ -254,6 +273,7 @@ class TestIdentityIsStructurallyIsolated(unittest.TestCase):
         cell = _resolve("wp5-validation")[0]
         adapter = cell.as_sweep_cell()
         for banned in ("model", "trials", "sampling_arm", "spec_decode", "timing_rounds",
+                       "timing_prompt_tokens", "timing_max_tokens",
                        "chars_per_token", "_queue_model_id", "_sampling_arm", "_trials",
                        "_chars_per_token"):
             self.assertNotIn(banned, adapter)
@@ -270,6 +290,10 @@ class TestIdentityIsStructurallyIsolated(unittest.TestCase):
             dataclasses.replace(cell.queue, trials=999),
             dataclasses.replace(cell.queue, chars_per_token=4.06),
             dataclasses.replace(cell.queue, timing_rounds=11),
+            # WP-1 (small-dense-decode-roofline-spike): the timing arm's optional depth/length
+            # knobs -- same non-identity contract as `timing_rounds` directly above.
+            dataclasses.replace(cell.queue, timing_prompt_tokens=8000),
+            dataclasses.replace(cell.queue, timing_max_tokens=256),
             dataclasses.replace(cell.queue, spec_decode="mtp"),
             # WP-R2 moved `model_family` onto this value (it used to ride an untyped bag). It
             # DOES reach the sweep adapter -- deliberately, the live runner reads it there --

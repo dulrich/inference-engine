@@ -52,6 +52,15 @@ SPEC_DECODE_VALUES = ("base", "mtp")
 # battery item's per-cell round-count override. Absent/None means `TIMING_DEFAULT_ROUNDS`.
 TIMING_ROUNDS_CELL_KEY = "timing_rounds"
 
+# WP-1 (small-dense-decode-roofline-spike): the two abbreviated-cell keys carrying the `"timing"`
+# battery item's optional prompt-depth/response-length overrides -- same optional-and-validated-
+# when-present shape as `TIMING_ROUNDS_CELL_KEY` above, and equally non-identity (`cell_model.
+# QueueCellMetadata`, not `CellIdentity`). Absent means today's fixed-short `TIMING_PROMPT` /
+# `TIMING_MAX_TOKENS` (`cell_runner.py`) -- every pre-WP-1 committed queue is bit-identical in
+# effective behavior.
+TIMING_PROMPT_TOKENS_CELL_KEY = "timing_prompt_tokens"
+TIMING_MAX_TOKENS_CELL_KEY = "timing_max_tokens"
+
 # WP-1 (qwen4exp-bakeoff-campaign, cycle-2 blocking 1): the harness's pre-existing factory
 # default for `harness_transport.py`'s per-recv socket timeout (`cell_runner.py`'s
 # `make_longcontext_cell_runner(timeout: float = 300)`). A queue's optional top-level
@@ -152,6 +161,25 @@ def _validate_cell(idx: int, cell: Dict[str, Any], models: Dict[str, Any]) -> No
     if rounds is not None and (not isinstance(rounds, int) or isinstance(rounds, bool) or rounds < 1):
         raise QueueValidationError(
             f"cells[{idx}] {TIMING_ROUNDS_CELL_KEY} {rounds!r} must be a positive integer when present"
+        )
+    # WP-1 (small-dense-decode-roofline-spike): the timing arm's optional prompt-depth/response-
+    # length overrides -- same optional-and-validated-when-present shape as `timing_rounds` above.
+    prompt_tokens = cell.get(TIMING_PROMPT_TOKENS_CELL_KEY)
+    if prompt_tokens is not None and (
+        not isinstance(prompt_tokens, int) or isinstance(prompt_tokens, bool) or prompt_tokens < 1
+    ):
+        raise QueueValidationError(
+            f"cells[{idx}] {TIMING_PROMPT_TOKENS_CELL_KEY} {prompt_tokens!r} must be a positive "
+            f"integer when present"
+        )
+    timing_max_tokens = cell.get(TIMING_MAX_TOKENS_CELL_KEY)
+    if timing_max_tokens is not None and (
+        not isinstance(timing_max_tokens, int) or isinstance(timing_max_tokens, bool)
+        or timing_max_tokens < 1
+    ):
+        raise QueueValidationError(
+            f"cells[{idx}] {TIMING_MAX_TOKENS_CELL_KEY} {timing_max_tokens!r} must be a positive "
+            f"integer when present"
         )
     # WP-2 (overnight-test-matrix-redesign): reject only a malformed PRESENT value -- unlike
     # `timing_rounds` above, an explicit JSON `null` counts as "present but not base/mtp" and is
@@ -294,6 +322,8 @@ def resolve_cell(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]) -> Re
             trials=abbreviated["trials"],
             chars_per_token=model_entry.get("chars_per_token"),
             timing_rounds=abbreviated.get(TIMING_ROUNDS_CELL_KEY),
+            timing_prompt_tokens=abbreviated.get(TIMING_PROMPT_TOKENS_CELL_KEY),
+            timing_max_tokens=abbreviated.get(TIMING_MAX_TOKENS_CELL_KEY),
             spec_decode=abbreviated.get("spec_decode"),
             # A GGUF `general.architecture` string the queue author already knows when writing
             # the registry entry -- how the live runner selects a

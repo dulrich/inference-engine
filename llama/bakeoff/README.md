@@ -765,6 +765,16 @@ It now runs a small round pass whose `timing_round` rows are appended to the sam
   as `success: false` on its own row. A cell WITHOUT `"timing"` in its battery is unchanged apart
   from the additive `config.json` keys.
 
+### Timing depth/length knobs and `timing_geometry` (2026-09-03, `plans/small-dense-decode-roofline-spike.md` WP-1)
+
+Two additive, non-identity abbreviated-cell keys extend the arm above. `timing_prompt_tokens` (int, optional) swaps the fixed ~87-character `TIMING_PROMPT` for `harness_fixture._build_filler_text(target, seed=FIXTURE_SEED)` (reused verbatim, never reimplemented) plus a pinned, cap-exhausting continuation instruction (`"\n\nContinue the text above in the same style for as long as you can, without stopping or summarizing."` -- distinct from `FIXTURE_INSTRUCTION`, which asks a bounded, self-terminating question); `timing_max_tokens` (int, optional) overrides `TIMING_MAX_TOKENS` (64). Both validated like `timing_rounds`, both resolved AFTER `compute_cell_id` (`cell_model.QueueCellMetadata`, not `CellIdentity`), so neither can perturb a cell's identity. Absent either knob, a cell's timing rounds are byte-for-byte what they were before this WP.
+
+**Why depth matters.** The pre-existing fixed short prompt puts only tens of tokens on the wire (template-dependent), and `model_scoreboard`'s `local-capture` ingest buckets any record whose median prompt depth is `< 1000` tokens as `shallow` and discards it outright -- a shallow timing row can never enter that estimator's calibration set. `timing_prompt_tokens` is how a cell reaches deep-prompt territory (e.g. `8000`, matching the estimator's own calibration bucket) without touching the `"needle"` battery item's long-context machinery at all -- the two arms stay independent knobs on the same scratch server.
+
+**`timing_geometry` on the record.** When at least one knob is set, `write_cell_record` stamps a new optional `config.json` key, `timing_geometry: {prompt_tokens_target, max_tokens, prompt_source: "fixed-short"|"fixture-filler", instruction_pinned}` -- **never** `timing_summary`: that name is reserved by the scoreboard's `capture.ts` legacy-v1 classifier and would cause every v2 timing sample in the record to be silently discarded. A cell that sets neither knob gets no `timing_geometry` key at all (omitted, not `null`), so its record stays byte-identical to one written before this WP.
+
+**Sampling is server-default for timing-only cells.** `run_timing_rounds` (and `run_round` underneath it) sends no sampling arguments, so a cell whose battery has `"timing"` but not `"needle"` never resolves its `sampling_arm` request at all -- `_startup_only` persists with `sampling_arm_effective=None`, so the queue's mandatory `sampling_arm` key is schema-satisfying only for such a cell, and its record's `sweep_cell.sampling_arm` is `null`, never the requested arm.
+
 ### CLI
 
 ```sh
@@ -829,6 +839,10 @@ Fit-safety ordering (audit/fit-safety pin): Tiers A/B/E/F are exactly the live-v
 `llama/bakeoff/queues/ladder-v2.json` is deleted, un-run (user decision 2026-08-25, choosing deletion over supersede-in-place, `plans/overnight-test-matrix-redesign.md` WP-3): it carried 11 cells over the pre-matrix landed recipes, no `.state.json`, and no `llama/bakeoff/records/ladder-v2/` directory ever existed, so nothing is lost. Its 9-model registry and 256k cells are this matrix's direct ancestor (Tier A/D lift its `models` map and carry its two 256k cells forward). Its own 11 aliases (`gemma-qat-c128k-f16-mtp` and siblings, none `mx-`/`mxd-`-prefixed) retire unused but stay reserved under the append-only alias contract — no matrix cell, present or future, may reuse one. Two live-state references to ladder-v2 went stale on deletion and were fixed in the same change: `cron-nightly.sh`'s default queue argument (now `matrix-v1-shared.json`) and `docs/gfx1201-kv-fa-mtp-findings.md`'s "committed DISARMED" sentence.
 
 Not authored in this pilot (plan Assumptions): vision probes, tool-calling under load, and a quality-corpus battery — follow-on tiers for a future `matrix-v2` queue once a `quality` battery item exists.
+
+## Small-dense decode roofline spike (`queues/small-dense-roofline-v1.json`)
+
+`plans/small-dense-decode-roofline-spike.md` WP-1. Twelve scratch cells (no router alias, no `llama/config.yaml` entry) at 8000-token prompt depth / 256-token cap / 3 rounds (`timing_prompt_tokens`/`timing_max_tokens`, see the timing-arm subsection above), measuring decode tok/s across the Qwen3.5-4B and Qwen3.5-0.8B quant ladders (`unsloth/*-GGUF`, BF16/Q8_0/Q6_K/Q4_0) and MiniCPM5-1B (`openbmb/MiniCPM5-1B-GGUF`, F16/Q8_0/Q4_K_M), plus one matched control cell against the file the live `nemotron-4b` router alias actually serves. `battery` is `["vram", "timing"]` only (no `"needle"`) -- this queue exercises the depth/length knobs without the long-context instrument. Aliases (append-only reserved, `sdr-`-prefixed, one alias per model registry key): `sdr-qwen35-4b-{bf16,q8,q6k,q40}`, `sdr-qwen35-08b-{bf16,q8,q6k,q40}`, `sdr-minicpm5-1b-{f16,q8,q4km}`, `sdr-nemotron-4b-udq4xl-ctl` — no cell, present or future, may reuse one.
 
 ## Scheduling -- host control plane (`control_dispatcher.py`, `run-window.sh`)
 

@@ -196,6 +196,11 @@ class QueueCellMetadata:
     the model registry, which `cell_runner` uses to pick a `sampling_table.production_sampling`
     entry without re-parsing a GGUF header per cell. It sits here rather than on `FitMetadata`
     because nothing about it is fit-bearing -- it selects a sampling preset, not a byte count.
+
+    `timing_prompt_tokens`/`timing_max_tokens` (WP-1, small-dense-decode-roofline-spike) are the
+    timing arm's optional prompt-depth/response-length overrides -- measurement-depth knobs
+    exactly like `timing_rounds`, and non-identity for the same reason: they change what is
+    measured, never which server is run.
     """
 
     model_id: str
@@ -205,6 +210,8 @@ class QueueCellMetadata:
     timing_rounds: Optional[int] = None
     spec_decode: Optional[str] = None
     model_family: Optional[str] = None
+    timing_prompt_tokens: Optional[int] = None
+    timing_max_tokens: Optional[int] = None
 
 
 @dataclass(frozen=True)

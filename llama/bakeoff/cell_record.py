@@ -211,6 +211,7 @@ def write_cell_record(
     scratch_startup_seconds: Optional[float] = None,
     extra_samples: Optional[List[Dict[str, Any]]] = None,
     extra_completions: Optional[List[Dict[str, Any]]] = None,
+    timing_geometry: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """Persists one live cell's battery output as a standard four-file
     `run_harness.write_experiment_record` directory under `records_dir/<cell_id>/` -- exactly the
@@ -229,6 +230,15 @@ def write_cell_record(
     `samples.jsonl`/`completions.jsonl` AFTER the battery's own -- how the `"timing"` battery
     item's `timing_round` rows reach the same record as the needle arm's `longcontext_probe`
     rows, without either arm needing to know the other's result shape.
+
+    `timing_geometry` (WP-1, small-dense-decode-roofline-spike) is the timing arm's optional
+    depth/length geometry (`cell_runner._timing_geometry_for_record`) -- `None` when the cell's
+    timing arm didn't run, or ran with neither `timing_prompt_tokens` nor `timing_max_tokens`
+    set. Written under `config["timing_geometry"]` ONLY when non-`None` -- omitted, not a `null`
+    key -- so a record whose cell set neither knob is byte-identical to a record written before
+    this WP. Never named `timing_summary`: the scoreboard's `capture.ts` local-capture ingest
+    uses that exact key to classify a record as legacy v1 and would then discard every v2 timing
+    sample from it.
 
     Every argument from `vram_profile` onward defaults to `None`, so a pre-existing positional
     caller writes exactly what it wrote before; `schema_version` stays 2.
@@ -253,6 +263,8 @@ def write_cell_record(
         "cell_wall_seconds": cell_wall_seconds,
         "scratch_startup_seconds": scratch_startup_seconds,
     }
+    if timing_geometry is not None:
+        config["timing_geometry"] = timing_geometry
     run_harness.write_experiment_record(
         meta.cell_id, config, [], completions, samples, base_dir=records_dir,
     )

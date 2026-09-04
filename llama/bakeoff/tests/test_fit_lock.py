@@ -8,16 +8,21 @@ attempted at all, and the built command is the exact process a bake-off measures
 that silently shifts either does not error -- it quietly changes what the fleet runs and what
 its recorded numbers mean.
 
-Captured at commit `27e1153` (pre-WP-R3) across all 5 committed queues, 94 cells; extended at
-WP-1 (`plans/qwen4exp-bakeoff-campaign.md`) to 6 committed queues, 98 cells (`qwen4exp-viability-
-v1.json` joined; the five-queue/94-cell digests below are re-derived unchanged by the
-WP-1 additivity proof, re-run by the orchestrator at landing -- `d8b09bba7a47d2b0`/`56bfd847eaf30d3a`, n=94):
+The current lock: 9 committed queues, 113 cells --
 
-    fit_classifications  c049cba53b8962b5  n=98
-    build_commands       ec2214347c80c9e2  n=98
+    fit_classifications  6671bd6204d1e66d  n=113
+    build_commands       97ddbd1bdfe55d6a  n=113
     vram_budgets         2f795a1ad011a72b
     geometry_shape       89c2f041b8feb1bf
     kv_bytes_table       5cc5a673e0dffe7b
+
+History: captured at commit `27e1153` (pre-WP-R3) across 5 committed queues, 94 cells
+(`d8b09bba7a47d2b0`/`56bfd847eaf30d3a`); extended at WP-1 of
+`plans/qwen4exp-bakeoff-campaign.md` to 6 committed queues, 98 cells (`qwen4exp-viability-v1.json`
+joined; `c049cba53b8962b5`/`ec2214347c80c9e2`), with the 94-cell digests re-derived unchanged by
+that WP-1's additivity proof; further extended by WP-1 of `plans/qwen4exp-ram-ab-spike.md` (the
+three `qwen4exp-ram-*` queues) to the current 9-queue/113-cell state above, with the 98-cell
+digests re-derived unchanged by that WP's additivity proof.
 
 The per-cell table below is the human-auditable form of the first two; the digests are a second,
 cheaper assertion over the *full* fit dicts (every byte count and margin, not just the

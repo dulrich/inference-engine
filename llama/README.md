@@ -37,6 +37,8 @@ smoke-inference.sh  host-run smoke test against a running router (see "Smoke tes
 Tag: **`crucible-llamacpp-vulkan:b10534-swap243`** — llama.cpp tag + llama-swap tag, both baked
 into the name so it's visible without opening the Dockerfile.
 
+`tools/hf-gguf-fetch.sh <org/repo> <file> [<file>...]` — resumable GGUF fetcher: downloads from Hugging Face into `/models/<org>/<repo>/<file>`, byte-size-verified against the HF tree API, idempotent (see the script's header for details).
+
 The compose service itself (`crucible-inference`, port mapping, `/models` and `config.yaml`
 mounts, `/dev/dri` passthrough, `mem_limit`) lives in the fleet repo,
 `fleet-tools/compose.fleet.yml`.

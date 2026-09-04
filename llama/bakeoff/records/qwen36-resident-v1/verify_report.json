@@ -1,0 +1,154 @@
+{
+  "run_dir": "llama/bakeoff/records/qwen36-resident-v1",
+  "run_dir_exists": true,
+  "state_path": null,
+  "queue_state": null,
+  "generated_at": "2026-09-04T22:04:14+00:00",
+  "checks": [
+    {
+      "check": "abort_state",
+      "cell_id": null,
+      "expected": "queue_state != 'aborted-hang'",
+      "observed": {
+        "reason": "no queue state file found"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "q36r-ud-iq2-m-ctkf16-ctvf16-faauto-c16384-d847b684",
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/qwen36-resident-v1/q36r-ud-iq2-m-ctkf16-ctvf16-faauto-c16384-d847b684",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "q36r-ud-iq2-m-ctkf16-ctvf16-faauto-c16384-d847b684",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "q36r-ud-iq2-m-ctkf16-ctvf16-faauto-c16384-d847b684",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 16384,
+        "weights_bytes": 11522702304,
+        "kv_bytes_per_token": 20480.0,
+        "kv_bytes_at_context": 335544320.0,
+        "estimated_delta_bytes": 11858246624.0,
+        "measured_delta_bytes": 11915481088,
+        "ratio": 1.0048265536900003
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "q36r-ud-iq2-m-ctkf16-ctvf16-faauto-c16384-d847b684",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "q36r-ud-iq2-m-ctkf16-ctvf16-faauto-c16384-d847b684",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "q36r-ud-iq2-m-ctkf16-ctvf16-faauto-c16384-d847b684",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "q36r-ud-iq3-xxs-ctkf16-ctvf16-faauto-c16384-7b8941de",
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/qwen36-resident-v1/q36r-ud-iq3-xxs-ctkf16-ctvf16-faauto-c16384-7b8941de",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "q36r-ud-iq3-xxs-ctkf16-ctvf16-faauto-c16384-7b8941de",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "q36r-ud-iq3-xxs-ctkf16-ctvf16-faauto-c16384-7b8941de",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 16384,
+        "weights_bytes": 13211155424,
+        "kv_bytes_per_token": 20480.0,
+        "kv_bytes_at_context": 335544320.0,
+        "estimated_delta_bytes": 13546699744.0,
+        "measured_delta_bytes": 13536358400,
+        "ratio": 0.999236615249808
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "q36r-ud-iq3-xxs-ctkf16-ctvf16-faauto-c16384-7b8941de",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "q36r-ud-iq3-xxs-ctkf16-ctvf16-faauto-c16384-7b8941de",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "q36r-ud-iq3-xxs-ctkf16-ctvf16-faauto-c16384-7b8941de",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    }
+  ],
+  "cells": {
+    "q36r-ud-iq2-m-ctkf16-ctvf16-faauto-c16384-d847b684": {
+      "state": null,
+      "reason": null,
+      "has_records": true
+    },
+    "q36r-ud-iq3-xxs-ctkf16-ctvf16-faauto-c16384-7b8941de": {
+      "state": null,
+      "reason": null,
+      "has_records": true
+    }
+  },
+  "summary": {
+    "total": 13,
+    "pass": 8,
+    "fail": 0,
+    "unknown": 3,
+    "informational": 2
+  },
+  "exit_code": 0
+}

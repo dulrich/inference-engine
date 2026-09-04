@@ -183,6 +183,10 @@ GOLDEN_CELL_IDS = {
         "sdr-minicpm5-1b-q4km-ctkf16-ctvf16-faauto-c16384-cf888fc6",
         "sdr-nemotron-4b-udq4xl-ctl-ctkf16-ctvf16-faauto-c16384-3c7a0785",
     ],
+    "qwen36-resident-v1": [  # 2 cells, sha256(chr(10).join(ids))[:16] == "c7612fcab3015526"
+        "q36r-ud-iq3-xxs-ctkf16-ctvf16-faauto-c16384-7b8941de",
+        "q36r-ud-iq2-m-ctkf16-ctvf16-faauto-c16384-d847b684",
+    ],
 }
 
 GOLDEN_DIGESTS = {
@@ -196,6 +200,7 @@ GOLDEN_DIGESTS = {
     "qwen4exp-ram-2dimm-expo-v1": (5, "bb0d3aa0f7c1a683"),
     "qwen4exp-ram-4dimm-v1": (5, "bb0d3aa0f7c1a683"),
     "small-dense-roofline-v1": (12, "2eb1ece7aa19452e"),
+    "qwen36-resident-v1": (2, "c7612fcab3015526"),
 }
 
 

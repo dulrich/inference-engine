@@ -1,0 +1,476 @@
+{
+  "queue_state": "completed",
+  "created_at": "2026-09-04T05:10:31+00:00",
+  "request_timeout_s": 600,
+  "cells": {
+    "sdr-qwen35-4b-bf16-ctkf16-ctvf16-faauto-c16384-08af6261": {
+      "state": "completed",
+      "reason": null,
+      "alias": "sdr-qwen35-4b-bf16",
+      "detail": {
+        "startup_details": {
+          "checks": {
+            "model_path": true,
+            "n_ctx": true,
+            "type_k": true,
+            "type_v": true,
+            "flash_attn": true,
+            "offload_placement": true
+          },
+          "matches": {
+            "model_path": "loading model '/models/unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-BF16.gguf'",
+            "n_ctx": "n_ctx                 = 16384",
+            "type_k": "K (f16",
+            "type_v": "V (f16",
+            "flash_attn": "flash_attn            = auto",
+            "offloaded_layers": "offloaded 33/33 layers to GPU"
+          }
+        },
+        "vram_before_bytes": 1395548160,
+        "vram_after_bytes": 10718199808,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": 8000,
+          "max_tokens": 256,
+          "prompt_source": "fixture-filler",
+          "instruction_pinned": true
+        },
+        "record_path": "llama/bakeoff/records/small-dense-roofline-v1/sdr-qwen35-4b-bf16-ctkf16-ctvf16-faauto-c16384-08af6261",
+        "record_error": null
+      }
+    },
+    "sdr-qwen35-4b-q8-ctkf16-ctvf16-faauto-c16384-6fb6a377": {
+      "state": "completed",
+      "reason": null,
+      "alias": "sdr-qwen35-4b-q8",
+      "detail": {
+        "startup_details": {
+          "checks": {
+            "model_path": true,
+            "n_ctx": true,
+            "type_k": true,
+            "type_v": true,
+            "flash_attn": true,
+            "offload_placement": true
+          },
+          "matches": {
+            "model_path": "loading model '/models/unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q8_0.gguf'",
+            "n_ctx": "n_ctx                 = 16384",
+            "type_k": "K (f16",
+            "type_v": "V (f16",
+            "flash_attn": "flash_attn            = auto",
+            "offloaded_layers": "offloaded 33/33 layers to GPU"
+          }
+        },
+        "vram_before_bytes": 1397645312,
+        "vram_after_bytes": 6765969408,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": 8000,
+          "max_tokens": 256,
+          "prompt_source": "fixture-filler",
+          "instruction_pinned": true
+        },
+        "record_path": "llama/bakeoff/records/small-dense-roofline-v1/sdr-qwen35-4b-q8-ctkf16-ctvf16-faauto-c16384-6fb6a377",
+        "record_error": null
+      }
+    },
+    "sdr-qwen35-4b-q6k-ctkf16-ctvf16-faauto-c16384-6f308247": {
+      "state": "completed",
+      "reason": null,
+      "alias": "sdr-qwen35-4b-q6k",
+      "detail": {
+        "startup_details": {
+          "checks": {
+            "model_path": true,
+            "n_ctx": true,
+            "type_k": true,
+            "type_v": true,
+            "flash_attn": true,
+            "offload_placement": true
+          },
+          "matches": {
+            "model_path": "loading model '/models/unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q6_K.gguf'",
+            "n_ctx": "n_ctx                 = 16384",
+            "type_k": "K (f16",
+            "type_v": "V (f16",
+            "flash_attn": "flash_attn            = auto",
+            "offloaded_layers": "offloaded 33/33 layers to GPU"
+          }
+        },
+        "vram_before_bytes": 1395560448,
+        "vram_after_bytes": 5809913856,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": 8000,
+          "max_tokens": 256,
+          "prompt_source": "fixture-filler",
+          "instruction_pinned": true
+        },
+        "record_path": "llama/bakeoff/records/small-dense-roofline-v1/sdr-qwen35-4b-q6k-ctkf16-ctvf16-faauto-c16384-6f308247",
+        "record_error": null
+      }
+    },
+    "sdr-qwen35-4b-q40-ctkf16-ctvf16-faauto-c16384-68f790d1": {
+      "state": "completed",
+      "reason": null,
+      "alias": "sdr-qwen35-4b-q40",
+      "detail": {
+        "startup_details": {
+          "checks": {
+            "model_path": true,
+            "n_ctx": true,
+            "type_k": true,
+            "type_v": true,
+            "flash_attn": true,
+            "offload_placement": true
+          },
+          "matches": {
+            "model_path": "loading model '/models/unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_0.gguf'",
+            "n_ctx": "n_ctx                 = 16384",
+            "type_k": "K (f16",
+            "type_v": "V (f16",
+            "flash_attn": "flash_attn            = auto",
+            "offloaded_layers": "offloaded 33/33 layers to GPU"
+          }
+        },
+        "vram_before_bytes": 1395572736,
+        "vram_after_bytes": 4867293184,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": 8000,
+          "max_tokens": 256,
+          "prompt_source": "fixture-filler",
+          "instruction_pinned": true
+        },
+        "record_path": "llama/bakeoff/records/small-dense-roofline-v1/sdr-qwen35-4b-q40-ctkf16-ctvf16-faauto-c16384-68f790d1",
+        "record_error": null
+      }
+    },
+    "sdr-qwen35-08b-bf16-ctkf16-ctvf16-faauto-c16384-3bf7fca9": {
+      "state": "completed",
+      "reason": null,
+      "alias": "sdr-qwen35-08b-bf16",
+      "detail": {
+        "startup_details": {
+          "checks": {
+            "model_path": true,
+            "n_ctx": true,
+            "type_k": true,
+            "type_v": true,
+            "flash_attn": true,
+            "offload_placement": true
+          },
+          "matches": {
+            "model_path": "loading model '/models/unsloth/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-BF16.gguf'",
+            "n_ctx": "n_ctx                 = 16384",
+            "type_k": "K (f16",
+            "type_v": "V (f16",
+            "flash_attn": "flash_attn            = auto",
+            "offloaded_layers": "offloaded 25/25 layers to GPU"
+          }
+        },
+        "vram_before_bytes": 1395560448,
+        "vram_after_bytes": 3298054144,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": 8000,
+          "max_tokens": 256,
+          "prompt_source": "fixture-filler",
+          "instruction_pinned": true
+        },
+        "record_path": "llama/bakeoff/records/small-dense-roofline-v1/sdr-qwen35-08b-bf16-ctkf16-ctvf16-faauto-c16384-3bf7fca9",
+        "record_error": null
+      }
+    },
+    "sdr-qwen35-08b-q8-ctkf16-ctvf16-faauto-c16384-45c7f57b": {
+      "state": "completed",
+      "reason": null,
+      "alias": "sdr-qwen35-08b-q8",
+      "detail": {
+        "startup_details": {
+          "checks": {
+            "model_path": true,
+            "n_ctx": true,
+            "type_k": true,
+            "type_v": true,
+            "flash_attn": true,
+            "offload_placement": true
+          },
+          "matches": {
+            "model_path": "loading model '/models/unsloth/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf'",
+            "n_ctx": "n_ctx                 = 16384",
+            "type_k": "K (f16",
+            "type_v": "V (f16",
+            "flash_attn": "flash_attn            = auto",
+            "offloaded_layers": "offloaded 25/25 layers to GPU"
+          }
+        },
+        "vram_before_bytes": 1395560448,
+        "vram_after_bytes": 2590756864,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": 8000,
+          "max_tokens": 256,
+          "prompt_source": "fixture-filler",
+          "instruction_pinned": true
+        },
+        "record_path": "llama/bakeoff/records/small-dense-roofline-v1/sdr-qwen35-08b-q8-ctkf16-ctvf16-faauto-c16384-45c7f57b",
+        "record_error": null
+      }
+    },
+    "sdr-qwen35-08b-q6k-ctkf16-ctvf16-faauto-c16384-107c38d7": {
+      "state": "completed",
+      "reason": null,
+      "alias": "sdr-qwen35-08b-q6k",
+      "detail": {
+        "startup_details": {
+          "checks": {
+            "model_path": true,
+            "n_ctx": true,
+            "type_k": true,
+            "type_v": true,
+            "flash_attn": true,
+            "offload_placement": true
+          },
+          "matches": {
+            "model_path": "loading model '/models/unsloth/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q6_K.gguf'",
+            "n_ctx": "n_ctx                 = 16384",
+            "type_k": "K (f16",
+            "type_v": "V (f16",
+            "flash_attn": "flash_attn            = auto",
+            "offloaded_layers": "offloaded 25/25 layers to GPU"
+          }
+        },
+        "vram_before_bytes": 1397649408,
+        "vram_after_bytes": 2418462720,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": 8000,
+          "max_tokens": 256,
+          "prompt_source": "fixture-filler",
+          "instruction_pinned": true
+        },
+        "record_path": "llama/bakeoff/records/small-dense-roofline-v1/sdr-qwen35-08b-q6k-ctkf16-ctvf16-faauto-c16384-107c38d7",
+        "record_error": null
+      }
+    },
+    "sdr-qwen35-08b-q40-ctkf16-ctvf16-faauto-c16384-5783a120": {
+      "state": "completed",
+      "reason": null,
+      "alias": "sdr-qwen35-08b-q40",
+      "detail": {
+        "startup_details": {
+          "checks": {
+            "model_path": true,
+            "n_ctx": true,
+            "type_k": true,
+            "type_v": true,
+            "flash_attn": true,
+            "offload_placement": true
+          },
+          "matches": {
+            "model_path": "loading model '/models/unsloth/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q4_0.gguf'",
+            "n_ctx": "n_ctx                 = 16384",
+            "type_k": "K (f16",
+            "type_v": "V (f16",
+            "flash_attn": "flash_attn            = auto",
+            "offloaded_layers": "offloaded 25/25 layers to GPU"
+          }
+        },
+        "vram_before_bytes": 1397649408,
+        "vram_after_bytes": 2286592000,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": 8000,
+          "max_tokens": 256,
+          "prompt_source": "fixture-filler",
+          "instruction_pinned": true
+        },
+        "record_path": "llama/bakeoff/records/small-dense-roofline-v1/sdr-qwen35-08b-q40-ctkf16-ctvf16-faauto-c16384-5783a120",
+        "record_error": null
+      }
+    },
+    "sdr-minicpm5-1b-f16-ctkf16-ctvf16-faauto-c16384-3c124316": {
+      "state": "completed",
+      "reason": null,
+      "alias": "sdr-minicpm5-1b-f16",
+      "detail": {
+        "startup_details": {
+          "checks": {
+            "model_path": true,
+            "n_ctx": true,
+            "type_k": true,
+            "type_v": true,
+            "flash_attn": true,
+            "offload_placement": true
+          },
+          "matches": {
+            "model_path": "loading model '/models/openbmb/MiniCPM5-1B-GGUF/MiniCPM5-1B-F16.gguf'",
+            "n_ctx": "n_ctx                 = 16384",
+            "type_k": "K (f16",
+            "type_v": "V (f16",
+            "flash_attn": "flash_attn            = auto",
+            "offloaded_layers": "offloaded 25/25 layers to GPU"
+          }
+        },
+        "vram_before_bytes": 1397649408,
+        "vram_after_bytes": 3656114176,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": 8000,
+          "max_tokens": 256,
+          "prompt_source": "fixture-filler",
+          "instruction_pinned": true
+        },
+        "record_path": "llama/bakeoff/records/small-dense-roofline-v1/sdr-minicpm5-1b-f16-ctkf16-ctvf16-faauto-c16384-3c124316",
+        "record_error": null
+      }
+    },
+    "sdr-minicpm5-1b-q8-ctkf16-ctvf16-faauto-c16384-4d2ae2db": {
+      "state": "completed",
+      "reason": null,
+      "alias": "sdr-minicpm5-1b-q8",
+      "detail": {
+        "startup_details": {
+          "checks": {
+            "model_path": true,
+            "n_ctx": true,
+            "type_k": true,
+            "type_v": true,
+            "flash_attn": true,
+            "offload_placement": true
+          },
+          "matches": {
+            "model_path": "loading model '/models/openbmb/MiniCPM5-1B-GGUF/MiniCPM5-1B-Q8_0.gguf'",
+            "n_ctx": "n_ctx                 = 16384",
+            "type_k": "K (f16",
+            "type_v": "V (f16",
+            "flash_attn": "flash_attn            = auto",
+            "offloaded_layers": "offloaded 25/25 layers to GPU"
+          }
+        },
+        "vram_before_bytes": 1397649408,
+        "vram_after_bytes": 2829066240,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": 8000,
+          "max_tokens": 256,
+          "prompt_source": "fixture-filler",
+          "instruction_pinned": true
+        },
+        "record_path": "llama/bakeoff/records/small-dense-roofline-v1/sdr-minicpm5-1b-q8-ctkf16-ctvf16-faauto-c16384-4d2ae2db",
+        "record_error": null
+      }
+    },
+    "sdr-minicpm5-1b-q4km-ctkf16-ctvf16-faauto-c16384-cf888fc6": {
+      "state": "completed",
+      "reason": null,
+      "alias": "sdr-minicpm5-1b-q4km",
+      "detail": {
+        "startup_details": {
+          "checks": {
+            "model_path": true,
+            "n_ctx": true,
+            "type_k": true,
+            "type_v": true,
+            "flash_attn": true,
+            "offload_placement": true
+          },
+          "matches": {
+            "model_path": "loading model '/models/openbmb/MiniCPM5-1B-GGUF/MiniCPM5-1B-Q4_K_M.gguf'",
+            "n_ctx": "n_ctx                 = 16384",
+            "type_k": "K (f16",
+            "type_v": "V (f16",
+            "flash_attn": "flash_attn            = auto",
+            "offloaded_layers": "offloaded 25/25 layers to GPU"
+          }
+        },
+        "vram_before_bytes": 1395560448,
+        "vram_after_bytes": 2463870976,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": 8000,
+          "max_tokens": 256,
+          "prompt_source": "fixture-filler",
+          "instruction_pinned": true
+        },
+        "record_path": "llama/bakeoff/records/small-dense-roofline-v1/sdr-minicpm5-1b-q4km-ctkf16-ctvf16-faauto-c16384-cf888fc6",
+        "record_error": null
+      }
+    },
+    "sdr-nemotron-4b-udq4xl-ctl-ctkf16-ctvf16-faauto-c16384-3c7a0785": {
+      "state": "completed",
+      "reason": null,
+      "alias": "sdr-nemotron-4b-udq4xl-ctl",
+      "detail": {
+        "startup_details": {
+          "checks": {
+            "model_path": true,
+            "n_ctx": true,
+            "type_k": true,
+            "type_v": true,
+            "flash_attn": true,
+            "offload_placement": true
+          },
+          "matches": {
+            "model_path": "loading model '/models/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-UD-Q4_K_XL.gguf'",
+            "n_ctx": "n_ctx                 = 16384",
+            "type_k": "K (f16",
+            "type_v": "V (f16",
+            "flash_attn": "flash_attn            = auto",
+            "offloaded_layers": "offloaded 43/43 layers to GPU"
+          }
+        },
+        "vram_before_bytes": 1428983808,
+        "vram_after_bytes": 4997046272,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": 8000,
+          "max_tokens": 256,
+          "prompt_source": "fixture-filler",
+          "instruction_pinned": true
+        },
+        "record_path": "llama/bakeoff/records/small-dense-roofline-v1/sdr-nemotron-4b-udq4xl-ctl-ctkf16-ctvf16-faauto-c16384-3c7a0785",
+        "record_error": null
+      }
+    }
+  },
+  "updated_at": "2026-09-04T05:13:23+00:00"
+}

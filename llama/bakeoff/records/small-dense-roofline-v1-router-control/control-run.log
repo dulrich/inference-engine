@@ -1,0 +1,3 @@
+cold 1 {'prompt_tokens': 5329, 'completion_tokens': 256, 'finish_reason': 'length', 'observed_decode_tok_s': 140.05210704335602, 'server_eval_tok_s': 139.4842801216303, 'server_prompt_eval_tok_s': 3147.475375095313, 'cache_assertion_passed': None}
+hot 1 {'prompt_tokens': 5329, 'completion_tokens': 256, 'finish_reason': 'length', 'observed_decode_tok_s': 140.14714442879517, 'server_eval_tok_s': 139.5830026219709, 'server_prompt_eval_tok_s': 57.77090945854215, 'cache_assertion_passed': True}
+hot 2 {'prompt_tokens': 5329, 'completion_tokens': 256, 'finish_reason': 'length', 'observed_decode_tok_s': 140.16090591321586, 'server_eval_tok_s': 139.60386445395454, 'server_prompt_eval_tok_s': 70.03782042302844, 'cache_assertion_passed': True}

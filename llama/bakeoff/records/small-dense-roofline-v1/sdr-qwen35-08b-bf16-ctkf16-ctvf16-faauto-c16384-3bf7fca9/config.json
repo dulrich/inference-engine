@@ -1,0 +1,67 @@
+{
+  "lineage": {
+    "hf_repo": "unsloth/Qwen3.5-0.8B-GGUF",
+    "hf_revision": null,
+    "filename": "Qwen3.5-0.8B-BF16.gguf",
+    "file_size": 1516744736,
+    "sha256": null,
+    "llama_cpp_build": "b10534"
+  },
+  "sweep_cell": {
+    "cell_id": "sdr-qwen35-08b-bf16-ctkf16-ctvf16-faauto-c16384-3bf7fca9",
+    "alias": "sdr-qwen35-08b-bf16",
+    "server_flags": {
+      "--host": "0.0.0.0",
+      "-lv": 9,
+      "-ctk": "f16",
+      "-ctv": "f16",
+      "-fa": "auto",
+      "-ngl": 99,
+      "--jinja": true,
+      "-c": 16384
+    },
+    "model_host_path": "/models/unsloth/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-BF16.gguf",
+    "battery": [
+      "vram",
+      "timing"
+    ],
+    "sampling_arm": null,
+    "model": "sdr-qwen35-08b-bf16",
+    "spec_decode": null,
+    "gpu_weights_bytes": null,
+    "kv_attention_layers": null,
+    "swa_layer_spec": null,
+    "kv_indexer_geometry": null
+  },
+  "vram": {
+    "baseline_bytes": 1395560448,
+    "loaded_bytes": 3298054144,
+    "after_teardown_bytes": null
+  },
+  "wilson_summary": null,
+  "vram_profile": "desktop-shared",
+  "response_caps": {
+    "default": 256,
+    "by_task": {
+      "multi_needle": 768
+    }
+  },
+  "cell_started_at": "2026-09-04T05:12:36+00:00",
+  "cell_ended_at": "2026-09-04T05:12:43+00:00",
+  "cell_wall_seconds": 7.2151931560001685,
+  "scratch_startup_seconds": 3.0762250469997525,
+  "timing_geometry": {
+    "prompt_tokens_target": 8000,
+    "max_tokens": 256,
+    "prompt_source": "fixture-filler",
+    "instruction_pinned": true
+  },
+  "experiment_id": "sdr-qwen35-08b-bf16-ctkf16-ctvf16-faauto-c16384-3bf7fca9",
+  "timestamp": "2026-09-04T05:12:43.325727+00:00",
+  "schema_version": 2,
+  "size_check": {
+    "total_bytes": 8112,
+    "limit_bytes": 26214400,
+    "within_budget": true
+  }
+}

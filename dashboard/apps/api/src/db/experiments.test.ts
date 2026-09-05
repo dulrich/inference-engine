@@ -160,6 +160,17 @@ function insertTimingRound(experimentId: string, decode: number | null, prefill?
   ).run(experimentId, decode, JSON.stringify(raw));
 }
 
+/** F2 (`reviews/2026-09-05-tn-code-review.md`): `insertTimingRound`'s `prefill?: number`
+ * signature can't express the malformed raw shapes `json_extract` actually has to survive
+ * (string, boolean, object, array, explicit null, absent key) -- this sibling takes the
+ * full `raw_json` text verbatim so a test can write any of those directly, arbitrary JSON
+ * text and all. */
+function insertTimingRoundRaw(experimentId: string, decode: number | null, rawJsonText: string): void {
+  db.query(
+    `INSERT INTO metrics (experiment_id, metric_type, observed_decode_tok_s, raw_json) VALUES (?, 'timing_round', ?, ?)`,
+  ).run(experimentId, decode, rawJsonText);
+}
+
 /** A plain-recipe (no MTP, f16/f16 KV, no offload) served model at `modelPath` -- a record
  * whose `model_host_path` matches AND whose flags reduce to the same all-defaults recipe
  * (no `sweep_server_flags` at all) gets `recipeMatch: true` against it. */
@@ -265,5 +276,100 @@ describe("listServingTimingRows: served-recipe-resolved p50/p90 prefill + decode
     expect(row?.p50PrefillTokS).toBeNull();
     expect(row?.p90PrefillTokS).toBeNull();
     expect(row?.p50DecodeTokS).toBe(15);
+  });
+});
+
+// F2 (`reviews/2026-09-05-tn-code-review.md`, WP-R2 `plans/served-recipe-boundary-
+// remediation.md`): the raw-JSON-to-numeric-sample boundary (`experiments.ts
+// prefillSample`) gated on SQLite's own `json_type` -- only an "integer"/"real" JSON value
+// may ever contribute a prefill sample. Each case below uses its OWN model path/served
+// alias, same discipline as the suite above.
+describe("listServingTimingRows: F2 prefill boundary -- json_type-gated numeric admission (WP-R2)", () => {
+  test("malformed/absent raw prefill (string, numeric string, true, false, object, array, null, absent key) never yields a prefill percentile; decode + sampleCount are unaffected", () => {
+    const cases: Array<{ suffix: string; rawJson: string }> = [
+      { suffix: "string", rawJson: JSON.stringify({ server_prompt_eval_tok_s: "fast" }) },
+      { suffix: "numeric-string", rawJson: JSON.stringify({ server_prompt_eval_tok_s: "123" }) },
+      { suffix: "true", rawJson: JSON.stringify({ server_prompt_eval_tok_s: true }) },
+      { suffix: "false", rawJson: JSON.stringify({ server_prompt_eval_tok_s: false }) },
+      { suffix: "object", rawJson: JSON.stringify({ server_prompt_eval_tok_s: {} }) },
+      { suffix: "array", rawJson: JSON.stringify({ server_prompt_eval_tok_s: [] }) },
+      { suffix: "null", rawJson: JSON.stringify({ server_prompt_eval_tok_s: null }) },
+      { suffix: "absent-key", rawJson: JSON.stringify({}) },
+    ];
+
+    for (const { suffix, rawJson } of cases) {
+      const path = `/models/fixture-org/fixture-timing-malformed-${suffix}-GGUF/model.gguf`;
+      const modelKey = `fixture-timing-malformed-${suffix}`;
+      const alias = plainServedAlias(modelKey, path);
+      const experimentId = `exp-timing-malformed-${suffix}`;
+      insertTimingExperiment(experimentId, { modelHostPath: path, samplingArm: "production" });
+      insertTimingRoundRaw(experimentId, 42, rawJson);
+
+      const rows = listServingTimingRows([alias]);
+      const row = rows.find((r) => r.modelKey === modelKey);
+      expect(row?.p50PrefillTokS).toBeNull();
+      expect(row?.p90PrefillTokS).toBeNull();
+      expect(row?.p50DecodeTokS).toBe(42);
+      expect(row?.sampleCount).toBe(1);
+    }
+  });
+
+  test("finite zero raw prefill is a valid sample (0, not null) -- no positive-only policy", () => {
+    const path = "/models/fixture-org/fixture-timing-prefill-zero-GGUF/model.gguf";
+    const alias = plainServedAlias("fixture-timing-prefill-zero", path);
+    insertTimingExperiment("exp-timing-prefill-zero", { modelHostPath: path, samplingArm: "production" });
+    insertTimingRound("exp-timing-prefill-zero", 10, 0);
+
+    const rows = listServingTimingRows([alias]);
+    const row = rows.find((r) => r.modelKey === "fixture-timing-prefill-zero");
+    expect(row?.p50PrefillTokS).toBe(0);
+    expect(row?.p90PrefillTokS).toBe(0);
+  });
+
+  test("a normal finite prefill number passes through as itself", () => {
+    const path = "/models/fixture-org/fixture-timing-prefill-normal-GGUF/model.gguf";
+    const alias = plainServedAlias("fixture-timing-prefill-normal", path);
+    insertTimingExperiment("exp-timing-prefill-normal", { modelHostPath: path, samplingArm: "production" });
+    insertTimingRound("exp-timing-prefill-normal", 10, 321.5);
+
+    const rows = listServingTimingRows([alias]);
+    const row = rows.find((r) => r.modelKey === "fixture-timing-prefill-normal");
+    expect(row?.p50PrefillTokS).toBe(321.5);
+  });
+
+  test("mixed rounds: percentiles computed over exactly the valid numeric prefill samples; sampleCount still counts every round", () => {
+    const path = "/models/fixture-org/fixture-timing-prefill-mixed-GGUF/model.gguf";
+    const alias = plainServedAlias("fixture-timing-prefill-mixed", path);
+    insertTimingExperiment("exp-timing-prefill-mixed", { modelHostPath: path, samplingArm: "production" });
+    insertTimingRound("exp-timing-prefill-mixed", 10, 100);
+    insertTimingRound("exp-timing-prefill-mixed", 20, 200);
+    insertTimingRoundRaw("exp-timing-prefill-mixed", 30, JSON.stringify({ server_prompt_eval_tok_s: "fast" }));
+    insertTimingRoundRaw("exp-timing-prefill-mixed", 40, JSON.stringify({ server_prompt_eval_tok_s: true }));
+
+    const rows = listServingTimingRows([alias]);
+    const row = rows.find((r) => r.modelKey === "fixture-timing-prefill-mixed");
+    expect(row?.sampleCount).toBe(4);
+    expect(row?.p50PrefillTokS).toBe(150); // percentile([100, 200], 0.5)
+    expect(row?.p90PrefillTokS).toBe(190); // percentile([100, 200], 0.9)
+    expect(row?.p50DecodeTokS).toBe(25); // percentile([10, 20, 30, 40], 0.5) -- unaffected
+  });
+
+  test("a second served model with valid prefill is unaffected by another model's malformed rounds", () => {
+    const badPath = "/models/fixture-org/fixture-timing-prefill-other-bad-GGUF/model.gguf";
+    const badAlias = plainServedAlias("fixture-timing-prefill-other-bad", badPath);
+    insertTimingExperiment("exp-timing-prefill-other-bad", { modelHostPath: badPath, samplingArm: "production" });
+    insertTimingRoundRaw("exp-timing-prefill-other-bad", 5, JSON.stringify({ server_prompt_eval_tok_s: "fast" }));
+
+    const goodPath = "/models/fixture-org/fixture-timing-prefill-other-good-GGUF/model.gguf";
+    const goodAlias = plainServedAlias("fixture-timing-prefill-other-good", goodPath);
+    insertTimingExperiment("exp-timing-prefill-other-good", { modelHostPath: goodPath, samplingArm: "production" });
+    insertTimingRound("exp-timing-prefill-other-good", 60, 600);
+
+    const rows = listServingTimingRows([badAlias, goodAlias]);
+    const badRow = rows.find((r) => r.modelKey === "fixture-timing-prefill-other-bad");
+    const goodRow = rows.find((r) => r.modelKey === "fixture-timing-prefill-other-good");
+    expect(badRow?.p50PrefillTokS).toBeNull();
+    expect(goodRow?.p50PrefillTokS).toBe(600);
+    expect(goodRow?.p50DecodeTokS).toBe(60);
   });
 });

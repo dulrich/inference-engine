@@ -449,12 +449,31 @@ interface ServingTimingSourceRow {
   sampling_arm: string | null;
   sweep_server_flags: string | null;
   observed_decode_tok_s: number | null;
-  observed_prefill_tok_s: number | null;
+  // Raw `json_extract` result -- SQLite returns TEXT for JSON strings and converts JSON
+  // booleans to integer 0/1, so this is honestly `unknown` here, not `number | null` (F2,
+  // `reviews/2026-09-05-tn-code-review.md`). `observed_prefill_json_type` (SQLite's own
+  // `json_type()`) is the only thing that lets `prefillSample` tell a real number apart
+  // from a converted boolean; see it there.
+  observed_prefill_tok_s: unknown;
+  observed_prefill_json_type: string | null;
 }
 
 interface ServingTimingRound {
   decode: number | null;
   prefill: number | null;
+}
+
+/** F2 boundary (`reviews/2026-09-05-tn-code-review.md`): admits a prefill sample only when
+ * SQLite's own `json_type` says the stored JSON value was an integer/real (never text,
+ * true/false, object, array, or a missing key -- all of which report some other
+ * `json_type`, including `null` for an absent key) AND the extracted value is actually a
+ * finite JS `number` once that's established. Valid finite `0` stays a sample; every other
+ * shape contributes none. This is the ONLY place raw prefill JSON is trusted as a number --
+ * `listServingTimingRows` never re-derives it. */
+function prefillSample(row: ServingTimingSourceRow): number | null {
+  if (row.observed_prefill_json_type !== "integer" && row.observed_prefill_json_type !== "real") return null;
+  const value = row.observed_prefill_tok_s;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 interface ServingTimingGroup {
@@ -503,7 +522,8 @@ export function listServingTimingRows(servedAliases: readonly ServingAlias[]): S
           e.sampling_arm AS sampling_arm,
           e.sweep_server_flags AS sweep_server_flags,
           m.observed_decode_tok_s AS observed_decode_tok_s,
-          json_extract(m.raw_json, '$.server_prompt_eval_tok_s') AS observed_prefill_tok_s
+          json_extract(m.raw_json, '$.server_prompt_eval_tok_s') AS observed_prefill_tok_s,
+          json_type(m.raw_json, '$.server_prompt_eval_tok_s') AS observed_prefill_json_type
         FROM metrics m
         JOIN experiments e ON e.id = m.experiment_id
         WHERE m.metric_type = 'timing_round'
@@ -530,7 +550,7 @@ export function listServingTimingRows(servedAliases: readonly ServingAlias[]): S
       groups.set(resolved.modelKey, group);
     }
     const rounds = group.byArm.get(row.sampling_arm);
-    const round: ServingTimingRound = { decode: row.observed_decode_tok_s, prefill: row.observed_prefill_tok_s };
+    const round: ServingTimingRound = { decode: row.observed_decode_tok_s, prefill: prefillSample(row) };
     if (rounds) rounds.push(round);
     else group.byArm.set(row.sampling_arm, [round]);
   }

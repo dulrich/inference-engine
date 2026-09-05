@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
+import { z } from "zod";
 import { join } from "node:path";
 import { useTemporaryDatabase } from "./db/testDatabase.ts";
 
@@ -12,9 +13,42 @@ await useTemporaryDatabase("app-routes");
 
 const { app } = await import("./app.ts");
 const { runIngest } = await import("./ingest/run.ts");
+const { db } = await import("./db/connection.ts");
 
 const FIXTURES_DIR = join(import.meta.dir, "../fixtures/records");
 await runIngest({ recordsDir: FIXTURES_DIR, rebuild: false });
+
+// WP-3 (`plans/served-recipe-p50-prefill-and-decode.md`) fixture pairing for the export's
+// `serving` key -- reused verbatim from `routes/servingTiming.test.ts`'s own comment: the
+// fixture config's `fixture-chat-q4` model resolves to `-m /models/example-org/
+// fixture-chat-gguf/fixture-chat-Q4_K_M.gguf -ctk q4_0 -ctv q4_0`, no MTP, no `-ncmoe` --
+// a record whose own `model_host_path`/flags reduce to the identical tuple gets
+// `recipeMatch: true` against it. Inserted directly (never through `runIngest`, which only
+// scans `FIXTURES_DIR`'s two on-disk records, neither of which carries a `model_host_path`)
+// -- same direct-`db.query` pattern `servingTiming.test.ts`/`experiments.test.ts` use for
+// resolver fixtures. Deferred to a `beforeAll` scoped to the export describe block below
+// (never at this module's top level) so it runs only right before that describe's own
+// tests -- after `/health`'s `experimentCount` and `/api/experiments`'s two-id assertions
+// have already executed against the two-row DB `runIngest` populated above.
+const SERVING_MATCH_EXPERIMENT_ID = "fixture-serving-match";
+function insertServingMatchExperiment(): void {
+  db.query(
+    `
+      INSERT INTO experiments (
+        id, schema_version, sweep_alias, sampling_arm, sweep_server_flags, model_host_path,
+        raw_config_json, raw_prompts_json, raw_completions_json, ingested_at, schema_origin
+      ) VALUES (?, 2, ?, ?, ?, ?, ?, '[]', '[]', ?, 'v2')
+    `,
+  ).run(
+    SERVING_MATCH_EXPERIMENT_ID,
+    "fixture-serving-match-alias",
+    "production",
+    JSON.stringify({ "-ctk": "q4_0", "-ctv": "q4_0" }),
+    "/models/example-org/fixture-chat-gguf/fixture-chat-Q4_K_M.gguf",
+    JSON.stringify({ experiment_id: SERVING_MATCH_EXPERIMENT_ID, schema_version: 2 }),
+    new Date().toISOString(),
+  );
+}
 
 async function getJson<T>(path: string): Promise<{ status: number; body: T }> {
   const response = await app.request(path);
@@ -194,25 +228,63 @@ describe("POST /api/control/*", () => {
 });
 
 describe("GET /api/export/scoreboard-capture", () => {
+  // WP-3 (`plans/served-recipe-p50-prefill-and-decode.md`): `insertServingMatchExperiment`
+  // adds a third DB row (`fixture-serving-match`) whose `model_host_path` resolves to the
+  // fixture config's `fixture-chat-q4` served model with a matching recipe. Scoped to a
+  // `beforeAll` on THIS describe block only, so it never touches `/health`'s
+  // `experimentCount` or `/api/experiments`'s two-id assertions above, which already ran
+  // against the two-row DB by the time this fires.
+  beforeAll(() => {
+    insertServingMatchExperiment();
+  });
+
+  interface CaptureRecordBody {
+    experimentId: string;
+    config: unknown;
+    samples: unknown[];
+    serving: { modelKey: string; aliases: string[]; recipeMatch: boolean; mtp: boolean; moeCpuLayers: number | null; specType: string | null } | null;
+  }
+
   test("envelope marks captureVersion 1 / stability \"v1\" and passes through raw records", async () => {
     const { status, body } = await getJson<{
       captureVersion: number;
       stability: string;
       recordCount: number;
-      records: { experimentId: string; config: unknown; samples: unknown[] }[];
+      records: CaptureRecordBody[];
     }>("/api/export/scoreboard-capture");
     expect(status).toBe(200);
     expect(body.captureVersion).toBe(1);
     expect(body.stability).toBe("v1");
-    expect(body.recordCount).toBe(2);
+    expect(body.recordCount).toBe(3);
     const smokeCell = body.records.find((r) => r.experimentId === "fixture-v2-smoke-cell");
     expect(smokeCell).toBeDefined();
     expect((smokeCell?.config as { schema_version: number }).schema_version).toBe(2);
     // Reconstructed from `trials`/`metrics` `raw_json`, ordered by `line_index` — matches
     // the original `samples.jsonl`'s 3 `sampling_echo_check` lines exactly (VRAM lives in
     // `config.json`, never `samples.jsonl`, so it is excluded here and reachable instead
-    // via `smokeCell.config.vram`).
+    // via `smokeCell.config.vram`). Unchanged from pre-`serving` behavior — proves the
+    // verbatim fields stayed byte-for-byte identical.
     expect(smokeCell?.samples).toHaveLength(3);
+    // Neither pre-existing fixture carries a `sweep_cell.model_host_path` (`fixture-v2-full`'s
+    // `sweep_cell` is null; `fixture-v2-smoke-cell`'s carries no `model_host_path` key) — both
+    // resolve to no served model, `null`, never a guessed object.
+    const fullRecord = body.records.find((r) => r.experimentId === "fixture-v2-full");
+    expect(fullRecord?.serving).toBeNull();
+    expect(smokeCell?.serving).toBeNull();
+  });
+
+  test("serving: recipeMatch true via the same resolver GET /api/serving/timing uses, for a matched model_host_path", async () => {
+    const { body } = await getJson<{ records: CaptureRecordBody[] }>("/api/export/scoreboard-capture?id=fixture-serving-match");
+    const record = body.records[0];
+    expect(record?.experimentId).toBe("fixture-serving-match");
+    expect(record?.serving).toEqual({
+      modelKey: "fixture-chat-q4",
+      aliases: ["fixture-chat"],
+      recipeMatch: true,
+      mtp: false,
+      moeCpuLayers: null,
+      specType: null,
+    });
   });
 
   test("?id= filters to the requested experiment(s)", async () => {
@@ -221,5 +293,24 @@ describe("GET /api/export/scoreboard-capture", () => {
     );
     expect(body.recordCount).toBe(1);
     expect(body.records[0]?.experimentId).toBe("fixture-v2-full");
+  });
+
+  // Consumer-compatibility test (audit c1 F4): a local copy of model_scoreboard's own
+  // frozen literal check (`local-capture/client.ts`) -- the two envelope literals plus
+  // `.passthrough()` on both the envelope and each record -- parses the LIVE route body
+  // unmodified. Proves the scoreboard's `.passthrough()` read cannot break on the new
+  // additive `serving` key, without importing anything from that repo.
+  const ConsumerFrozenCheckSchema = z
+    .object({
+      captureVersion: z.literal(1),
+      stability: z.literal("v1"),
+      records: z.array(z.object({ experimentId: z.string() }).passthrough()),
+    })
+    .passthrough();
+
+  test("consumer-compatibility: model_scoreboard's frozen literal + .passthrough() check parses the live body", async () => {
+    const response = await app.request("/api/export/scoreboard-capture");
+    const raw: unknown = await response.json();
+    expect(() => ConsumerFrozenCheckSchema.parse(raw)).not.toThrow();
   });
 });

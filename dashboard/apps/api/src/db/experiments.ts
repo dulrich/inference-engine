@@ -37,6 +37,11 @@ interface ExperimentRow {
   sampling_arm: string | null;
   battery_json: string | null;
   vram_profile: string | null;
+  // WP-1 (`plans/served-recipe-p50-prefill-and-decode.md`): reconciled columns the
+  // served-recipe resolver reads (`schema.ts`) -- present on `SELECT *` already; added
+  // here so `getCaptureRecord`'s `resolveServedModel` call typechecks (WP-3).
+  schema_origin: string;
+  model_host_path: string | null;
   raw_config_json: string;
   raw_prompts_json: string;
   raw_completions_json: string;
@@ -567,8 +572,18 @@ export function listLongcontextTrials(experimentId: string): TrialTableRow[] {
 /** Raw record pass-through for `GET /api/export/scoreboard-capture` (experimental — see
  * `packages/shared/src/capture.ts`). Reconstructs `samples.jsonl` from `trials`+`metrics`
  * `raw_json`, ordered by `line_index`/insertion, alongside the verbatim
- * `config`/`prompts`/`completions` blobs — servable from the DB alone. */
-export function getCaptureRecord(experimentId: string): CaptureRecord | undefined {
+ * `config`/`prompts`/`completions` blobs — servable from the DB alone.
+ *
+ * `servedAliases` (WP-3, `plans/served-recipe-p50-prefill-and-decode.md`) is `GET
+ * /api/serving`'s own parse, passed in by `routes/export.ts` (read ONCE per request, same
+ * pattern as `routes/servingTiming.ts` -- this function never opens `llama/config.yaml`
+ * itself). `serving` is computed by the SAME resolver the Serving view uses
+ * (`serving/recipe.ts resolveServedModel`) over the row's own reconciled columns
+ * (`model_host_path`, `sweep_alias`, `schema_origin`, `sweep_server_flags`) -- never
+ * `raw_config_json` -- and is `null`, never a guessed object, when the row resolves to no
+ * served model. Every verbatim field below (`config`/`prompts`/`completions`/`samples`)
+ * stays byte-for-byte unchanged; `serving` is a new, additive sibling key only. */
+export function getCaptureRecord(experimentId: string, servedAliases: readonly ServingAlias[]): CaptureRecord | undefined {
   const row = db.query(`SELECT * FROM experiments WHERE id = ?`).get(experimentId) as ExperimentRow | null;
   if (!row) return undefined;
   const trialRaws = db
@@ -584,12 +599,23 @@ export function getCaptureRecord(experimentId: string): CaptureRecord | undefine
     .sort((a, b) => a.line_index - b.line_index)
     .map((entry) => JSON.parse(entry.raw_json) as unknown);
 
+  const serving = resolveServedModel(
+    {
+      modelHostPath: row.model_host_path,
+      sweepAlias: row.sweep_alias,
+      schemaOrigin: row.schema_origin,
+      sweepServerFlags: row.sweep_server_flags,
+    },
+    servedAliases,
+  );
+
   return {
     experimentId: row.id,
     config: JSON.parse(row.raw_config_json) as unknown,
     prompts: JSON.parse(row.raw_prompts_json) as unknown[],
     completions: JSON.parse(row.raw_completions_json) as unknown[],
     samples,
+    serving,
   };
 }
 

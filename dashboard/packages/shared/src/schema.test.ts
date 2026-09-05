@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   CaptureEnvelopeSchema,
+  CaptureRecordSchema,
   CurveSeriesSchema,
   ExperimentDetailSchema,
   ExperimentSummarySchema,
@@ -298,6 +299,38 @@ describe("CaptureEnvelopeSchema", () => {
     expect(() => CaptureEnvelopeSchema.parse(envelope)).not.toThrow();
     expect(() => CaptureEnvelopeSchema.parse({ ...envelope, stability: "experimental" })).toThrow();
     expect(() => CaptureEnvelopeSchema.parse({ ...envelope, captureVersion: 2 })).toThrow();
+  });
+});
+
+describe("CaptureRecordSchema", () => {
+  // WP-3 (`plans/served-recipe-p50-prefill-and-decode.md`): `serving` is additive and
+  // `.nullable().default(null)`-widened, the same posture `ServingAliasSchema.capability`/
+  // `.recipe` use -- a legacy record predating this field (no `serving` key at all, exactly
+  // what every pre-WP-3 export payload on disk/in a cache looks like) still parses, and
+  // reads back `serving: null`, never a thrown error.
+  test("a legacy record without `serving` parses to `serving: null`", () => {
+    const legacy = {
+      experimentId: "exp-1",
+      config: { schema_version: 2 },
+      prompts: [],
+      completions: [],
+      samples: [],
+    };
+    const parsed = CaptureRecordSchema.parse(legacy);
+    expect(parsed.serving).toBeNull();
+  });
+
+  test("round-trips a resolved `serving` object verbatim", () => {
+    const record = {
+      experimentId: "exp-2",
+      config: {},
+      prompts: [],
+      completions: [],
+      samples: [],
+      serving: { modelKey: "fixture-chat-q4", aliases: ["fixture-chat"], recipeMatch: true, mtp: false, moeCpuLayers: null, specType: null },
+    };
+    const parsed = CaptureRecordSchema.parse(record);
+    expect(parsed.serving).toEqual(record.serving);
   });
 });
 

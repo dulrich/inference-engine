@@ -8,6 +8,7 @@ import {
   LadderRowSchema,
   QueueListResponseSchema,
   ServingResponseSchema,
+  ServingTimingRowSchema,
   TrialRowSchema,
 } from "./index.ts";
 
@@ -207,6 +208,84 @@ describe("ServingResponseSchema", () => {
     };
     const parsed = ServingResponseSchema.parse(response);
     expect(parsed.models[0]?.capability).toBeNull();
+  });
+
+  // WP-1 (`plans/served-recipe-p50-prefill-and-decode.md`): `recipe` is additive the same
+  // way `capability` is above -- a payload predating it still round-trips as `recipe: null`.
+  test("accepts a `recipe` entirely absent from the payload (backward-compat default)", () => {
+    const response = {
+      configPath: "/fixtures/llama-config.yaml",
+      models: [
+        {
+          modelKey: "fixture-chat-q4",
+          name: null,
+          aliases: ["fixture-chat"],
+          ttl: null,
+          checkEndpoint: null,
+          flags: { contextLength: null, kvCacheTypeK: null, kvCacheTypeV: null, flashAttention: null, gpuLayers: null },
+        },
+      ],
+    };
+    const parsed = ServingResponseSchema.parse(response);
+    expect(parsed.models[0]?.recipe).toBeNull();
+  });
+
+  test("round-trips a full recipe (sidecar MTP draft + moeCpuLayers)", () => {
+    const response = {
+      configPath: "/fixtures/llama-config.yaml",
+      models: [
+        {
+          modelKey: "gemma-4-12B-it-qat-UD-Q4_K_XL",
+          name: "Gemma 4 12B it QAT (UD-Q4_K_XL)",
+          aliases: ["gemma-4-12b-qat"],
+          ttl: 1800,
+          checkEndpoint: "/health",
+          flags: { contextLength: 131072, kvCacheTypeK: null, kvCacheTypeV: null, flashAttention: null, gpuLayers: 99 },
+          recipe: {
+            modelPath: "/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+            draftPath: "/models/unsloth/gemma-4-12B-it-qat-GGUF/mtp-gemma-4-12B-it.gguf",
+            specType: "draft-mtp",
+            moeCpuLayers: null,
+            kvK: "f16",
+            kvV: "f16",
+          },
+        },
+      ],
+    };
+    const parsed = ServingResponseSchema.parse(response);
+    expect(parsed.models[0]?.recipe).toEqual(response.models[0]?.recipe);
+  });
+});
+
+describe("ServingTimingRowSchema", () => {
+  test("round-trips a fully-populated row (modelKey/aliases, p50/p90 prefill+decode, arm, mtp)", () => {
+    const row = {
+      modelKey: "qwen36-a3b-bakeoff",
+      aliases: ["qwen36-a3b"],
+      p50PrefillTokS: 366.2,
+      p90PrefillTokS: 390.1,
+      p50DecodeTokS: 45.6,
+      p90DecodeTokS: 47.6,
+      samplingArm: "production",
+      sampleCount: 3,
+      mtp: true,
+    };
+    expect(ServingTimingRowSchema.parse(row)).toEqual(row);
+  });
+
+  test("nullable numeric fields and a null samplingArm (unlabelled arm) parse cleanly", () => {
+    const row = {
+      modelKey: "nemotron-3-nano-4B-UD-Q4_K_XL",
+      aliases: ["nemotron-4b"],
+      p50PrefillTokS: null,
+      p90PrefillTokS: null,
+      p50DecodeTokS: 12.3,
+      p90DecodeTokS: 12.3,
+      samplingArm: null,
+      sampleCount: 3,
+      mtp: false,
+    };
+    expect(ServingTimingRowSchema.parse(row)).toEqual(row);
   });
 });
 

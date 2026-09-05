@@ -156,12 +156,28 @@ describe("readRecordDir: sampling_arm/battery/vram_profile population", () => {
     expect(result.record.vramProfile).toBe("desktop-shared");
   });
 
+  // WP-1 (`plans/served-recipe-p50-prefill-and-decode.md`): `sweep_cell.model_host_path`
+  // promotes onto `NormalizedRecord.modelHostPath` the same way its siblings above do.
+  test("promotes modelHostPath when sweep_cell.model_host_path is present", async () => {
+    const result = await readRecordDir(join(PROJECTIONS_DIR, "fixture-v2-battery"));
+    if (result.kind !== "v2") throw new Error("unreachable");
+    expect(result.record.modelHostPath).toBe("/models/example-org/Example-Battery-GGUF/Example-Battery-Q4_K_M.gguf");
+  });
+
+  test("modelHostPath stays null when sweep_cell carries no model_host_path (fixture-v2-smoke-cell)", async () => {
+    const result = await readRecordDir(join(FIXTURES_DIR, "fixture-v2-smoke-cell"));
+    if (result.kind !== "v2") throw new Error("unreachable");
+    expect(result.record.sweepCellId).not.toBeNull(); // sweep_cell IS present on this fixture
+    expect(result.record.modelHostPath).toBeNull();
+  });
+
   test("absent sweep_cell (fixture-v2-full: sweep_cell itself null) stays null throughout", async () => {
     const result = await readRecordDir(join(FIXTURES_DIR, "fixture-v2-full"));
     if (result.kind !== "v2") throw new Error("unreachable");
     expect(result.record.samplingArm).toBeNull();
     expect(result.record.battery).toBeNull();
     expect(result.record.vramProfile).toBeNull();
+    expect(result.record.modelHostPath).toBeNull();
   });
 
   test("present sweep_cell but absent sampling_arm/battery sub-fields (fixture-v2-smoke-cell) stays null", async () => {

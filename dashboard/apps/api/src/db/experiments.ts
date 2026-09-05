@@ -4,11 +4,13 @@ import type {
   ExperimentSummary,
   LadderRow,
   MetricRow,
+  ServingAlias,
   ServingTimingRow,
   TrialRow,
 } from "@bench-dashboard/shared";
 import { WilsonSummarySchema } from "@bench-dashboard/shared";
 import type { NormalizedRecord } from "../ingest/record.ts";
+import { resolveServedModel } from "../serving/recipe.ts";
 import { db } from "./connection.ts";
 
 // Repository seam over the four tables (`db/schema.ts`). Every function reaches `db` at
@@ -187,9 +189,9 @@ export function replaceExperiment(record: NormalizedRecord): void {
           id, schema_version, description, timestamp, hf_repo, hf_revision, filename,
           file_size, sha256, llama_cpp_build, sweep_cell_id, sweep_alias,
           sweep_server_flags, sweep_command, wilson_summary_json, sampling_arm,
-          battery_json, vram_profile, raw_config_json, raw_prompts_json,
+          battery_json, vram_profile, model_host_path, raw_config_json, raw_prompts_json,
           raw_completions_json, ingested_at
-        ) VALUES (?, 2, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, 2, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       r.id,
@@ -209,6 +211,7 @@ export function replaceExperiment(record: NormalizedRecord): void {
       r.samplingArm,
       r.battery === null ? null : JSON.stringify(r.battery),
       r.vramProfile,
+      r.modelHostPath,
       JSON.stringify(r.rawConfig),
       JSON.stringify(r.rawPrompts),
       JSON.stringify(r.rawCompletions),
@@ -411,73 +414,143 @@ function stringFlag(flags: Record<string, unknown>, key: string): string | null 
   if (typeof value === "boolean") return value ? "on" : "off";
   return null;
 }
-function median(values: number[]): number | null {
+/** Linear-interpolation percentile at rank `p·(n−1)` over the sorted sample (WP-1,
+ * `plans/served-recipe-p50-prefill-and-decode.md`, generalizing the pre-WP-1 `median`).
+ * `n=1` returns the sample's one value for every `p` (Decisions locked) -- handled as its
+ * own branch rather than falling out of the general formula by coincidence, since
+ * `p·(n−1)` is `0` for every `p` when `n=1` regardless, but writing it out keeps the
+ * "single sample, any percentile is that sample" invariant readable at the call site.
+ * `percentile(values, 0.5) === ` the old `median` byte-for-byte (locked by test) -- every
+ * existing caller (`listLadderRows` above) passes `0.5` and is unaffected. */
+export function percentile(values: number[], p: number): number | null {
   if (values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? ((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2 : (sorted[mid] as number);
+  if (sorted.length === 1) return sorted[0] as number;
+  const rank = p * (sorted.length - 1);
+  const lower = Math.floor(rank);
+  const upper = Math.ceil(rank);
+  if (lower === upper) return sorted[lower] as number;
+  const weight = rank - lower;
+  return (sorted[lower] as number) * (1 - weight) + (sorted[upper] as number) * weight;
 }
-
-/** Trailing suffix `readLegacyTimingRecord`'s dir-derived record ids commonly carry
- * (`gemma-4-12b-qat-full`, WP-4's real-data example) -- the record's own `sweep_alias`
- * value is sourced from `config.alias` and, on every legacy dir measured to date, is
- * already clean of this suffix, but the WP-3 alias-join rule strips it defensively for any
- * `v1-timing` row whose stored alias does carry it. Never applied to a `v2` row. */
-const LEGACY_TIMING_ALIAS_SUFFIX = "-full";
-
-/** Maps a stored `sweep_alias` + its `schema_origin` to the alias `GET
- * /api/serving/timing`'s response groups by (`listServingTimingRows` below) --
- * `plans/bakeoff-timing-records-and-estimates.md` WP-3's pinned alias-join rule. A `v2`
- * alias is returned exactly as stored. A `v1-timing` alias has a trailing `-full` suffix
- * stripped (`gemma-4-12b-qat-full` -> `gemma-4-12b-qat`) so the pre-v2 timing-only ingest
- * side door (WP-4) joins onto the same served alias a v2 measurement of the same model
- * would use. If the stripped alias collides with a `v2` alias that also has timing rows,
- * `listServingTimingRows`'s grouping-by-computed-alias merges their samples -- they are the
- * same served model measured in two eras, never a coincidence to hide. */
-function servingTimingAlias(alias: string, schemaOrigin: string): string {
-  if (schemaOrigin !== "v1-timing") return alias;
-  return alias.endsWith(LEGACY_TIMING_ALIAS_SUFFIX) ? alias.slice(0, -LEGACY_TIMING_ALIAS_SUFFIX.length) : alias;
+function median(values: number[]): number | null {
+  return percentile(values, 0.5);
 }
 
 interface ServingTimingSourceRow {
-  alias: string;
+  model_host_path: string | null;
+  sweep_alias: string | null;
   schema_origin: string;
-  observed_decode_tok_s: number;
+  sampling_arm: string | null;
+  sweep_server_flags: string | null;
+  observed_decode_tok_s: number | null;
+  observed_prefill_tok_s: number | null;
 }
 
-/** `GET /api/serving/timing` support (WP-3) -- p50 decode tok/s + sample count grouped by
- * alias, mirroring `listLadderRows`' median pattern just above (application-code median,
- * SQLite has no built-in `MEDIAN`, over an expected small per-alias row count). Only
- * `timing_round` metrics with a non-null `observed_decode_tok_s` are considered, joined to
- * their experiment's `sweep_alias`/`schema_origin` -- an experiment with no `sweep_alias`
- * (nothing to join on) is excluded up front by the query, never surfaced as an
- * alias-less row. Grouping key is `servingTimingAlias`'s computed alias, not the raw
- * column, so a legacy `-full`-suffixed alias and its v2 equivalent merge into one row. */
-export function listServingTimingRows(): ServingTimingRow[] {
+interface ServingTimingRound {
+  decode: number | null;
+  prefill: number | null;
+}
+
+interface ServingTimingGroup {
+  modelKey: string;
+  aliases: string[];
+  mtp: boolean;
+  byArm: Map<string | null, ServingTimingRound[]>;
+}
+
+/** Arm preference (Decisions locked, unchanged from `bakeoff-timing-records-and-estimates.
+ * md`): `production` -> `capability` -> unlabelled-only. `byArm` is never empty when this
+ * is called (`listServingTimingRows` only creates a group entry once it has at least one
+ * round). The final fallback (whatever arm key IS present) covers "unlabelled-only" --
+ * `sampling_arm IS NULL` groups under the `null` key -- and, defensively, any future arm
+ * value this fleet hasn't introduced yet, so a group is never dropped silently for want of
+ * a name this function doesn't recognize. */
+function pickArm(byArm: Map<string | null, ServingTimingRound[]>): string | null {
+  if (byArm.has("production")) return "production";
+  if (byArm.has("capability")) return "capability";
+  const [first] = byArm.keys();
+  return first ?? null;
+}
+
+/** `GET /api/serving/timing` support (WP-1, revising WP-3's original alias-keyed
+ * aggregate) -- p50/p90 prefill + decode tok/s, grouped by SERVED MODEL via the recipe
+ * resolver (`serving/recipe.ts resolveServedModel`), never by raw `sweep_alias` directly.
+ * Selects every `timing_round` metric (not pre-filtered to a non-null decode sample --
+ * prefill's own nullability is independent, "prefill samples may be fewer"), resolves each
+ * row against `servedAliases` (`GET /api/serving`'s own parse, passed in by the route --
+ * this function never opens `llama/config.yaml` itself), and keeps only `recipeMatch ===
+ * true` rows ("only the currently-served recipe contributes to a model's Serving row").
+ * Rounds are bucketed by `(modelKey, samplingArm)`; `pickArm` picks ONE arm per model
+ * (arm-aware, never pooled -- the winning arm supplies both prefill and decode together);
+ * `percentile` computes p50/p90 over each metric's own non-null samples within that arm. A
+ * served model with zero admissible rounds across every arm never gets a `Map` entry at
+ * all, so it simply doesn't appear in the output -- "zero admissible rounds ⇒ no row,
+ * never a computed zero". */
+export function listServingTimingRows(servedAliases: readonly ServingAlias[]): ServingTimingRow[] {
   const sourceRows = db
     .query(
       `
-        SELECT e.sweep_alias AS alias, e.schema_origin AS schema_origin, m.observed_decode_tok_s AS observed_decode_tok_s
+        SELECT
+          e.model_host_path AS model_host_path,
+          e.sweep_alias AS sweep_alias,
+          e.schema_origin AS schema_origin,
+          e.sampling_arm AS sampling_arm,
+          e.sweep_server_flags AS sweep_server_flags,
+          m.observed_decode_tok_s AS observed_decode_tok_s,
+          json_extract(m.raw_json, '$.server_prompt_eval_tok_s') AS observed_prefill_tok_s
         FROM metrics m
         JOIN experiments e ON e.id = m.experiment_id
         WHERE m.metric_type = 'timing_round'
-          AND m.observed_decode_tok_s IS NOT NULL
-          AND e.sweep_alias IS NOT NULL
       `,
     )
     .all() as ServingTimingSourceRow[];
 
-  const samplesByAlias = new Map<string, number[]>();
+  const groups = new Map<string, ServingTimingGroup>();
   for (const row of sourceRows) {
-    const alias = servingTimingAlias(row.alias, row.schema_origin);
-    const samples = samplesByAlias.get(alias);
-    if (samples) samples.push(row.observed_decode_tok_s);
-    else samplesByAlias.set(alias, [row.observed_decode_tok_s]);
+    const resolved = resolveServedModel(
+      {
+        modelHostPath: row.model_host_path,
+        sweepAlias: row.sweep_alias,
+        schemaOrigin: row.schema_origin,
+        sweepServerFlags: row.sweep_server_flags,
+      },
+      servedAliases,
+    );
+    if (resolved === null || !resolved.recipeMatch) continue;
+
+    let group = groups.get(resolved.modelKey);
+    if (!group) {
+      group = { modelKey: resolved.modelKey, aliases: resolved.aliases, mtp: resolved.mtp, byArm: new Map() };
+      groups.set(resolved.modelKey, group);
+    }
+    const rounds = group.byArm.get(row.sampling_arm);
+    const round: ServingTimingRound = { decode: row.observed_decode_tok_s, prefill: row.observed_prefill_tok_s };
+    if (rounds) rounds.push(round);
+    else group.byArm.set(row.sampling_arm, [round]);
   }
 
-  return [...samplesByAlias.entries()]
-    .map(([alias, samples]) => ({ alias, p50DecodeTokS: median(samples), sampleCount: samples.length }))
-    .sort((a, b) => a.alias.localeCompare(b.alias));
+  const rows: ServingTimingRow[] = [];
+  for (const group of groups.values()) {
+    const arm = pickArm(group.byArm);
+    const rounds = group.byArm.get(arm) ?? [];
+    if (rounds.length === 0) continue;
+    const decodeSamples = rounds.map((r) => r.decode).filter((v): v is number => v !== null);
+    const prefillSamples = rounds.map((r) => r.prefill).filter((v): v is number => v !== null);
+    rows.push({
+      modelKey: group.modelKey,
+      aliases: group.aliases,
+      p50PrefillTokS: percentile(prefillSamples, 0.5),
+      p90PrefillTokS: percentile(prefillSamples, 0.9),
+      p50DecodeTokS: percentile(decodeSamples, 0.5),
+      p90DecodeTokS: percentile(decodeSamples, 0.9),
+      samplingArm: arm,
+      sampleCount: rounds.length,
+      mtp: group.mtp,
+    });
+  }
+
+  return rows.sort((a, b) => a.modelKey.localeCompare(b.modelKey));
 }
 
 /** `GET /api/curves/:experimentId` support — every `longcontext_probe` trial for the

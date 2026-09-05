@@ -61,12 +61,21 @@ import type { Database } from "bun:sqlite";
  * of that value, immediately after the same record's `replaceExperiment` insert). NOT NULL
  * with a DDL default (not merely nullable, unlike its two siblings above) specifically so a
  * pre-existing DB file's reconciled rows read `'v2'`, never `NULL` — "existing rows
- * unaffected (default provenance = v2)" is a value guarantee, not just a schema one. */
+ * unaffected (default provenance = v2)" is a value guarantee, not just a schema one.
+ *
+ * `model_host_path` (WP-1, `plans/served-recipe-p50-prefill-and-decode.md`): the served-
+ * recipe resolver's path-join key, promoted from `sweep_cell.model_host_path`
+ * (`ingest/record.ts normalizeSweepCell`). Nullable like its `sampling_arm`/`battery_json`/
+ * `vram_profile` siblings — a pre-existing row (and any record predating the field, or a
+ * v1-timing row, which never carries a path at all) reads back `NULL`, never a guessed
+ * value; the closeout's one idempotent ingest replay is what backfills it for every
+ * path-bearing v2 record already on disk. */
 const RECONCILED_EXPERIMENTS_COLUMNS: readonly { name: string; ddlType: string }[] = [
   { name: "sampling_arm", ddlType: "TEXT" },
   { name: "battery_json", ddlType: "TEXT" },
   { name: "vram_profile", ddlType: "TEXT" },
   { name: "schema_origin", ddlType: "TEXT NOT NULL DEFAULT 'v2'" },
+  { name: "model_host_path", ddlType: "TEXT" },
 ];
 
 /** `PRAGMA table_info(experiments)` + `ALTER TABLE ... ADD COLUMN` for each column in

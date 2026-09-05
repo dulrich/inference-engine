@@ -62,6 +62,8 @@ describe("readLegacyTimingRecord", () => {
     expect(result.record.samplingArm).toBeNull();
     expect(result.record.battery).toBeNull();
     expect(result.record.vramProfile).toBeNull();
+    // WP-1: a v1-timing row never carries a path -- it resolves by alias only.
+    expect(result.record.modelHostPath).toBeNull();
   });
 
   test("a pre-v2 dir without any timing_round rows classifies v1 (still fully skipped)", async () => {

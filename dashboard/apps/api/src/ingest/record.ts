@@ -73,6 +73,7 @@ export interface NormalizedRecord {
   sweepCommand: string | null;
   samplingArm: string | null;
   battery: string[] | null;
+  modelHostPath: string | null;
   vramProfile: string | null;
   wilsonSummary: WilsonSummary;
   rawConfig: unknown;
@@ -134,6 +135,7 @@ function normalizeSweepCell(config: Record<string, unknown>): {
   sweepCommand: string | null;
   samplingArm: string | null;
   battery: string[] | null;
+  modelHostPath: string | null;
 } {
   const cell = config.sweep_cell;
   if (!isRecord(cell)) {
@@ -144,6 +146,7 @@ function normalizeSweepCell(config: Record<string, unknown>): {
       sweepCommand: null,
       samplingArm: null,
       battery: null,
+      modelHostPath: null,
     };
   }
   return {
@@ -153,6 +156,11 @@ function normalizeSweepCell(config: Record<string, unknown>): {
     sweepCommand: asString(cell.command),
     samplingArm: asString(cell.sampling_arm),
     battery: asStringArray(cell.battery),
+    // WP-1 (`plans/served-recipe-p50-prefill-and-decode.md`, S2): the served-recipe
+    // resolver's path join key -- promoted straight through, never rewritten here (the
+    // `/srv/models/` -> `/models/` prefix normalization happens at JOIN time,
+    // `serving/recipe.ts normalizeModelPath`, not at ingest -- records are evidence).
+    modelHostPath: asString(cell.model_host_path),
   };
 }
 
@@ -299,6 +307,7 @@ export async function readRecordDir(dir: string): Promise<ReadRecordResult> {
     sweepCommand: sweep.sweepCommand,
     samplingArm: sweep.samplingArm,
     battery: sweep.battery,
+    modelHostPath: sweep.modelHostPath,
     // `vram_profile` — top-level on `config.json` (WP-B addition), absent on any record
     // predating it. Never guessed from `sweep_cell` or elsewhere — absent stays NULL.
     vramProfile: asString(config.vram_profile),
@@ -405,6 +414,9 @@ export async function readLegacyTimingRecord(dir: string): Promise<ReadLegacyTim
     sweepCommand: null,
     samplingArm: null,
     battery: null,
+    // A `v1-timing` row never carries a path -- it resolves by alias only (Decisions
+    // locked, WP-1). Always null, never inferred from `legacyAlias` or anywhere else.
+    modelHostPath: null,
     vramProfile: null,
     wilsonSummary: null,
     rawConfig: config,

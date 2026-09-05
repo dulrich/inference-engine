@@ -7,7 +7,7 @@
 // `pill-muted` fallback the rest of this app already uses for "nothing to show", never a
 // guessed value.
 
-import type { ServingCapability } from "@bench-dashboard/shared";
+import type { ServingCapability, ServingRecipe } from "@bench-dashboard/shared";
 import { formatCount } from "../format.ts";
 
 // ---- Tool calling ----------------------------------------------------------------------
@@ -62,4 +62,33 @@ export function formatCapabilityServingSummary(capability: ServingCapability): s
   if (capability.serving.moeCpuOffloadLayers !== null) parts.push(`ncmoe ${capability.serving.moeCpuOffloadLayers}`);
   if (capability.serving.ubatch !== null) parts.push(`ub ${capability.serving.ubatch}`);
   return parts.length > 0 ? parts.join(" · ") : "—";
+}
+
+// ---- MTP column (WP-1, `plans/served-recipe-p50-prefill-and-decode.md`) ----------------
+// The pill is driven by `capability.serving.mtp` (CONFIG truth -- availability/activation
+// per served model), never by the recipe's `specType`/`draftPath` presence directly --
+// "the two agree by construction under the recipe rule" (Decisions locked). "MTP" is the
+// product-surface label for every `--spec-type` variant; `mtpDetail` below supplies the
+// underlying-method detail text (`draft-mtp` today) as a title/tooltip, never as the pill
+// label itself.
+
+export function mtpLabel(mtp: boolean | null): string {
+  if (mtp === null) return "—";
+  return mtp ? "MTP" : "no MTP";
+}
+
+export function mtpPillClass(mtp: boolean | null): string {
+  return mtp === true ? "pill-ok" : "pill-muted";
+}
+
+/** Detail text for the MTP pill's title/tooltip -- the recipe's own `specType` when
+ * present (`draft-mtp` today, append-only per `docs/model-capabilities.md:27`); when MTP is
+ * active only via a sidecar draft model with no `--spec-type` recorded (shouldn't happen on
+ * this fleet's current recipes, S3, but the config-side type allows it), falls back to
+ * `"sidecar"`. `null` (no recipe, or MTP inactive -- nothing informative to title) renders
+ * no title at all, left to the caller. */
+export function mtpDetail(recipe: ServingRecipe | null): string | null {
+  if (recipe === null) return null;
+  if (recipe.specType !== null) return recipe.specType;
+  return recipe.draftPath !== null ? "sidecar" : null;
 }

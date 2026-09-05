@@ -14,7 +14,8 @@
     "server_flags": {"-c": 32768},
     "command": "llama-server -m /models/example-org/Example-Battery-GGUF/Example-Battery-Q4_K_M.gguf -c 32768",
     "sampling_arm": "production",
-    "battery": ["needle", "vram"]
+    "battery": ["needle", "vram"],
+    "model_host_path": "/models/example-org/Example-Battery-GGUF/Example-Battery-Q4_K_M.gguf"
   },
   "vram_profile": "desktop-shared",
   "response_caps": {"needle": 4096, "default": 2048},

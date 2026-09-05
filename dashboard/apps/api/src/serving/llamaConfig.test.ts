@@ -2,9 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { readServingConfig } from "./llamaConfig.ts";
 
-// Every assertion here reads `fixtures/llama-config.yaml`, never the real
-// `llama/config.yaml` — brief hard constraint: "tests must pass from fixtures alone."
+// Every assertion in the `readServingConfig` describe block below reads
+// `fixtures/llama-config.yaml`, never the real `llama/config.yaml` — brief hard
+// constraint: "tests must pass from fixtures alone." The separate `recipe projection`
+// describe block further down is a sanctioned, scoped exception (WP-1 dispatch brief: "may
+// read the real `llama/config.yaml` text read-only as a fixture source") -- it reads the
+// real committed file as a READ-ONLY fixture, verifying the recipe projection against the
+// actual served corpus rather than a hand-authored stand-in; it never writes the file
+// (`readServingConfig` itself is read-only regardless of path).
 const FIXTURE_PATH = join(import.meta.dir, "../../fixtures/llama-config.yaml");
+const REAL_CONFIG_PATH = join(import.meta.dir, "../../../../../llama/config.yaml");
 
 describe("readServingConfig", () => {
   test("parses served aliases with macro-expanded flags", async () => {
@@ -135,5 +142,73 @@ describe("readServingConfig", () => {
     await readServingConfig(FIXTURE_PATH);
     const after = await Bun.file(FIXTURE_PATH).text();
     expect(after).toBe(before);
+  });
+});
+
+// WP-1 (`plans/served-recipe-p50-prefill-and-decode.md`) recipe projection -- reads the
+// REAL committed `llama/config.yaml`, read-only, as a fixture source (sanctioned exception,
+// see the header comment above): the point of these assertions is that the projection
+// matches the ACTUAL served corpus's two MTP artifact forms (sidecar draft + embedded
+// heads) and its q4/q4 KV recipe, not a hand-authored stand-in that could drift from it.
+describe("readServingConfig: recipe projection (WP-1, real config)", () => {
+  test("gemma-4-12b-qat: sidecar MTP draft (-md + --spec-type draft-mtp)", async () => {
+    const response = await readServingConfig(REAL_CONFIG_PATH);
+    const gemma = response.models.find((m) => m.modelKey === "gemma-4-12B-it-qat-UD-Q4_K_XL");
+    expect(gemma?.recipe).toEqual({
+      modelPath: "/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+      draftPath: "/models/unsloth/gemma-4-12B-it-qat-GGUF/mtp-gemma-4-12B-it.gguf",
+      specType: "draft-mtp",
+      moeCpuLayers: null,
+      kvK: "f16",
+      kvV: "f16",
+    });
+  });
+
+  test("qwen36-a3b: embedded MTP heads (--spec-type draft-mtp, no -md) plus -ncmoe 32", async () => {
+    const response = await readServingConfig(REAL_CONFIG_PATH);
+    const qwen36 = response.models.find((m) => m.modelKey === "Qwen3.6-35B-A3B-UD-Q4_K_XL");
+    expect(qwen36?.recipe).toEqual({
+      modelPath: "/models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+      draftPath: null,
+      specType: "draft-mtp",
+      moeCpuLayers: 32,
+      kvK: "f16",
+      kvV: "f16",
+    });
+  });
+
+  test("qwen38-27b-iq3s: no MTP, quantized q4_0/q4_0 KV (the served recipe, not f16)", async () => {
+    const response = await readServingConfig(REAL_CONFIG_PATH);
+    const qwen38 = response.models.find((m) => m.modelKey === "Qwen3.8-27B-UD-IQ3_S");
+    expect(qwen38?.recipe).toEqual({
+      modelPath: "/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf",
+      draftPath: null,
+      specType: null,
+      moeCpuLayers: null,
+      kvK: "q4_0",
+      kvV: "q4_0",
+    });
+  });
+
+  test("ling-3-tiny-q8: plain -- no MTP, no -ncmoe, -ctk/-ctv absent so kvK/kvV default to f16", async () => {
+    const response = await readServingConfig(REAL_CONFIG_PATH);
+    const ling = response.models.find((m) => m.modelKey === "Ling-3.0-tiny-Q8_0");
+    expect(ling?.recipe).toEqual({
+      modelPath: "/models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q8_0.gguf",
+      draftPath: null,
+      specType: null,
+      moeCpuLayers: null,
+      kvK: "f16",
+      kvV: "f16",
+    });
+  });
+
+  test("every served model: recipe MTP (specType or draftPath present) agrees with capability.serving.mtp", async () => {
+    const response = await readServingConfig(REAL_CONFIG_PATH);
+    expect(response.models.length).toBeGreaterThan(0);
+    for (const model of response.models) {
+      const recipeMtp = model.recipe !== null && (model.recipe.specType !== null || model.recipe.draftPath !== null);
+      expect(recipeMtp).toBe(model.capability?.serving.mtp ?? false);
+    }
   });
 });

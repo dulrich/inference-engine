@@ -1,4 +1,11 @@
-import type { ServingAlias, ServingCapability, ServingFlagEntry, ServingFlags, ServingResponse } from "@bench-dashboard/shared";
+import type {
+  ServingAlias,
+  ServingCapability,
+  ServingFlagEntry,
+  ServingFlags,
+  ServingRecipe,
+  ServingResponse,
+} from "@bench-dashboard/shared";
 
 // `GET /api/serving`'s server-side reader (cycle-1 blocking finding B1 — the browser gets
 // no executable path to `llama/config.yaml`; only this module ever opens the file, and it
@@ -104,6 +111,27 @@ function extractAllFlags(tokens: string[]): ServingFlagEntry[] {
   return entries;
 }
 
+/** Space/newline-separated positional token split, shared by `extractFlags` and
+ * `extractRecipe` below -- both scan the SAME fully-expanded command string for a
+ * different flag subset, never a general argv parser (this repo's `cmd:` blocks are
+ * space/newline-separated flag pairs, never quoted values). */
+function tokenizeCmd(cmdText: string): string[] {
+  return cmdText.split(/\s+/).filter((t) => t.length > 0);
+}
+
+/** `flag`'s immediately-following token, or `undefined` when the flag itself isn't
+ * present. A flag not present in the command resolves to `null` one level up in every
+ * caller — never a guessed default — this is the raw "found it or not" primitive. */
+function valueAfterToken(tokens: string[], flag: string): string | undefined {
+  const index = tokens.indexOf(flag);
+  return index >= 0 ? tokens[index + 1] : undefined;
+}
+
+function toIntFlag(raw: string | undefined): number | null {
+  if (raw === undefined || !/^\d+$/.test(raw)) return null;
+  return Number.parseInt(raw, 10);
+}
+
 /** Pulls the fixed flag set the Ladders/Serving views care about (`-c`, `-ctk`, `-ctv`,
  * `-fa`, `-ngl`) out of a fully-expanded command string — a simple positional token scan,
  * not a general argv parser (this repo's `cmd:` blocks are space/newline-separated flag
@@ -111,22 +139,36 @@ function extractAllFlags(tokens: string[]): ServingFlagEntry[] {
  * never a guessed default. `allFlags` (WP-1) is the additive full-config sibling of this
  * typed subset -- the subset itself is untouched. */
 function extractFlags(cmdText: string): ServingFlags {
-  const tokens = cmdText.split(/\s+/).filter((t) => t.length > 0);
-  const valueAfter = (flag: string): string | undefined => {
-    const index = tokens.indexOf(flag);
-    return index >= 0 ? tokens[index + 1] : undefined;
-  };
-  const toInt = (raw: string | undefined): number | null => {
-    if (raw === undefined || !/^\d+$/.test(raw)) return null;
-    return Number.parseInt(raw, 10);
-  };
+  const tokens = tokenizeCmd(cmdText);
+  const valueAfter = (flag: string): string | undefined => valueAfterToken(tokens, flag);
   return {
-    contextLength: toInt(valueAfter("-c")),
+    contextLength: toIntFlag(valueAfter("-c")),
     kvCacheTypeK: valueAfter("-ctk") ?? null,
     kvCacheTypeV: valueAfter("-ctv") ?? null,
     flashAttention: valueAfter("-fa") ?? null,
-    gpuLayers: toInt(valueAfter("-ngl")),
+    gpuLayers: toIntFlag(valueAfter("-ngl")),
     allFlags: extractAllFlags(tokens),
+  };
+}
+
+/** Served-recipe projection (WP-1, `plans/served-recipe-p50-prefill-and-decode.md`) --
+ * artifact + MTP + expert placement + KV types, the config-side half of the join
+ * (`apps/api/src/serving/recipe.ts` is the record-side half). `-ctk`/`-ctv` absent resolve
+ * to `"f16"` (this fleet's effective default when the flag itself is omitted) — the ONE
+ * divergence from `extractFlags`'s sibling fields above, which stay `null` on absence;
+ * `-md`/`--spec-type`/`-ncmoe` absent resolve to `null`, never a guessed default. "MTP" is
+ * `specType !== null || draftPath !== null` (`docs/model-capabilities.md:27`), computed by
+ * every reader of this recipe rather than duplicated as a redundant field here. */
+function extractRecipe(cmdText: string): ServingRecipe {
+  const tokens = tokenizeCmd(cmdText);
+  const valueAfter = (flag: string): string | undefined => valueAfterToken(tokens, flag);
+  return {
+    modelPath: valueAfter("-m") ?? null,
+    draftPath: valueAfter("-md") ?? null,
+    specType: valueAfter("--spec-type") ?? null,
+    moeCpuLayers: toIntFlag(valueAfter("-ncmoe")),
+    kvK: valueAfter("-ctk") ?? "f16",
+    kvV: valueAfter("-ctv") ?? "f16",
   };
 }
 
@@ -168,14 +210,16 @@ export function parseServedAliases(configText: string): ServingAlias[] {
   for (const [modelKey, model] of Object.entries(models)) {
     const modelAliases = model.aliases ?? [];
     if (modelAliases.length === 0) continue;
+    const expandedCmd = expandMacros(model.cmd ?? "", macros);
     aliases.push({
       modelKey,
       name: model.name ?? null,
       aliases: modelAliases,
       ttl: typeof model.ttl === "number" ? model.ttl : null,
       checkEndpoint: model.checkEndpoint ?? null,
-      flags: extractFlags(expandMacros(model.cmd ?? "", macros)),
+      flags: extractFlags(expandedCmd),
       capability: extractCapability(model.metadata),
+      recipe: extractRecipe(expandedCmd),
     });
   }
   return aliases;

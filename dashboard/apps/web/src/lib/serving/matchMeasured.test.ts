@@ -18,6 +18,7 @@ function servingAlias(overrides: Partial<ServingAlias>): ServingAlias {
       allFlags: [],
     },
     capability: null,
+    recipe: null,
     ...overrides,
   };
 }

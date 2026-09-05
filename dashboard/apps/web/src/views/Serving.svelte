@@ -12,16 +12,22 @@
   // model predating the WP-1 metadata rollout, renders its own muted "no capability
   // metadata" note rather than an empty cell).
   //
-  // "tok/s (p50)" column (WP-3, `plans/bakeoff-timing-records-and-estimates.md`) fetches
-  // the SEPARATE DB-backed `GET /api/serving/timing` aggregate alongside `GET /api/serving`
-  // and joins the two client-side by alias (`lib/serving/matchTiming.ts`) -- `GET
-  // /api/serving` itself stays a pure config-file parse, untouched. p50 + sample count
-  // only; an alias with no timing data (the `bge-*` embed/rerank aliases) renders the
-  // literal "—", never a guessed value.
+  // "MTP" / "Prefill tok/s (p50/p90)" / "Decode tok/s (p50/p90)" columns (WP-1, `plans/
+  // served-recipe-p50-prefill-and-decode.md` -- revises WP-3's `bakeoff-timing-records-and-
+  // estimates.md` original single "tok/s (p50)" column) fetch the SEPARATE DB-backed `GET
+  // /api/serving/timing` aggregate alongside `GET /api/serving` and join the two
+  // client-side by `modelKey` (`lib/serving/matchTiming.ts`) -- `GET /api/serving` itself
+  // stays a pure config-file parse, untouched. p50 AND p90 for both prefill and decode,
+  // each with its own arm/sample-count provenance; a served model with no recipe-matched
+  // timing data (the `bge-*` embed/rerank aliases, or any model whose only measured cells
+  // are off-recipe) renders the literal "—", never a guessed value. The `MTP` pill is
+  // driven by `capability.serving.mtp` (config truth) with the recipe's `specType` as
+  // title/detail text (`lib/serving/capability.ts mtpDetail`) -- the product-surface label
+  // is always "MTP", never the underlying method name (`draft-mtp` today).
   import type { ExperimentSummary, ServingTimingRow } from "@bench-dashboard/shared";
   import { getServing, getServingTiming } from "../api.ts";
   import { matchServingToMeasured } from "../lib/serving/matchMeasured.ts";
-  import { formatServingTimingCell, matchServingTiming } from "../lib/serving/matchTiming.ts";
+  import { formatServingDecodeCell, formatServingPrefillCell, matchServingTiming } from "../lib/serving/matchTiming.ts";
   import { expandToggleLabel, flagValueClass, formatFlagValue, toggleExpandedRow } from "../lib/serving/expand.ts";
   import {
     capabilityReasoningLabel,
@@ -29,6 +35,9 @@
     capabilityToolsLabel,
     capabilityToolsPillClass,
     formatCapabilityServingSummary,
+    mtpDetail,
+    mtpLabel,
+    mtpPillClass,
   } from "../lib/serving/capability.ts";
   import { guardedNavClick, runDetailPath } from "../routes.ts";
   import { formatCount } from "../lib/format.ts";
@@ -115,13 +124,16 @@
           <th>KV V</th>
           <th>FA</th>
           <th>Capabilities</th>
-          <th class="run-table-num">tok/s (p50)</th>
+          <th>MTP</th>
+          <th class="run-table-num">Prefill tok/s (p50/p90)</th>
+          <th class="run-table-num">Decode tok/s (p50/p90)</th>
           <th>Measured cell</th>
           <th>Config</th>
         </tr>
       </thead>
       <tbody>
         {#each rows as row (row.alias.modelKey)}
+          {@const timingRow = matchServingTiming(row.alias.modelKey, timingRows)}
           <tr>
             <td class="serving-aliases">{row.alias.aliases.join(", ")}</td>
             <td>{row.alias.name ?? row.alias.modelKey}</td>
@@ -153,7 +165,13 @@
                 <span class="run-table-muted">no capability metadata</span>
               {/if}
             </td>
-            <td class="run-table-num">{formatServingTimingCell(matchServingTiming(row.alias.aliases, timingRows))}</td>
+            <td>
+              <span class="pill {mtpPillClass(row.alias.capability?.serving.mtp ?? null)}" title={mtpDetail(row.alias.recipe)}>
+                {mtpLabel(row.alias.capability?.serving.mtp ?? null)}
+              </span>
+            </td>
+            <td class="run-table-num">{formatServingPrefillCell(timingRow)}</td>
+            <td class="run-table-num">{formatServingDecodeCell(timingRow)}</td>
             <td>
               {#if row.measured}
                 <a
@@ -179,7 +197,7 @@
           </tr>
           {#if expandedRows.has(row.alias.modelKey)}
             <tr class="serving-flags-row">
-              <td colspan="10">
+              <td colspan="12">
                 {#if row.alias.flags.allFlags.length === 0}
                   <p class="run-table-muted">No flags found in the served command.</p>
                 {:else}

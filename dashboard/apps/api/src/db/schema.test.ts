@@ -65,26 +65,35 @@ describe("applySchema: experiments column reconciliation", () => {
     expect(columns).toContain("battery_json");
     expect(columns).toContain("vram_profile");
     expect(columns).toContain("schema_origin");
+    expect(columns).toContain("model_host_path");
 
     // Pre-existing row survives reconciliation, new columns read back NULL (never
     // fabricated) for a row ingested before this WP existed -- EXCEPT `schema_origin`
     // (WP-4, `plans/bakeoff-timing-records-and-estimates.md`), whose DDL `DEFAULT 'v2'`
     // backfills every pre-existing row explicitly: "existing rows unaffected (default
-    // provenance = v2)" is a value guarantee, not just a schema one.
+    // provenance = v2)" is a value guarantee, not just a schema one. `model_host_path`
+    // (WP-1, `plans/served-recipe-p50-prefill-and-decode.md`) is nullable like its
+    // `sampling_arm`/`battery_json`/`vram_profile` siblings -- a pre-existing row reads it
+    // back NULL until the closeout's one idempotent ingest replay backfills every
+    // path-bearing v2 record already on disk.
     const row = reopened
-      .query(`SELECT id, sampling_arm, battery_json, vram_profile, schema_origin FROM experiments WHERE id = ?`)
+      .query(
+        `SELECT id, sampling_arm, battery_json, vram_profile, schema_origin, model_host_path FROM experiments WHERE id = ?`,
+      )
       .get("legacy-exp") as {
       id: string;
       sampling_arm: string | null;
       battery_json: string | null;
       vram_profile: string | null;
       schema_origin: string;
+      model_host_path: string | null;
     };
     expect(row.id).toBe("legacy-exp");
     expect(row.sampling_arm).toBeNull();
     expect(row.battery_json).toBeNull();
     expect(row.vram_profile).toBeNull();
     expect(row.schema_origin).toBe("v2");
+    expect(row.model_host_path).toBeNull();
 
     reopened.close();
   });
@@ -100,6 +109,7 @@ describe("applySchema: experiments column reconciliation", () => {
     expect(columns).toContain("battery_json");
     expect(columns).toContain("vram_profile");
     expect(columns).toContain("schema_origin");
+    expect(columns).toContain("model_host_path");
     db.close();
   });
 
@@ -113,6 +123,7 @@ describe("applySchema: experiments column reconciliation", () => {
     expect(columns).toContain("battery_json");
     expect(columns).toContain("vram_profile");
     expect(columns).toContain("schema_origin");
+    expect(columns).toContain("model_host_path");
     db.close();
   });
 });

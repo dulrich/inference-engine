@@ -65,6 +65,26 @@ export const ServingCapabilitySchema = z.object({
 });
 export type ServingCapability = z.infer<typeof ServingCapabilitySchema>;
 
+// Served-recipe projection (WP-1, `plans/served-recipe-p50-prefill-and-decode.md`) --
+// artifact + MTP + expert placement + KV types, read straight off the already-expanded
+// `cmd` (`llamaConfig.ts`'s `extractRecipe`), never a live probe. `-ctk`/`-ctv` absent
+// resolve to `"f16"` (the macro/llama.cpp default this fleet always runs with when the
+// flag itself is omitted) -- never `null` -- matching `recipeFromServedAlias`'s own
+// posture in `apps/api/src/serving/recipe.ts`, the record-side counterpart that compares
+// against this same tuple. `draftPath`/`specType`/`moeCpuLayers` are `null` when the
+// corresponding flag (`-md`/`--spec-type`/`-ncmoe`) is absent -- "MTP" (the product-surface
+// label, `docs/model-capabilities.md:27`) is `specType !== null || draftPath !== null`,
+// computed wherever needed rather than duplicated as a redundant boolean on this type.
+export const ServingRecipeSchema = z.object({
+  modelPath: z.string().nullable(),
+  draftPath: z.string().nullable(),
+  specType: z.string().nullable(),
+  moeCpuLayers: z.number().int().nullable(),
+  kvK: z.string(),
+  kvV: z.string(),
+});
+export type ServingRecipe = z.infer<typeof ServingRecipeSchema>;
+
 export const ServingAliasSchema = z.object({
   modelKey: z.string(),
   name: z.string().nullable(),
@@ -75,6 +95,10 @@ export const ServingAliasSchema = z.object({
   // `.default(null)` widens what `.parse()` accepts the same way `allFlags` above does --
   // a payload predating this field still round-trips as `capability: null`.
   capability: ServingCapabilitySchema.nullable().default(null),
+  // Additive (WP-1), same `.default(null)`-style widening as `capability` above -- a
+  // payload predating this field still round-trips as `recipe: null`. Every real producer
+  // (`parseServedAliases`) populates it for every served model going forward.
+  recipe: ServingRecipeSchema.nullable().default(null),
 });
 export type ServingAlias = z.infer<typeof ServingAliasSchema>;
 
@@ -84,21 +108,39 @@ export const ServingResponseSchema = z.object({
 });
 export type ServingResponse = z.infer<typeof ServingResponseSchema>;
 
-// `GET /api/serving/timing` (WP-3, `plans/bakeoff-timing-records-and-estimates.md`) -- a
+// `GET /api/serving/timing` (WP-1, `plans/served-recipe-p50-prefill-and-decode.md` --
+// revises WP-3's `plans/bakeoff-timing-records-and-estimates.md` original shape) -- a
 // SEPARATE DB-backed aggregate, never folded into `ServingResponseSchema`/`GET /api/serving`
 // above (Decisions locked: that route stays a pure `llama/config.yaml` file-parse, unchanged
-// by this addition). One row per alias carrying at least one `timing_round` metric with a
-// numeric `observed_decode_tok_s` (`db/experiments.ts listServingTimingRows`); an alias with
-// zero such samples (the `bge-*` embed/rerank aliases are the known case today) simply does
-// not appear here -- the web client's join treats absence as the literal "—", never a
-// guessed zero. p50 + sample count only, deliberately no p90 (n≈10/record per experiment
-// makes a p90 dishonest at this depth -- plan Decisions locked). `p50DecodeTokS` stays
-// nullable on the wire type for the same "null, not guessed" posture every other measured
-// field in this schema already carries, even though the route's own selection query (only
-// rows with at least one sample) means it is never actually null in practice.
+// by this addition). One row per SERVED MODEL (`modelKey`, not per raw `sweep_alias` --
+// WP-1 rekeyed the join onto the served-recipe resolver, `apps/api/src/serving/recipe.ts`)
+// carrying at least one recipe-matched `timing_round` round; a served model with zero such
+// rounds (the `bge-*` embed/rerank aliases are the known case today, and any served model
+// whose only measured cells are off-recipe) simply does not appear here -- the web client's
+// join treats absence as the literal "—", never a guessed zero.
+//
+// p50 **and p90** for both prefill (`server_prompt_eval_tok_s`, extracted from a
+// `timing_round`'s `raw_json` -- reversing WP-3's original "no p90" call, recorded here so
+// it is never read as a regression) and decode (`observed_decode_tok_s`) -- four numbers,
+// all independently nullable ("null, not guessed" -- prefill samples may be fewer than
+// decode samples within the same admissible round set, per the plan's Decisions locked).
+// `samplingArm`/`sampleCount` travel with every number (arm-aware, never pooled -- the
+// winning arm, by preference production -> capability -> unlabelled-only, supplies both
+// metrics together). `mtp` is the RECIPE's mtp (so a reader knows whether the number is an
+// MTP number), which agrees by construction with `ServingCapability.serving.mtp` under the
+// recipe-match admission rule. `p50DecodeTokS`/`sampleCount` keep their pre-WP-1 name and
+// semantics; `alias` (singular) is replaced by `modelKey` + `aliases` (plural) -- the row is
+// now keyed to the served model the config actually names, not to whichever raw
+// `sweep_alias` string a record happened to carry.
 export const ServingTimingRowSchema = z.object({
-  alias: z.string(),
+  modelKey: z.string(),
+  aliases: z.array(z.string()),
+  p50PrefillTokS: z.number().nullable(),
+  p90PrefillTokS: z.number().nullable(),
   p50DecodeTokS: z.number().nullable(),
+  p90DecodeTokS: z.number().nullable(),
+  samplingArm: z.string().nullable(),
   sampleCount: z.number().int(),
+  mtp: z.boolean(),
 });
 export type ServingTimingRow = z.infer<typeof ServingTimingRowSchema>;

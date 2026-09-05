@@ -260,14 +260,18 @@ class TestWp2SpecDecode(unittest.TestCase):
         with self.assertRaises(batch.QueueValidationError):
             batch.resolve_queue_cells(queue)
 
-    def test_absent_key_is_a_no_op_byte_identical_to_recomputed_cell_id(self):
+    def test_absent_key_is_a_no_op_on_flags_but_stamps_mtp_byte_identical_cell_id(self):
         resolved = batch.resolve_queue_cells(self._mtp_queue())[0]  # no spec_decode key
-        self.assertIsNone(resolved.queue.spec_decode)
+        # served-recipe-p50-prefill-and-decode WP-2: an undeclared cell whose resolved flags
+        # carry `--spec-type`/`-md` is stamped "mtp" -- never left `None` -- so a record is
+        # self-describing about MTP without requiring every queue author to declare it.
+        self.assertEqual(resolved.queue.spec_decode, "mtp")
         # The registry's MTP flags survive untouched -- absence means "as-is", never a strip.
         self.assertEqual(resolved.server_flags["-md"], "/models/mtp/model-mtp-draft.gguf")
         self.assertEqual(resolved.server_flags["--spec-type"], "draft-mtp")
-        # Same recompute-and-compare shape as the `model`/`chars_per_token` precedents: identity
-        # is exactly what `sweep.compute_cell_id` derives from the four identity fields alone.
+        # The stamp is non-identity (`QueueCellMetadata`, not `CellIdentity`): same
+        # recompute-and-compare shape as the `model`/`chars_per_token` precedents -- identity is
+        # exactly what `sweep.compute_cell_id` derives from the four identity fields alone.
         self.assertEqual(sweep.compute_cell_id(resolved.as_sweep_cell()), resolved.cell_id)
         self.assertEqual(
             sweep.compute_cell_id(resolved.identity.identity_payload()), resolved.cell_id,
@@ -321,6 +325,55 @@ class TestWp2SpecDecode(unittest.TestCase):
             config = json.loads((out / "config.json").read_text())
             self.assertIn("spec_decode", config["sweep_cell"])  # key present, not just absent
             self.assertIsNone(config["sweep_cell"]["spec_decode"])
+
+
+class TestServedRecipeSpecDecodeStamp(unittest.TestCase):
+    """`plans/served-recipe-p50-prefill-and-decode.md` WP-2: `resolve_cell` stamps
+    `spec_decode` from the resolved `server_flags` when the queue declared nothing, so a newly
+    resolved cell is self-describing about MTP without every queue author declaring it by hand.
+    Exercised against the real, committed `matrix-v1-dedicated-prod.json` registry+cells (not a
+    synthetic fixture), so the pinned `cell_id`s are the ones a live run actually produces."""
+
+    QUEUE_PATH = BAKEOFF_DIR / "queues" / "matrix-v1-dedicated-prod.json"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.resolved = {
+            cell.identity.alias: cell
+            for cell in batch.resolve_queue_cells(batch.load_queue(cls.QUEUE_PATH))
+        }
+
+    def test_mtp_cell_with_no_declaration_is_stamped_mtp_cell_id_unmoved(self):
+        # qwen36-a3b-mtp's registry entry carries `--spec-type` (embedded MTP heads, no `-md`
+        # sidecar); this cell (`mxdp-qwen36-c128k-f16-mtp-prod`) never declares `spec_decode`.
+        cell = self.resolved["mxdp-qwen36-c128k-f16-mtp-prod"]
+        self.assertEqual(cell.queue.spec_decode, "mtp")
+        self.assertEqual(
+            cell.cell_id, "mxdp-qwen36-c128k-f16-mtp-prod-ctkf16-ctvf16-faauto-c131072-f330211a",
+        )
+
+    def test_plain_cell_with_no_declaration_is_none_never_base_cell_id_unmoved(self):
+        # qwen38-iq3s's registry entry carries no MTP flags at all; this cell
+        # (`mxdp-qwen38-iq3s-c128k-q4q4-fa-prod`) never declares `spec_decode` either.
+        cell = self.resolved["mxdp-qwen38-iq3s-c128k-q4q4-fa-prod"]
+        self.assertIsNone(cell.queue.spec_decode)
+        self.assertNotEqual(cell.queue.spec_decode, "base")
+        self.assertEqual(
+            cell.cell_id,
+            "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-ctkq4_0-ctvq4_0-faon-c131072-0d8108e6",
+        )
+
+    def test_explicit_base_declaration_survives_against_an_mtp_serving_registry_entry(self):
+        # `mxdp-qwen36-c128k-f16-timing-base-think` explicitly declares "base" against the same
+        # qwen36-a3b-mtp registry entry the mtp-arm cell above resolves -- the explicit
+        # declaration must win over the resolved-flags inference, not merely agree with it (this
+        # cell's OWN resolved flags no longer carry `--spec-type`/`-md`, since
+        # `_merge_server_flags` strips them for a "base" declaration before `spec_decode`'s
+        # stamp is computed).
+        cell = self.resolved["mxdp-qwen36-c128k-f16-timing-base-think"]
+        self.assertEqual(cell.queue.spec_decode, "base")
+        self.assertNotIn("--spec-type", cell.server_flags)
+        self.assertNotIn("-md", cell.server_flags)
 
 
 class TestWp1KvIndexerGeometryValidation(unittest.TestCase):

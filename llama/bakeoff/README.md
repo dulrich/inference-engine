@@ -599,6 +599,7 @@ resolve against the queue's own `models:` map, so one queue file is one reproduc
   run the "no draft sidecar" comparison arm against an MTP-serving model's own registry entry,
   with no second model entry needed. **Absent is the default and every pre-WP-2 queue file's only
   state** — "registry `server_flags` as-is", byte-identical behavior; `queue_format` stays 1.
+  An undeclared cell is no longer recorded blind, though (`plans/served-recipe-p50-prefill-and-decode.md` WP-2): `resolve_cell` stamps `spec_decode` `"mtp"` when the resolved `server_flags` carry `--spec-type` or `-md` and the queue declared nothing, `null` otherwise -- `"base"` is never inferred, only ever written from an explicit queue declaration.
   `validate_queue` rejects only a malformed PRESENT value (anything other than `"base"`/`"mtp"`,
   including an explicit JSON `null`) — the MTP-flags assertion needs the model registry, so it
   lives in `resolve_cell` instead. Recorded verbatim as `sweep_cell.spec_decode` in the cell's

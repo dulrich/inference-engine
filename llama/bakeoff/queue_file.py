@@ -324,7 +324,8 @@ def resolve_cell(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]) -> Re
             timing_rounds=abbreviated.get(TIMING_ROUNDS_CELL_KEY),
             timing_prompt_tokens=abbreviated.get(TIMING_PROMPT_TOKENS_CELL_KEY),
             timing_max_tokens=abbreviated.get(TIMING_MAX_TOKENS_CELL_KEY),
-            spec_decode=abbreviated.get("spec_decode"),
+            spec_decode=abbreviated.get("spec_decode")
+            or ("mtp" if "--spec-type" in normalized_flags or "-md" in normalized_flags else None),
             # A GGUF `general.architecture` string the queue author already knows when writing
             # the registry entry -- how the live runner selects a
             # `sampling_table.production_sampling` entry without re-parsing a GGUF header per

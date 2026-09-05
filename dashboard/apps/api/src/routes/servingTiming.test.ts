@@ -122,4 +122,17 @@ describe("GET /api/serving/timing", () => {
     const body = (await response.json()) as TimingRowBody[];
     expect(body.some((r) => r.p50DecodeTokS === 99)).toBe(false);
   });
+
+  // F1 (`reviews/2026-09-05-tn-code-review.md`, WP-R1): a present-but-wrong-typed `-ctk`
+  // must resolve unresolved (never a defaulted/guessed match) all the way through this
+  // route -- a matched `model_host_path` never means the model appears here when its own
+  // stored flags are invalid.
+  test("a matched-path row with a wrong-typed -ctk ('{\"-ctk\":7}') never contributes -- invalid evidence, not a guessed match", async () => {
+    insertExperiment("exp-timing-malformed-flags", { modelHostPath: FIXTURE_CHAT_MODEL_PATH, samplingArm: "production", sweepServerFlags: { "-ctk": 7 } });
+    insertTimingMetric("exp-timing-malformed-flags", 999);
+
+    const response = await testApp().request("/api/serving/timing");
+    const body = (await response.json()) as TimingRowBody[];
+    expect(body.some((r) => r.sampleCount > 0 && r.p50DecodeTokS === 999)).toBe(false);
+  });
 });

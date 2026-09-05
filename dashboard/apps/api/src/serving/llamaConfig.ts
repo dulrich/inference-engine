@@ -6,6 +6,7 @@ import type {
   ServingRecipe,
   ServingResponse,
 } from "@bench-dashboard/shared";
+import { projectRecipe } from "./recipe.ts";
 
 // `GET /api/serving`'s server-side reader (cycle-1 blocking finding B1 — the browser gets
 // no executable path to `llama/config.yaml`; only this module ever opens the file, and it
@@ -153,22 +154,29 @@ function extractFlags(cmdText: string): ServingFlags {
 
 /** Served-recipe projection (WP-1, `plans/served-recipe-p50-prefill-and-decode.md`) --
  * artifact + MTP + expert placement + KV types, the config-side half of the join
- * (`apps/api/src/serving/recipe.ts` is the record-side half). `-ctk`/`-ctv` absent resolve
- * to `"f16"` (this fleet's effective default when the flag itself is omitted) — the ONE
- * divergence from `extractFlags`'s sibling fields above, which stay `null` on absence;
- * `-md`/`--spec-type`/`-ncmoe` absent resolve to `null`, never a guessed default. "MTP" is
- * `specType !== null || draftPath !== null` (`docs/model-capabilities.md:27`), computed by
- * every reader of this recipe rather than duplicated as a redundant field here. */
+ * (`apps/api/src/serving/recipe.ts` is the record-side half). Feeds the raw token values
+ * into `recipe.ts`'s `projectRecipe` (F1: one shared owner of the `-ctk`/`-ctv` -> `"f16"`
+ * default and the `-md`/`--spec-type`/`-ncmoe` -> `null`-on-absence posture) rather than
+ * re-deriving those defaults here a second time. "MTP" is `specType !== null || draftPath
+ * !== null` (`docs/model-capabilities.md:27`), computed by every reader of this recipe
+ * rather than duplicated as a redundant field here. */
 function extractRecipe(cmdText: string): ServingRecipe {
   const tokens = tokenizeCmd(cmdText);
   const valueAfter = (flag: string): string | undefined => valueAfterToken(tokens, flag);
+  const projected = projectRecipe({
+    specType: valueAfter("--spec-type") ?? null,
+    draftPath: valueAfter("-md") ?? null,
+    moeCpuLayers: toIntFlag(valueAfter("-ncmoe")),
+    kvK: valueAfter("-ctk") ?? null,
+    kvV: valueAfter("-ctv") ?? null,
+  });
   return {
     modelPath: valueAfter("-m") ?? null,
-    draftPath: valueAfter("-md") ?? null,
-    specType: valueAfter("--spec-type") ?? null,
-    moeCpuLayers: toIntFlag(valueAfter("-ncmoe")),
-    kvK: valueAfter("-ctk") ?? "f16",
-    kvV: valueAfter("-ctv") ?? "f16",
+    draftPath: projected.draftPath,
+    specType: projected.specType,
+    moeCpuLayers: projected.moeCpuLayers,
+    kvK: projected.kvK,
+    kvV: projected.kvV,
   };
 }
 

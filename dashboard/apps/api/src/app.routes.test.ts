@@ -241,6 +241,8 @@ describe("GET /api/export/scoreboard-capture", () => {
   interface CaptureRecordBody {
     experimentId: string;
     config: unknown;
+    prompts: unknown[];
+    completions: unknown[];
     samples: unknown[];
     serving: { modelKey: string; aliases: string[]; recipeMatch: boolean; mtp: boolean; moeCpuLayers: number | null; specType: string | null } | null;
   }
@@ -285,6 +287,45 @@ describe("GET /api/export/scoreboard-capture", () => {
       moeCpuLayers: null,
       specType: null,
     });
+  });
+
+  // F1 (`reviews/2026-09-05-tn-code-review.md`, WP-R1): a matched `model_host_path` whose
+  // stored `sweep_server_flags` decodes to a present-but-wrong-typed key must export
+  // `serving: null` -- never a guessed/defaulted match -- while every verbatim record field
+  // stays exactly as reconciled (this is the F1 acceptance shown through a real caller, not
+  // merely through the resolver helper in isolation).
+  const SERVING_MALFORMED_FLAGS_EXPERIMENT_ID = "fixture-serving-malformed-flags";
+  function insertServingMalformedFlagsExperiment(): void {
+    db.query(
+      `
+        INSERT INTO experiments (
+          id, schema_version, sweep_alias, sampling_arm, sweep_server_flags, model_host_path,
+          raw_config_json, raw_prompts_json, raw_completions_json, ingested_at, schema_origin
+        ) VALUES (?, 2, ?, ?, ?, ?, ?, '[]', '[]', ?, 'v2')
+      `,
+    ).run(
+      SERVING_MALFORMED_FLAGS_EXPERIMENT_ID,
+      "fixture-serving-malformed-flags-alias",
+      "production",
+      JSON.stringify({ "-ctk": 7 }),
+      "/models/example-org/fixture-chat-gguf/fixture-chat-Q4_K_M.gguf",
+      JSON.stringify({ experiment_id: SERVING_MALFORMED_FLAGS_EXPERIMENT_ID, schema_version: 2 }),
+      new Date().toISOString(),
+    );
+  }
+
+  test("serving: null for a matched model_host_path whose stored flags are malformed -- config/prompts/completions/samples still returned verbatim", async () => {
+    insertServingMalformedFlagsExperiment();
+    const { body } = await getJson<{ records: CaptureRecordBody[] }>(
+      `/api/export/scoreboard-capture?id=${SERVING_MALFORMED_FLAGS_EXPERIMENT_ID}`,
+    );
+    const record = body.records[0];
+    expect(record?.experimentId).toBe(SERVING_MALFORMED_FLAGS_EXPERIMENT_ID);
+    expect(record?.serving).toBeNull();
+    expect(record?.config).toEqual({ experiment_id: SERVING_MALFORMED_FLAGS_EXPERIMENT_ID, schema_version: 2 });
+    expect(record?.prompts).toEqual([]);
+    expect(record?.completions).toEqual([]);
+    expect(record?.samples).toEqual([]);
   });
 
   test("?id= filters to the requested experiment(s)", async () => {

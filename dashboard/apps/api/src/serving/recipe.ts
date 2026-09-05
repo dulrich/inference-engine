@@ -58,64 +58,114 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** `row.sweep_server_flags` arrives here in whatever shape its caller already has it in --
- * the SQLite column is TEXT (a JSON string, `db/experiments.ts replaceExperiment`), while a
- * test fixture may pass the plain object directly. Lenient over `null`/string/object rather
- * than pushing a `JSON.parse` onto every caller; a string that fails to parse, or a parsed
- * value that isn't an object, resolves to `{}` -- the same "nothing found" outcome as if
- * the record carried no flags at all, never a thrown error from a malformed stored value. */
-function parseFlags(raw: unknown): Record<string, unknown> {
-  if (raw === null || raw === undefined) return {};
-  if (typeof raw === "string") {
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      return isRecord(parsed) ? parsed : {};
-    } catch {
-      return {};
-    }
+/** Sentinel for "the stored column decoded to something other than a JSON object" --
+ * malformed JSON or a syntactically valid non-object (`[1,2]`, `"x"`, `7`). Distinct from
+ * both `null` (F1: absence is a legitimate, defaulted state) and a real flags object;
+ * never collapsed into `{}`, so a caller can refuse it instead of defaulting it. */
+export const INVALID_SERVER_FLAGS = Symbol("invalid-server-flags");
+
+/** Three-way decode of the stored `experiments.sweep_server_flags` TEXT column (F1): the
+ * column is genuinely `null` (no flags recorded at all -- the all-defaults case), a parsed
+ * JSON object, or `INVALID_SERVER_FLAGS` for anything else. Storage decode ONLY -- never
+ * applies a recipe-field default itself; `recipeFromServerFlags` owns that. */
+export function decodeServerFlags(raw: string | null): Record<string, unknown> | null | typeof INVALID_SERVER_FLAGS {
+  if (raw === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return INVALID_SERVER_FLAGS;
   }
-  return isRecord(raw) ? raw : {};
+  return isRecord(parsed) ? parsed : INVALID_SERVER_FLAGS;
 }
 
-/** `flagsRaw` is the stored `sweep_cell.server_flags` object (keys like `-ctk`, `-ctv`,
- * `-ncmoe`, `-md`, `--spec-type`, verbatim from `record.ts`'s `sweepServerFlags` -- never
- * value-mutated on the way in). Absent-flag defaults mirror `extractRecipe`'s config-side
- * posture exactly: `-ctk`/`-ctv` absent -> `"f16"`; `-ncmoe` absent -> `null`; `-md`/
- * `--spec-type` absent -> `null`. A `-ncmoe` value that arrives as a JSON number (as every
- * real record stores it) is read directly; a stringly-typed one is never guessed at. */
-export function recipeFromServerFlags(flagsRaw: unknown): FlagRecipe {
-  const flags = parseFlags(flagsRaw);
-  const specType = typeof flags["--spec-type"] === "string" ? (flags["--spec-type"] as string) : null;
-  const draftPath = typeof flags["-md"] === "string" ? (flags["-md"] as string) : null;
-  const moeCpuLayers = typeof flags["-ncmoe"] === "number" ? (flags["-ncmoe"] as number) : null;
-  const kvK = typeof flags["-ctk"] === "string" ? (flags["-ctk"] as string) : "f16";
-  const kvV = typeof flags["-ctv"] === "string" ? (flags["-ctv"] as string) : "f16";
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalFiniteInt(value: unknown): value is number | undefined {
+  return value === undefined || (typeof value === "number" && Number.isInteger(value));
+}
+
+/** The one owner of recipe defaulting/derivation (F1 remedy: "one typed recipe
+ * projection"), fed by both `llamaConfig.ts extractRecipe` (command tokens, already
+ * `string | null` / `number | null`) and `recipeFromServerFlags` below (stored object,
+ * after its own presence/type gate). `-ctk`/`-ctv` absent (`null` in) -> `"f16"`; `mtp` is
+ * `specType !== null || draftPath !== null`; `moeCpuLayers` passes through unchanged. */
+export function projectRecipe(input: {
+  specType: string | null;
+  draftPath: string | null;
+  moeCpuLayers: number | null;
+  kvK: string | null;
+  kvV: string | null;
+}): { mtp: boolean; specType: string | null; draftPath: string | null; moeCpuLayers: number | null; kvK: string; kvV: string } {
   return {
-    mtp: specType !== null || draftPath !== null,
-    specType,
-    moeCpuLayers,
-    kvK,
-    kvV,
+    mtp: input.specType !== null || input.draftPath !== null,
+    specType: input.specType,
+    draftPath: input.draftPath,
+    moeCpuLayers: input.moeCpuLayers,
+    kvK: input.kvK ?? "f16",
+    kvV: input.kvV ?? "f16",
   };
+}
+
+/** `flags` is the DECODED `sweep_cell.server_flags` object (`decodeServerFlags`'s non-null,
+ * non-invalid result), or `null` for the genuinely-absent-column case -- NEVER the raw
+ * `unknown`/string column value (F1: that decode is `decodeServerFlags`'s job, not this
+ * function's). Returns `null` -- never a guessed default -- when a recipe-bearing key
+ * (`-ctk`, `-ctv`, `-ncmoe`, `-md`, `--spec-type`) is PRESENT with the wrong type; an
+ * absent key still keeps `projectRecipe`'s default. A `-ncmoe` value that arrives as a JSON
+ * number (every real record stores it that way) is read directly; a stringly-typed or
+ * non-integer one is wrong-typed, never guessed at. */
+export function recipeFromServerFlags(flags: Record<string, unknown> | null): FlagRecipe | null {
+  const rawSpecType: unknown = flags === null ? undefined : flags["--spec-type"];
+  const rawDraftPath: unknown = flags === null ? undefined : flags["-md"];
+  const rawKvK: unknown = flags === null ? undefined : flags["-ctk"];
+  const rawKvV: unknown = flags === null ? undefined : flags["-ctv"];
+  const rawMoeCpuLayers: unknown = flags === null ? undefined : flags["-ncmoe"];
+  if (
+    !isOptionalString(rawSpecType) ||
+    !isOptionalString(rawDraftPath) ||
+    !isOptionalString(rawKvK) ||
+    !isOptionalString(rawKvV) ||
+    !isOptionalFiniteInt(rawMoeCpuLayers)
+  ) {
+    return null;
+  }
+  const projected = projectRecipe({
+    specType: rawSpecType ?? null,
+    draftPath: rawDraftPath ?? null,
+    moeCpuLayers: rawMoeCpuLayers ?? null,
+    kvK: rawKvK ?? null,
+    kvV: rawKvV ?? null,
+  });
+  return { mtp: projected.mtp, specType: projected.specType, moeCpuLayers: projected.moeCpuLayers, kvK: projected.kvK, kvV: projected.kvV };
 }
 
 /** The served model's recipe, projected from `ServingAlias.recipe` (`llamaConfig.ts`'s
  * `extractRecipe`) into the same five-field equality tuple a record's recipe reduces to.
  * `modelPath` is normalized here too (defensive -- every real `config.yaml` path is
  * already `/models/…`, S2 census, but this keeps both sides of `recipeEquals` running
- * through the identical normalization rather than trusting one side by convention). A
- * served model with no `-m` flag at all (shouldn't happen for anything with `aliases:`,
- * but `extractRecipe` types it nullable) reduces to the empty string, matching nothing. */
-export function recipeFromServedAlias(alias: ServingAlias): Recipe {
+ * through the identical normalization rather than trusting one side by convention). F1:
+ * `null` -- never a manufactured baseline -- when the model has no recipe at all
+ * (`alias.recipe === null`) or no `-m` flag (`modelPath === null`); a served model with no
+ * recipe of its own must never satisfy `isV1TimingBaselineRecipe` or join by path. */
+export function recipeFromServedAlias(alias: ServingAlias): Recipe | null {
   const recipe = alias.recipe;
-  const modelPath = recipe === null ? "" : normalizeModelPath(recipe.modelPath ?? "");
-  const mtp = recipe !== null && (recipe.specType !== null || recipe.draftPath !== null);
+  if (recipe === null || recipe.modelPath === null) return null;
+  const projected = projectRecipe({
+    specType: recipe.specType,
+    draftPath: recipe.draftPath,
+    moeCpuLayers: recipe.moeCpuLayers,
+    kvK: recipe.kvK,
+    kvV: recipe.kvV,
+  });
   return {
-    modelPath,
-    mtp,
-    moeCpuLayers: recipe === null ? null : recipe.moeCpuLayers,
-    kvK: recipe === null ? "f16" : recipe.kvK,
-    kvV: recipe === null ? "f16" : recipe.kvV,
+    modelPath: normalizeModelPath(recipe.modelPath),
+    mtp: projected.mtp,
+    moeCpuLayers: projected.moeCpuLayers,
+    kvK: projected.kvK,
+    kvV: projected.kvV,
   };
 }
 
@@ -158,7 +208,7 @@ export interface ResolvableTimingRow {
   modelHostPath: string | null;
   sweepAlias: string | null;
   schemaOrigin: string;
-  sweepServerFlags: unknown;
+  sweepServerFlags: string | null;
 }
 
 export interface ResolvedServedModel {
@@ -182,11 +232,17 @@ export interface ResolvedServedModel {
 export function resolveServedModel(row: ResolvableTimingRow, servedAliases: readonly ServingAlias[]): ResolvedServedModel | null {
   if (row.modelHostPath !== null) {
     const normalizedPath = normalizeModelPath(row.modelHostPath);
-    const alias = servedAliases.find((a) => recipeFromServedAlias(a).modelPath === normalizedPath);
+    const alias = servedAliases.find((a) => recipeFromServedAlias(a)?.modelPath === normalizedPath);
     if (alias === undefined) return null;
 
     const servedRecipe = recipeFromServedAlias(alias);
-    const flagRecipe = recipeFromServerFlags(row.sweepServerFlags);
+    if (servedRecipe === null) return null; // no served recipe -> no join (F1)
+
+    const decodedFlags = decodeServerFlags(row.sweepServerFlags);
+    if (decodedFlags === INVALID_SERVER_FLAGS) return null; // invalid evidence -> unresolved (F1)
+    const flagRecipe = recipeFromServerFlags(decodedFlags);
+    if (flagRecipe === null) return null; // present-but-wrong-typed key -> unresolved (F1)
+
     const rowRecipe: Recipe = {
       modelPath: normalizedPath,
       mtp: flagRecipe.mtp,
@@ -211,6 +267,7 @@ export function resolveServedModel(row: ResolvableTimingRow, servedAliases: read
     if (alias === undefined) return null;
 
     const servedRecipe = recipeFromServedAlias(alias);
+    if (servedRecipe === null) return null; // no served recipe -> not the v1 baseline (F1)
     if (!isV1TimingBaselineRecipe(servedRecipe)) return null;
 
     return {

@@ -3,6 +3,8 @@ import { join } from "node:path";
 import type { ServingAlias } from "@bench-dashboard/shared";
 import { readServingConfig } from "./llamaConfig.ts";
 import {
+  decodeServerFlags,
+  INVALID_SERVER_FLAGS,
   normalizeModelPath,
   recipeEquals,
   recipeFromServedAlias,
@@ -47,6 +49,7 @@ describe("normalizeModelPath", () => {
 describe("recipeFromServerFlags", () => {
   test("-ctk/-ctv absent resolve to f16, matching the config-side extractRecipe default", () => {
     const recipe = recipeFromServerFlags({ "-ngl": 99, "-c": 131072 });
+    if (recipe === null) throw new Error("unreachable");
     expect(recipe.kvK).toBe("f16");
     expect(recipe.kvV).toBe("f16");
     expect(recipe.mtp).toBe(false);
@@ -56,6 +59,7 @@ describe("recipeFromServerFlags", () => {
 
   test("--spec-type present marks mtp true and carries the spec type text verbatim", () => {
     const recipe = recipeFromServerFlags({ "--spec-type": "draft-mtp", "-ncmoe": 32 });
+    if (recipe === null) throw new Error("unreachable");
     expect(recipe.mtp).toBe(true);
     expect(recipe.specType).toBe("draft-mtp");
     expect(recipe.moeCpuLayers).toBe(32);
@@ -63,6 +67,7 @@ describe("recipeFromServerFlags", () => {
 
   test("-md present (sidecar draft, no --spec-type) also marks mtp true", () => {
     const recipe = recipeFromServerFlags({ "-md": "/models/foo/mtp-draft.gguf" });
+    if (recipe === null) throw new Error("unreachable");
     expect(recipe.mtp).toBe(true);
     expect(recipe.specType).toBeNull();
   });
@@ -72,10 +77,40 @@ describe("recipeFromServerFlags", () => {
     expect(recipe).toEqual({ mtp: false, specType: null, moeCpuLayers: null, kvK: "f16", kvV: "f16" });
   });
 
-  test("a JSON-string-encoded flags object (the real DB column shape) parses the same as the plain object", () => {
-    const asObject = recipeFromServerFlags({ "-ctk": "q4_0", "-ctv": "q4_0" });
-    const asString = recipeFromServerFlags(JSON.stringify({ "-ctk": "q4_0", "-ctv": "q4_0" }));
-    expect(asString).toEqual(asObject);
+  test("a JSON-string-encoded flags object (the real DB column shape), decoded then projected, matches the plain object directly projected", () => {
+    const flags = { "-ctk": "q4_0", "-ctv": "q4_0" };
+    const asObject = recipeFromServerFlags(flags);
+    const decoded = decodeServerFlags(JSON.stringify(flags));
+    if (decoded === null || decoded === INVALID_SERVER_FLAGS) throw new Error("unreachable");
+    const asDecodedString = recipeFromServerFlags(decoded);
+    expect(asDecodedString).toEqual(asObject);
+  });
+
+  test("a present recipe-bearing key with the wrong type refuses (null), never a guessed default", () => {
+    expect(recipeFromServerFlags({ "-ctk": 7 })).toBeNull();
+    expect(recipeFromServerFlags({ "--spec-type": true })).toBeNull();
+    expect(recipeFromServerFlags({ "-ncmoe": "3" })).toBeNull();
+    expect(recipeFromServerFlags({ "-ncmoe": 3.5 })).toBeNull();
+  });
+});
+
+describe("decodeServerFlags", () => {
+  test("a null column decodes to null (the genuinely-absent, all-defaults case)", () => {
+    expect(decodeServerFlags(null)).toBeNull();
+  });
+
+  test("a valid JSON object string decodes to the parsed object", () => {
+    expect(decodeServerFlags('{"-ctk":"q4_0"}')).toEqual({ "-ctk": "q4_0" });
+  });
+
+  test("malformed JSON decodes to INVALID_SERVER_FLAGS, never {}", () => {
+    expect(decodeServerFlags("{broken")).toBe(INVALID_SERVER_FLAGS);
+  });
+
+  test("serialized non-object JSON (array/string/number) decodes to INVALID_SERVER_FLAGS, never {}", () => {
+    expect(decodeServerFlags("[1,2]")).toBe(INVALID_SERVER_FLAGS);
+    expect(decodeServerFlags('"x"')).toBe(INVALID_SERVER_FLAGS);
+    expect(decodeServerFlags("7")).toBe(INVALID_SERVER_FLAGS);
   });
 });
 
@@ -160,7 +195,7 @@ describe("resolveServedModel: Qwen3.6 MTP-vs-plain path disambiguation (S2)", ()
         modelHostPath: "/srv/models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
         sweepAlias: null,
         schemaOrigin: "v2",
-        sweepServerFlags: { "--spec-type": "draft-mtp", "-ncmoe": 32 },
+        sweepServerFlags: JSON.stringify({ "--spec-type": "draft-mtp", "-ncmoe": 32 }),
       },
       servedAliases,
     );
@@ -178,7 +213,7 @@ describe("resolveServedModel: resolution order against the real config + real co
         modelHostPath: "/srv/models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
         sweepAlias: "mxdp-qwen36-c128k-f16-mtp-prod",
         schemaOrigin: "v2",
-        sweepServerFlags: { "-ctk": "f16", "-ctv": "f16", "-fa": "auto", "-ngl": 99, "-ncmoe": 32, "--spec-type": "draft-mtp", "-ub": 2048, "-c": 131072 },
+        sweepServerFlags: JSON.stringify({ "-ctk": "f16", "-ctv": "f16", "-fa": "auto", "-ngl": 99, "-ncmoe": 32, "--spec-type": "draft-mtp", "-ub": 2048, "-c": 131072 }),
       },
       models,
     );
@@ -194,7 +229,7 @@ describe("resolveServedModel: resolution order against the real config + real co
         modelHostPath: "/models/openbmb/MiniCPM5-1B-GGUF/MiniCPM5-1B-F16.gguf",
         sweepAlias: "sdr-minicpm5-1b-f16",
         schemaOrigin: "v2",
-        sweepServerFlags: { "-ctk": "f16", "-ctv": "f16", "-fa": "auto", "-ngl": 99, "-c": 16384 },
+        sweepServerFlags: JSON.stringify({ "-ctk": "f16", "-ctv": "f16", "-fa": "auto", "-ngl": 99, "-c": 16384 }),
       },
       models,
     );
@@ -209,7 +244,7 @@ describe("resolveServedModel: resolution order against the real config + real co
         modelHostPath: "/models/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-UD-Q4_K_XL.gguf",
         sweepAlias: "sdr-nemotron-4b-udq4xl-ctl",
         schemaOrigin: "v2",
-        sweepServerFlags: { "-ctk": "f16", "-ctv": "f16", "-fa": "auto", "-ngl": 99, "-c": 16384 },
+        sweepServerFlags: JSON.stringify({ "-ctk": "f16", "-ctv": "f16", "-fa": "auto", "-ngl": 99, "-c": 16384 }),
       },
       models,
     );
@@ -247,7 +282,7 @@ describe("resolveServedModel: resolution order against the real config + real co
         modelHostPath: "/models/synthetic/fixture-model.gguf",
         sweepAlias: "fixture-scratch-q4q4",
         schemaOrigin: "v2",
-        sweepServerFlags: { "-ctk": "q4_0", "-ctv": "q4_0" },
+        sweepServerFlags: JSON.stringify({ "-ctk": "q4_0", "-ctv": "q4_0" }),
       },
       [syntheticServedAlias],
     );
@@ -262,7 +297,7 @@ describe("resolveServedModel: resolution order against the real config + real co
         modelHostPath: "/srv/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf",
         sweepAlias: "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod",
         schemaOrigin: "v2",
-        sweepServerFlags: { "-ctk": "q4_0", "-ctv": "q4_0", "-fa": "on", "-ngl": 99, "-c": 131072 },
+        sweepServerFlags: JSON.stringify({ "-ctk": "q4_0", "-ctv": "q4_0", "-fa": "on", "-ngl": 99, "-c": 131072 }),
       },
       models,
     );
@@ -290,5 +325,116 @@ describe("resolveServedModel: resolution order against the real config + real co
       kvK: "q4_0",
       kvV: "q4_0",
     });
+  });
+});
+
+// F1 (`reviews/2026-09-05-tn-code-review.md`, `plans/served-recipe-boundary-remediation.md`
+// WP-R1): invalid stored evidence must resolve to `null` -- never a defaulted/guessed
+// match -- through the actual resolver, not merely through `recipeFromServerFlags` in
+// isolation.
+describe("resolveServedModel: F1 -- invalid stored evidence never resolves, never defaults", () => {
+  const path = "/models/fixture-org/fixture-boundary-GGUF/model.gguf";
+  const servedAlias = fullServingAlias({
+    modelKey: "fixture-boundary-f16",
+    aliases: ["fixture-boundary"],
+    recipe: { modelPath: path, draftPath: null, specType: null, moeCpuLayers: null, kvK: "f16", kvV: "f16" },
+  });
+
+  function resolveWithFlags(sweepServerFlags: string | null): ReturnType<typeof resolveServedModel> {
+    return resolveServedModel({ modelHostPath: path, sweepAlias: null, schemaOrigin: "v2", sweepServerFlags }, [servedAlias]);
+  }
+
+  test("malformed stored JSON ('{broken') resolves to null, never {} defaults", () => {
+    expect(resolveWithFlags("{broken")).toBeNull();
+  });
+
+  test("a serialized JSON array ('[1,2]') resolves to null", () => {
+    expect(resolveWithFlags("[1,2]")).toBeNull();
+  });
+
+  test("a serialized JSON string ('\"x\"') resolves to null", () => {
+    expect(resolveWithFlags('"x"')).toBeNull();
+  });
+
+  test("a serialized JSON number ('7') resolves to null", () => {
+    expect(resolveWithFlags("7")).toBeNull();
+  });
+
+  test("a numeric -ctk ('{\"-ctk\":7}') resolves to null, never defaults kvK to f16", () => {
+    expect(resolveWithFlags(JSON.stringify({ "-ctk": 7 }))).toBeNull();
+  });
+
+  test("a boolean --spec-type resolves to null, never defaults mtp to false", () => {
+    expect(resolveWithFlags(JSON.stringify({ "--spec-type": true }))).toBeNull();
+  });
+
+  test("a string -ncmoe ('{\"-ncmoe\":\"3\"}') resolves to null, never defaults moeCpuLayers to null", () => {
+    expect(resolveWithFlags(JSON.stringify({ "-ncmoe": "3" }))).toBeNull();
+  });
+
+  test("a non-integer -ncmoe (3.5) resolves to null", () => {
+    expect(resolveWithFlags(JSON.stringify({ "-ncmoe": 3.5 }))).toBeNull();
+  });
+
+  test("a null sweep_server_flags column resolves all-defaults with recipeMatch:true against an f16 served recipe", () => {
+    expect(resolveWithFlags(null)).toMatchObject({ recipeMatch: true, mtp: false, moeCpuLayers: null });
+  });
+
+  test("'{}' resolves identically to a null column -- all-defaults, recipeMatch:true", () => {
+    expect(resolveWithFlags("{}")).toMatchObject({ recipeMatch: true, mtp: false, moeCpuLayers: null });
+  });
+
+  test("a valid numeric -ncmoe (32) matched against the served recipe's own -ncmoe 32 resolves recipeMatch:true", () => {
+    const mtpServedAlias = fullServingAlias({
+      modelKey: "fixture-boundary-mtp",
+      aliases: ["fixture-boundary-mtp-alias"],
+      recipe: { modelPath: path, draftPath: null, specType: "draft-mtp", moeCpuLayers: 32, kvK: "f16", kvV: "f16" },
+    });
+    const resolved = resolveServedModel(
+      { modelHostPath: path, sweepAlias: null, schemaOrigin: "v2", sweepServerFlags: JSON.stringify({ "--spec-type": "draft-mtp", "-ncmoe": 32 }) },
+      [mtpServedAlias],
+    );
+    expect(resolved).toMatchObject({ recipeMatch: true, mtp: true, moeCpuLayers: 32 });
+  });
+
+  test("-md (sidecar draft, no --spec-type) also marks mtp:true through the resolver", () => {
+    const resolved = resolveServedModel(
+      { modelHostPath: path, sweepAlias: null, schemaOrigin: "v2", sweepServerFlags: JSON.stringify({ "-md": "/models/fixture-org/fixture-boundary-GGUF/draft.gguf" }) },
+      [servedAlias],
+    );
+    expect(resolved?.mtp).toBe(true);
+    // the served recipe itself has no MTP -- off-recipe, never a guessed match
+    expect(resolved?.recipeMatch).toBe(false);
+  });
+
+  test("a served alias with recipe:null is never joined on the path branch (find skips it, never manufactures a match)", () => {
+    const noRecipeAlias = fullServingAlias({ modelKey: "fixture-no-recipe", aliases: ["fixture-no-recipe-alias"], recipe: null });
+    const resolved = resolveServedModel(
+      { modelHostPath: path, sweepAlias: null, schemaOrigin: "v2", sweepServerFlags: null },
+      [noRecipeAlias],
+    );
+    expect(resolved).toBeNull();
+  });
+
+  test("a served alias with recipe:null is never admitted as the v1 baseline (a served model with no recipe is not the v1 baseline)", () => {
+    const noRecipeAlias = fullServingAlias({ modelKey: "fixture-no-recipe-v1", aliases: ["fixture-no-recipe-v1-alias"], recipe: null });
+    const resolved = resolveServedModel(
+      { modelHostPath: null, sweepAlias: "fixture-no-recipe-v1-alias", schemaOrigin: "v1-timing", sweepServerFlags: null },
+      [noRecipeAlias],
+    );
+    expect(resolved).toBeNull();
+  });
+
+  test("recipeFromServedAlias itself returns null for recipe:null and for a null modelPath", () => {
+    expect(recipeFromServedAlias(fullServingAlias({ modelKey: "k1", aliases: ["a1"], recipe: null }))).toBeNull();
+    expect(
+      recipeFromServedAlias(
+        fullServingAlias({
+          modelKey: "k2",
+          aliases: ["a2"],
+          recipe: { modelPath: null, draftPath: null, specType: null, moeCpuLayers: null, kvK: "f16", kvV: "f16" },
+        }),
+      ),
+    ).toBeNull();
   });
 });

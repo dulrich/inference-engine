@@ -1,15 +1,15 @@
 # Verifier report -- `llama/bakeoff/records/matrix-v1-shared`
 
-Generated: 2026-09-06T07:19:44+00:00  
+Generated: 2026-09-06T23:44:34+00:00  
 State file: llama/bakeoff/records/matrix-v1-shared/queue.state.json  
 Exit code: **1**
 
 ## Summary
 
-- total checks: 98
-- pass: 40
-- fail: 7
-- unknown: 33
+- total checks: 100
+- pass: 46
+- fail: 9
+- unknown: 27
 - informational: 18
 
 ## Cells
@@ -217,29 +217,31 @@ Exit code: **1**
 
 ### `mx-qwen38-iq3s-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-fee2cb77`
 
-- state: `pending`
-- has_records: `False`
+- state: `completed`
+- has_records: `True`
 
 | check | verdict | expected | observed |
 | --- | --- | --- | --- |
-| records_present | unknown | records optional for state 'pending' | "no records subdirectory found" |
-| vram_arithmetic | unknown | estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes | "config.json missing/unparseable" |
-| prompt_tokens_tolerance | unknown | usage.prompt_tokens within ±10% of target_tokens | {"n": 0, "reason": "no trials with both target_tokens and prompt_tokens recorded"} |
+| records_present | pass | records subdirectory present | "llama/bakeoff/records/matrix-v1-shared/mx-qwen38-iq3s-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-fee2cb77" |
+| schema_conformant | pass | schema-v2-conformant records (4-file split + required config/sample fields) | "conformant" |
+| vram_arithmetic | pass | estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes | {"ctk": "q4_0", "ctv": "q4_0", "context": 131072, "weights_bytes": 12040883104, "kv_bytes_per_token": 74880.0, "kv_bytes_at_context": 9814671360.0, "estimated_delta_bytes": 21855554464.0, "measured_delta_bytes": 14575562752, "ratio": 0.6669042771716707} |
+| prompt_tokens_tolerance | fail | usage.prompt_tokens within ±10% of target_tokens | {"n": 27, "violations": [{"trial_index": 0, "target_tokens": 111411, "prompt_tokens": 98445}, {"trial_index": 2, "target_tokens": 111411, "prompt_tokens": 99761}]} |
 | wilson_min_trials | pass | >= 10 trials whenever a wilson_summary verdict is claimed | {"wilson_summary": null, "reason": "no wilson_summary claimed for this cell"} |
-| classifier_distribution | informational | None | {} |
+| classifier_distribution | informational | None | {"correct": 25, "truncated(benign)": 2} |
 
 ### `mx-qwen38-q3kxl-c64k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c65536-cd3baabe`
 
-- state: `pending`
-- has_records: `False`
+- state: `completed`
+- has_records: `True`
 
 | check | verdict | expected | observed |
 | --- | --- | --- | --- |
-| records_present | unknown | records optional for state 'pending' | "no records subdirectory found" |
-| vram_arithmetic | unknown | estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes | "config.json missing/unparseable" |
-| prompt_tokens_tolerance | unknown | usage.prompt_tokens within ±10% of target_tokens | {"n": 0, "reason": "no trials with both target_tokens and prompt_tokens recorded"} |
+| records_present | pass | records subdirectory present | "llama/bakeoff/records/matrix-v1-shared/mx-qwen38-q3kxl-c64k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c65536-cd3baabe" |
+| schema_conformant | pass | schema-v2-conformant records (4-file split + required config/sample fields) | "conformant" |
+| vram_arithmetic | pass | estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes | {"ctk": "q4_0", "ctv": "q4_0", "context": 65536, "weights_bytes": 13146393504, "kv_bytes_per_token": 74880.0, "kv_bytes_at_context": 4907335680.0, "estimated_delta_bytes": 18053729184.0, "measured_delta_bytes": 14337040384, "ratio": 0.7941317961447051} |
+| prompt_tokens_tolerance | fail | usage.prompt_tokens within ±10% of target_tokens | {"n": 27, "violations": [{"trial_index": 1, "target_tokens": 55705, "prompt_tokens": 49219}, {"trial_index": 2, "target_tokens": 55705, "prompt_tokens": 49261}, {"trial_index": 2, "target_tokens": 55705, "prompt_tokens": 49329}]} |
 | wilson_min_trials | pass | >= 10 trials whenever a wilson_summary verdict is claimed | {"wilson_summary": null, "reason": "no wilson_summary claimed for this cell"} |
-| classifier_distribution | informational | None | {} |
+| classifier_distribution | informational | None | {"correct": 26, "truncated(benign)": 1} |
 
 ### `mx-qwen38-xxs-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-c2573bb7`
 

@@ -1,16 +1,16 @@
 {
-  "run_dir": "../../runs/bakeoff/matrix-v1-dedicated-prod",
+  "run_dir": "llama/bakeoff/records/matrix-v1-dedicated-prod",
   "run_dir_exists": true,
-  "state_path": "../../runs/bakeoff/matrix-v1-dedicated-prod/queue.state.json",
-  "queue_state": "paused-resumable",
-  "generated_at": "2026-08-26T16:34:07+00:00",
+  "state_path": "llama/bakeoff/records/matrix-v1-dedicated-prod/queue.state.json",
+  "queue_state": "completed",
+  "generated_at": "2026-09-06T13:15:16+00:00",
   "checks": [
     {
       "check": "abort_state",
       "cell_id": null,
       "expected": "queue_state != 'aborted-hang'",
       "observed": {
-        "queue_state": "paused-resumable",
+        "queue_state": "completed",
         "aborted_hang_cells": []
       },
       "verdict": "pass"
@@ -19,7 +19,7 @@
       "check": "records_present",
       "cell_id": "mxdp-gemma-qat-c128k-f16-mtp-prod-ctkf16-ctvf16-faauto-c131072-64f3cf26",
       "expected": "records subdirectory present",
-      "observed": "../../runs/bakeoff/matrix-v1-dedicated-prod/mxdp-gemma-qat-c128k-f16-mtp-prod-ctkf16-ctvf16-faauto-c131072-64f3cf26",
+      "observed": "llama/bakeoff/records/matrix-v1-dedicated-prod/mxdp-gemma-qat-c128k-f16-mtp-prod-ctkf16-ctvf16-faauto-c131072-64f3cf26",
       "verdict": "pass"
     },
     {
@@ -102,7 +102,7 @@
       "check": "records_present",
       "cell_id": "mxdp-ling-q8-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-9e8a463f",
       "expected": "records subdirectory present",
-      "observed": "../../runs/bakeoff/matrix-v1-dedicated-prod/mxdp-ling-q8-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-9e8a463f",
+      "observed": "llama/bakeoff/records/matrix-v1-dedicated-prod/mxdp-ling-q8-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-9e8a463f",
       "verdict": "pass"
     },
     {
@@ -184,7 +184,7 @@
       "check": "records_present",
       "cell_id": "mxdp-ling-ud-q4-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-9f2929eb",
       "expected": "records subdirectory present",
-      "observed": "../../runs/bakeoff/matrix-v1-dedicated-prod/mxdp-ling-ud-q4-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-9f2929eb",
+      "observed": "llama/bakeoff/records/matrix-v1-dedicated-prod/mxdp-ling-ud-q4-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-9f2929eb",
       "verdict": "pass"
     },
     {
@@ -261,7 +261,7 @@
       "check": "records_present",
       "cell_id": "mxdp-ling-ud-q6-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-85d4f581",
       "expected": "records subdirectory present",
-      "observed": "../../runs/bakeoff/matrix-v1-dedicated-prod/mxdp-ling-ud-q6-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-85d4f581",
+      "observed": "llama/bakeoff/records/matrix-v1-dedicated-prod/mxdp-ling-ud-q6-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-85d4f581",
       "verdict": "pass"
     },
     {
@@ -343,7 +343,7 @@
       "check": "records_present",
       "cell_id": "mxdp-qwen36-c128k-f16-mtp-prod-ctkf16-ctvf16-faauto-c131072-f330211a",
       "expected": "records subdirectory present",
-      "observed": "../../runs/bakeoff/matrix-v1-dedicated-prod/mxdp-qwen36-c128k-f16-mtp-prod-ctkf16-ctvf16-faauto-c131072-f330211a",
+      "observed": "llama/bakeoff/records/matrix-v1-dedicated-prod/mxdp-qwen36-c128k-f16-mtp-prod-ctkf16-ctvf16-faauto-c131072-f330211a",
       "verdict": "pass"
     },
     {
@@ -410,7 +410,7 @@
       "check": "records_present",
       "cell_id": "mxdp-qwen36-c128k-f16-mtp-prod-nothink-ctkf16-ctvf16-faauto-c131072-2033109b",
       "expected": "records subdirectory present",
-      "observed": "../../runs/bakeoff/matrix-v1-dedicated-prod/mxdp-qwen36-c128k-f16-mtp-prod-nothink-ctkf16-ctvf16-faauto-c131072-2033109b",
+      "observed": "llama/bakeoff/records/matrix-v1-dedicated-prod/mxdp-qwen36-c128k-f16-mtp-prod-nothink-ctkf16-ctvf16-faauto-c131072-2033109b",
       "verdict": "pass"
     },
     {
@@ -475,26 +475,64 @@
     {
       "check": "records_present",
       "cell_id": "mxdp-qwen36-c128k-f16-mtp-prod-rb128-ctkf16-ctvf16-faauto-c131072-feb547bf",
-      "expected": "records optional for state 'pending'",
-      "observed": "no records subdirectory found",
-      "verdict": "unknown"
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/matrix-v1-dedicated-prod/mxdp-qwen36-c128k-f16-mtp-prod-rb128-ctkf16-ctvf16-faauto-c131072-feb547bf",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mxdp-qwen36-c128k-f16-mtp-prod-rb128-ctkf16-ctvf16-faauto-c131072-feb547bf",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
     },
     {
       "check": "vram_arithmetic",
       "cell_id": "mxdp-qwen36-c128k-f16-mtp-prod-rb128-ctkf16-ctvf16-faauto-c131072-feb547bf",
       "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
-      "observed": "config.json missing/unparseable",
-      "verdict": "unknown"
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 131072,
+        "weights_bytes": 6620000000,
+        "kv_bytes_per_token": 20480.0,
+        "kv_bytes_at_context": 2684354560.0,
+        "estimated_delta_bytes": 9304354560.0,
+        "measured_delta_bytes": 12475510784,
+        "ratio": 1.3408249549767803
+      },
+      "verdict": "pass"
     },
     {
       "check": "prompt_tokens_tolerance",
       "cell_id": "mxdp-qwen36-c128k-f16-mtp-prod-rb128-ctkf16-ctvf16-faauto-c131072-feb547bf",
       "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
       "observed": {
-        "n": 0,
-        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+        "n": 27,
+        "violations": [
+          {
+            "trial_index": 1,
+            "target_tokens": 111411,
+            "prompt_tokens": 98899
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 98726
+          },
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 99109
+          },
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 99442
+          }
+        ]
       },
-      "verdict": "unknown"
+      "verdict": "fail"
     },
     {
       "check": "wilson_min_trials",
@@ -510,6 +548,241 @@
       "check": "classifier_distribution",
       "cell_id": "mxdp-qwen36-c128k-f16-mtp-prod-rb128-ctkf16-ctvf16-faauto-c131072-feb547bf",
       "expected": null,
+      "observed": {
+        "correct": 24,
+        "wrong": 3
+      },
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-base-nothink-ctkf16-ctvf16-faauto-c131072-60601124",
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/matrix-v1-dedicated-prod/mxdp-qwen36-c128k-f16-timing-base-nothink-ctkf16-ctvf16-faauto-c131072-60601124",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-base-nothink-ctkf16-ctvf16-faauto-c131072-60601124",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-base-nothink-ctkf16-ctvf16-faauto-c131072-60601124",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 131072,
+        "weights_bytes": 6620000000,
+        "kv_bytes_per_token": 20480.0,
+        "kv_bytes_at_context": 2684354560.0,
+        "estimated_delta_bytes": 9304354560.0,
+        "measured_delta_bytes": 10156896256,
+        "ratio": 1.091628246806622
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-base-nothink-ctkf16-ctvf16-faauto-c131072-60601124",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-base-nothink-ctkf16-ctvf16-faauto-c131072-60601124",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-base-nothink-ctkf16-ctvf16-faauto-c131072-60601124",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-base-think-ctkf16-ctvf16-faauto-c131072-447e38a2",
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/matrix-v1-dedicated-prod/mxdp-qwen36-c128k-f16-timing-base-think-ctkf16-ctvf16-faauto-c131072-447e38a2",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-base-think-ctkf16-ctvf16-faauto-c131072-447e38a2",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-base-think-ctkf16-ctvf16-faauto-c131072-447e38a2",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 131072,
+        "weights_bytes": 6620000000,
+        "kv_bytes_per_token": 20480.0,
+        "kv_bytes_at_context": 2684354560.0,
+        "estimated_delta_bytes": 9304354560.0,
+        "measured_delta_bytes": 10156830720,
+        "ratio": 1.0916212032229349
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-base-think-ctkf16-ctvf16-faauto-c131072-447e38a2",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-base-think-ctkf16-ctvf16-faauto-c131072-447e38a2",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-base-think-ctkf16-ctvf16-faauto-c131072-447e38a2",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-mtp-nothink-ctkf16-ctvf16-faauto-c131072-27ef8a46",
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/matrix-v1-dedicated-prod/mxdp-qwen36-c128k-f16-timing-mtp-nothink-ctkf16-ctvf16-faauto-c131072-27ef8a46",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-mtp-nothink-ctkf16-ctvf16-faauto-c131072-27ef8a46",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-mtp-nothink-ctkf16-ctvf16-faauto-c131072-27ef8a46",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 131072,
+        "weights_bytes": 6620000000,
+        "kv_bytes_per_token": 20480.0,
+        "kv_bytes_at_context": 2684354560.0,
+        "estimated_delta_bytes": 9304354560.0,
+        "measured_delta_bytes": 12460371968,
+        "ratio": 1.3391978871450059
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-mtp-nothink-ctkf16-ctvf16-faauto-c131072-27ef8a46",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-mtp-nothink-ctkf16-ctvf16-faauto-c131072-27ef8a46",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-mtp-nothink-ctkf16-ctvf16-faauto-c131072-27ef8a46",
+      "expected": null,
+      "observed": {},
+      "verdict": "informational"
+    },
+    {
+      "check": "records_present",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5",
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/matrix-v1-dedicated-prod/mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
+    },
+    {
+      "check": "vram_arithmetic",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5",
+      "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 131072,
+        "weights_bytes": 6620000000,
+        "kv_bytes_per_token": 20480.0,
+        "kv_bytes_at_context": 2684354560.0,
+        "estimated_delta_bytes": 9304354560.0,
+        "measured_delta_bytes": 12460240896,
+        "ratio": 1.339183799977631
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "prompt_tokens_tolerance",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5",
+      "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
+      "observed": {
+        "n": 0,
+        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+      },
+      "verdict": "unknown"
+    },
+    {
+      "check": "wilson_min_trials",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5",
+      "expected": ">= 10 trials whenever a wilson_summary verdict is claimed",
+      "observed": {
+        "wilson_summary": null,
+        "reason": "no wilson_summary claimed for this cell"
+      },
+      "verdict": "pass"
+    },
+    {
+      "check": "classifier_distribution",
+      "cell_id": "mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5",
+      "expected": null,
       "observed": {},
       "verdict": "informational"
     },
@@ -517,7 +790,7 @@
       "check": "records_present",
       "cell_id": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-ctkq4_0-ctvq4_0-faon-c131072-0d8108e6",
       "expected": "records subdirectory present",
-      "observed": "../../runs/bakeoff/matrix-v1-dedicated-prod/mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-ctkq4_0-ctvq4_0-faon-c131072-0d8108e6",
+      "observed": "llama/bakeoff/records/matrix-v1-dedicated-prod/mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-ctkq4_0-ctvq4_0-faon-c131072-0d8108e6",
       "verdict": "pass"
     },
     {
@@ -604,26 +877,74 @@
     {
       "check": "records_present",
       "cell_id": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-nothink-ctkq4_0-ctvq4_0-faon-c131072-41f57002",
-      "expected": "records optional for state 'pending'",
-      "observed": "no records subdirectory found",
-      "verdict": "unknown"
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/matrix-v1-dedicated-prod/mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-nothink-ctkq4_0-ctvq4_0-faon-c131072-41f57002",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-nothink-ctkq4_0-ctvq4_0-faon-c131072-41f57002",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
     },
     {
       "check": "vram_arithmetic",
       "cell_id": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-nothink-ctkq4_0-ctvq4_0-faon-c131072-41f57002",
       "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
-      "observed": "config.json missing/unparseable",
-      "verdict": "unknown"
+      "observed": {
+        "ctk": "q4_0",
+        "ctv": "q4_0",
+        "context": 131072,
+        "weights_bytes": 12040883104,
+        "kv_bytes_per_token": 74880.0,
+        "kv_bytes_at_context": 9814671360.0,
+        "estimated_delta_bytes": 21855554464.0,
+        "measured_delta_bytes": 14544216064,
+        "ratio": 0.6654700107451824
+      },
+      "verdict": "pass"
     },
     {
       "check": "prompt_tokens_tolerance",
       "cell_id": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-nothink-ctkq4_0-ctvq4_0-faon-c131072-41f57002",
       "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
       "observed": {
-        "n": 0,
-        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+        "n": 27,
+        "violations": [
+          {
+            "trial_index": 1,
+            "target_tokens": 111411,
+            "prompt_tokens": 97541
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 99400
+          },
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 97860
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 99682
+          },
+          {
+            "trial_index": 1,
+            "target_tokens": 111411,
+            "prompt_tokens": 98180
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 99317
+          }
+        ]
       },
-      "verdict": "unknown"
+      "verdict": "fail"
     },
     {
       "check": "wilson_min_trials",
@@ -639,32 +960,82 @@
       "check": "classifier_distribution",
       "cell_id": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-nothink-ctkq4_0-ctvq4_0-faon-c131072-41f57002",
       "expected": null,
-      "observed": {},
+      "observed": {
+        "correct": 27
+      },
       "verdict": "informational"
     },
     {
       "check": "records_present",
       "cell_id": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-rb128-ctkq4_0-ctvq4_0-faon-c131072-62da3ac9",
-      "expected": "records optional for state 'pending'",
-      "observed": "no records subdirectory found",
-      "verdict": "unknown"
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/matrix-v1-dedicated-prod/mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-rb128-ctkq4_0-ctvq4_0-faon-c131072-62da3ac9",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-rb128-ctkq4_0-ctvq4_0-faon-c131072-62da3ac9",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
     },
     {
       "check": "vram_arithmetic",
       "cell_id": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-rb128-ctkq4_0-ctvq4_0-faon-c131072-62da3ac9",
       "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
-      "observed": "config.json missing/unparseable",
-      "verdict": "unknown"
+      "observed": {
+        "ctk": "q4_0",
+        "ctv": "q4_0",
+        "context": 131072,
+        "weights_bytes": 12040883104,
+        "kv_bytes_per_token": 74880.0,
+        "kv_bytes_at_context": 9814671360.0,
+        "estimated_delta_bytes": 21855554464.0,
+        "measured_delta_bytes": 14542118912,
+        "ratio": 0.6653740556412543
+      },
+      "verdict": "pass"
     },
     {
       "check": "prompt_tokens_tolerance",
       "cell_id": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-rb128-ctkq4_0-ctvq4_0-faon-c131072-62da3ac9",
       "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
       "observed": {
-        "n": 0,
-        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+        "n": 27,
+        "violations": [
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 98126
+          },
+          {
+            "trial_index": 1,
+            "target_tokens": 111411,
+            "prompt_tokens": 98637
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 99284
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 98181
+          },
+          {
+            "trial_index": 1,
+            "target_tokens": 111411,
+            "prompt_tokens": 98479
+          },
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 98065
+          }
+        ]
       },
-      "verdict": "unknown"
+      "verdict": "fail"
     },
     {
       "check": "wilson_min_trials",
@@ -680,7 +1051,10 @@
       "check": "classifier_distribution",
       "cell_id": "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-rb128-ctkq4_0-ctvq4_0-faon-c131072-62da3ac9",
       "expected": null,
-      "observed": {},
+      "observed": {
+        "correct": 24,
+        "wrong": 3
+      },
       "verdict": "informational"
     }
   ],
@@ -716,9 +1090,29 @@
       "has_records": true
     },
     "mxdp-qwen36-c128k-f16-mtp-prod-rb128-ctkf16-ctvf16-faauto-c131072-feb547bf": {
-      "state": "pending",
+      "state": "failed",
+      "reason": "needle_failure",
+      "has_records": true
+    },
+    "mxdp-qwen36-c128k-f16-timing-base-nothink-ctkf16-ctvf16-faauto-c131072-60601124": {
+      "state": "completed",
       "reason": null,
-      "has_records": false
+      "has_records": true
+    },
+    "mxdp-qwen36-c128k-f16-timing-base-think-ctkf16-ctvf16-faauto-c131072-447e38a2": {
+      "state": "completed",
+      "reason": null,
+      "has_records": true
+    },
+    "mxdp-qwen36-c128k-f16-timing-mtp-nothink-ctkf16-ctvf16-faauto-c131072-27ef8a46": {
+      "state": "completed",
+      "reason": null,
+      "has_records": true
+    },
+    "mxdp-qwen36-c128k-f16-timing-mtp-think-ctkf16-ctvf16-faauto-c131072-a609f0c5": {
+      "state": "completed",
+      "reason": null,
+      "has_records": true
     },
     "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-ctkq4_0-ctvq4_0-faon-c131072-0d8108e6": {
       "state": "completed",
@@ -726,22 +1120,22 @@
       "has_records": true
     },
     "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-nothink-ctkq4_0-ctvq4_0-faon-c131072-41f57002": {
-      "state": "pending",
+      "state": "completed",
       "reason": null,
-      "has_records": false
+      "has_records": true
     },
     "mxdp-qwen38-iq3s-c128k-q4q4-fa-prod-rb128-ctkq4_0-ctvq4_0-faon-c131072-62da3ac9": {
-      "state": "pending",
-      "reason": null,
-      "has_records": false
+      "state": "failed",
+      "reason": "needle_failure",
+      "has_records": true
     }
   },
   "summary": {
-    "total": 58,
-    "pass": 30,
-    "fail": 9,
-    "unknown": 9,
-    "informational": 10
+    "total": 85,
+    "pass": 55,
+    "fail": 12,
+    "unknown": 4,
+    "informational": 14
   },
   "exit_code": 1
 }

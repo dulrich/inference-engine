@@ -1,0 +1,63 @@
+{
+  "lineage": {
+    "hf_repo": "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
+    "hf_revision": null,
+    "filename": "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+    "file_size": 22853663008,
+    "sha256": null,
+    "llama_cpp_build": "b10534"
+  },
+  "sweep_cell": {
+    "cell_id": "mxdp-qwen36-c128k-f16-timing-base-nothink-ctkf16-ctvf16-faauto-c131072-60601124",
+    "alias": "mxdp-qwen36-c128k-f16-timing-base-nothink",
+    "server_flags": {
+      "--host": "0.0.0.0",
+      "-lv": 9,
+      "-ctk": "f16",
+      "-ctv": "f16",
+      "-fa": "auto",
+      "-ngl": 99,
+      "--jinja": true,
+      "-ncmoe": 32,
+      "-ub": 2048,
+      "--reasoning": "off",
+      "-c": 131072
+    },
+    "model_host_path": "/srv/models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+    "battery": [
+      "timing"
+    ],
+    "sampling_arm": null,
+    "model": "qwen36-a3b-mtp-nothink",
+    "spec_decode": "base",
+    "gpu_weights_bytes": 6620000000,
+    "kv_attention_layers": 10,
+    "swa_layer_spec": null,
+    "kv_indexer_geometry": null
+  },
+  "vram": {
+    "baseline_bytes": 585699328,
+    "loaded_bytes": 10742595584,
+    "after_teardown_bytes": null
+  },
+  "wilson_summary": null,
+  "vram_profile": "headless",
+  "response_caps": {
+    "default": 256,
+    "by_task": {
+      "multi_needle": 768
+    }
+  },
+  "cell_started_at": "2026-09-06T07:36:36+00:00",
+  "cell_ended_at": "2026-09-06T07:36:45+00:00",
+  "cell_wall_seconds": 9.501912323001307,
+  "scratch_startup_seconds": 2.982626592995075,
+  "experiment_id": "mxdp-qwen36-c128k-f16-timing-base-nothink-ctkf16-ctvf16-faauto-c131072-60601124",
+  "timestamp": "2026-09-06T07:36:45.993651+00:00",
+  "schema_version": 2,
+  "size_check": {
+    "total_bytes": 6138,
+    "limit_bytes": 26214400,
+    "within_budget": true
+  }
+}

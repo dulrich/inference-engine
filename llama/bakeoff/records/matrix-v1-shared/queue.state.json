@@ -1,0 +1,337 @@
+{
+  "queue_state": "paused-resumable",
+  "created_at": "2026-09-06T00:43:01+00:00",
+  "request_timeout_s": 300,
+  "cells": {
+    "mx-gemma-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-1cd55be3": {
+      "state": "failed",
+      "reason": "degenerate",
+      "alias": "mx-gemma-qat-c128k-f16-mtp",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "gemma4",
+        "target_tokens": 111411,
+        "chars_per_token": 4.3,
+        "vram_before_bytes": 1023029248,
+        "vram_after_bytes": 12590944256,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "llama/bakeoff/records/matrix-v1-shared/mx-gemma-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-1cd55be3",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": null,
+          "max_tokens": 64,
+          "prompt_source": "fixed-short",
+          "instruction_pinned": false
+        }
+      }
+    },
+    "mx-qwen36-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-8d32c2d0": {
+      "state": "completed",
+      "reason": null,
+      "alias": "mx-qwen36-c128k-f16-mtp",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "qwen35moe",
+        "target_tokens": 111411,
+        "chars_per_token": 4.0,
+        "vram_before_bytes": 1106501632,
+        "vram_after_bytes": 13885689856,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "llama/bakeoff/records/matrix-v1-shared/mx-qwen36-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-8d32c2d0",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": null,
+          "max_tokens": 64,
+          "prompt_source": "fixed-short",
+          "instruction_pinned": false
+        }
+      }
+    },
+    "mx-nemotron-c128k-f16-ctkf16-ctvf16-faauto-c131072-74439058": {
+      "state": "failed",
+      "reason": "needle_failure",
+      "alias": "mx-nemotron-c128k-f16",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "nemotron_h",
+        "target_tokens": 111411,
+        "chars_per_token": 4.17,
+        "vram_before_bytes": 1393655808,
+        "vram_after_bytes": 7077404672,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "llama/bakeoff/records/matrix-v1-shared/mx-nemotron-c128k-f16-ctkf16-ctvf16-faauto-c131072-74439058",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": null,
+          "max_tokens": 64,
+          "prompt_source": "fixed-short",
+          "instruction_pinned": false
+        }
+      }
+    },
+    "mx-ling-ud-q4-c128k-f16-ctkf16-ctvf16-faauto-c131072-de5d379e": {
+      "state": "completed",
+      "reason": null,
+      "alias": "mx-ling-ud-q4-c128k-f16",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "bailingmoe3",
+        "target_tokens": 111411,
+        "chars_per_token": 4.2,
+        "vram_before_bytes": 1476665344,
+        "vram_after_bytes": 7859675136,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "llama/bakeoff/records/matrix-v1-shared/mx-ling-ud-q4-c128k-f16-ctkf16-ctvf16-faauto-c131072-de5d379e",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": null,
+          "max_tokens": 64,
+          "prompt_source": "fixed-short",
+          "instruction_pinned": false
+        }
+      }
+    },
+    "mx-ling-ud-q6-c128k-f16-ctkf16-ctvf16-faauto-c131072-7a1d7924": {
+      "state": "failed",
+      "reason": "degenerate",
+      "alias": "mx-ling-ud-q6-c128k-f16",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "bailingmoe3",
+        "target_tokens": 111411,
+        "chars_per_token": 4.2,
+        "vram_before_bytes": 1490591744,
+        "vram_after_bytes": 9734922240,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "llama/bakeoff/records/matrix-v1-shared/mx-ling-ud-q6-c128k-f16-ctkf16-ctvf16-faauto-c131072-7a1d7924",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": null,
+          "max_tokens": 64,
+          "prompt_source": "fixed-short",
+          "instruction_pinned": false
+        }
+      }
+    },
+    "mx-ling-q8-c128k-f16-ctkf16-ctvf16-faauto-c131072-2291772d": {
+      "state": "failed",
+      "reason": "needle_failure",
+      "alias": "mx-ling-q8-c128k-f16",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "bailingmoe3",
+        "target_tokens": 111411,
+        "chars_per_token": 4.2,
+        "vram_before_bytes": 1490624512,
+        "vram_after_bytes": 10868535296,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "llama/bakeoff/records/matrix-v1-shared/mx-ling-q8-c128k-f16-ctkf16-ctvf16-faauto-c131072-2291772d",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": null,
+          "max_tokens": 64,
+          "prompt_source": "fixed-short",
+          "instruction_pinned": false
+        }
+      }
+    },
+    "mx-qwen38-xxs-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-c2573bb7": {
+      "state": "completed",
+      "reason": null,
+      "alias": "mx-qwen38-xxs-c128k-q4q4-fa",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "qwen35",
+        "target_tokens": 111411,
+        "chars_per_token": 4.0,
+        "vram_before_bytes": 1476669440,
+        "vram_after_bytes": 14786404352,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "llama/bakeoff/records/matrix-v1-shared/mx-qwen38-xxs-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-c2573bb7",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": null,
+          "max_tokens": 64,
+          "prompt_source": "fixed-short",
+          "instruction_pinned": false
+        }
+      }
+    },
+    "mx-qwen38-iq3s-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-fee2cb77": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mx-qwen38-iq3s-c128k-q4q4-fa"
+    },
+    "mx-qwen38-q3kxl-c64k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c65536-cd3baabe": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mx-qwen38-q3kxl-c64k-q4q4-fa"
+    },
+    "mx-gemma-qat-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-9afffa7f": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mx-gemma-qat-c128k-f16-base"
+    },
+    "mx-qwen36-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-41baab12": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mx-qwen36-c128k-f16-base"
+    },
+    "mx-gemma-qat-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-bf0431b6": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mx-gemma-qat-c128k-f16-prod"
+    },
+    "mx-qwen36-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-5d38307a": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mx-qwen36-c128k-f16-prod"
+    },
+    "mx-nemotron-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-6a866129": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mx-nemotron-c128k-q4q4-fa"
+    },
+    "mx-ling-ud-q4-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-c18f80b4": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mx-ling-ud-q4-c128k-q4q4-fa"
+    },
+    "mx-gemma-qat-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-df739795": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mx-gemma-qat-c128k-q4q4-fa"
+    },
+    "mx-gemma-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-1afee66e": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mx-gemma-qat-c256k-f16-mtp"
+    },
+    "mx-nemotron-c256k-f16-ctkf16-ctvf16-faauto-c262144-4e6d7906": {
+      "state": "pending",
+      "reason": null,
+      "alias": "mx-nemotron-c256k-f16"
+    }
+  },
+  "updated_at": "2026-09-06T07:19:02+00:00",
+  "paused_reason": "deadline"
+}

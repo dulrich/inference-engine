@@ -1,0 +1,61 @@
+{
+  "lineage": {
+    "hf_repo": "bloomer010/Ling-3.0-tiny-GGUF",
+    "hf_revision": null,
+    "filename": "Ling-3.0-tiny-UD-Q4_K_XL.gguf",
+    "file_size": 5340611328,
+    "sha256": null,
+    "llama_cpp_build": "b10534"
+  },
+  "sweep_cell": {
+    "cell_id": "mx-ling-ud-q4-c128k-f16-ctkf16-ctvf16-faauto-c131072-de5d379e",
+    "alias": "mx-ling-ud-q4-c128k-f16",
+    "server_flags": {
+      "--host": "0.0.0.0",
+      "-lv": 9,
+      "-ctk": "f16",
+      "-ctv": "f16",
+      "-fa": "auto",
+      "-ngl": 99,
+      "--jinja": true,
+      "-c": 131072
+    },
+    "model_host_path": "/srv/models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q4_K_XL.gguf",
+    "battery": [
+      "timing",
+      "needle"
+    ],
+    "sampling_arm": "capability",
+    "model": "ling-3-tiny-ud-q4",
+    "spec_decode": null,
+    "gpu_weights_bytes": null,
+    "kv_attention_layers": null,
+    "swa_layer_spec": null,
+    "kv_indexer_geometry": null
+  },
+  "vram": {
+    "baseline_bytes": 1476665344,
+    "loaded_bytes": 7859675136,
+    "after_teardown_bytes": null
+  },
+  "wilson_summary": null,
+  "vram_profile": "desktop-shared",
+  "response_caps": {
+    "default": 256,
+    "by_task": {
+      "multi_needle": 768
+    }
+  },
+  "cell_started_at": "2026-09-06T03:30:46+00:00",
+  "cell_ended_at": "2026-09-06T04:01:13+00:00",
+  "cell_wall_seconds": 1827.0036236230007,
+  "scratch_startup_seconds": 6.085607832999813,
+  "experiment_id": "mx-ling-ud-q4-c128k-f16-ctkf16-ctvf16-faauto-c131072-de5d379e",
+  "timestamp": "2026-09-06T04:01:13.731349+00:00",
+  "schema_version": 2,
+  "size_check": {
+    "total_bytes": 72314,
+    "limit_bytes": 26214400,
+    "within_budget": true
+  }
+}

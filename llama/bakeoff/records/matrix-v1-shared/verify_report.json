@@ -3,7 +3,7 @@
   "run_dir_exists": true,
   "state_path": "llama/bakeoff/records/matrix-v1-shared/queue.state.json",
   "queue_state": "paused-resumable",
-  "generated_at": "2026-09-07T01:50:51+00:00",
+  "generated_at": "2026-09-07T02:24:48+00:00",
   "checks": [
     {
       "check": "abort_state",
@@ -672,26 +672,54 @@
     {
       "check": "records_present",
       "cell_id": "mx-nemotron-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-6a866129",
-      "expected": "records optional for state 'pending'",
-      "observed": "no records subdirectory found",
-      "verdict": "unknown"
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/matrix-v1-shared/mx-nemotron-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-6a866129",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mx-nemotron-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-6a866129",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
     },
     {
       "check": "vram_arithmetic",
       "cell_id": "mx-nemotron-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-6a866129",
       "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
-      "observed": "config.json missing/unparseable",
-      "verdict": "unknown"
+      "observed": {
+        "ctk": "q4_0",
+        "ctv": "q4_0",
+        "context": 131072,
+        "weights_bytes": 3133118624,
+        "kv_bytes_per_token": 4608.0,
+        "kv_bytes_at_context": 603979776.0,
+        "estimated_delta_bytes": 3737098400.0,
+        "measured_delta_bytes": 4058910720,
+        "ratio": 1.0861128837281886
+      },
+      "verdict": "pass"
     },
     {
       "check": "prompt_tokens_tolerance",
       "cell_id": "mx-nemotron-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-6a866129",
       "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
       "observed": {
-        "n": 0,
-        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+        "n": 27,
+        "violations": [
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 124858
+          },
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 123699
+          }
+        ]
       },
-      "verdict": "unknown"
+      "verdict": "fail"
     },
     {
       "check": "wilson_min_trials",
@@ -707,7 +735,10 @@
       "check": "classifier_distribution",
       "cell_id": "mx-nemotron-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-6a866129",
       "expected": null,
-      "observed": {},
+      "observed": {
+        "correct": 25,
+        "wrong": 2
+      },
       "verdict": "informational"
     },
     {
@@ -1183,9 +1214,9 @@
       "has_records": true
     },
     "mx-nemotron-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-6a866129": {
-      "state": "pending",
-      "reason": null,
-      "has_records": false
+      "state": "failed",
+      "reason": "needle_failure",
+      "has_records": true
     },
     "mx-nemotron-c256k-f16-ctkf16-ctvf16-faauto-c262144-4e6d7906": {
       "state": "pending",
@@ -1224,10 +1255,10 @@
     }
   },
   "summary": {
-    "total": 101,
-    "pass": 49,
-    "fail": 10,
-    "unknown": 24,
+    "total": 102,
+    "pass": 52,
+    "fail": 11,
+    "unknown": 21,
     "informational": 18
   },
   "exit_code": 1

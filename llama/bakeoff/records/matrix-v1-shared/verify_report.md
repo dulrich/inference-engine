@@ -1,15 +1,15 @@
 # Verifier report -- `llama/bakeoff/records/matrix-v1-shared`
 
-Generated: 2026-09-07T01:50:51+00:00  
+Generated: 2026-09-07T02:24:48+00:00  
 State file: llama/bakeoff/records/matrix-v1-shared/queue.state.json  
 Exit code: **1**
 
 ## Summary
 
-- total checks: 101
-- pass: 49
-- fail: 10
-- unknown: 24
+- total checks: 102
+- pass: 52
+- fail: 11
+- unknown: 21
 - informational: 18
 
 ## Cells
@@ -152,16 +152,17 @@ Exit code: **1**
 
 ### `mx-nemotron-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-6a866129`
 
-- state: `pending`
-- has_records: `False`
+- state: `failed` (reason: `needle_failure`)
+- has_records: `True`
 
 | check | verdict | expected | observed |
 | --- | --- | --- | --- |
-| records_present | unknown | records optional for state 'pending' | "no records subdirectory found" |
-| vram_arithmetic | unknown | estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes | "config.json missing/unparseable" |
-| prompt_tokens_tolerance | unknown | usage.prompt_tokens within ±10% of target_tokens | {"n": 0, "reason": "no trials with both target_tokens and prompt_tokens recorded"} |
+| records_present | pass | records subdirectory present | "llama/bakeoff/records/matrix-v1-shared/mx-nemotron-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-6a866129" |
+| schema_conformant | pass | schema-v2-conformant records (4-file split + required config/sample fields) | "conformant" |
+| vram_arithmetic | pass | estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes | {"ctk": "q4_0", "ctv": "q4_0", "context": 131072, "weights_bytes": 3133118624, "kv_bytes_per_token": 4608.0, "kv_bytes_at_context": 603979776.0, "estimated_delta_bytes": 3737098400.0, "measured_delta_bytes": 4058910720, "ratio": 1.0861128837281886} |
+| prompt_tokens_tolerance | fail | usage.prompt_tokens within ±10% of target_tokens | {"n": 27, "violations": [{"trial_index": 2, "target_tokens": 111411, "prompt_tokens": 124858}, {"trial_index": 0, "target_tokens": 111411, "prompt_tokens": 123699}]} |
 | wilson_min_trials | pass | >= 10 trials whenever a wilson_summary verdict is claimed | {"wilson_summary": null, "reason": "no wilson_summary claimed for this cell"} |
-| classifier_distribution | informational | None | {} |
+| classifier_distribution | informational | None | {"correct": 25, "wrong": 2} |
 
 ### `mx-nemotron-c256k-f16-ctkf16-ctvf16-faauto-c262144-4e6d7906`
 

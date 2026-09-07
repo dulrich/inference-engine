@@ -409,9 +409,43 @@
       "alias": "mx-qwen36-c128k-f16-prod"
     },
     "mx-nemotron-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-6a866129": {
-      "state": "pending",
-      "reason": null,
-      "alias": "mx-nemotron-c128k-q4q4-fa"
+      "state": "failed",
+      "reason": "needle_failure",
+      "alias": "mx-nemotron-c128k-q4q4-fa",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "nemotron_h",
+        "target_tokens": 111411,
+        "chars_per_token": 4.17,
+        "vram_before_bytes": 805732352,
+        "vram_after_bytes": 4864643072,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "llama/bakeoff/records/matrix-v1-shared/mx-nemotron-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-6a866129",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": null,
+          "max_tokens": 64,
+          "prompt_source": "fixed-short",
+          "instruction_pinned": false
+        }
+      }
     },
     "mx-ling-ud-q4-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-c18f80b4": {
       "state": "pending",
@@ -434,6 +468,6 @@
       "alias": "mx-nemotron-c256k-f16"
     }
   },
-  "updated_at": "2026-09-07T01:50:01+00:00",
+  "updated_at": "2026-09-07T02:24:02+00:00",
   "paused_reason": "deadline"
 }

@@ -3,7 +3,7 @@
   "run_dir_exists": true,
   "state_path": "llama/bakeoff/records/matrix-v1-shared/queue.state.json",
   "queue_state": "paused-resumable",
-  "generated_at": "2026-09-07T02:24:48+00:00",
+  "generated_at": "2026-09-07T18:00:40+00:00",
   "checks": [
     {
       "check": "abort_state",
@@ -194,26 +194,54 @@
     {
       "check": "records_present",
       "cell_id": "mx-gemma-qat-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-bf0431b6",
-      "expected": "records optional for state 'pending'",
-      "observed": "no records subdirectory found",
-      "verdict": "unknown"
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/matrix-v1-shared/mx-gemma-qat-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-bf0431b6",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mx-gemma-qat-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-bf0431b6",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
     },
     {
       "check": "vram_arithmetic",
       "cell_id": "mx-gemma-qat-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-bf0431b6",
       "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
-      "observed": "config.json missing/unparseable",
-      "verdict": "unknown"
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 131072,
+        "weights_bytes": 6716356800,
+        "kv_bytes_per_token": 21504.0,
+        "kv_bytes_at_context": 2818572288.0,
+        "estimated_delta_bytes": 9534929088.0,
+        "measured_delta_bytes": 11484581888,
+        "ratio": 1.2044748085702806
+      },
+      "verdict": "pass"
     },
     {
       "check": "prompt_tokens_tolerance",
       "cell_id": "mx-gemma-qat-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-bf0431b6",
       "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
       "observed": {
-        "n": 0,
-        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+        "n": 27,
+        "violations": [
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 127244
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 127024
+          }
+        ]
       },
-      "verdict": "unknown"
+      "verdict": "fail"
     },
     {
       "check": "wilson_min_trials",
@@ -229,32 +257,88 @@
       "check": "classifier_distribution",
       "cell_id": "mx-gemma-qat-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-bf0431b6",
       "expected": null,
-      "observed": {},
+      "observed": {
+        "correct": 13,
+        "truncated(benign)": 14
+      },
       "verdict": "informational"
     },
     {
       "check": "records_present",
       "cell_id": "mx-gemma-qat-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-df739795",
-      "expected": "records optional for state 'pending'",
-      "observed": "no records subdirectory found",
-      "verdict": "unknown"
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/matrix-v1-shared/mx-gemma-qat-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-df739795",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mx-gemma-qat-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-df739795",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
     },
     {
       "check": "vram_arithmetic",
       "cell_id": "mx-gemma-qat-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-df739795",
       "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
-      "observed": "config.json missing/unparseable",
-      "verdict": "unknown"
+      "observed": {
+        "ctk": "q4_0",
+        "ctv": "q4_0",
+        "context": 131072,
+        "weights_bytes": 6716356800,
+        "kv_bytes_per_token": 6048.0,
+        "kv_bytes_at_context": 792723456.0,
+        "estimated_delta_bytes": 7509080256.0,
+        "measured_delta_bytes": 8857440256,
+        "ratio": 1.1795639351334162
+      },
+      "verdict": "pass"
     },
     {
       "check": "prompt_tokens_tolerance",
       "cell_id": "mx-gemma-qat-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-df739795",
       "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
       "observed": {
-        "n": 0,
-        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+        "n": 27,
+        "violations": [
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 127091
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 127311
+          },
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 127399
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 127091
+          },
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 127179
+          },
+          {
+            "trial_index": 1,
+            "target_tokens": 111411,
+            "prompt_tokens": 127096
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 127154
+          }
+        ]
       },
-      "verdict": "unknown"
+      "verdict": "fail"
     },
     {
       "check": "wilson_min_trials",
@@ -270,7 +354,11 @@
       "check": "classifier_distribution",
       "cell_id": "mx-gemma-qat-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-df739795",
       "expected": null,
-      "observed": {},
+      "observed": {
+        "truncated(benign)": 12,
+        "correct": 13,
+        "degenerate": 2
+      },
       "verdict": "informational"
     },
     {
@@ -467,26 +555,64 @@
     {
       "check": "records_present",
       "cell_id": "mx-ling-ud-q4-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-c18f80b4",
-      "expected": "records optional for state 'pending'",
-      "observed": "no records subdirectory found",
-      "verdict": "unknown"
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/matrix-v1-shared/mx-ling-ud-q4-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-c18f80b4",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mx-ling-ud-q4-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-c18f80b4",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
     },
     {
       "check": "vram_arithmetic",
       "cell_id": "mx-ling-ud-q4-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-c18f80b4",
       "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
-      "observed": "config.json missing/unparseable",
-      "verdict": "unknown"
+      "observed": {
+        "ctk": "q4_0",
+        "ctv": "q4_0",
+        "context": 131072,
+        "weights_bytes": 5340611328,
+        "kv_bytes_per_token": 2376.0,
+        "kv_bytes_at_context": 311427072.0,
+        "estimated_delta_bytes": 5652038400.0,
+        "measured_delta_bytes": 5096312832,
+        "ratio": 0.9016769652520408
+      },
+      "verdict": "pass"
     },
     {
       "check": "prompt_tokens_tolerance",
       "cell_id": "mx-ling-ud-q4-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-c18f80b4",
       "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
       "observed": {
-        "n": 0,
-        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+        "n": 27,
+        "violations": [
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 129581
+          },
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 127081
+          },
+          {
+            "trial_index": 1,
+            "target_tokens": 111411,
+            "prompt_tokens": 126978
+          },
+          {
+            "trial_index": 1,
+            "target_tokens": 111411,
+            "prompt_tokens": 128332
+          }
+        ]
       },
-      "verdict": "unknown"
+      "verdict": "fail"
     },
     {
       "check": "wilson_min_trials",
@@ -502,7 +628,10 @@
       "check": "classifier_distribution",
       "cell_id": "mx-ling-ud-q4-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-c18f80b4",
       "expected": null,
-      "observed": {},
+      "observed": {
+        "correct": 23,
+        "truncated(benign)": 4
+      },
       "verdict": "informational"
     },
     {
@@ -744,26 +873,43 @@
     {
       "check": "records_present",
       "cell_id": "mx-nemotron-c256k-f16-ctkf16-ctvf16-faauto-c262144-4e6d7906",
-      "expected": "records optional for state 'pending'",
-      "observed": "no records subdirectory found",
-      "verdict": "unknown"
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/matrix-v1-shared/mx-nemotron-c256k-f16-ctkf16-ctvf16-faauto-c262144-4e6d7906",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mx-nemotron-c256k-f16-ctkf16-ctvf16-faauto-c262144-4e6d7906",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
     },
     {
       "check": "vram_arithmetic",
       "cell_id": "mx-nemotron-c256k-f16-ctkf16-ctvf16-faauto-c262144-4e6d7906",
       "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
-      "observed": "config.json missing/unparseable",
-      "verdict": "unknown"
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 262144,
+        "weights_bytes": 3133118624,
+        "kv_bytes_per_token": 16384.0,
+        "kv_bytes_at_context": 4294967296.0,
+        "estimated_delta_bytes": 7428085920.0,
+        "measured_delta_bytes": 7887548416,
+        "ratio": 1.0618547632523885
+      },
+      "verdict": "pass"
     },
     {
       "check": "prompt_tokens_tolerance",
       "cell_id": "mx-nemotron-c256k-f16-ctkf16-ctvf16-faauto-c262144-4e6d7906",
       "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
       "observed": {
-        "n": 0,
-        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+        "n": 27,
+        "violations": []
       },
-      "verdict": "unknown"
+      "verdict": "pass"
     },
     {
       "check": "wilson_min_trials",
@@ -779,32 +925,73 @@
       "check": "classifier_distribution",
       "cell_id": "mx-nemotron-c256k-f16-ctkf16-ctvf16-faauto-c262144-4e6d7906",
       "expected": null,
-      "observed": {},
+      "observed": {
+        "correct": 21,
+        "wrong": 6
+      },
       "verdict": "informational"
     },
     {
       "check": "records_present",
       "cell_id": "mx-qwen36-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-41baab12",
-      "expected": "records optional for state 'pending'",
-      "observed": "no records subdirectory found",
-      "verdict": "unknown"
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/matrix-v1-shared/mx-qwen36-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-41baab12",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mx-qwen36-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-41baab12",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
     },
     {
       "check": "vram_arithmetic",
       "cell_id": "mx-qwen36-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-41baab12",
       "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
-      "observed": "config.json missing/unparseable",
-      "verdict": "unknown"
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 131072,
+        "weights_bytes": 6620000000,
+        "kv_bytes_per_token": 20480.0,
+        "kv_bytes_at_context": 2684354560.0,
+        "estimated_delta_bytes": 9304354560.0,
+        "measured_delta_bytes": 10172522496,
+        "ratio": 1.093307701292071
+      },
+      "verdict": "pass"
     },
     {
       "check": "prompt_tokens_tolerance",
       "cell_id": "mx-qwen36-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-41baab12",
       "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
       "observed": {
-        "n": 0,
-        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+        "n": 27,
+        "violations": [
+          {
+            "trial_index": 1,
+            "target_tokens": 111411,
+            "prompt_tokens": 98015
+          },
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 99019
+          },
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 98065
+          },
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 98733
+          }
+        ]
       },
-      "verdict": "unknown"
+      "verdict": "fail"
     },
     {
       "check": "wilson_min_trials",
@@ -820,7 +1007,10 @@
       "check": "classifier_distribution",
       "cell_id": "mx-qwen36-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-41baab12",
       "expected": null,
-      "observed": {},
+      "observed": {
+        "correct": 13,
+        "truncated(benign)": 14
+      },
       "verdict": "informational"
     },
     {
@@ -898,26 +1088,64 @@
     {
       "check": "records_present",
       "cell_id": "mx-qwen36-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-5d38307a",
-      "expected": "records optional for state 'pending'",
-      "observed": "no records subdirectory found",
-      "verdict": "unknown"
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/matrix-v1-shared/mx-qwen36-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-5d38307a",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mx-qwen36-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-5d38307a",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
     },
     {
       "check": "vram_arithmetic",
       "cell_id": "mx-qwen36-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-5d38307a",
       "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
-      "observed": "config.json missing/unparseable",
-      "verdict": "unknown"
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 131072,
+        "weights_bytes": 6620000000,
+        "kv_bytes_per_token": 20480.0,
+        "kv_bytes_at_context": 2684354560.0,
+        "estimated_delta_bytes": 9304354560.0,
+        "measured_delta_bytes": 12490547200,
+        "ratio": 1.3424410172090433
+      },
+      "verdict": "pass"
     },
     {
       "check": "prompt_tokens_tolerance",
       "cell_id": "mx-qwen36-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-5d38307a",
       "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
       "observed": {
-        "n": 0,
-        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+        "n": 27,
+        "violations": [
+          {
+            "trial_index": 0,
+            "target_tokens": 111411,
+            "prompt_tokens": 98230
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 98210
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 98901
+          },
+          {
+            "trial_index": 2,
+            "target_tokens": 111411,
+            "prompt_tokens": 98372
+          }
+        ]
       },
-      "verdict": "unknown"
+      "verdict": "fail"
     },
     {
       "check": "wilson_min_trials",
@@ -933,7 +1161,10 @@
       "check": "classifier_distribution",
       "cell_id": "mx-qwen36-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-5d38307a",
       "expected": null,
-      "observed": {},
+      "observed": {
+        "correct": 7,
+        "truncated(benign)": 20
+      },
       "verdict": "informational"
     },
     {
@@ -1174,14 +1405,14 @@
       "has_records": true
     },
     "mx-gemma-qat-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-bf0431b6": {
-      "state": "pending",
+      "state": "completed",
       "reason": null,
-      "has_records": false
+      "has_records": true
     },
     "mx-gemma-qat-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-df739795": {
-      "state": "pending",
-      "reason": null,
-      "has_records": false
+      "state": "failed",
+      "reason": "degenerate",
+      "has_records": true
     },
     "mx-gemma-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-1afee66e": {
       "state": "pending",
@@ -1199,9 +1430,9 @@
       "has_records": true
     },
     "mx-ling-ud-q4-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-c18f80b4": {
-      "state": "pending",
+      "state": "completed",
       "reason": null,
-      "has_records": false
+      "has_records": true
     },
     "mx-ling-ud-q6-c128k-f16-ctkf16-ctvf16-faauto-c131072-7a1d7924": {
       "state": "failed",
@@ -1219,14 +1450,14 @@
       "has_records": true
     },
     "mx-nemotron-c256k-f16-ctkf16-ctvf16-faauto-c262144-4e6d7906": {
-      "state": "pending",
-      "reason": null,
-      "has_records": false
+      "state": "failed",
+      "reason": "needle_failure",
+      "has_records": true
     },
     "mx-qwen36-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-41baab12": {
-      "state": "pending",
+      "state": "completed",
       "reason": null,
-      "has_records": false
+      "has_records": true
     },
     "mx-qwen36-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-8d32c2d0": {
       "state": "completed",
@@ -1234,9 +1465,9 @@
       "has_records": true
     },
     "mx-qwen36-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-5d38307a": {
-      "state": "pending",
+      "state": "completed",
       "reason": null,
-      "has_records": false
+      "has_records": true
     },
     "mx-qwen38-iq3s-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-fee2cb77": {
       "state": "completed",
@@ -1255,10 +1486,10 @@
     }
   },
   "summary": {
-    "total": 102,
-    "pass": 52,
-    "fail": 11,
-    "unknown": 21,
+    "total": 108,
+    "pass": 71,
+    "fail": 16,
+    "unknown": 3,
     "informational": 18
   },
   "exit_code": 1

@@ -394,19 +394,121 @@
       }
     },
     "mx-qwen36-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-41baab12": {
-      "state": "pending",
+      "state": "completed",
       "reason": null,
-      "alias": "mx-qwen36-c128k-f16-base"
+      "alias": "mx-qwen36-c128k-f16-base",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "qwen35moe",
+        "target_tokens": 111411,
+        "chars_per_token": 4.0,
+        "vram_before_bytes": 594141184,
+        "vram_after_bytes": 10766663680,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "llama/bakeoff/records/matrix-v1-shared/mx-qwen36-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-41baab12",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": null,
+          "max_tokens": 64,
+          "prompt_source": "fixed-short",
+          "instruction_pinned": false
+        }
+      }
     },
     "mx-gemma-qat-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-bf0431b6": {
-      "state": "pending",
+      "state": "completed",
       "reason": null,
-      "alias": "mx-gemma-qat-c128k-f16-prod"
+      "alias": "mx-gemma-qat-c128k-f16-prod",
+      "detail": {
+        "sampling_arm_requested": "production",
+        "sampling_arm_effective": "production",
+        "production_sampling_fallback_reason": null,
+        "model_family": "gemma4",
+        "target_tokens": 111411,
+        "chars_per_token": 4.3,
+        "vram_before_bytes": 594145280,
+        "vram_after_bytes": 12078727168,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "llama/bakeoff/records/matrix-v1-shared/mx-gemma-qat-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-bf0431b6",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": null,
+          "max_tokens": 64,
+          "prompt_source": "fixed-short",
+          "instruction_pinned": false
+        }
+      }
     },
     "mx-qwen36-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-5d38307a": {
-      "state": "pending",
+      "state": "completed",
       "reason": null,
-      "alias": "mx-qwen36-c128k-f16-prod"
+      "alias": "mx-qwen36-c128k-f16-prod",
+      "detail": {
+        "sampling_arm_requested": "production",
+        "sampling_arm_effective": "production",
+        "production_sampling_fallback_reason": null,
+        "model_family": "qwen35moe",
+        "target_tokens": 111411,
+        "chars_per_token": 4.0,
+        "vram_before_bytes": 594141184,
+        "vram_after_bytes": 13084688384,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "llama/bakeoff/records/matrix-v1-shared/mx-qwen36-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-5d38307a",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": null,
+          "max_tokens": 64,
+          "prompt_source": "fixed-short",
+          "instruction_pinned": false
+        }
+      }
     },
     "mx-nemotron-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-6a866129": {
       "state": "failed",
@@ -448,14 +550,82 @@
       }
     },
     "mx-ling-ud-q4-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-c18f80b4": {
-      "state": "pending",
+      "state": "completed",
       "reason": null,
-      "alias": "mx-ling-ud-q4-c128k-q4q4-fa"
+      "alias": "mx-ling-ud-q4-c128k-q4q4-fa",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "bailingmoe3",
+        "target_tokens": 111411,
+        "chars_per_token": 4.2,
+        "vram_before_bytes": 1226371072,
+        "vram_after_bytes": 6322683904,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "llama/bakeoff/records/matrix-v1-shared/mx-ling-ud-q4-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-c18f80b4",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": null,
+          "max_tokens": 64,
+          "prompt_source": "fixed-short",
+          "instruction_pinned": false
+        }
+      }
     },
     "mx-gemma-qat-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-df739795": {
-      "state": "pending",
-      "reason": null,
-      "alias": "mx-gemma-qat-c128k-q4q4-fa"
+      "state": "failed",
+      "reason": "degenerate",
+      "alias": "mx-gemma-qat-c128k-q4q4-fa",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "gemma4",
+        "target_tokens": 111411,
+        "chars_per_token": 4.3,
+        "vram_before_bytes": 594145280,
+        "vram_after_bytes": 9451585536,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "llama/bakeoff/records/matrix-v1-shared/mx-gemma-qat-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-df739795",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": null,
+          "max_tokens": 64,
+          "prompt_source": "fixed-short",
+          "instruction_pinned": false
+        }
+      }
     },
     "mx-gemma-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-1afee66e": {
       "state": "pending",
@@ -463,11 +633,45 @@
       "alias": "mx-gemma-qat-c256k-f16-mtp"
     },
     "mx-nemotron-c256k-f16-ctkf16-ctvf16-faauto-c262144-4e6d7906": {
-      "state": "pending",
-      "reason": null,
-      "alias": "mx-nemotron-c256k-f16"
+      "state": "failed",
+      "reason": "needle_failure",
+      "alias": "mx-nemotron-c256k-f16",
+      "detail": {
+        "sampling_arm_requested": "capability",
+        "sampling_arm_effective": "capability",
+        "production_sampling_fallback_reason": null,
+        "model_family": "nemotron_h",
+        "target_tokens": 222822,
+        "chars_per_token": 4.17,
+        "vram_before_bytes": 592048128,
+        "vram_after_bytes": 8479596544,
+        "sample_count": 27,
+        "summaries": {
+          "single_needle@0.10": null,
+          "single_needle@0.45": null,
+          "single_needle@0.85": null,
+          "multi_needle@0.10": null,
+          "multi_needle@0.45": null,
+          "multi_needle@0.85": null,
+          "passage_qa@0.10": null,
+          "passage_qa@0.45": null,
+          "passage_qa@0.85": null
+        },
+        "record_path": "llama/bakeoff/records/matrix-v1-shared/mx-nemotron-c256k-f16-ctkf16-ctvf16-faauto-c262144-4e6d7906",
+        "record_error": null,
+        "timing": {
+          "rounds_requested": 3,
+          "rounds_recorded": 3,
+          "rounds_succeeded": 3,
+          "error": null,
+          "prompt_tokens_target": null,
+          "max_tokens": 64,
+          "prompt_source": "fixed-short",
+          "instruction_pinned": false
+        }
+      }
     }
   },
-  "updated_at": "2026-09-07T02:24:02+00:00",
+  "updated_at": "2026-09-07T17:59:12+00:00",
   "paused_reason": "deadline"
 }

@@ -1,31 +1,32 @@
 # Verifier report -- `llama/bakeoff/records/matrix-v1-shared`
 
-Generated: 2026-09-06T23:44:34+00:00  
+Generated: 2026-09-07T01:50:51+00:00  
 State file: llama/bakeoff/records/matrix-v1-shared/queue.state.json  
 Exit code: **1**
 
 ## Summary
 
-- total checks: 100
-- pass: 46
-- fail: 9
-- unknown: 27
+- total checks: 101
+- pass: 49
+- fail: 10
+- unknown: 24
 - informational: 18
 
 ## Cells
 
 ### `mx-gemma-qat-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-9afffa7f`
 
-- state: `pending`
-- has_records: `False`
+- state: `failed` (reason: `degenerate`)
+- has_records: `True`
 
 | check | verdict | expected | observed |
 | --- | --- | --- | --- |
-| records_present | unknown | records optional for state 'pending' | "no records subdirectory found" |
-| vram_arithmetic | unknown | estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes | "config.json missing/unparseable" |
-| prompt_tokens_tolerance | unknown | usage.prompt_tokens within ±10% of target_tokens | {"n": 0, "reason": "no trials with both target_tokens and prompt_tokens recorded"} |
+| records_present | pass | records subdirectory present | "llama/bakeoff/records/matrix-v1-shared/mx-gemma-qat-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-9afffa7f" |
+| schema_conformant | pass | schema-v2-conformant records (4-file split + required config/sample fields) | "conformant" |
+| vram_arithmetic | pass | estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes | {"ctk": "f16", "ctv": "f16", "context": 131072, "weights_bytes": 6716356800, "kv_bytes_per_token": 21504.0, "kv_bytes_at_context": 2818572288.0, "estimated_delta_bytes": 9534929088.0, "measured_delta_bytes": 11036233728, "ratio": 1.157453152104659} |
+| prompt_tokens_tolerance | fail | usage.prompt_tokens within ±10% of target_tokens | {"n": 27, "violations": [{"trial_index": 0, "target_tokens": 111411, "prompt_tokens": 126982}, {"trial_index": 1, "target_tokens": 111411, "prompt_tokens": 127307}, {"trial_index": 0, "target_tokens": 111411, "prompt_tokens": 127041}, {"trial_index": 2, "target_tokens": 111411, "prompt_tokens": 127182}, {"trial_index": 1, "target_tokens": 111411, "prompt_tokens": 127015}, {"trial_index": 2, "target_tokens": 111411, "prompt_tokens": 127162}]} |
 | wilson_min_trials | pass | >= 10 trials whenever a wilson_summary verdict is claimed | {"wilson_summary": null, "reason": "no wilson_summary claimed for this cell"} |
-| classifier_distribution | informational | None | {} |
+| classifier_distribution | informational | None | {"correct": 17, "truncated(benign)": 9, "degenerate": 1} |
 
 ### `mx-gemma-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-1cd55be3`
 

@@ -209,40 +209,6 @@
       "trials": 3
     },
     {
-      "model": "qwen36-a3b-mtp",
-      "alias": "mx-qwen36-c128k-f16-base",
-      "c": 131072,
-      "ctk": "f16",
-      "ctv": "f16",
-      "fa": "auto",
-      "spec_decode": "base",
-      "battery": ["timing", "needle"],
-      "sampling_arm": "capability",
-      "trials": 3
-    },
-    {
-      "model": "gemma-4-12b-qat",
-      "alias": "mx-gemma-qat-c128k-f16-prod",
-      "c": 131072,
-      "ctk": "f16",
-      "ctv": "f16",
-      "fa": "auto",
-      "battery": ["timing", "needle"],
-      "sampling_arm": "production",
-      "trials": 3
-    },
-    {
-      "model": "qwen36-a3b-mtp",
-      "alias": "mx-qwen36-c128k-f16-prod",
-      "c": 131072,
-      "ctk": "f16",
-      "ctv": "f16",
-      "fa": "auto",
-      "battery": ["timing", "needle"],
-      "sampling_arm": "production",
-      "trials": 3
-    },
-    {
       "model": "nemotron-4b-ud",
       "alias": "mx-nemotron-c128k-q4q4-fa",
       "c": 131072,
@@ -265,6 +231,28 @@
       "trials": 3
     },
     {
+      "model": "nemotron-4b-ud",
+      "alias": "mx-nemotron-c256k-f16",
+      "c": 262144,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "battery": ["timing", "needle"],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "gemma-4-12b-qat",
+      "alias": "mx-gemma-qat-c128k-f16-prod",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "battery": ["timing", "needle"],
+      "sampling_arm": "production",
+      "trials": 3
+    },
+    {
       "model": "gemma-4-12b-qat",
       "alias": "mx-gemma-qat-c128k-q4q4-fa",
       "c": 131072,
@@ -276,19 +264,31 @@
       "trials": 3
     },
     {
-      "model": "gemma-4-12b-qat",
-      "alias": "mx-gemma-qat-c256k-f16-mtp",
-      "c": 262144,
+      "model": "qwen36-a3b-mtp",
+      "alias": "mx-qwen36-c128k-f16-prod",
+      "c": 131072,
       "ctk": "f16",
       "ctv": "f16",
       "fa": "auto",
+      "battery": ["timing", "needle"],
+      "sampling_arm": "production",
+      "trials": 3
+    },
+    {
+      "model": "qwen36-a3b-mtp",
+      "alias": "mx-qwen36-c128k-f16-base",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "spec_decode": "base",
       "battery": ["timing", "needle"],
       "sampling_arm": "capability",
       "trials": 3
     },
     {
-      "model": "nemotron-4b-ud",
-      "alias": "mx-nemotron-c256k-f16",
+      "model": "gemma-4-12b-qat",
+      "alias": "mx-gemma-qat-c256k-f16-mtp",
       "c": 262144,
       "ctk": "f16",
       "ctv": "f16",

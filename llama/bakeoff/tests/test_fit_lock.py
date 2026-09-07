@@ -512,21 +512,6 @@ GOLDEN = {
                 command="llama-server -m /models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --mmproj /models/unsloth/gemma-4-12B-it-qat-GGUF/mmproj-BF16.gguf -lv 9",
             ),
             GoldenCell(
-                cell_id="mx-qwen36-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-41baab12",
-                classification="fits",
-                command="llama-server -m /models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lv 9 -ncmoe 32 -ub 2048",
-            ),
-            GoldenCell(
-                cell_id="mx-gemma-qat-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-bf0431b6",
-                classification="fits",
-                command="llama-server -m /models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --mmproj /models/unsloth/gemma-4-12B-it-qat-GGUF/mmproj-BF16.gguf --spec-type draft-mtp -lv 9 -md /models/unsloth/gemma-4-12B-it-qat-GGUF/mtp-gemma-4-12B-it.gguf",
-            ),
-            GoldenCell(
-                cell_id="mx-qwen36-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-5d38307a",
-                classification="fits",
-                command="llama-server -m /models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --spec-type draft-mtp -lv 9 -ncmoe 32 -ub 2048",
-            ),
-            GoldenCell(
                 cell_id="mx-nemotron-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-6a866129",
                 classification="fits",
                 command="llama-server -m /models/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk q4_0 -ctv q4_0 -fa on -ngl 99 --host 0.0.0.0 --jinja -lv 9",
@@ -537,19 +522,34 @@ GOLDEN = {
                 command="llama-server -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk q4_0 -ctv q4_0 -fa on -ngl 99 --host 0.0.0.0 --jinja -lv 9",
             ),
             GoldenCell(
+                cell_id="mx-nemotron-c256k-f16-ctkf16-ctvf16-faauto-c262144-4e6d7906",
+                classification="fits",
+                command="llama-server -m /models/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-UD-Q4_K_XL.gguf --port 8080 -c 262144 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lv 9",
+            ),
+            GoldenCell(
+                cell_id="mx-gemma-qat-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-bf0431b6",
+                classification="fits",
+                command="llama-server -m /models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --mmproj /models/unsloth/gemma-4-12B-it-qat-GGUF/mmproj-BF16.gguf --spec-type draft-mtp -lv 9 -md /models/unsloth/gemma-4-12B-it-qat-GGUF/mtp-gemma-4-12B-it.gguf",
+            ),
+            GoldenCell(
                 cell_id="mx-gemma-qat-c128k-q4q4-fa-ctkq4_0-ctvq4_0-faon-c131072-df739795",
                 classification="fits",
                 command="llama-server -m /models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk q4_0 -ctv q4_0 -fa on -ngl 99 --host 0.0.0.0 --jinja --mmproj /models/unsloth/gemma-4-12B-it-qat-GGUF/mmproj-BF16.gguf --spec-type draft-mtp -lv 9 -md /models/unsloth/gemma-4-12B-it-qat-GGUF/mtp-gemma-4-12B-it.gguf",
             ),
             GoldenCell(
+                cell_id="mx-qwen36-c128k-f16-prod-ctkf16-ctvf16-faauto-c131072-5d38307a",
+                classification="fits",
+                command="llama-server -m /models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --spec-type draft-mtp -lv 9 -ncmoe 32 -ub 2048",
+            ),
+            GoldenCell(
+                cell_id="mx-qwen36-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-41baab12",
+                classification="fits",
+                command="llama-server -m /models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lv 9 -ncmoe 32 -ub 2048",
+            ),
+            GoldenCell(
                 cell_id="mx-gemma-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-1afee66e",
                 classification="excluded",
                 command="llama-server -m /models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf --port 8080 -c 262144 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --mmproj /models/unsloth/gemma-4-12B-it-qat-GGUF/mmproj-BF16.gguf --spec-type draft-mtp -lv 9 -md /models/unsloth/gemma-4-12B-it-qat-GGUF/mtp-gemma-4-12B-it.gguf",
-            ),
-            GoldenCell(
-                cell_id="mx-nemotron-c256k-f16-ctkf16-ctvf16-faauto-c262144-4e6d7906",
-                classification="fits",
-                command="llama-server -m /models/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-UD-Q4_K_XL.gguf --port 8080 -c 262144 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lv 9",
             ),
         ],
     ),
@@ -717,8 +717,8 @@ GOLDEN = {
 # plans/qwen4exp-ram-ab-spike.md added the three qwen4exp-ram-* queues; the pre-WP-1 6-queue/
 # 98-cell digests were re-derived unchanged by this WP's additivity proof -- see this file's
 # module docstring).
-GOLDEN_FIT_DIGEST = "6671bd6204d1e66d"
-GOLDEN_COMMAND_DIGEST = "97ddbd1bdfe55d6a"
+GOLDEN_FIT_DIGEST = "88a4b6faca3905fd"
+GOLDEN_COMMAND_DIGEST = "35ead6585c1b30df"
 GOLDEN_CELL_COUNT = 113
 
 # `compute_vram_budget_bytes` for both profiles under the pinned injections. `desktop-shared` is

@@ -116,6 +116,9 @@
 # step 5: `-ncmoe 34`/`-ncmoe 35`) were REMOVED from serving the same date (user-directed: hold
 # on Q4 only; their MTP-variant downloads were cancelled) — testing-only aliases, no consumer;
 # re-adding them later is a download + config re-add on ask.
+# Recipe change 2026-09-08 (plans/moe-offload-load-mode-and-qwen4exp-fit-math.md WP-1): qwen36-a3b
+# adds --load-mode none (+80% prefill measured, decode flat); -ub 512 dropped from the chat macro
+# (default, was double-specified).
 #
 # `qwen38-27b-iq3xxs` / `qwen38-27b-iq3s` / `qwen38-27b-q3kxl` (the `qwen38-27b-bakeoff` group
 # below) — unsloth/Qwen3.8-27B-GGUF (`qwen35` architecture: a DENSE sibling of Qwen3.6-35B-A3B's
@@ -169,15 +172,22 @@ macros:
   # by reusing it. The retrieval macro's `-b/-ub 8192` was tuned for batch-embedding many chunks
   # at once through two small models; for a chat model that ubatch size is pure VRAM cost with no
   # throughput benefit, because chat is single-conversation autoregressive decode after one
-  # prefill. llama.cpp's own defaults are `-b 2048 -ub 512`; keeping the chat macro at those
-  # defaults (rather than inheriting 8192) keeps the compute/graph buffer small so the VRAM
-  # budget is dominated by weights + KV cache, which is what the fit math below is computed
-  # against. `-c` (context) is set per model below, not in this shared macro, because the safe
-  # context size differs per model (see the fit math on each entry and on the `chat` group).
+  # prefill. llama.cpp's own defaults are `-b 2048` (`--help`, `b10534`: "logical maximum batch
+  # size (default: 2048)") and `-ub 512` ("physical maximum batch size (default: 512)"); `-b 2048`
+  # stays explicit here (rather than inheriting 8192) so the compute/graph buffer stays small and
+  # the VRAM budget is dominated by weights + KV cache, which is what the fit math below is
+  # computed against. `-ub` is deliberately NOT set in this macro (2026-09-08,
+  # plans/moe-offload-load-mode-and-qwen4exp-fit-math.md WP-1) so a per-entry `-ub` override
+  # (`qwen36-a3b`'s `-ub 2048`) does not double-specify it — llama-server `b10534` warns
+  # `DEPRECATED: argument '-ub' specified multiple times … only last value will be used`
+  # (harmless, last wins, but llama-swap never surfaces the warning — see the `qwen36-a3b` entry
+  # comment below); a consumer that does not override `-ub` runs at the 512 default. `-c`
+  # (context) is set per model below, not in this shared macro, because the safe context size
+  # differs per model (see the fit math on each entry and on the `chat` group).
   llama_server_chat_common: >
     /usr/local/bin/llama-server
     --host 0.0.0.0 --port ${PORT}
-    -ngl 99 -b 2048 -ub 512
+    -ngl 99 -b 2048
 
 models:
   bge-m3-f16:
@@ -466,6 +476,22 @@ models:
   # entry's real `-c 100000` on landing — see the group comment below. The UD-Q5_K_XL/UD-Q6_K_XL
   # entries that used to follow this one were removed the same date (see the registry comment
   # above — user-directed hold on Q4 only).
+  # Recipe change 2026-09-08 (plans/moe-offload-load-mode-and-qwen4exp-fit-math.md WP-1): the cmd
+  # below adds a load-mode override. It answers a loader warning that had never been seen —
+  # llama-swap never surfaces a child's stdout (`config.yaml:585-590`) — `W llama_model_loader:
+  # tensor overrides to CPU are used with mmap enabled - consider using --load-mode none for
+  # better performance`, emitted because `-ncmoe 32` puts CPU-resident tensors under mmap by
+  # default. Measured this session: scratch `llama-server` in this container
+  # (`inference-engine-llama`, `crucible-llamacpp-vulkan:b10534-swap243`), production flags
+  # verbatim, 2013-token prefill + 150-token decode, temp 0, two runs, router unloaded first —
+  # default (mmap) 877/959 pp t/s, tg 45.5/45.5; with the override, 1590/1738 pp t/s (+~80%), tg
+  # 44.6/44.4 (decode flat within noise). The dense `qwen38-27b-iq3s` control (all-GPU, no
+  # CPU-resident tensors) saw 771/812 → 768/789 pp, tg flat — the win is specific to CPU-resident
+  # weight tensors under `-ncmoe`, so this is an MoE-offload recipe, not a fleet rollout (only
+  # this entry qualifies today). RAM
+  # consequence: the 32 CPU layers' routed experts (15,363 MiB) become an anonymous pinned
+  # `Vulkan_Host` buffer instead of evictable page cache, for the 1800 s ttl this entry already
+  # carries below (62 GB host RAM).
   Qwen3.6-35B-A3B-UD-Q4_K_XL:
     name: "Qwen3.6 35B A3B (UD-Q4_K_XL)"
     aliases:
@@ -495,6 +521,7 @@ models:
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
       -ncmoe 32
+      --load-mode none
       --spec-type draft-mtp
       -c 131072
       -ub 2048

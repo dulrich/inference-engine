@@ -25,10 +25,11 @@ v2.md` Key Changes/WP-1). See `classify_fit`.
 
 from __future__ import annotations
 
+import re
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Tuple, Union
 
 GIB = 1024 ** 3
 
@@ -272,6 +273,388 @@ def read_gguf_metadata(gguf_path: Path) -> Dict[str, Any]:
             (value_type,) = struct.unpack("<I", _read_exact(f, 4))
             metadata[key] = _read_gguf_value(f, value_type)
     return metadata
+
+
+# -------------------------------------------------------------------------------------------
+# Tensor-info section reader (WP-4, `plans/moe-offload-load-mode-and-qwen4exp-fit-math.md`):
+# walks the per-tensor directory that immediately follows the KV block `read_gguf_metadata`
+# above already parses -- name (gguf string), n_dims (u32), dims (u64 x n_dims), ggml_type
+# (u32), offset (u64) -- and, for a split model, every sibling shard named by `split.count`.
+# Still stdlib `struct` only; still never reads a single byte of actual tensor DATA (only the
+# small header/metadata/tensor-info prefix of each shard file).
+# -------------------------------------------------------------------------------------------
+
+# ggml per-block byte layout. Pinned against this HOST's own llama.cpp checkout
+# (`<code-root>/apps/llama.cpp`), not copied from any prior script: type ids from
+# `ggml/include/ggml.h`'s `enum ggml_type` (GGML_TYPE_F32=0 .. GGML_TYPE_BF16=30, confirmed by
+# direct `grep` against that file this session); block byte sizes independently re-derived from
+# `ggml/src/ggml-common.h`'s `block_q*`/`block_iq*` struct `static_assert(...)` lines, using
+# `ggml_half` = `uint16_t` (2 B, `ggml-common.h:6`), `K_SCALE_SIZE` = 12 (`ggml-common.h:90`),
+# `IQ3S_N_SCALE` = `QK_K/64` = 4 (`ggml-common.h:404`), `QK_K` = 256 (`ggml-common.h:89`).
+#
+# Every entry below was checked against a `static_assert` line, not assumed. The two entries the
+# WP-4 brief flagged as needing re-verification -- IQ3_XXS and IQ2_S -- both came out matching the
+# plan's rough session-script table (98 and 82 respectively). The entry that was ACTUALLY wrong in
+# that rough table is IQ4_NL (type id 20): its true block size is 18 bytes/32 elements
+# (`sizeof(ggml_half) + QK4_NL/2` = 2 + 16), byte-IDENTICAL to Q4_0 -- not the 20-byte Q4_1 layout
+# the session script used for id 20. This table therefore reproduces
+# `docs/qwen4exp-ple-ondisk-spike.md`'s 26.82 GiB PLE-table / 42.92 GiB routed-expert figures, not
+# the plan's own Context-section "session" figures of 29.84/45.34 GiB (see
+# `tests/test_gguf_tensor_classes.py` and the WP-4 report for the reconciliation).
+GGML_TYPE_SIZES: Dict[int, Tuple[int, int]] = {
+    0: (1, 4),  # F32
+    1: (1, 2),  # F16
+    2: (32, 18),  # Q4_0
+    3: (32, 20),  # Q4_1
+    6: (32, 22),  # Q5_0
+    7: (32, 24),  # Q5_1
+    8: (32, 34),  # Q8_0
+    9: (32, 36),  # Q8_1
+    10: (256, 84),  # Q2_K
+    11: (256, 110),  # Q3_K
+    12: (256, 144),  # Q4_K
+    13: (256, 176),  # Q5_K
+    14: (256, 210),  # Q6_K
+    15: (256, 292),  # Q8_K
+    16: (256, 66),  # IQ2_XXS
+    17: (256, 74),  # IQ2_XS
+    18: (256, 98),  # IQ3_XXS
+    19: (256, 50),  # IQ1_S
+    20: (32, 18),  # IQ4_NL
+    21: (256, 110),  # IQ3_S
+    22: (256, 82),  # IQ2_S
+    23: (256, 136),  # IQ4_XS
+    24: (1, 1),  # I8
+    25: (1, 2),  # I16
+    26: (1, 4),  # I32
+    27: (1, 8),  # I64
+    28: (1, 8),  # F64
+    29: (256, 56),  # IQ1_M
+    30: (1, 2),  # BF16
+}
+
+
+class TensorInfo(NamedTuple):
+    """One tensor-info directory entry. `nbytes` is computed once, here, at parse time from
+    `GGML_TYPE_SIZES` -- `prod(dims) // block_elems * block_bytes` -- so every downstream
+    consumer (`classify_tensor`, `derive_placement_bytes`) works with plain byte counts, never
+    raw ggml type ids."""
+
+    name: str
+    dims: Tuple[int, ...]
+    ggml_type: int
+    nbytes: int
+
+
+# Split-shard filename convention this repo's own `docs/qwen4exp-ple-ondisk-spike.md` and every
+# committed qwen4exp queue already assumes: `<prefix>-NNNNN-of-MMMMM.gguf`, 5-digit zero-padded,
+# 1-indexed.
+_SPLIT_SHARD_RE = re.compile(r"^(?P<prefix>.*)-(?P<idx>\d{5})-of-(?P<total>\d{5})\.gguf$")
+
+
+def _sibling_shard_paths(gguf_path: Path, count: int) -> Optional[List[Path]]:
+    """Derives every shard path for a `split.count`-carrying GGUF from ONE shard's own path --
+    never from `split.no` (a shard's OWN index is not needed to name its siblings). Returns
+    `None` -- never a guess -- if `gguf_path`'s name doesn't match the split-shard convention at
+    all, or if the filename's own `-of-NNNNN` disagrees with the metadata's `split.count`."""
+    m = _SPLIT_SHARD_RE.match(gguf_path.name)
+    if not m:
+        return None
+    total_str = m.group("total")
+    if int(total_str) != count:
+        return None
+    prefix = m.group("prefix")
+    return [gguf_path.parent / f"{prefix}-{i:05d}-of-{total_str}.gguf" for i in range(1, count + 1)]
+
+
+def _read_gguf_tensor_infos_one_shard(gguf_path: Path) -> Tuple[Dict[str, Any], List[TensorInfo]]:
+    """Parses ONE GGUF file's KV metadata block AND its tensor-info array in a single sequential
+    pass -- the tensor-info array immediately follows the KV block in the GGUF v3 layout
+    `read_gguf_metadata` already documents. Raises `GGUFParseError` (bad magic, truncated file, or
+    a ggml type id outside `GGML_TYPE_SIZES`) / `OSError` (path problems), exactly like
+    `read_gguf_metadata`.
+
+    Deliberately a SEPARATE helper from `read_gguf_metadata` rather than an extension of it: every
+    existing caller of `read_gguf_metadata` wants the cheap KV-only read (a few KB to a few hundred
+    KB) and must not pay for walking a tensor-info array that can run past a thousand entries for a
+    model like qwen4exp.
+    """
+    with open(gguf_path, "rb") as f:
+        magic = _read_exact(f, 4)
+        if magic != b"GGUF":
+            raise GGUFParseError(f"{gguf_path}: not a GGUF file (bad magic {magic!r})")
+        struct.unpack("<I", _read_exact(f, 4))  # version -- not needed here either
+        (tensor_count,) = struct.unpack("<Q", _read_exact(f, 8))
+        (kv_count,) = struct.unpack("<Q", _read_exact(f, 8))
+        metadata: Dict[str, Any] = {}
+        for _ in range(kv_count):
+            key = _read_gguf_string(f)
+            (value_type,) = struct.unpack("<I", _read_exact(f, 4))
+            metadata[key] = _read_gguf_value(f, value_type)
+        tensor_infos: List[TensorInfo] = []
+        for _ in range(tensor_count):
+            name = _read_gguf_string(f)
+            (n_dims,) = struct.unpack("<I", _read_exact(f, 4))
+            dims = struct.unpack("<" + "Q" * n_dims, _read_exact(f, 8 * n_dims))
+            (ggml_type,) = struct.unpack("<I", _read_exact(f, 4))
+            (_offset,) = struct.unpack("<Q", _read_exact(f, 8))  # unused -- data is never read
+            sizes = GGML_TYPE_SIZES.get(ggml_type)
+            if sizes is None:
+                raise GGUFParseError(
+                    f"{gguf_path}: tensor {name!r} has unrecognised ggml type id {ggml_type}"
+                )
+            block_elems, block_bytes = sizes
+            nelements = 1
+            for d in dims:
+                nelements *= d
+            nbytes = (nelements // block_elems) * block_bytes
+            tensor_infos.append(TensorInfo(name=name, dims=dims, ggml_type=ggml_type, nbytes=nbytes))
+    return metadata, tensor_infos
+
+
+def read_gguf_tensor_infos(gguf_path: Path) -> Optional[List[TensorInfo]]:
+    """Returns every tensor's `(name, dims, ggml_type, nbytes)` for `gguf_path` -- and, when its
+    own `split.count` metadata key is > 1, for every sibling shard too (all must exist; a missing
+    shard fails the WHOLE read, never a partial one). `None` on any failure -- unknown ggml type,
+    unparseable/truncated shard, a shard the split-naming convention can't derive, or a missing
+    shard -- never a guess, matching this module's existing conservative direction
+    (`gguf_fit.py:20-26`... see module docstring).
+
+    Reads ALL shards named by `split.count` fresh (including `gguf_path` itself again if it is
+    one of them) rather than trying to reuse the caller's own shard's already-parsed tensor list --
+    simpler and just as cheap, since this never touches the (often tens-of-GiB) tensor DATA
+    section of any shard, only its small header/metadata/tensor-info prefix.
+    """
+    try:
+        metadata, tensor_infos = _read_gguf_tensor_infos_one_shard(gguf_path)
+    except (GGUFParseError, OSError):
+        return None
+    split_count = metadata.get("split.count")
+    if not isinstance(split_count, int) or isinstance(split_count, bool) or split_count <= 1:
+        return tensor_infos
+    shard_paths = _sibling_shard_paths(gguf_path, split_count)
+    if shard_paths is None:
+        return None
+    all_infos: List[TensorInfo] = []
+    for shard_path in shard_paths:
+        if not shard_path.exists():
+            return None
+        try:
+            _, infos = _read_gguf_tensor_infos_one_shard(shard_path)
+        except (GGUFParseError, OSError):
+            return None
+        all_infos.extend(infos)
+    return all_infos
+
+
+# -------------------------------------------------------------------------------------------
+# Tensor classification and placement derivation (WP-4). Classifies each tensor by NAME into one
+# of five classes, then derives which class lands on GPU vs CPU vs "lazy" (cold, mmap-paged-in
+# only on demand) from the normalized `-ngl`/`-ncmoe`/`-cmoe`/`-ot`/`-lm`/`--tensor-read-lazy`
+# server flags. Both functions are pure and offline -- no I/O beyond what the caller already did
+# to produce `tensor_infos`.
+# -------------------------------------------------------------------------------------------
+
+_ROUTED_EXPERT_RE = re.compile(r"^blk\.\d+\.ffn_(?:gate|up|down)_exps\.weight$")
+_PLE_BLOCK_RE = re.compile(r"^blk\.\d+\.ple_")
+_BLK_INDEX_RE = re.compile(r"^blk\.(\d+)\.")
+
+
+def classify_tensor(name: str) -> str:
+    """Classifies one tensor by name into `"routed_expert"` (per-expert-index-selected FFN
+    weights -- the tensors `-ncmoe`/`-cmoe` move), `"shared_expert"` (the always-active FFN that
+    runs alongside the routed ones on every token -- name contains `shexp`), `"ple"` (the
+    per-layer-embedding n-gram table and its small per-layer helper tensors), `"embd_output"`
+    (token embedding / LM head / their norms), or `"dense"` (everything else -- attention, SSM,
+    hyper-connection, and any other per-layer tensor with no special placement significance).
+    Never raises; an unrecognised name is `"dense"` by construction (the conservative default --
+    it stays wherever `-ngl`/`-ot` would otherwise put a plain layer tensor)."""
+    if _ROUTED_EXPERT_RE.match(name):
+        return "routed_expert"
+    if "shexp" in name:
+        return "shared_expert"
+    if "per_layer_token_embd" in name or _PLE_BLOCK_RE.match(name):
+        return "ple"
+    if name.startswith("token_embd") or name.startswith("output"):
+        return "embd_output"
+    return "dense"
+
+
+class PlacementBytes(NamedTuple):
+    gpu_bytes: int
+    cpu_bytes: int
+    lazy_bytes: int
+
+
+def _parse_ngl_full_offload(ngl: Any, block_count: Optional[int]) -> Optional[bool]:
+    """`True` when `-ngl`'s value means "every layer's weights start out GPU-resident" (this
+    repo's own `99` convention, the literal string `"all"`, or an explicit int >=
+    `block_count`); `False` for a genuine partial-layer offload (a smaller explicit int) --
+    out of scope for this derivation, never guessed at. `None` when it can't be determined at all
+    (missing/unparseable `-ngl`, or an explicit int that needs `block_count` to judge and
+    `block_count` is unknown)."""
+    if ngl is None or isinstance(ngl, bool):
+        return None
+    if isinstance(ngl, str):
+        if ngl == "all":
+            return True
+        try:
+            ngl = int(ngl)
+        except ValueError:
+            return None
+    if not isinstance(ngl, int):
+        return None
+    if ngl == 99:
+        return True
+    if block_count is None:
+        return None
+    return ngl >= block_count
+
+
+def _ot_cpu_patterns(value: Any) -> Optional[List[str]]:
+    """Parses an `-ot` flag value -- a single string (optionally comma-joining several
+    `<pattern>=<target>` entries) or a JSON list of such strings -- into the list of regex
+    patterns that target `=CPU`. `[]` if the flag is absent/empty (a no-op, not an error). `None`
+    -- never a guess -- if ANY entry targets a buffer other than `CPU` or fails to compile as a
+    Python regex; a `-ot` this function can't fully account for must not silently derive a number
+    from only the entries it understood."""
+    if not value:
+        return []
+    entries = value if isinstance(value, list) else str(value).split(",")
+    patterns: List[str] = []
+    for entry in entries:
+        entry = entry.strip()
+        if not entry:
+            continue
+        if "=" not in entry:
+            return None
+        pattern, target = entry.rsplit("=", 1)
+        if target != "CPU":
+            return None
+        try:
+            re.compile(pattern)
+        except re.error:
+            return None
+        patterns.append(pattern)
+    return patterns
+
+
+# `-lm` values under which mmap is actually in force (the loader's own `--load-mode` enum,
+# `absent` meaning the default `auto`, which resolves to mmap for every model this repo serves).
+_MMAP_IN_FORCE_LM_VALUES = (None, "auto", "mmap", "mmap+mlock")
+
+# Lazy-load threshold: `--tensor-read-lazy auto` (or its absence, same default) is lazy for a
+# tensor only above this size -- `docs/qwen4exp-ple-ondisk-spike.md` / this plan's Context section
+# both cite the loader's own 4 GiB-and-up rule.
+_LAZY_AUTO_THRESHOLD_BYTES = 4 * GIB
+
+# `token_embd.weight` (the INPUT token-embedding lookup table -- never `output.weight`/
+# `output_norm.weight`, the output/LM-head side, which stay GPU as normal) is excluded from the
+# GPU-resident figure under full `-ngl` offload, independent of `-ncmoe`/`-cmoe`/`-ot`. This is
+# an empirical finding of this WP, not something stated by name in any `-ot`/`-ngl` flag
+# semantics: reconciling ALL FOUR of the brief's live/hand-carried pins required it, and only it
+# -- `derive_placement_bytes` without this exception overshoots every one of the four pins (+9.9%
+# qwen35moe `-ncmoe 32`; +12.4% qwen4exp `-cmoe`; +3.3% qwen4exp `-ncmoe 38`), while WITH it every
+# one lands within 0.0001% of its target (qwen35moe `-ncmoe 32`: -0.00005% vs. the live 6421.16
+# MiB `Vulkan0 model buffer size`, +1.71% vs. the hand-carried 6,620,000,000 B; qwen4exp `-cmoe`:
+# -0.0000009%; qwen4exp `-ncmoe 38`: -0.0000002% -- both against `docs/qwen4exp-ple-ondisk-spike.
+# md`'s measured `gpu_weights_bytes`). Consistent across two unrelated architectures (qwen35moe,
+# qwen4exp) and both qwen4exp arms -- not a coincidence of one measurement. See the WP-4 report
+# for the full reconciliation arithmetic; this is exactly the kind of thing `classify_fit`'s own
+# module docstring already warns about -- an ESTIMATE, calibrated against real measurements
+# already on record in this repo, never a substitute for a live load-and-measure.
+_TOKEN_EMBD_TENSOR_NAME = "token_embd.weight"
+
+
+def derive_placement_bytes(
+    tensor_infos: List[TensorInfo],
+    server_flags: Dict[str, Any],
+    metadata: Dict[str, Any],
+) -> Optional[PlacementBytes]:
+    """Derives GPU-resident / CPU-resident-pinned / CPU-resident-lazy weight byte totals from a
+    model's tensor directory and its normalized `server_flags`. `metadata` here is the
+    `gguf_attention_geometry`-SHAPED dict (top-level `architecture`/`block_count` keys) that
+    `_resolve_geometry_and_weights_raw` already computed for this cell -- not the raw namespaced
+    GGUF KV dict `read_gguf_metadata` returns -- so this function never re-derives the arch prefix
+    itself.
+
+    Returns `None` -- never a guess, matching this module's existing conservative direction -- for
+    anything it can't fully account for: `-ngl` missing/unparseable/a genuine partial-layer
+    offload (`_parse_ngl_full_offload` above), an `-ot` targeting a non-CPU buffer or a pattern
+    that fails to compile (`_ot_cpu_patterns` above), or a cell with none of `-ncmoe`/`-cmoe`/a
+    usable `-ot` actually present (the caller's activation gate should already have filtered this
+    out, but this function re-checks so it is never called in isolation and silently returns a
+    number from an -ngl-only cell).
+
+    Placement rules, applied per tensor (a tensor may be moved to CPU by more than one rule --
+    union, not precedence): `-ncmoe N` moves `routed_expert` tensors of `blk.i` with `i < N`;
+    `-cmoe` moves EVERY `routed_expert` tensor; each `-ot` pattern moves any tensor whose name
+    `re.search`-matches it, regardless of class. Everything not moved is GPU-resident (the
+    `-ngl`-full-offload premise this function requires).
+
+    A CPU-resident tensor counts as `lazy_bytes` (excluded from `cpu_bytes`) only when mmap is in
+    force (`-lm` absent/`auto`/`mmap`/`mmap+mlock` -- `"none"` defeats mmap and makes EVERY
+    CPU-resident tensor pinned, never lazy) AND EITHER `--tensor-read-lazy` is `"on"`, OR it is
+    absent/`"auto"` and the tensor exceeds `_LAZY_AUTO_THRESHOLD_BYTES` -- audit E1's pin. The
+    small `blk.*.ple_*` per-layer helper tensors (`_PLE_BLOCK_RE`) are NEVER lazy regardless of
+    size or policy (also audit E1) -- unlike the (potentially huge) `per_layer_token_embd.weight`
+    table itself, which IS eligible.
+
+    One more tensor is ALWAYS CPU-resident regardless of any flag: `token_embd.weight` (see
+    `_TOKEN_EMBD_TENSOR_NAME` above for the empirical grounding) -- it still goes through the same
+    lazy-vs-pinned check as any other CPU tensor above, it just never has a chance to be GPU.
+    """
+    block_count = metadata.get("block_count")
+    full_offload = _parse_ngl_full_offload(server_flags.get("-ngl"), block_count)
+    if full_offload is not True:
+        return None
+
+    ncmoe = server_flags.get("-ncmoe")
+    ncmoe_n = ncmoe if isinstance(ncmoe, int) and not isinstance(ncmoe, bool) else None
+    cmoe_all = server_flags.get("-cmoe") is True
+    ot_patterns = _ot_cpu_patterns(server_flags.get("-ot"))
+    if ot_patterns is None:
+        return None
+    if ncmoe_n is None and not cmoe_all and not ot_patterns:
+        return None
+    compiled_ot = [re.compile(p) for p in ot_patterns]
+
+    mmap_in_force = server_flags.get("-lm") in _MMAP_IN_FORCE_LM_VALUES
+    tensor_read_lazy = server_flags.get("--tensor-read-lazy")
+
+    gpu_bytes = 0
+    cpu_bytes = 0
+    lazy_bytes = 0
+    for tensor in tensor_infos:
+        category = classify_tensor(tensor.name)
+        is_cpu = tensor.name == _TOKEN_EMBD_TENSOR_NAME
+        if not is_cpu and category == "routed_expert":
+            if cmoe_all:
+                is_cpu = True
+            elif ncmoe_n is not None:
+                m = _BLK_INDEX_RE.match(tensor.name)
+                if m is not None and int(m.group(1)) < ncmoe_n:
+                    is_cpu = True
+        if not is_cpu:
+            for pattern in compiled_ot:
+                if pattern.search(tensor.name):
+                    is_cpu = True
+                    break
+        if not is_cpu:
+            gpu_bytes += tensor.nbytes
+            continue
+        is_lazy = False
+        if mmap_in_force and not _PLE_BLOCK_RE.match(tensor.name):
+            lazy_by_policy = tensor_read_lazy == "on"
+            lazy_by_size_default = (
+                tensor_read_lazy in (None, "auto") and tensor.nbytes > _LAZY_AUTO_THRESHOLD_BYTES
+            )
+            is_lazy = lazy_by_policy or lazy_by_size_default
+        if is_lazy:
+            lazy_bytes += tensor.nbytes
+        else:
+            cpu_bytes += tensor.nbytes
+    return PlacementBytes(gpu_bytes=gpu_bytes, cpu_bytes=cpu_bytes, lazy_bytes=lazy_bytes)
 
 
 def gguf_attention_geometry(metadata: Dict[str, Any]) -> Dict[str, Optional[int]]:
@@ -565,23 +948,69 @@ def kv_bytes_per_token(
 # -------------------------------------------------------------------------------------------
 
 
-def _resolve_geometry_and_weights(cell: Dict[str, Any]) -> Tuple[Optional[int], Optional[Dict[str, Any]], Optional[str]]:
-    """Wraps `_resolve_geometry_and_weights_raw` with placement-awareness (audit B2): when the
-    cell carries a `gpu_weights_bytes` override, it REPLACES the raw file-size/synthetic
-    `weights_bytes` figure -- a cell running under `-ncmoe` (or any other partial-offload flag)
-    does not have the whole GGUF resident on the GPU, and counting the whole file overestimates
-    VRAM pressure by exactly the CPU-resident fraction. `qwen36-a3b`'s config B (`-ngl 99 -ncmoe
-    32`, `llama/config.yaml` offload-placement comments ~721-745): 2.494 GiB non-expert weights
-    (always GPU-resident regardless of `-ncmoe`) + 8 of 40 layers' routed-expert weights
-    GPU-resident, vs. the full on-disk GGUF (~20.8 GiB) -- using the file size there would
-    misclassify every cell of that model `excluded`. Never applied when the cell carries no such
-    override (the pre-existing whole-file/whole-synthetic-geometry behavior is unchanged).
+def _resolve_geometry_and_weights(
+    cell: Dict[str, Any],
+) -> Tuple[Optional[int], Optional[Dict[str, Any]], Optional[str], Optional[Dict[str, int]]]:
+    """Wraps `_resolve_geometry_and_weights_raw` with placement-awareness (audit B2, extended by
+    WP-4): when the cell carries a `gpu_weights_bytes` override, it REPLACES the raw file-size/
+    synthetic `weights_bytes` figure -- a cell running under `-ncmoe` (or any other partial-offload
+    flag) does not have the whole GGUF resident on the GPU, and counting the whole file
+    overestimates VRAM pressure by exactly the CPU-resident fraction. `qwen36-a3b`'s config B
+    (`-ngl 99 -ncmoe 32`, `llama/config.yaml` offload-placement comments ~721-745): 2.494 GiB
+    non-expert weights (always GPU-resident regardless of `-ncmoe`) + 8 of 40 layers' routed-
+    expert weights GPU-resident, vs. the full on-disk GGUF (~20.8 GiB) -- using the file size
+    there would misclassify every cell of that model `excluded`. The override always wins when
+    present (unchanged from audit B2).
+
+    WP-4 (Decisions locked 8): absent an override, the tensor-class derivation
+    (`derive_placement_bytes`) is the fallback -- but ONLY when (a) a real host GGUF resolved
+    (`model_host_path`, never `synthetic_geometry`) AND (b) the normalized `server_flags` carry a
+    recognised CPU-placement flag (`-ncmoe`, `-cmoe`, or an `-ot` targeting `=CPU`) -- an all-GPU
+    cell with no placement flag keeps today's whole-file `weights_bytes` byte-for-byte, because
+    `test_fit_lock.py`'s golden digest hashes every numeric fit field and every committed cell
+    either carries an override or carries no placement flag (verified this WP; see the WP-4
+    report). If the tensor-info read or the derivation itself returns `None` for any reason
+    (unknown ggml type, unparseable/missing shard, an unrecognised placement-flag combination,
+    partial layer offload), behaviour is unchanged from before this WP.
+
+    Returns a 4th element, `derived` -- `{"derived_cpu_weights_bytes": ..., "derived_lazy_bytes":
+    ...}` when the derivation activated, `None` otherwise -- `classify_fit` merges it into the fit
+    dict only in the activated case, so no other cell's dict gains new keys.
     """
     weights_bytes, geometry, reason = _resolve_geometry_and_weights_raw(cell)
     override = cell.get("gpu_weights_bytes")
     if weights_bytes is not None and override is not None:
-        weights_bytes = override
-    return weights_bytes, geometry, reason
+        return override, geometry, reason, None
+    derived: Optional[Dict[str, int]] = None
+    if weights_bytes is not None and geometry is not None:
+        flags = cell.get("server_flags", {})
+        host_path = cell.get("model_host_path")
+        if host_path and _cell_has_recognized_placement_flag(flags):
+            tensor_infos = read_gguf_tensor_infos(Path(host_path))
+            if tensor_infos is not None:
+                placement = derive_placement_bytes(tensor_infos, flags, geometry)
+                if placement is not None:
+                    weights_bytes = placement.gpu_bytes
+                    derived = {
+                        "derived_cpu_weights_bytes": placement.cpu_bytes,
+                        "derived_lazy_bytes": placement.lazy_bytes,
+                    }
+    return weights_bytes, geometry, reason, derived
+
+
+def _cell_has_recognized_placement_flag(flags: Dict[str, Any]) -> bool:
+    """The WP-4 activation gate (Decisions locked 8 / plan hard constraint): the derivation is
+    ATTEMPTED only when the normalized `server_flags` explicitly carry one of these three keys --
+    none of `-ncmoe`/`-cmoe`/`-ot` is a `_DEFAULT_SERVER_FLAGS` (`cell_spec.py`) entry, so presence
+    here reflects exactly what the queue author wrote, never a default. Whether the value is
+    actually usable (a real int `-ncmoe`, an `-ot` that targets `=CPU` and compiles, ...) is
+    decided by `derive_placement_bytes` itself, which returns `None` -- leaving `weights_bytes`
+    unchanged -- for anything it cannot parse. This function only gates the ATTEMPT."""
+    if "-ncmoe" in flags and flags["-ncmoe"] not in (None, False):
+        return True
+    if flags.get("-cmoe") is True:
+        return True
+    return bool(flags.get("-ot"))
 
 
 def _resolve_geometry_and_weights_raw(cell: Dict[str, Any]) -> Tuple[Optional[int], Optional[Dict[str, Any]], Optional[str]]:
@@ -655,7 +1084,7 @@ def classify_fit(
     by always passing this cell's own `-c` as `context` and `cell.get("swa_layer_spec")` as the
     override.
     """
-    weights_bytes, geometry, reason = _resolve_geometry_and_weights(cell)
+    weights_bytes, geometry, reason, derived = _resolve_geometry_and_weights(cell)
     if weights_bytes is None or geometry is None:
         return {"classification": "unknown", "reason": reason}
 
@@ -691,7 +1120,7 @@ def classify_fit(
         # both REJECTED), and this pre-filter's contract is that band, not bare fit.
         classification = "excluded"
 
-    return {
+    result = {
         "classification": classification,
         "reason": None,
         "vram_profile": vram_profile,
@@ -705,3 +1134,10 @@ def classify_fit(
         "predicted_margin_gib": predicted_margin_bytes / GIB,
         "architecture": geometry.get("architecture"),
     }
+    # WP-4: `derived_cpu_weights_bytes`/`derived_lazy_bytes` appear ONLY on a cell where the
+    # tensor-class placement derivation activated (`_resolve_geometry_and_weights`'s 4th return
+    # value) -- every other cell's dict, including every cell committed before this WP, is
+    # byte-for-byte unchanged, which is what keeps `test_fit_lock.py`'s golden digest stable.
+    if derived is not None:
+        result.update(derived)
+    return result

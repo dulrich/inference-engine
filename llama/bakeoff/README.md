@@ -422,6 +422,38 @@ regardless of whether the geometry came from a real header or a synthetic fixtur
 non-expert weights (always GPU-resident) + 8 of 40 layers' routed-expert weights GPU-resident,
 vs. its ~20.8 GiB whole-file size.
 
+#### Tensor-class-derived placement (WP-4, `moe-offload-load-mode-and-qwen4exp-fit-math`)
+
+Audit B2's `gpu_weights_bytes` override above is a hand-carried number — someone reads a real
+`Vulkan0 model buffer size` line and pastes it into the queue's model block. WP-4 adds a
+**fallback derivation** for when no override exists: `read_gguf_tensor_infos(gguf_path)` walks the
+tensor-info directory of a GGUF (and every sibling shard named by `split.count`, all-must-exist)
+using ONE pinned `GGML_TYPE_SIZES` bytes-per-block table (cited to this host's own llama.cpp
+checkout's `ggml/include/ggml.h` type ids and `ggml/src/ggml-common.h` block-size
+`static_assert`s); `classify_tensor(name)` sorts each tensor into one of five classes —
+`routed_expert` (`blk.N.ffn_{gate,up,down}_exps.weight`, the tensors `-ncmoe`/`-cmoe` move),
+`shared_expert` (name contains `shexp`), `ple` (the per-layer-embedding n-gram table and its small
+per-layer helpers), `embd_output` (token embedding / LM head / their norms), `dense` (everything
+else) — and `derive_placement_bytes(tensor_infos, server_flags, geometry)` sums each tensor into
+`gpu_bytes`, `cpu_bytes` (pinned), or `lazy_bytes` (mmap-cold, excluded from `cpu_bytes`) from the
+normalized `-ngl`/`-ncmoe`/`-cmoe`/`-ot`/`-lm`/`--tensor-read-lazy` flags — `-ncmoe N` and `-cmoe`
+move `routed_expert` tensors to CPU (by layer index / unconditionally); any `-ot '<pattern>=CPU'`
+moves whatever it regex-matches; a tensor is `lazy_bytes` only under mmap with
+`--tensor-read-lazy on`, or absent/`auto` and > 4 GiB (the small `blk.*.ple_*` helpers are never
+lazy); `token_embd.weight` specifically is always CPU-resident under full offload (an empirical
+finding of this WP, not a stated flag semantic — see `gguf_fit.py`'s `_TOKEN_EMBD_TENSOR_NAME`
+comment for the reconciliation against four live/hand-carried pins). **Precedence and activation
+gate (Decisions locked 8):** an explicit `gpu_weights_bytes` override always wins outright; absent
+one, the derivation activates ONLY when a real host GGUF resolved AND the normalized
+`server_flags` carry a recognised CPU-placement flag (`-ncmoe`, `-cmoe`, or an `-ot` targeting
+`=CPU`) — an all-GPU cell with no placement flag keeps today's whole-file `weights_bytes`
+byte-for-byte, and every committed cell as of this WP either carries an override or carries no
+placement flag at all, so no existing `test_fit_lock.py` pin moves. When it activates, the fit
+dict gains `derived_cpu_weights_bytes`/`derived_lazy_bytes` (reporting only — no record-schema
+field). Anything the derivation can't fully account for — an unknown ggml type, an unparseable or
+missing shard, a genuine partial-layer `-ngl`, or an `-ot` targeting a non-`CPU` buffer — returns
+`None` and leaves behaviour unchanged, never a guess.
+
 #### VRAM budget profiles (audit B4)
 
 Two named profiles, never a bare constant — `compute_vram_budget_bytes(vram_profile,

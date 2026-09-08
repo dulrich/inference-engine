@@ -2,15 +2,15 @@
   "run_dir": "llama/bakeoff/records/matrix-v1-shared",
   "run_dir_exists": true,
   "state_path": "llama/bakeoff/records/matrix-v1-shared/queue.state.json",
-  "queue_state": "paused-resumable",
-  "generated_at": "2026-09-07T18:00:40+00:00",
+  "queue_state": "completed",
+  "generated_at": "2026-09-08T00:58:54+00:00",
   "checks": [
     {
       "check": "abort_state",
       "cell_id": null,
       "expected": "queue_state != 'aborted-hang'",
       "observed": {
-        "queue_state": "paused-resumable",
+        "queue_state": "completed",
         "aborted_hang_cells": []
       },
       "verdict": "pass"
@@ -364,26 +364,43 @@
     {
       "check": "records_present",
       "cell_id": "mx-gemma-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-1afee66e",
-      "expected": "records optional for state 'pending'",
-      "observed": "no records subdirectory found",
-      "verdict": "unknown"
+      "expected": "records subdirectory present",
+      "observed": "llama/bakeoff/records/matrix-v1-shared/mx-gemma-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-1afee66e",
+      "verdict": "pass"
+    },
+    {
+      "check": "schema_conformant",
+      "cell_id": "mx-gemma-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-1afee66e",
+      "expected": "schema-v2-conformant records (4-file split + required config/sample fields)",
+      "observed": "conformant",
+      "verdict": "pass"
     },
     {
       "check": "vram_arithmetic",
       "cell_id": "mx-gemma-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-1afee66e",
       "expected": "estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes",
-      "observed": "config.json missing/unparseable",
-      "verdict": "unknown"
+      "observed": {
+        "ctk": "f16",
+        "ctv": "f16",
+        "context": 262144,
+        "weights_bytes": 6716356800,
+        "kv_bytes_per_token": 18944.0,
+        "kv_bytes_at_context": 4966055936.0,
+        "estimated_delta_bytes": 11682412736.0,
+        "measured_delta_bytes": 14270410752,
+        "ratio": 1.2215294113025934
+      },
+      "verdict": "pass"
     },
     {
       "check": "prompt_tokens_tolerance",
       "cell_id": "mx-gemma-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-1afee66e",
       "expected": "usage.prompt_tokens within \u00b110% of target_tokens",
       "observed": {
-        "n": 0,
-        "reason": "no trials with both target_tokens and prompt_tokens recorded"
+        "n": 27,
+        "violations": []
       },
-      "verdict": "unknown"
+      "verdict": "pass"
     },
     {
       "check": "wilson_min_trials",
@@ -399,7 +416,12 @@
       "check": "classifier_distribution",
       "cell_id": "mx-gemma-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-1afee66e",
       "expected": null,
-      "observed": {},
+      "observed": {
+        "correct": 12,
+        "truncated(benign)": 13,
+        "degenerate": 1,
+        "wrong": 1
+      },
       "verdict": "informational"
     },
     {
@@ -1415,9 +1437,9 @@
       "has_records": true
     },
     "mx-gemma-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-1afee66e": {
-      "state": "pending",
-      "reason": null,
-      "has_records": false
+      "state": "failed",
+      "reason": "degenerate",
+      "has_records": true
     },
     "mx-ling-q8-c128k-f16-ctkf16-ctvf16-faauto-c131072-2291772d": {
       "state": "failed",
@@ -1486,10 +1508,10 @@
     }
   },
   "summary": {
-    "total": 108,
-    "pass": 71,
+    "total": 109,
+    "pass": 75,
     "fail": 16,
-    "unknown": 3,
+    "unknown": 0,
     "informational": 18
   },
   "exit_code": 1

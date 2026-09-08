@@ -1,15 +1,15 @@
 # Verifier report -- `llama/bakeoff/records/matrix-v1-shared`
 
-Generated: 2026-09-07T18:00:40+00:00  
+Generated: 2026-09-08T00:58:54+00:00  
 State file: llama/bakeoff/records/matrix-v1-shared/queue.state.json  
 Exit code: **1**
 
 ## Summary
 
-- total checks: 108
-- pass: 71
+- total checks: 109
+- pass: 75
 - fail: 16
-- unknown: 3
+- unknown: 0
 - informational: 18
 
 ## Cells
@@ -72,16 +72,17 @@ Exit code: **1**
 
 ### `mx-gemma-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-1afee66e`
 
-- state: `pending`
-- has_records: `False`
+- state: `failed` (reason: `degenerate`)
+- has_records: `True`
 
 | check | verdict | expected | observed |
 | --- | --- | --- | --- |
-| records_present | unknown | records optional for state 'pending' | "no records subdirectory found" |
-| vram_arithmetic | unknown | estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes | "config.json missing/unparseable" |
-| prompt_tokens_tolerance | unknown | usage.prompt_tokens within ±10% of target_tokens | {"n": 0, "reason": "no trials with both target_tokens and prompt_tokens recorded"} |
+| records_present | pass | records subdirectory present | "llama/bakeoff/records/matrix-v1-shared/mx-gemma-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-1afee66e" |
+| schema_conformant | pass | schema-v2-conformant records (4-file split + required config/sample fields) | "conformant" |
+| vram_arithmetic | pass | estimated weights+KV delta within [0.4x, 3.0x] of measured vram.loaded_bytes - vram.baseline_bytes | {"ctk": "f16", "ctv": "f16", "context": 262144, "weights_bytes": 6716356800, "kv_bytes_per_token": 18944.0, "kv_bytes_at_context": 4966055936.0, "estimated_delta_bytes": 11682412736.0, "measured_delta_bytes": 14270410752, "ratio": 1.2215294113025934} |
+| prompt_tokens_tolerance | pass | usage.prompt_tokens within ±10% of target_tokens | {"n": 27, "violations": []} |
 | wilson_min_trials | pass | >= 10 trials whenever a wilson_summary verdict is claimed | {"wilson_summary": null, "reason": "no wilson_summary claimed for this cell"} |
-| classifier_distribution | informational | None | {} |
+| classifier_distribution | informational | None | {"correct": 12, "truncated(benign)": 13, "degenerate": 1, "wrong": 1} |
 
 ### `mx-ling-q8-c128k-f16-ctkf16-ctvf16-faauto-c131072-2291772d`
 

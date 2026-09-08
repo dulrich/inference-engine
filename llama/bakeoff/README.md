@@ -853,6 +853,10 @@ Not authored in this pilot (plan Assumptions): vision probes, tool-calling under
 
 `plans/minicpm5-2b-context-ladder.md` WP-2. Nine scratch cells (no router alias, no `llama/config.yaml` entry) measuring the three vendor quants of MiniCPM5-2B (`openbmb/MiniCPM5-2B-GGUF`, F16/Q8_0/Q4_K_M) across a 32k/64k/128k context ladder — the model's own 131072 max (`rope_scaling: null`, so no 256k rung is possible), f16 KV throughout, `battery: ["timing", "needle"]`, greedy (`sampling_arm: "capability"`), `vram_profile: "headless"`, cells ordered shortest-first (32k, 64k, then 128k, each rung q4km/q8/f16). Aliases (append-only reserved, `mc2-`-prefixed): `mc2-{f16,q8,q4km}-c{32k,64k,128k}-f16` — no cell, present or future, may reuse one.
 
+## Load-mode A/B (`queues/lm-ab-v1.json`)
+
+`plans/moe-offload-load-mode-and-qwen4exp-fit-math.md` WP-2. Four scratch cells (no router alias, no `llama/config.yaml` entry) measuring `-lm mmap` (default) against `--load-mode none` at each entry's production context and KV type -- the MoE-offload recipe (`qwen36-a3b-mtp`, `-ncmoe 32`, MTP, f16 KV, `fa: "auto"`) that the scratch measurement in the plan's Context table found nearly doubles prefill with CPU-resident routed-expert tensors, and a dense all-GPU control (`qwen38-iq3s`, no `-ncmoe`, q4_0/q4_0 KV, `fa: "on"`) that the same measurement found unaffected -- both at `c: 131072`, `battery: ["vram", "timing"]`, greedy (`sampling_arm: "capability"`), `vram_profile: "headless"`, an 8000-token timing prompt / 256-token cap / 3 rounds, cells ordered shortest-first (the dense pair, no CPU experts, before the MoE-offload pair). Pre-registered expectation (WP-3): MoE pair prefill ratio ≥ 1.5× none/mmap, decode within ±3%; dense pair within ±5% on both. Aliases (append-only reserved, `lmab-`-prefixed): `lmab-qwen36-{mmap,none}-c128k`, `lmab-qwen38-{mmap,none}-c128k` -- no cell, present or future, may reuse one.
+
 ## Scheduling -- host control plane (`control_dispatcher.py`, `run-window.sh`)
 
 `plans/bakeoff-queue-control-plane.md` WP-3. Files-only, minutely host dispatcher, no persistent

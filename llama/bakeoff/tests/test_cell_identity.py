@@ -200,6 +200,14 @@ GOLDEN_CELL_IDS = {
         "mc2-q8-c128k-f16-ctkf16-ctvf16-faauto-c131072-92526252",
         "mc2-f16-c128k-f16-ctkf16-ctvf16-faauto-c131072-b1b3c95c",
     ],
+    # WP-2 of plans/moe-offload-load-mode-and-qwen4exp-fit-math.md: `--load-mode none` A/B,
+    # dense pair first (no CPU experts, faster load), then the MoE-offload pair.
+    "lm-ab-v1": [  # 4 cells, sha256(chr(10).join(ids))[:16] == "74df1f6c88682f9f"
+        "lmab-qwen38-mmap-c128k-ctkq4_0-ctvq4_0-faon-c131072-f9631d23",
+        "lmab-qwen38-none-c128k-ctkq4_0-ctvq4_0-faon-c131072-1f202b21",
+        "lmab-qwen36-mmap-c128k-ctkf16-ctvf16-faauto-c131072-f18b0d5f",
+        "lmab-qwen36-none-c128k-ctkf16-ctvf16-faauto-c131072-bb080a73",
+    ],
 }
 
 GOLDEN_DIGESTS = {
@@ -215,6 +223,7 @@ GOLDEN_DIGESTS = {
     "small-dense-roofline-v1": (12, "2eb1ece7aa19452e"),
     "qwen36-resident-v1": (2, "c7612fcab3015526"),
     "minicpm5-2b-ladder-v1": (9, "dd3b61c2c84eb07d"),
+    "lm-ab-v1": (4, "74df1f6c88682f9f"),
 }
 
 

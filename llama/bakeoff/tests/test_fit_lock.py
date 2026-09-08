@@ -8,10 +8,10 @@ attempted at all, and the built command is the exact process a bake-off measures
 that silently shifts either does not error -- it quietly changes what the fleet runs and what
 its recorded numbers mean.
 
-The current lock: 10 committed queues, 122 cells --
+The current lock: 11 committed queues, 126 cells --
 
-    fit_classifications  e8573b2630a00cc4  n=122
-    build_commands       72c9756e86b8466c  n=122
+    fit_classifications  19b0f305383da67f  n=126
+    build_commands       d0c807d4af2e8f57  n=126
     vram_budgets         2f795a1ad011a72b
     geometry_shape       89c2f041b8feb1bf
     kv_bytes_table       5cc5a673e0dffe7b
@@ -24,8 +24,11 @@ that WP-1's additivity proof; further extended by WP-1 of `plans/qwen4exp-ram-ab
 three `qwen4exp-ram-*` queues) to a 9-queue/113-cell state (`88a4b6faca3905fd`/
 `35ead6585c1b30df`), with the 98-cell digests re-derived unchanged by that WP's additivity proof;
 extended by WP-2 of `plans/minicpm5-2b-context-ladder.md` (`minicpm5-2b-ladder-v1.json` joined)
-to the current 10-queue/122-cell state above, with the 113-cell digests re-derived unchanged
-before the append.
+to a 10-queue/122-cell state (`e8573b2630a00cc4`/`72c9756e86b8466c`), with the 113-cell digests
+re-derived unchanged before that WP's append; extended by WP-2 of
+`plans/moe-offload-load-mode-and-qwen4exp-fit-math.md` (`lm-ab-v1.json` joined) to the current
+11-queue/126-cell state above, with the 122-cell digests re-derived unchanged before this
+append.
 
 The per-cell table below is the human-auditable form of the first two; the digests are a second,
 cheaper assertion over the *full* fit dicts (every byte count and margin, not just the
@@ -769,16 +772,52 @@ GOLDEN = {
             ),
         ],
     ),
+    # WP-2 of plans/moe-offload-load-mode-and-qwen4exp-fit-math.md: `--load-mode none` A/B --
+    # dense qwen38-iq3s control pair first (no CPU experts, faster load), then the MoE-offload
+    # qwen36-a3b-mtp pair (`-ncmoe 32`). Both mmap/none pairs classify and price IDENTICALLY
+    # (weights/KV/margin bytes unchanged) -- `-lm` is not a placement flag, Decisions locked 8 --
+    # the only argv difference is `-lm none` itself. The dense pair locks "excluded" under this
+    # file's pinned 12.8 GiB total / 1 GiB used injection: same model, same flags, same c/KV as
+    # the already-committed `mxd-qwen38-iq3s-c128k-q4q4-fa` cell under `matrix-v1-dedicated`
+    # above (also "excluded" here), because `qwen38-iq3s` carries no `gpu_weights_bytes`
+    # override and the whole 12.04 GiB file plus 9.14 GiB of KV at 131072/q4_0/q4_0 exceeds even
+    # the live nameplate -- a property of the fixed test injection and the file-size fallback,
+    # not evidence the recipe is broken (WP-1's live measurement runs this exact recipe).
+    "lm-ab-v1": GoldenQueue(
+        vram_profile="headless",
+        cells=[
+            GoldenCell(
+                cell_id="lmab-qwen38-mmap-c128k-ctkq4_0-ctvq4_0-faon-c131072-f9631d23",
+                classification="excluded",
+                command="llama-server -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf --port 8080 -c 131072 -ctk q4_0 -ctv q4_0 -fa on -ngl 99 --host 0.0.0.0 --jinja -lv 9",
+            ),
+            GoldenCell(
+                cell_id="lmab-qwen38-none-c128k-ctkq4_0-ctvq4_0-faon-c131072-1f202b21",
+                classification="excluded",
+                command="llama-server -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf --port 8080 -c 131072 -ctk q4_0 -ctv q4_0 -fa on -ngl 99 --host 0.0.0.0 --jinja -lm none -lv 9",
+            ),
+            GoldenCell(
+                cell_id="lmab-qwen36-mmap-c128k-ctkf16-ctvf16-faauto-c131072-f18b0d5f",
+                classification="fits",
+                command="llama-server -m /models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --spec-type draft-mtp -lv 9 -ncmoe 32 -ub 2048",
+            ),
+            GoldenCell(
+                cell_id="lmab-qwen36-none-c128k-ctkf16-ctvf16-faauto-c131072-bb080a73",
+                classification="fits",
+                command="llama-server -m /models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --spec-type draft-mtp -lm none -lv 9 -ncmoe 32 -ub 2048",
+            ),
+        ],
+    ),
 }
 
 # sha256(json.dumps(x, sort_keys=True, default=str))[:16] over the FULL per-cell fit dicts and
-# the FULL argv lists, in committed-queue order across all 10 queues (WP-2 of
-# plans/minicpm5-2b-context-ladder.md added minicpm5-2b-ladder-v1; the pre-WP-2 9-queue/
-# 113-cell digests (88a4b6faca3905fd/35ead6585c1b30df) were re-derived unchanged by this WP's
+# the FULL argv lists, in committed-queue order across all 11 queues (WP-2 of
+# plans/moe-offload-load-mode-and-qwen4exp-fit-math.md added lm-ab-v1; the pre-WP-2 10-queue/
+# 122-cell digests (e8573b2630a00cc4/72c9756e86b8466c) were re-derived unchanged by this WP's
 # additivity proof -- see this file's module docstring).
-GOLDEN_FIT_DIGEST = "e8573b2630a00cc4"
-GOLDEN_COMMAND_DIGEST = "72c9756e86b8466c"
-GOLDEN_CELL_COUNT = 122
+GOLDEN_FIT_DIGEST = "19b0f305383da67f"
+GOLDEN_COMMAND_DIGEST = "d0c807d4af2e8f57"
+GOLDEN_CELL_COUNT = 126
 
 # `compute_vram_budget_bytes` for both profiles under the pinned injections. `desktop-shared` is
 # the static REALISTIC_FREE_VRAM_GIB cap and touches neither reader; `headless` is

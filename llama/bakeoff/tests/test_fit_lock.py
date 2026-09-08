@@ -8,10 +8,10 @@ attempted at all, and the built command is the exact process a bake-off measures
 that silently shifts either does not error -- it quietly changes what the fleet runs and what
 its recorded numbers mean.
 
-The current lock: 9 committed queues, 113 cells --
+The current lock: 10 committed queues, 122 cells --
 
-    fit_classifications  6671bd6204d1e66d  n=113
-    build_commands       97ddbd1bdfe55d6a  n=113
+    fit_classifications  e8573b2630a00cc4  n=122
+    build_commands       72c9756e86b8466c  n=122
     vram_budgets         2f795a1ad011a72b
     geometry_shape       89c2f041b8feb1bf
     kv_bytes_table       5cc5a673e0dffe7b
@@ -21,8 +21,11 @@ History: captured at commit `27e1153` (pre-WP-R3) across 5 committed queues, 94 
 `plans/qwen4exp-bakeoff-campaign.md` to 6 committed queues, 98 cells (`qwen4exp-viability-v1.json`
 joined; `c049cba53b8962b5`/`ec2214347c80c9e2`), with the 94-cell digests re-derived unchanged by
 that WP-1's additivity proof; further extended by WP-1 of `plans/qwen4exp-ram-ab-spike.md` (the
-three `qwen4exp-ram-*` queues) to the current 9-queue/113-cell state above, with the 98-cell
-digests re-derived unchanged by that WP's additivity proof.
+three `qwen4exp-ram-*` queues) to a 9-queue/113-cell state (`88a4b6faca3905fd`/
+`35ead6585c1b30df`), with the 98-cell digests re-derived unchanged by that WP's additivity proof;
+extended by WP-2 of `plans/minicpm5-2b-context-ladder.md` (`minicpm5-2b-ladder-v1.json` joined)
+to the current 10-queue/122-cell state above, with the 113-cell digests re-derived unchanged
+before the append.
 
 The per-cell table below is the human-auditable form of the first two; the digests are a second,
 cheaper assertion over the *full* fit dicts (every byte count and margin, not just the
@@ -710,16 +713,72 @@ GOLDEN = {
             ),
         ],
     ),
+    # WP-2 of plans/minicpm5-2b-context-ladder.md: headless ladder over the three vendor
+    # quants (real GGUF headers on disk from WP-1). Under this file's pinned 12.8 GiB
+    # total / 1 GiB used injections, the F16 c128k cell's predicted margin (~0.86 GiB)
+    # falls below MARGINAL_MARGIN_GIB and locks "excluded" -- a property of the fixed test
+    # injection, not of the real card (the WP-3 preflight dry-run uses the live/desktop-shared
+    # budget and classified all 9 cells "fits").
+    "minicpm5-2b-ladder-v1": GoldenQueue(
+        vram_profile="headless",
+        cells=[
+            GoldenCell(
+                cell_id="mc2-q4km-c32k-f16-ctkf16-ctvf16-faauto-c32768-760418a9",
+                classification="fits",
+                command="llama-server -m /models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q4_K_M.gguf --port 8080 -c 32768 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lv 9",
+            ),
+            GoldenCell(
+                cell_id="mc2-q8-c32k-f16-ctkf16-ctvf16-faauto-c32768-868011c9",
+                classification="fits",
+                command="llama-server -m /models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q8_0.gguf --port 8080 -c 32768 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lv 9",
+            ),
+            GoldenCell(
+                cell_id="mc2-f16-c32k-f16-ctkf16-ctvf16-faauto-c32768-d8be8e51",
+                classification="fits",
+                command="llama-server -m /models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-F16.gguf --port 8080 -c 32768 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lv 9",
+            ),
+            GoldenCell(
+                cell_id="mc2-q4km-c64k-f16-ctkf16-ctvf16-faauto-c65536-0c17f00c",
+                classification="fits",
+                command="llama-server -m /models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q4_K_M.gguf --port 8080 -c 65536 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lv 9",
+            ),
+            GoldenCell(
+                cell_id="mc2-q8-c64k-f16-ctkf16-ctvf16-faauto-c65536-846daf65",
+                classification="fits",
+                command="llama-server -m /models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q8_0.gguf --port 8080 -c 65536 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lv 9",
+            ),
+            GoldenCell(
+                cell_id="mc2-f16-c64k-f16-ctkf16-ctvf16-faauto-c65536-452b1a3e",
+                classification="fits",
+                command="llama-server -m /models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-F16.gguf --port 8080 -c 65536 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lv 9",
+            ),
+            GoldenCell(
+                cell_id="mc2-q4km-c128k-f16-ctkf16-ctvf16-faauto-c131072-939ca587",
+                classification="fits",
+                command="llama-server -m /models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q4_K_M.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lv 9",
+            ),
+            GoldenCell(
+                cell_id="mc2-q8-c128k-f16-ctkf16-ctvf16-faauto-c131072-92526252",
+                classification="fits",
+                command="llama-server -m /models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q8_0.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lv 9",
+            ),
+            GoldenCell(
+                cell_id="mc2-f16-c128k-f16-ctkf16-ctvf16-faauto-c131072-b1b3c95c",
+                classification="excluded",
+                command="llama-server -m /models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-F16.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja -lv 9",
+            ),
+        ],
+    ),
 }
 
 # sha256(json.dumps(x, sort_keys=True, default=str))[:16] over the FULL per-cell fit dicts and
-# the FULL argv lists, in committed-queue order across all 9 queues (WP-1 of
-# plans/qwen4exp-ram-ab-spike.md added the three qwen4exp-ram-* queues; the pre-WP-1 6-queue/
-# 98-cell digests were re-derived unchanged by this WP's additivity proof -- see this file's
-# module docstring).
-GOLDEN_FIT_DIGEST = "88a4b6faca3905fd"
-GOLDEN_COMMAND_DIGEST = "35ead6585c1b30df"
-GOLDEN_CELL_COUNT = 113
+# the FULL argv lists, in committed-queue order across all 10 queues (WP-2 of
+# plans/minicpm5-2b-context-ladder.md added minicpm5-2b-ladder-v1; the pre-WP-2 9-queue/
+# 113-cell digests (88a4b6faca3905fd/35ead6585c1b30df) were re-derived unchanged by this WP's
+# additivity proof -- see this file's module docstring).
+GOLDEN_FIT_DIGEST = "e8573b2630a00cc4"
+GOLDEN_COMMAND_DIGEST = "72c9756e86b8466c"
+GOLDEN_CELL_COUNT = 122
 
 # `compute_vram_budget_bytes` for both profiles under the pinned injections. `desktop-shared` is
 # the static REALISTIC_FREE_VRAM_GIB cap and touches neither reader; `headless` is

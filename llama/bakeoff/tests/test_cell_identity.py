@@ -187,6 +187,19 @@ GOLDEN_CELL_IDS = {
         "q36r-ud-iq3-xxs-ctkf16-ctvf16-faauto-c16384-7b8941de",
         "q36r-ud-iq2-m-ctkf16-ctvf16-faauto-c16384-d847b684",
     ],
+    # WP-2 of plans/minicpm5-2b-context-ladder.md: headless ladder over the three vendor
+    # quants, shortest-first (32k/64k/128k rungs, q4km/q8/f16 order within each rung).
+    "minicpm5-2b-ladder-v1": [  # 9 cells, sha256(chr(10).join(ids))[:16] == "dd3b61c2c84eb07d"
+        "mc2-q4km-c32k-f16-ctkf16-ctvf16-faauto-c32768-760418a9",
+        "mc2-q8-c32k-f16-ctkf16-ctvf16-faauto-c32768-868011c9",
+        "mc2-f16-c32k-f16-ctkf16-ctvf16-faauto-c32768-d8be8e51",
+        "mc2-q4km-c64k-f16-ctkf16-ctvf16-faauto-c65536-0c17f00c",
+        "mc2-q8-c64k-f16-ctkf16-ctvf16-faauto-c65536-846daf65",
+        "mc2-f16-c64k-f16-ctkf16-ctvf16-faauto-c65536-452b1a3e",
+        "mc2-q4km-c128k-f16-ctkf16-ctvf16-faauto-c131072-939ca587",
+        "mc2-q8-c128k-f16-ctkf16-ctvf16-faauto-c131072-92526252",
+        "mc2-f16-c128k-f16-ctkf16-ctvf16-faauto-c131072-b1b3c95c",
+    ],
 }
 
 GOLDEN_DIGESTS = {
@@ -201,6 +214,7 @@ GOLDEN_DIGESTS = {
     "qwen4exp-ram-4dimm-v1": (5, "bb0d3aa0f7c1a683"),
     "small-dense-roofline-v1": (12, "2eb1ece7aa19452e"),
     "qwen36-resident-v1": (2, "c7612fcab3015526"),
+    "minicpm5-2b-ladder-v1": (9, "dd3b61c2c84eb07d"),
 }
 
 

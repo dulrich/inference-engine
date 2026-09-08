@@ -849,6 +849,10 @@ Not authored in this pilot (plan Assumptions): vision probes, tool-calling under
 
 `model-scoreboard/plans/hardware-pareto-resident-moe-measurement-quant-subset-and-sibling-highlight.md` WP-0. Two scratch cells (no router alias, no `llama/config.yaml` entry) measuring FULLY-RESIDENT decode of Qwen3.6 35B A3B (`unsloth/Qwen3.6-35B-A3B-GGUF`, UD-IQ3_XXS 13.2 GB and UD-IQ2_M 11.5 GB — both fit the 16 GiB RX 9070 with f16 KV over 10 attention layers at 16k) at the same 8000-token / 256-cap / 3-round timing geometry as `small-dense-roofline-v1`. Deliberately `-ngl 99 --jinja` only: no `-ncmoe` (nothing offloaded), no `--spec-type`/`-md` (MTP would measure speculative acceptance, not the base decode roofline the scoreboard's `throughput.ts` estimator predicts). The scoreboard's `local-capture` source ingests the two records onto the family's existing `ud-iq3-xxs` / `ud-iq2-m` quantization artifacts, giving `calibrate:local` its first MoE-resident cells outside Ling 3.0 Tiny. Aliases (append-only reserved, `q36r-`-prefixed): `q36r-ud-iq3-xxs`, `q36r-ud-iq2-m` — no cell, present or future, may reuse one.
 
+## MiniCPM5-2B context ladder (`queues/minicpm5-2b-ladder-v1.json`)
+
+`plans/minicpm5-2b-context-ladder.md` WP-2. Nine scratch cells (no router alias, no `llama/config.yaml` entry) measuring the three vendor quants of MiniCPM5-2B (`openbmb/MiniCPM5-2B-GGUF`, F16/Q8_0/Q4_K_M) across a 32k/64k/128k context ladder — the model's own 131072 max (`rope_scaling: null`, so no 256k rung is possible), f16 KV throughout, `battery: ["timing", "needle"]`, greedy (`sampling_arm: "capability"`), `vram_profile: "headless"`, cells ordered shortest-first (32k, 64k, then 128k, each rung q4km/q8/f16). Aliases (append-only reserved, `mc2-`-prefixed): `mc2-{f16,q8,q4km}-c{32k,64k,128k}-f16` — no cell, present or future, may reuse one.
+
 ## Scheduling -- host control plane (`control_dispatcher.py`, `run-window.sh`)
 
 `plans/bakeoff-queue-control-plane.md` WP-3. Files-only, minutely host dispatcher, no persistent

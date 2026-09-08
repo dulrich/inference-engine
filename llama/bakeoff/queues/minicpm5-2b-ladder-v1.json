@@ -1,0 +1,137 @@
+{
+  "queue_format": 1,
+  "vram_profile": "headless",
+  "deadline": "07:00",
+  "stop_policy": "pause-at-deadline",
+  "request_timeout_s": 600,
+  "models": {
+    "minicpm5-2b-f16": {
+      "model_host_path": "/models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-F16.gguf",
+      "model_container_path": "/models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-F16.gguf",
+      "server_flags": {
+        "-ngl": 99,
+        "--jinja": true
+      },
+      "model_family": "minicpm"
+    },
+    "minicpm5-2b-q8": {
+      "model_host_path": "/models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q8_0.gguf",
+      "model_container_path": "/models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q8_0.gguf",
+      "server_flags": {
+        "-ngl": 99,
+        "--jinja": true
+      },
+      "model_family": "minicpm"
+    },
+    "minicpm5-2b-q4km": {
+      "model_host_path": "/models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q4_K_M.gguf",
+      "model_container_path": "/models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q4_K_M.gguf",
+      "server_flags": {
+        "-ngl": 99,
+        "--jinja": true
+      },
+      "model_family": "minicpm"
+    }
+  },
+  "cells": [
+    {
+      "model": "minicpm5-2b-q4km",
+      "alias": "mc2-q4km-c32k-f16",
+      "c": 32768,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "battery": ["timing", "needle"],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "minicpm5-2b-q8",
+      "alias": "mc2-q8-c32k-f16",
+      "c": 32768,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "battery": ["timing", "needle"],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "minicpm5-2b-f16",
+      "alias": "mc2-f16-c32k-f16",
+      "c": 32768,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "battery": ["timing", "needle"],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "minicpm5-2b-q4km",
+      "alias": "mc2-q4km-c64k-f16",
+      "c": 65536,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "battery": ["timing", "needle"],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "minicpm5-2b-q8",
+      "alias": "mc2-q8-c64k-f16",
+      "c": 65536,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "battery": ["timing", "needle"],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "minicpm5-2b-f16",
+      "alias": "mc2-f16-c64k-f16",
+      "c": 65536,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "battery": ["timing", "needle"],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "minicpm5-2b-q4km",
+      "alias": "mc2-q4km-c128k-f16",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "battery": ["timing", "needle"],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "minicpm5-2b-q8",
+      "alias": "mc2-q8-c128k-f16",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "battery": ["timing", "needle"],
+      "sampling_arm": "capability",
+      "trials": 3
+    },
+    {
+      "model": "minicpm5-2b-f16",
+      "alias": "mc2-f16-c128k-f16",
+      "c": 131072,
+      "ctk": "f16",
+      "ctv": "f16",
+      "fa": "auto",
+      "battery": ["timing", "needle"],
+      "sampling_arm": "capability",
+      "trials": 3
+    }
+  ]
+}

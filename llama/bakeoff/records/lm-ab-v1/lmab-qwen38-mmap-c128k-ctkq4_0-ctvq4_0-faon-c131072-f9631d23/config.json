@@ -1,0 +1,67 @@
+{
+  "lineage": {
+    "hf_repo": "unsloth/Qwen3.8-27B-GGUF",
+    "hf_revision": null,
+    "filename": "Qwen3.8-27B-UD-IQ3_S.gguf",
+    "file_size": 12040883104,
+    "sha256": null,
+    "llama_cpp_build": "b10534"
+  },
+  "sweep_cell": {
+    "cell_id": "lmab-qwen38-mmap-c128k-ctkq4_0-ctvq4_0-faon-c131072-f9631d23",
+    "alias": "lmab-qwen38-mmap-c128k",
+    "server_flags": {
+      "--host": "0.0.0.0",
+      "-lv": 9,
+      "-ctk": "q4_0",
+      "-ctv": "q4_0",
+      "-fa": "on",
+      "-ngl": 99,
+      "--jinja": true,
+      "-c": 131072
+    },
+    "model_host_path": "/srv/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf",
+    "battery": [
+      "vram",
+      "timing"
+    ],
+    "sampling_arm": null,
+    "model": "qwen38-iq3s",
+    "spec_decode": null,
+    "gpu_weights_bytes": null,
+    "kv_attention_layers": null,
+    "swa_layer_spec": null,
+    "kv_indexer_geometry": null
+  },
+  "vram": {
+    "baseline_bytes": 602120192,
+    "loaded_bytes": 15089012736,
+    "after_teardown_bytes": null
+  },
+  "wilson_summary": null,
+  "vram_profile": "headless",
+  "response_caps": {
+    "default": 256,
+    "by_task": {
+      "multi_needle": 768
+    }
+  },
+  "cell_started_at": "2026-09-08T18:25:02+00:00",
+  "cell_ended_at": "2026-09-08T18:25:40+00:00",
+  "cell_wall_seconds": 38.40704221300257,
+  "scratch_startup_seconds": 8.595442101999652,
+  "timing_geometry": {
+    "prompt_tokens_target": 8000,
+    "max_tokens": 256,
+    "prompt_source": "fixture-filler",
+    "instruction_pinned": true
+  },
+  "experiment_id": "lmab-qwen38-mmap-c128k-ctkq4_0-ctvq4_0-faon-c131072-f9631d23",
+  "timestamp": "2026-09-08T18:25:40.810877+00:00",
+  "schema_version": 2,
+  "size_check": {
+    "total_bytes": 9290,
+    "limit_bytes": 26214400,
+    "within_budget": true
+  }
+}

@@ -5,7 +5,7 @@
 # family this guards against).
 #
 # Usage:
-#   router/smoke-router.sh <base-url> [<gateway-key>] [--subscription]
+#   router/smoke-router.sh <base-url> [<gateway-key>] [--subscription] [--codex]
 #
 #   <base-url>      mandatory, e.g. http://127.0.0.1:4813 (resident) or a transient
 #                   http://127.0.0.1:470x (WP-1 scratch-decade run).
@@ -30,11 +30,19 @@
 #   5. POST /v1/messages/count_tokens with an unresolvable model returns a 404-class JSON
 #      error body (patch 0004).
 #   6. (--subscription only) one claude -p call through the gateway returns a completion.
+#   7. (--codex only, metered: one luna turn on the operator's Codex subscription) one
+#      non-streamed codex-a/gpt-5.6-luna completion via /v1/messages returns
+#      usage.input_tokens > 0 — proves the host sidecar leg (plans/codex-appserver-sidecar.md)
+#      end to end through the router: extra_hosts, the shared CODEX_SIDECAR_KEY, and the
+#      engine's baseurl-with-path derivation.
+#   8. POST /v1/messages/count_tokens via codex-a/gpt-5.6-luna returns an integer
+#      input_tokens (unmetered — the sidecar answers locally with a chars/4 estimate).
 #
 # Exits non-zero on any check failure. Requires: curl, jq.
 set -u
 
 SUBSCRIPTION=0
+CODEX=0
 BASE_URL=""
 GATEWAY_KEY="${GATEWAY_KEY:-}"
 
@@ -42,6 +50,9 @@ for arg in "$@"; do
 	case "$arg" in
 	--subscription)
 		SUBSCRIPTION=1
+		;;
+	--codex)
+		CODEX=1
 		;;
 	*)
 		if [ -z "$BASE_URL" ]; then
@@ -54,7 +65,7 @@ for arg in "$@"; do
 done
 
 if [ -z "$BASE_URL" ]; then
-	echo "usage: $0 <base-url> [<gateway-key>] [--subscription]" >&2
+	echo "usage: $0 <base-url> [<gateway-key>] [--subscription] [--codex]" >&2
 	exit 2
 fi
 
@@ -95,10 +106,16 @@ for id in anthropic/claude-sonnet-5 anthropic/claude-opus-5 anthropic/claude-fab
 		models_hosted_ok=0
 	fi
 done
-if [ "$models_local_ok" -eq 1 ] && [ "$models_hosted_ok" -eq 1 ]; then
-	pass "/v1/models lists all claude-local/* and anthropic/* ids"
+models_codex_ok=1
+for id in codex-a/gpt-5.6-luna codex-a/gpt-5.6-sol codex-a/gpt-6-astra codex-b/gpt-5.6-luna codex-b/gpt-5.6-sol codex-b/gpt-6-astra; do
+	if ! echo "$model_ids" | grep -qx "$id"; then
+		models_codex_ok=0
+	fi
+done
+if [ "$models_local_ok" -eq 1 ] && [ "$models_hosted_ok" -eq 1 ] && [ "$models_codex_ok" -eq 1 ]; then
+	pass "/v1/models lists all claude-local/*, anthropic/* and codex-{david,b}/* ids"
 else
-	bad "/v1/models missing expected ids (local ok=$models_local_ok, hosted ok=$models_hosted_ok). Got: $(echo "$model_ids" | tr '\n' ',')"
+	bad "/v1/models missing expected ids (local ok=$models_local_ok, hosted ok=$models_hosted_ok, codex ok=$models_codex_ok). Got: $(echo "$model_ids" | tr '\n' ',')"
 fi
 
 # ── 2. Missing / wrong gateway key both 401 by body ─────────────────────────────────────────
@@ -187,6 +204,44 @@ else
 	note "--subscription not passed: SKIPPING the hosted-leg claude -p probe (never run unattended — it bills"
 	note "the operator's live subscription). What it would run:"
 	note "  ANTHROPIC_BASE_URL=$BASE_URL ANTHROPIC_CUSTOM_HEADERS='x-gateway-key: <key>' claude -p 'Reply with the single word: pong'"
+fi
+
+# ── 7. Codex sidecar leg, metered (--codex only) ────────────────────────────────────────────
+if [ "$CODEX" -eq 1 ]; then
+	note "--codex passed: running one non-streamed codex-a/gpt-5.6-luna turn through $BASE_URL (bills the operator's Codex subscription)."
+	# The engine's anthropic-type leg needs *some* client bearer to build passthrough headers
+	# (openrouter-spike finding 3); the provider's apiKeyEnv replaces it before the sidecar.
+	codex_json=$(curl -s --max-time 180 -X POST "$BASE_URL/v1/messages" \
+		-H 'Content-Type: application/json' \
+		-H "x-gateway-key: $GATEWAY_KEY" \
+		-H 'authorization: Bearer smoke-dummy-client-bearer' \
+		-H 'anthropic-version: 2023-06-01' \
+		-d '{"model":"codex-a/gpt-5.6-luna","max_tokens":32,"stream":false,"metadata":{"user_id":"{\"session_id\":\"smoke-router-codex\"}"},"messages":[{"role":"user","content":"Reply with the single word: pong"}]}') || codex_json=""
+	codex_in=$(echo "$codex_json" | jq -r '.usage.input_tokens | if type == "number" and . > 0 then . else empty end' 2>/dev/null)
+	if [ -n "$codex_in" ]; then
+		pass "/v1/messages (codex-a/gpt-5.6-luna) returned usage.input_tokens=$codex_in"
+	else
+		bad "/v1/messages (codex-a/gpt-5.6-luna) did not return usage.input_tokens > 0. Response: $codex_json"
+	fi
+else
+	note "--codex not passed: SKIPPING the metered codex-a/gpt-5.6-luna probe (one Codex-subscription turn)."
+fi
+
+# ── 8. Codex sidecar count_tokens (unmetered) ───────────────────────────────────────────────
+note "checking POST /v1/messages/count_tokens (model=codex-a/gpt-5.6-luna) ..."
+codex_ct_json=$(curl -s --max-time 30 -X POST "$BASE_URL/v1/messages/count_tokens" \
+	-H 'Content-Type: application/json' \
+	-H "x-gateway-key: $GATEWAY_KEY" \
+	-H 'authorization: Bearer smoke-dummy-client-bearer' \
+	-d '{"model":"codex-a/gpt-5.6-luna","messages":[{"role":"user","content":"Reply with the single word: pong"}]}') || codex_ct_json=""
+codex_ct_value=$(echo "$codex_ct_json" | jq -r '
+	.input_tokens
+	| if type == "number" and (. == (. | floor)) then . else empty end
+' 2>/dev/null)
+if [ -n "$codex_ct_value" ]; then
+	pass "/v1/messages/count_tokens (codex-a/gpt-5.6-luna) returned integer input_tokens=$codex_ct_value"
+else
+	bad "/v1/messages/count_tokens (codex-a/gpt-5.6-luna) did not return an integer input_tokens. Response: $codex_ct_json"
 fi
 
 echo

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  parseModelId, isTitleRequest, extractCwd, conversational, sessionKeyOf, countTokensEstimate,
+  parseModelId, isTitleRequest, titleEnvelope, extractCwd, conversational, sessionKeyOf, countTokensEstimate,
   verifyInstructionSources, mapUpstreamError, retryAfterSeconds, rateLimitExhaustion, presentedKey,
   toDynamicTools, Logger,
 } from "../codex-sidecar.mjs";
@@ -27,14 +27,21 @@ test("effort lives in the model-id suffix", () => {
   assert.equal(parseModelId(undefined), null);
 });
 
-test("the title signature needs all four measured conditions", () => {
+test("the title signature needs the three robust conditions; the envelope is only a drift label", () => {
   const sessionMsg = [{ role: "user", content: "<session>chat</session>" }];
+  // Claude Code 2.1.269 appends a language instruction after </session> (WP-4 G1)
+  const cc2269 = [{ role: "user", content: "<session>chat</session>\n\nWrite the title in the predominant language of the session — a stray word or code token in another language doesn't change it, and neither does the English of these instructions." }];
+  const drifted = [{ role: "user", content: "please read <session>x</session> for me" }];
+  assert.equal(isTitleRequest({ tools: [] }, TITLE_SYSTEM, cc2269), true, "2.1.269 envelope");
+  assert.equal(isTitleRequest({ tools: [] }, TITLE_SYSTEM, drifted), true, "envelope drift is fail-safe: still local");
+  assert.equal(titleEnvelope(sessionMsg), "pinned");
+  assert.equal(titleEnvelope(cc2269), "pinned");
+  assert.equal(titleEnvelope(drifted), "drifted");
   assert.equal(isTitleRequest({ tools: [] }, TITLE_SYSTEM, sessionMsg), true);
   assert.equal(isTitleRequest({}, TITLE_SYSTEM, sessionMsg), true, "absent tools count as empty");
   assert.equal(isTitleRequest({ tools: [{ name: "Bash" }] }, TITLE_SYSTEM, sessionMsg), false, "tools present");
   assert.equal(isTitleRequest({ tools: [] }, "Summarise this chat", sessionMsg), false, "phrase missing");
   assert.equal(isTitleRequest({ tools: [] }, `${TITLE_SYSTEM}${"x".repeat(4000)}`, sessionMsg), false, "system too long");
-  assert.equal(isTitleRequest({ tools: [] }, TITLE_SYSTEM, [{ role: "user", content: "please read <session>x</session> for me" }]), false, "not a bare session tag");
   assert.equal(isTitleRequest({ tools: [] }, TITLE_SYSTEM, [...sessionMsg, { role: "assistant", content: "Title" }]), false, "more than one message");
 });
 

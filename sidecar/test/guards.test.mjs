@@ -89,7 +89,8 @@ test("the session-title signature is answered locally, and only that signature",
       model: "gpt-5.6-luna",
       system: TITLE_SYSTEM,
       tools: [],
-      messages: [{ role: "user", content: "<session>user: fix the parser\nassistant: done</session>" }],
+      // Claude Code 2.1.269 shape: language instruction after </session> (WP-4 G1)
+      messages: [{ role: "user", content: "<session>user: fix the parser\nassistant: done</session>\n\nWrite the title in the predominant language of the session." }],
     }),
   });
   assert.equal(title.status, 200, title.text);
@@ -97,7 +98,7 @@ test("the session-title signature is answered locally, and only that signature",
   assert.equal(title.json.stop_reason, "end_turn");
   assert.deepEqual(title.json.usage, { input_tokens: 0, output_tokens: 0 });
   assert.equal(sentTo(h.trace(), "thread/start").length, 0, "no thread is opened for a title query");
-  assert.ok(h.log().some(l => l.kind === "title-local"));
+  assert.ok(h.log().some(l => l.kind === "title-local" && l.envelope === "pinned"));
 
   // negative: an ordinary message that merely contains <session>, with tools present
   const ordinary = await req(h, "/codex-a/v1/messages", {

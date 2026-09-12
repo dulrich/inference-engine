@@ -30,7 +30,9 @@ const INBAND_ITEM_TYPES = new Set(["agentMessage", "reasoning", "dynamicToolCall
 const MODEL_FAMILIES = { "gpt-5.6-luna": "low", "gpt-5.6-sol": "medium", "gpt-6-astra": "medium" };
 const TITLE_PHRASE = "You are naming a coding session so the user can pick it out of a long list of sessions";
 const TITLE_MAX_SYSTEM_CHARS = 4000;
-const SESSION_RE = /^\s*<session>[\s\S]*<\/session>\s*$/;
+// Spike-era envelope was the bare <session> block; Claude Code 2.1.269 appends a language
+// instruction after </session> (WP-4 G1). The envelope is a drift label, never the decision.
+const SESSION_RE = /^\s*<session>[\s\S]*<\/session>/;
 const CWD_RE = /^[ \t]*Primary working directory:[ \t]*(.+?)[ \t]*$/m;
 
 // ---------------------------------------------------------------- config ----
@@ -247,14 +249,22 @@ export function sessionKeyOf(body, systemText, firstUserText) {
   return { key: hash, weak: true };
 }
 
-// The full measured title signature (plan, Decisions locked); all four must hold.
+// The title signature: empty tools, a short system prompt carrying the naming phrase, a single
+// user message. A miss must fail safe — a title query that reaches the app-server opens the
+// session's thread and the real task then lands as a continuation of "name this session"
+// (WP-4 G1) — so the user-message envelope is deliberately NOT a clause; titleEnvelope() labels it.
 export function isTitleRequest(body, systemText, msgs) {
   const tools = Array.isArray(body?.tools) ? body.tools : [];
   if (tools.length !== 0) return false;
   if (!systemText || systemText.length >= TITLE_MAX_SYSTEM_CHARS) return false;
   if (!systemText.includes(TITLE_PHRASE)) return false;
-  if (msgs.length !== 1 || msgs[0].role !== "user") return false;
-  return SESSION_RE.test(textOf(msgs[0].content));
+  return msgs.length === 1 && msgs[0].role === "user";
+}
+
+// "pinned" when the user message opens with the <session> block (spike-era and 2.1.269 shapes
+// both qualify); "drifted" once Claude Code rewords the envelope. Logged so drift is observable.
+export function titleEnvelope(msgs) {
+  return SESSION_RE.test(textOf(msgs[0]?.content)) ? "pinned" : "drifted";
 }
 
 export function countTokensEstimate(body) {
@@ -925,7 +935,7 @@ async function handleMessages(ctx, persona, body, req, res) {
 
   // (i) local session-title answer — before model validation, no thread opened
   if (isTitleRequest(body, systemText, msgs)) {
-    ctx.logger.write("title-local", { persona: persona.name, stream: !!body.stream });
+    ctx.logger.write("title-local", { persona: persona.name, stream: !!body.stream, envelope: titleEnvelope(msgs) });
     const usage = { input_tokens: 0, output_tokens: 0 };
     if (body.stream) {
       const msg = { ...messageSkeleton(body.model), usage };

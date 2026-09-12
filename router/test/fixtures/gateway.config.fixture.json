@@ -1,0 +1,64 @@
+{
+  "host": "0.0.0.0",
+  "port": 4813,
+  "providers": [
+    {
+      "name": "claude-local",
+      "type": "openai_chat_completions",
+      "apikey": "local-dummy-key-not-a-secret",
+      "baseurl": "http://inference-engine-llama:4806/v1",
+      "models": [
+        "qwen38-27b-iq3s",
+        "nemotron-4b",
+        "some-future-model-9b"
+      ]
+    },
+    {
+      "name": "anthropic",
+      "type": "anthropic",
+      "baseurl": "https://api.anthropic.com",
+      "models": [
+        "claude-sonnet-5",
+        "claude-opus-5"
+      ]
+    },
+    {
+      "name": "openrouter",
+      "type": "openai_chat_completions",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "baseurl": "https://openrouter.ai/api/v1",
+      "models": [
+        "z-ai/glm-5.2:free"
+      ]
+    },
+    {
+      "name": "or-anthropic",
+      "type": "anthropic",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "baseurl": "https://openrouter.ai/api",
+      "models": [
+        "z-ai/glm-5.3"
+      ]
+    },
+    {
+      "name": "codex-a",
+      "type": "anthropic",
+      "apiKeyEnv": "CODEX_SIDECAR_KEY",
+      "baseurl": "http://host.docker.internal:4877/codex-a",
+      "models": [
+        "gpt-5.6-luna",
+        "gpt-6-astra-low"
+      ]
+    },
+    {
+      "name": "codex-b",
+      "type": "anthropic",
+      "apiKeyEnv": "CODEX_SIDECAR_KEY",
+      "baseurl": "http://host.docker.internal:4877/codex-b",
+      "models": [
+        "gpt-5.6-sol",
+        "gpt-5.6-luna-high"
+      ]
+    }
+  ]
+}

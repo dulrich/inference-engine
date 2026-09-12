@@ -35,7 +35,23 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-local/nemotron-4b
 
 The `claude-local/` prefix **is required** on request ids — it is what selects the local provider over the default hosted leg. Keep small models in the haiku slot only (the WP-4 positional-derail finding, `routing-decision.md`).
 
-Both modes: add `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` to surface the merged `/v1/models` list in the model picker (discovery only lists ids containing `claude`/`anthropic` — both legs' ids qualify by construction). Containment rules for agent fixtures (deny-rule profile, disposable fixture dirs) are unchanged from WP-4 — see `docs/claude-code-local-profile.md`; note its correction that only `Edit(path)` deny rules cover file-editing tools.
+**Roster mode** (the fleet's default interactive profile: OAuth login, router base URL, the whole roster in the `/model` picker):
+
+```bash
+ANTHROPIC_BASE_URL=http://127.0.0.1:4813
+ANTHROPIC_CUSTOM_HEADERS="x-gateway-key: <INFERENCE_ROUTER_GATEWAY_KEY value>"
+# Still NEVER ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY — OAuth stays the credential.
+```
+
+Those two keys live in the `env` block of `~/.claude/settings.json`, so every interactive and FleetView-launched session rides the router — and so does every subagent, which inherits the parent's base URL (there is no per-agent base URL). The picker rows come from a generated `modelPicker` lineup in the same file: `node router/model-picker-lineup.mjs --write --launch-profile` writes both the `env` block and `modelPicker.options`, one labelled row per `<provider>/<model>` id in `gateway.config.json` (e.g. `Sol medium (codex-b)`, `GLM 5.3 (or-anthropic)`, `Qwen3.8 27B (local)`). Hosted `anthropic/claude-*` ids are excluded — they duplicate the built-in rows, and the bare id is what Claude Code sends anyway — and `replaceBuiltInOptions` is left unset so the built-in subscription rows stay first. The lineup needs no discovery and hits no id validation: behind `ANTHROPIC_BASE_URL` Claude Code passes the model string through unchecked, so `codex-a/gpt-5.6-luna` is selectable by name with no rename and no sidecar change.
+
+`node router/model-picker-lineup.mjs --check` is the sync gate (exit 1 when `gateway.config.json` and the settings file disagree; same shape as the fleet's `design:verify`) — re-run `--write --launch-profile` after any provider or model-id change. The generator owns `modelPicker.options` wholesale and, under `--launch-profile`, those two `env` keys; it touches nothing else, refuses a settings file that is not canonical 2-space JSON, and never writes `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY`.
+
+**Gateway model discovery is the non-OAuth alternative to Roster mode, not a companion to it.** `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` merges the gateway's `/v1/models` list into the picker, but it filters ids on `/(claude|anthropic)/i` (10 of the router's 30 ids survive today) and it **never runs in an OAuth session**: measured 2026-09-12 on Claude Code 2.1.269 (`claude -p --debug` through `:4813`), the debug log says `[gatewayDiscovery] skipped: no credential (ANTHROPIC_AUTH_TOKEN, apiKeyHelper, or API key)`. A credential supplied only through `ANTHROPIC_CUSTOM_HEADERS` also skips — the header is not a credential as far as discovery is concerned. Discovery is therefore a Local-mode feature (the gateway key is `ANTHROPIC_AUTH_TOKEN` there, and the saved login is already replaced); Subscription and Roster mode keep the OAuth bearer and use the generated lineup instead. The flag is not set on this fleet.
+
+**Escape hatch.** Because the `env` block is always on, a down router breaks every session: launch `env -u ANTHROPIC_BASE_URL -u ANTHROPIC_CUSTOM_HEADERS claude` to fall back to the direct hosted path until the container is back.
+
+Containment rules for agent fixtures (deny-rule profile, disposable fixture dirs) are unchanged from WP-4 — see `docs/claude-code-local-profile.md`; note its correction that only `Edit(path)` deny rules cover file-editing tools.
 
 ## Protocol coverage (closed by `plans/router-prefill-keepalive-and-protocol-gaps.md`, 2026-08-25)
 

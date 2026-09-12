@@ -1,0 +1,77 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { withSidecar, req, msgBody } from "./helpers.mjs";
+
+const call = (callId, tool, args) => ({ request: "item/tool/call", params: { callId, tool, arguments: args } });
+const toolResponses = h => h.trace().filter(e => e.kind === "in" && e.frame?.result?.contentItems).map(e => e.frame.result);
+
+test("a codex callId round-trips as the tool_use id and the tool_result answers it", async t => {
+  const h = await withSidecar({
+    scenario: { turns: [[call("call_abc", "Bash", { command: "ls -la" }), { awaitToolResults: 1 }, { text: "done" }, { complete: {} }]] },
+  });
+  t.after(() => h.close());
+
+  const first = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: [{ name: "Bash", description: "run", input_schema: { type: "object" } }] }) });
+  assert.equal(first.status, 200, first.text);
+  assert.equal(first.json.stop_reason, "tool_use");
+  const block = first.json.content.find(b => b.type === "tool_use");
+  assert.deepEqual({ id: block.id, name: block.name, input: block.input }, { id: "call_abc", name: "Bash", input: { command: "ls -la" } });
+
+  const second = await req(h, "/codex-a/v1/messages", {
+    body: msgBody({
+      tools: [{ name: "Bash", description: "run", input_schema: { type: "object" } }],
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: [block] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "call_abc", content: "file list" }] },
+      ],
+    }),
+  });
+  assert.equal(second.status, 200, second.text);
+  assert.equal(second.json.stop_reason, "end_turn");
+  assert.equal(second.json.content[0].text, "done");
+
+  const answers = toolResponses(h);
+  assert.equal(answers.length, 1);
+  assert.deepEqual(answers[0], { contentItems: [{ type: "inputText", text: "file list" }], success: true });
+});
+
+test("tool calls inside the batching window are relayed as one message", async t => {
+  const h = await withSidecar({
+    scenario: { turns: [[call("c1", "Read", { path: "a" }), { delay: 10 }, call("c2", "Read", { path: "b" }), { awaitToolResults: 2 }, { complete: {} }]] },
+  });
+  t.after(() => h.close());
+
+  const r = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: [{ name: "Read", description: "read", input_schema: { type: "object" } }] }) });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.stop_reason, "tool_use");
+  const ids = r.json.content.filter(b => b.type === "tool_use").map(b => b.id);
+  assert.deepEqual(ids, ["c1", "c2"]);
+
+  const batch = h.log().find(l => l.kind === "parallel-tool-batch");
+  assert.equal(batch.n, 2);
+});
+
+test("streamed deltas keep their order and precede the tool_use block", async t => {
+  const h = await withSidecar({
+    scenario: { turns: [[{ text: "a" }, { text: "b" }, { text: "c" }, call("c1", "Bash", {}), { awaitToolResults: 1 }, { complete: {} }]] },
+  });
+  t.after(() => h.close());
+
+  const r = await req(h, "/codex-a/v1/messages", { body: msgBody({ stream: true, tools: [{ name: "Bash", description: "run", input_schema: { type: "object" } }] }) });
+  assert.equal(r.status, 200);
+
+  const names = r.events.map(e => e.event);
+  assert.deepEqual(names, [
+    "message_start",
+    "content_block_start", "content_block_delta", "content_block_delta", "content_block_delta", "content_block_stop",
+    "content_block_start", "content_block_delta", "content_block_stop",
+    "message_delta", "message_stop",
+  ]);
+  const text = r.events.filter(e => e.data?.delta?.type === "text_delta").map(e => e.data.delta.text).join("");
+  assert.equal(text, "abc");
+  const toolStart = r.events.find(e => e.data?.content_block?.type === "tool_use");
+  assert.equal(toolStart.data.index, 1);
+  assert.equal(toolStart.data.content_block.id, "c1");
+  assert.equal(r.events.at(-2).data.delta.stop_reason, "tool_use");
+});

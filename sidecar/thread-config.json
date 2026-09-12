@@ -1,0 +1,24 @@
+{
+  "project_doc_max_bytes": 0,
+  "features": {
+    "apps": false,
+    "plugins": false,
+    "hooks": false,
+    "shell_tool": false,
+    "unified_exec": false,
+    "view_image": false,
+    "sleep_tool": false,
+    "browser_use": false,
+    "computer_use": false,
+    "image_generation": false,
+    "multi_agent": false,
+    "skill_search": false,
+    "tool_suggest": false,
+    "goals": false,
+    "personality": false,
+    "memories": false,
+    "shell_snapshot": false,
+    "guardian_approval": false,
+    "workspace_dependencies": false
+  }
+}

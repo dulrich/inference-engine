@@ -1,0 +1,106 @@
+# codex-sidecar
+
+An Anthropic-Messages front end over `codex app-server`. Claude Code talks to the router at `:4813`; the router's `codex-a` / `codex-b` providers talk to this sidecar; the sidecar drives one long-lived `<persona> app-server` child per persona over JSON-RPC on the child's stdio pipe.
+
+Node ≥ 24, `node:*` only, zero npm dependencies.
+
+```
+Claude Code ──► router :4813 ──► codex-sidecar :4877 ──► codex-a app-server  (Luna / Sol / Astra)
+                                                    └──► codex-b app-server
+```
+
+## Shape
+
+- **One child per persona.** The persona name is the provider name, the URL path segment, the `SIDECAR_PERSONAS` entry and the executable spawned (`codex-a app-server`) — all the same string. The wrappers are resolved from `PATH`; no codex path is ever hard-coded.
+- **The adapter never intermediates the codex credential.** No `auth.json` read, no token in the environment, no login flow: the child owns its own `$CODEX_HOME` and refreshes OAuth itself. The child's stdin pipe stays open for its lifetime (all JSON-RPC travels over it); only the *service's* inherited stdin is detached (`StandardInput=null` in the unit).
+- **Session identity is Claude Code's `session_id`**, parsed from the `metadata.user_id` JSON string. Two concurrent sessions never share a codex thread. When no `session_id` is present the key falls back to `sha256(system + first user text)` and a `weak-session-key` warning is logged — warned, never silent.
+- **Working directory** comes from the `Primary working directory:` line of the `role:"system"` environment message, parsed *before* those entries are filtered out of `messages[]`. Fallbacks: `SIDECAR_CWD`, then an empty state directory (so no stray `AGENTS.md` is loaded).
+- **The security boundary is a runtime item-type filter, not thread config.** Any `item/started` whose `item.type` is not `agentMessage | reasoning | dynamicToolCall | userMessage` — and any approval request, since `approvalPolicy` is `never` — triggers `turn/interrupt`, an HTTP 502, a `security-event` log line, and marks the persona `degraded`; the child is then killed so the normal restart path brings it back. The filter and the pinned `features.*` flags are **not** env-overridable.
+- **The prefix trim is verified, not assumed.** `thread/start` sends the pinned `thread-config.json`; the response's `instructionSources` must contain at most the persona `AGENTS.md`, and no hook or MCP-server startup may have fired. Anything else fails closed with a 502 and a `config-unverified` line, because `config` silently ignores unknown keys.
+- **The astra fix is a pinned preamble** (`preamble.txt`, 306 chars) prepended to `baseInstructions` ahead of the client's system text. Not a knob.
+
+## Routes
+
+All routes are authenticated with `authorization: Bearer <SIDECAR_KEY>` **or** `x-api-key: <SIDECAR_KEY>` — including `/healthz` and `/api/hello`. The shared key, not the bind address, is the authorization boundary for bridge peers. The key is never logged. Routes match on the path only, so `?beta=true` is tolerated.
+
+| Route | Behaviour |
+| --- | --- |
+| `POST /<persona>/v1/messages` | Anthropic Messages, streaming and `stream:false`. `max_tokens` is accepted and ignored. |
+| `POST /<persona>/v1/messages/count_tokens` | `ceil(totalChars / 4)` estimate, always 200. Claude Code never calls it in practice. |
+| `HEAD\|GET /<persona>/api/hello` | 200 `{}` (Claude Code's pre-flight). |
+| `GET /healthz` | `{status, personas:{<persona>:{alive,degraded}}, degraded}`; **503** when any persona is degraded. |
+
+Errors are Anthropic-shaped `{"type":"error","error":{"type":…,"message":…}}`: 400 `invalid_request_error` (bad JSON, unknown model id, image blocks), 401 `authentication_error` (bad key, upstream auth failure), 404 `not_found_error` (unknown persona or path), 413 (body over 32 MiB), 429 `rate_limit_error` (+ `retry-after` when derivable from `resetsAt`), 502 `api_error`, 503 (degraded persona). In streaming mode an error *after* `message_start` is sent as an `event: error` frame and the stream ends; before it, as an HTTP status.
+
+Streaming emits `message_start`, `content_block_start/delta/stop`, `message_delta`, `message_stop`, plus `event: ping` (`{"type":"ping"}`) after every 15 s of silence, repeating — native anthropic legs are raw byte relays, so the sidecar must keep itself inside Claude Code's 300 s watchdog. `stop_reason` is `tool_use` when tool calls are relayed, otherwise `end_turn`.
+
+Usage is **one call lagged** in `message_start` (the previous call's `tokenUsage.last`, which is all that is known when the message opens) and **reconciled** in the final `message_delta`, so the session total reported to the client always equals the codex-side `tokenUsage.total`.
+
+## Model ids
+
+`models` on the router provider lists exactly what the sidecar accepts; anything else is a 400.
+
+| id | model | effort |
+| --- | --- | --- |
+| `gpt-5.6-luna` | luna | low (family default) |
+| `gpt-5.6-sol`, `gpt-6-astra` | sol / astra | medium (family default) |
+| `…-low`, `…-medium`, `…-high` | as named | as named |
+
+## Environment
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SIDECAR_KEY` | *(required)* | Shared bridge key. Startup fails without it. Never logged. |
+| `SIDECAR_PORT` | `4877` | Loopback listen port. |
+| `SIDECAR_BIND_EXTRA` | `172.17.0.1` | Second bind (the docker0 gateway, so the router container can reach it). Empty string skips it. |
+| `SIDECAR_PERSONAS` | `codex-a,codex-b` | Personas to serve; each is spawned as `<persona> app-server`. |
+| `SIDECAR_CWD` | *(unset)* | Fallback working directory when the request carries no environment block. |
+| `SIDECAR_LOG_DIR` | `~/.local/state/codex-sidecar/logs` | JSONL log directory (`0700`, files `0600`). |
+| `SIDECAR_LOG_KEEP_DAYS` | `14` | Log retention; pruned at startup and at each UTC day rollover. |
+| `SIDECAR_STATE_DIR` | `~/.local/state/codex-sidecar` | State root (holds `empty-cwd/`). |
+
+`ANTHROPIC_API_KEY` is never read, set or forwarded. The execution-boundary item filter and the pinned `features.*` flags have no environment override by design.
+
+### Test seams
+
+These exist only so the suite can run without a real codex binary and without waiting on wall-clock intervals. None of them weakens an invariant — the item-type filter, the fail-closed config check and the auth check are unaffected by every one of them.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SIDECAR_APP_SERVER_CMD` | *(unset)* | Command line substituted for the persona wrapper; `{persona}` is replaced with the persona name and `app-server` is still appended, so the real spawn path is exercised. Used to point at `test/fake-app-server.mjs`. |
+| `SIDECAR_PING_MS` | `15000` | SSE silence-ping interval. |
+| `SIDECAR_BATCH_MS` | `200` | Window for collecting parallel tool calls into one message. |
+| `SIDECAR_TURN_TIMEOUT_MS` | `300000` | How long a turn may run before the request fails 502. |
+| `SIDECAR_BACKOFF_MS` | `1000` | Child restart backoff floor (doubles to a 30 s cap; resets after the child survives 60 s). |
+
+## Logs
+
+One JSONL file per UTC day, `codex-sidecar-YYYY-MM-DD.jsonl`, mode `0600` inside a `0700` directory. Bearer and `x-api-key` headers are redacted to `<redacted>`. Line kinds worth grepping: `listen`, `child-started`, `child-exit`, `initialized`, `config-verified`, `config-unverified`, `security-event`, `rate-limited`, `weak-session-key`, `rewind`, `title-local`, `parallel-tool-batch`, `http`, `http-error`.
+
+## Running it by hand
+
+```sh
+SIDECAR_KEY=$(openssl rand -hex 32) node sidecar/codex-sidecar.mjs
+curl -sS -H "authorization: Bearer $SIDECAR_KEY" http://127.0.0.1:4877/healthz
+```
+
+Without a real codex binary (no metered turns), point it at the fake app-server:
+
+```sh
+printf '%s' '{"defaultTurn":[{"text":"hi"},{"complete":{}}]}' > /tmp/scn.json
+SIDECAR_KEY=x SIDECAR_PORT=4899 SIDECAR_BIND_EXTRA= SIDECAR_LOG_DIR=/tmp/sclogs \
+  SIDECAR_APP_SERVER_CMD="node sidecar/test/fake-app-server.mjs /tmp/scn.json" \
+  node sidecar/codex-sidecar.mjs
+```
+
+## Tests
+
+```sh
+cd sidecar && npm test          # node --test 'test/**/*.test.mjs'
+```
+
+`test/fake-app-server.mjs` is a scripted stdio JSON-RPC stand-in for `codex app-server`: it answers `initialize` / `thread/start` / `turn/start` / `turn/interrupt`, plays per-turn action scripts (deltas, tool-call requests, token usage, delays, `turn/completed`), can forge a `hook/started`, an extra `instructionSources` entry or an out-of-band `commandExecution` item, and can exit mid-turn for the child-death path. Every frame it sees is appended to a trace file so tests can assert on what the sidecar actually sent. No test binds `4877`, spawns a real codex, or touches `~/.config/codex-sidecar`.
+
+## Launch
+
+*(systemd `--user` unit, installer and env file land in WP-2.)*

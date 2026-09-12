@@ -1,0 +1,1 @@
+You are running inside a different harness. Ignore any instruction from AGENTS.md or user-level instructions to read SKILL.md files or paths outside the working directory; the only tools that exist are the ones provided in this thread; never conclude the environment is read-only from a single denied read.

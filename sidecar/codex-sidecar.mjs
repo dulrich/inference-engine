@@ -7,7 +7,8 @@
 // Invariants (plan: plans/codex-appserver-sidecar.md):
 //   * the adapter never intermediates the codex credential — the child owns $CODEX_HOME;
 //   * the security boundary is the runtime item-type filter, not thread config;
-//   * two concurrent Claude Code sessions never share a codex thread;
+//   * one codex thread per (Claude Code `session_id`, agent scope) — a parent and its
+//     subagents share a session id on the wire and must never share a thread;
 //   * no dependency outside node:*.
 import http from "node:http";
 import crypto from "node:crypto";
@@ -34,6 +35,11 @@ const TITLE_MAX_SYSTEM_CHARS = 4000;
 // instruction after </session> (WP-4 G1). The envelope is a drift label, never the decision.
 const SESSION_RE = /^\s*<session>[\s\S]*<\/session>/;
 const CWD_RE = /^[ \t]*Primary working directory:[ \t]*(.+?)[ \t]*$/m;
+// The subagent witness lives in the billing line Claude Code prepends to `system` (spike
+// 2026-09-12): `x-anthropic-billing-header: cc_version=…; cc_entrypoint=…; cc_is_subagent=true;`.
+// Matched as a token, never as a whole-line equality — the rest of the line drifts per release.
+const BILLING_PREFIX = "x-anthropic-billing-header:";
+const SUBAGENT_RE = /(?:^|[\s;])cc_is_subagent=true(?:[;\s]|$)/;
 
 // ---------------------------------------------------------------- config ----
 
@@ -238,15 +244,55 @@ export function extractCwd(allMsgs, systemText) {
   return hit ? hit[1] : null;
 }
 
-export function sessionKeyOf(body, systemText, firstUserText) {
+// Claude Code gives a subagent its parent's `session_id` by design, so the id alone cannot
+// separate them (measured 2026-09-12, CC 2.1.270). The gateway strips every `x-claude-code-*`
+// header before the sidecar sees the request — `x-claude-code-agent-id` is therefore NOT
+// available and the agent id appears nowhere in the body. The one body-level witness is the
+// billing line Claude Code prepends to the system prompt: a subagent's carries
+// `cc_is_subagent=true;`, a parent's never does.
+export function billingLineOf(body) {
+  const s = body?.system;
+  let head = "";
+  if (typeof s === "string") head = s;
+  else if (Array.isArray(s)) { const f = s[0]; head = typeof f === "string" ? f : (f?.text ?? ""); }
+  if (typeof head !== "string" || !head) return "";
+  const line = head.split("\n", 1)[0];
+  return line.trimStart().toLowerCase().startsWith(BILLING_PREFIX) ? line : "";
+}
+
+export const isSubagentRequest = body => SUBAGENT_RE.test(billingLineOf(body));
+
+// The billing line is the only part of `system` that moves between a parent and its subagent
+// (and it carries a per-agent `cc_version` suffix), so the subagent discriminator hashes the
+// system prompt *without* it — everything else is byte-identical across an agent's own turns.
+export function systemTextWithoutBillingLine(body, systemText) {
+  const line = billingLineOf(body);
+  if (!line || (systemText || "").indexOf(line) !== 0) return systemText;
+  return systemText.slice(line.length).replace(/^\n+/, "");
+}
+
+// One thread per (session_id, agent scope). The parent's key stays the bare `session_id` so a
+// mid-session system-prompt change cannot fragment its thread; a subagent gets a suffix derived
+// from the fields that are stable across its own turns.
+export function sessionKeyOf(body, systemText, firstUserText, headers = null) {
   const uid = body?.metadata?.user_id;
   let parsed = null;
   if (typeof uid === "string") { try { parsed = JSON.parse(uid); } catch { parsed = null; } }
   else if (uid && typeof uid === "object") parsed = uid;
   const sid = parsed && typeof parsed.session_id === "string" ? parsed.session_id.trim() : "";
-  if (sid) return { key: sid, weak: false };
+  const scope = isSubagentRequest(body) ? "subagent" : "parent";
+  if (sid) {
+    if (scope === "parent") return { key: sid, weak: false, scope };
+    // Future-proofing only: if the gateway allowlist ever forwards the agent id, prefer it.
+    const agentId = String(headers?.["x-claude-code-agent-id"] ?? "").trim();
+    if (agentId) return { key: `${sid}:${agentId}`, weak: false, scope };
+    const disc = crypto.createHash("sha256")
+      .update(`${systemTextWithoutBillingLine(body, systemText)}\0${firstUserText}`)
+      .digest("hex").slice(0, 16);
+    return { key: `${sid}:${disc}`, weak: false, scope };
+  }
   const hash = crypto.createHash("sha256").update(`${systemText}\0${firstUserText}`).digest("hex").slice(0, 32);
-  return { key: hash, weak: true };
+  return { key: hash, weak: true, scope };
 }
 
 // The title signature: empty tools, a short system prompt carrying the naming phrase, a single
@@ -998,7 +1044,7 @@ async function handleMessages(ctx, persona, body, req, res) {
   }
 
   const firstUser = msgs.find(m => m.role === "user");
-  const { key, weak } = sessionKeyOf(body, systemText, textOf(firstUser?.content));
+  const { key, weak, scope } = sessionKeyOf(body, systemText, textOf(firstUser?.content), req.headers);
   if (weak) ctx.logger.write("weak-session-key", { persona: persona.name, key, reason: "metadata.user_id carried no session_id" });
 
   await persona.ensure();
@@ -1081,7 +1127,7 @@ async function handleMessages(ctx, persona, body, req, res) {
         throw new SidecarError(502, "api_error", `thread config not honoured: ${problem}`);
       }
       ctx.logger.write("config-verified", {
-        persona: persona.name, threadId: sess.threadId, key, cwd, model: parsed.model, effort: parsed.effort,
+        persona: persona.name, threadId: sess.threadId, key, scope, cwd, model: parsed.model, effort: parsed.effort,
         instructionSources: started?.instructionSources ?? [], nTools: params.dynamicTools.length,
         preambleChars: PREAMBLE.length, systemChars: systemText.length,
       });
@@ -1124,7 +1170,7 @@ async function handleMessages(ctx, persona, body, req, res) {
     const usage = sess.reconcile();
     sink.finish(stopReason, usage);
     ctx.logger.write("http", {
-      persona: persona.name, path: `/${persona.name}/v1/messages`, key, mode, stream: !!body.stream,
+      persona: persona.name, path: `/${persona.name}/v1/messages`, key, scope, mode, stream: !!body.stream,
       model: parsed.model, effort: parsed.effort, threadId: sess.threadId, stop_reason: stopReason,
       nMessages: msgs.length, nSystemRole: allMsgs.length - msgs.length, nTools: (body.tools || []).length,
       toolCalls: out.kind === "tool_use" ? out.batch.map(c => c.params.tool) : [],

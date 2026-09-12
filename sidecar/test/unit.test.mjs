@@ -60,7 +60,7 @@ test("cwd comes from the environment block and system-role messages are then dro
 
 test("sessions key on metadata.user_id and fall back to a warned hash", () => {
   const body = sid => ({ metadata: { user_id: JSON.stringify({ device_id: "d", account_uuid: "a", session_id: sid }) } });
-  assert.deepEqual(sessionKeyOf(body("abc-123"), "sys", "hi"), { key: "abc-123", weak: false });
+  assert.deepEqual(sessionKeyOf(body("abc-123"), "sys", "hi"), { key: "abc-123", weak: false, scope: "parent" });
 
   const a = sessionKeyOf({}, "sys", "hi");
   const b = sessionKeyOf({}, "sys", "hi");

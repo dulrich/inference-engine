@@ -30,6 +30,16 @@ const EXCLUDED_PROVIDERS = new Set(["anthropic"]);
 const LEG_NAMES = { "claude-local": "local" };
 // Credential env keys the generator must never write (OAuth stays the credential).
 const FORBIDDEN_ENV_KEYS = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"];
+// Static env keys the generator owns under --launch-profile, alongside the dynamic
+// ANTHROPIC_BASE_URL / ANTHROPIC_CUSTOM_HEADERS pair. ENABLE_TOOL_SEARCH must be set explicitly:
+// a custom ANTHROPIC_BASE_URL auto-disables tool search, which loads every tool schema up front
+// instead of deferring (~10k tokens of assembly per session). CLAUDE_CODE_DISABLE_TERMINAL_TITLE
+// suppresses the background terminal-title model call, which behind a custom base URL is not
+// guaranteed to honour the haiku alias (anthropics/claude-code#92050, closed as not planned).
+const LAUNCH_PROFILE_ENV = {
+  ENABLE_TOOL_SEARCH: "true",
+  CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",
+};
 
 // Family/label table. `prefix` families may carry a `-low|-medium|-high` effort suffix; without
 // one the persona default applies (router/AGENTS.md, "The codex sidecar leg").
@@ -207,6 +217,9 @@ function applyLaunchProfile(parsed, gatewayKey) {
   }
   parsed.env.ANTHROPIC_BASE_URL = ROUTER_URL;
   parsed.env.ANTHROPIC_CUSTOM_HEADERS = `x-gateway-key: ${gatewayKey}`;
+  // Assignment, not insert-if-absent: these keys are generated, so a drifted hand-edit is
+  // corrected rather than preserved, and a re-run over an already-current block is a no-op.
+  for (const [key, value] of Object.entries(LAUNCH_PROFILE_ENV)) parsed.env[key] = value;
 }
 
 function checkFailure(rows, parsed, launchProfile, gatewayKey, file) {
@@ -227,6 +240,11 @@ function checkFailure(rows, parsed, launchProfile, gatewayKey, file) {
     }
     if (env.ANTHROPIC_CUSTOM_HEADERS !== `x-gateway-key: ${gatewayKey}`) {
       return `env.ANTHROPIC_CUSTOM_HEADERS in ${file} does not carry the ${GATEWAY_KEY_VAR} value`;
+    }
+    for (const [key, value] of Object.entries(LAUNCH_PROFILE_ENV)) {
+      if (env[key] !== value) {
+        return `env.${key} in ${file} is ${JSON.stringify(env[key] ?? null)}, expected ${JSON.stringify(value)}`;
+      }
     }
   }
   return null;

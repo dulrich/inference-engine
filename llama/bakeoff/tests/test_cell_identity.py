@@ -200,6 +200,17 @@ GOLDEN_CELL_IDS = {
         "mc2-q8-c128k-f16-ctkf16-ctvf16-faauto-c131072-92526252",
         "mc2-f16-c128k-f16-ctkf16-ctvf16-faauto-c131072-b1b3c95c",
     ],
+    # WP-2 of plans/gemma4-26b-a4b-qat-mtp-ladder.md: headless Gemma 4 26B A4B QAT + MTP
+    # context ladder, shortest-first (32k/64k/128k/256k on the unsloth UD-Q4_K_XL, plus at
+    # 128k a spec_decode: "base" arm and the lmstudio QAT-Q4_0 A/B cell).
+    "gemma4-26b-a4b-ladder-v1": [  # 6 cells, sha256(chr(10).join(ids))[:16] == "c618905ef5cf34ed"
+        "g26-qat-c32k-f16-mtp-ctkf16-ctvf16-faauto-c32768-043ba5a9",
+        "g26-qat-c64k-f16-mtp-ctkf16-ctvf16-faauto-c65536-02135724",
+        "g26-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-398b1f3f",
+        "g26-qat-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-9ee03266",
+        "g26-q40-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-2bd65ba0",
+        "g26-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-89c80044",
+    ],
     # WP-2 of plans/moe-offload-load-mode-and-qwen4exp-fit-math.md: `--load-mode none` A/B,
     # dense pair first (no CPU experts, faster load), then the MoE-offload pair.
     "lm-ab-v1": [  # 4 cells, sha256(chr(10).join(ids))[:16] == "74df1f6c88682f9f"
@@ -224,6 +235,7 @@ GOLDEN_DIGESTS = {
     "qwen36-resident-v1": (2, "c7612fcab3015526"),
     "minicpm5-2b-ladder-v1": (9, "dd3b61c2c84eb07d"),
     "lm-ab-v1": (4, "74df1f6c88682f9f"),
+    "gemma4-26b-a4b-ladder-v1": (6, "c618905ef5cf34ed"),
 }
 
 

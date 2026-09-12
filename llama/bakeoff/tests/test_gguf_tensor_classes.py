@@ -48,6 +48,12 @@ FLASH_NEXT_SHARD1_PATH = Path(
     "/srv/models/unsloth/Qwen3.8-Flash-Next-GGUF/"
     "Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf"
 )
+# Gemma 4 26B A4B QAT -- the fused-expert (`ffn_gate_up_exps`) model whose class totals WP-1 of
+# `plans/gemma4-26b-a4b-qat-mtp-ladder.md` measured directly off this file's tensor directory.
+GEMMA4_26B_A4B_QAT_PATH = Path(
+    "/srv/models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/"
+    "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf"
+)
 
 
 # -------------------------------------------------------------------------------------------
@@ -108,6 +114,14 @@ class TestClassifyTensor(unittest.TestCase):
             ("blk.5.ffn_up_exps.weight", "routed_expert"),
             ("blk.5.ffn_down_exps.weight", "routed_expert"),
             ("blk.40.ffn_gate_exps.weight", "routed_expert"),
+            # The FUSED gate+up expert tensor Gemma 4 MoE emits (plans/gemma4-26b-a4b-qat-mtp-
+            # ladder.md WP-2): 7.98 GiB of the 26B-A4B QAT file classed as "dense" before the
+            # `gate_up` alternative joined `_ROUTED_EXPERT_RE`.
+            ("blk.5.ffn_gate_up_exps.weight", "routed_expert"),
+            # ... but its sibling `.scale` tensor stays "dense" by decision (0.35 MB total on
+            # that file, measured) -- the regex is `.weight`-anchored, and this row pins that
+            # the omission is deliberate, not an oversight.
+            ("blk.5.ffn_down_exps.scale", "dense"),
             ("blk.5.ffn_gate_shexp.weight", "shared_expert"),
             ("blk.5.ffn_up_shexp.weight", "shared_expert"),
             ("blk.5.ffn_down_shexp.weight", "shared_expert"),
@@ -123,6 +137,7 @@ class TestClassifyTensor(unittest.TestCase):
             ("blk.5.attn_qkv.weight", "dense"),
             ("blk.5.ssm_out.weight", "dense"),
             ("blk.5.ffn_gate_inp.weight", "dense"),  # the router gate -- not "_exps", not moved
+            ("blk.5.ffn_gate_inp.scale", "dense"),  # same, and the other half of the 0.35 MB
         ]
         for name, expected in cases:
             with self.subTest(name=name):
@@ -244,6 +259,80 @@ class TestFlashNextLivePlacementPins(unittest.TestCase):
             t.nbytes for t in self.tensor_infos if t.name == "per_layer_token_embd.weight"
         )
         self.assertAlmostEqual(ple_table_bytes / GIB, 26.82, places=2)  # NOT the session's 29.84
+
+
+@unittest.skipUnless(
+    GEMMA4_26B_A4B_QAT_PATH.exists(), f"host GGUF not present: {GEMMA4_26B_A4B_QAT_PATH}"
+)
+class TestGemma4_26bA4bFusedExpertPin(unittest.TestCase):
+    """The fused-expert regression pin (`plans/gemma4-26b-a4b-qat-mtp-ladder.md` WP-1/WP-2).
+    WP-1 measured this file's tensor directory directly: 30 blocks, each carrying
+    `ffn_gate_up_exps.weight` (285,474,816 B) + `ffn_down_exps.weight` (142,737,408 B) =
+    428,212,224 B = 0.3988 GiB of routed expert per layer, 12,846,366,720 B = 11.964 GiB total,
+    against ~0.90 GiB of true dense weight. Before `_ROUTED_EXPERT_RE` gained the `gate_up`
+    alternative the fused half (7.976 GiB) fell through to `dense`, and `derive_placement_bytes`
+    reported GPU 12.87 GiB at `-ncmoe 0` AND 8.88 GiB at `-ncmoe 30` -- i.e. `-ncmoe` barely
+    moved anything, and every fit verdict for this model was wrong in the unsafe direction."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tensor_infos = gguf_fit.read_gguf_tensor_infos(GEMMA4_26B_A4B_QAT_PATH)
+
+    def _class_bytes(self):
+        totals = {}
+        assert self.tensor_infos is not None
+        for t in self.tensor_infos:
+            cls_name = gguf_fit.classify_tensor(t.name)
+            totals[cls_name] = totals.get(cls_name, 0) + t.nbytes
+        return totals
+
+    def test_routed_expert_total_within_1_percent_of_wp1(self):
+        self.assertIsNotNone(self.tensor_infos)
+        totals = self._class_bytes()
+        self.assertTrue(
+            _within_pct(totals["routed_expert"], 12_846_366_720, 1.0),
+            f"{totals['routed_expert']:,} vs WP-1's 12,846,366,720",
+        )
+        # 60 routed tensors: gate_up + down on each of the 30 blocks.
+        self.assertEqual(
+            sum(
+                1
+                for t in self.tensor_infos
+                if gguf_fit.classify_tensor(t.name) == "routed_expert"
+            ),
+            60,
+        )
+
+    def test_dense_stays_under_one_gib_and_keeps_the_scale_siblings(self):
+        totals = self._class_bytes()
+        self.assertLess(totals["dense"], GIB)  # ~0.90 GiB of true dense weight
+        # The 0.35 MB of `.scale` siblings are inside that `dense` figure by decision.
+        scale_bytes = sum(
+            t.nbytes
+            for t in (self.tensor_infos or [])
+            if t.name.endswith(".scale") and gguf_fit.classify_tensor(t.name) == "dense"
+        )
+        self.assertEqual(scale_bytes, 353_280)
+
+    def test_ncmoe_actually_moves_the_fused_tensor(self):
+        """`-ncmoe 30` must strand the WHOLE routed-expert mass on CPU -- the property the
+        unfixed regex silently broke (8.88 GiB still 'GPU' at `-ncmoe 30`)."""
+        metadata = gguf_fit.read_gguf_metadata(GEMMA4_26B_A4B_QAT_PATH)
+        geometry = gguf_fit.gguf_attention_geometry(metadata)
+        all_gpu = gguf_fit.derive_placement_bytes(
+            self.tensor_infos, {"-ngl": 99, "-ncmoe": 0}, geometry
+        )
+        all_cpu = gguf_fit.derive_placement_bytes(
+            self.tensor_infos, {"-ngl": 99, "-ncmoe": 30}, geometry
+        )
+        self.assertIsNotNone(all_gpu)
+        self.assertIsNotNone(all_cpu)
+        assert all_gpu is not None and all_cpu is not None
+        self.assertTrue(
+            _within_pct(all_gpu.gpu_bytes - all_cpu.gpu_bytes, 12_846_366_720, 1.0),
+            f"{all_gpu.gpu_bytes:,} - {all_cpu.gpu_bytes:,}",
+        )
+        self.assertLess(all_cpu.gpu_bytes, GIB)
 
 
 # -------------------------------------------------------------------------------------------

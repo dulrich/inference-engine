@@ -455,7 +455,7 @@ def read_gguf_tensor_infos(gguf_path: Path) -> Optional[List[TensorInfo]]:
 # to produce `tensor_infos`.
 # -------------------------------------------------------------------------------------------
 
-_ROUTED_EXPERT_RE = re.compile(r"^blk\.\d+\.ffn_(?:gate|up|down)_exps\.weight$")
+_ROUTED_EXPERT_RE = re.compile(r"^blk\.\d+\.ffn_(?:gate|up|down|gate_up)_exps\.weight$")
 _PLE_BLOCK_RE = re.compile(r"^blk\.\d+\.ple_")
 _BLK_INDEX_RE = re.compile(r"^blk\.(\d+)\.")
 
@@ -467,6 +467,15 @@ def classify_tensor(name: str) -> str:
     per-layer-embedding n-gram table and its small per-layer helper tensors), `"embd_output"`
     (token embedding / LM head / their norms), or `"dense"` (everything else -- attention, SSM,
     hyper-connection, and any other per-layer tensor with no special placement significance).
+    The routed-expert form covers both the three-tensor split (`ffn_gate_exps`/`ffn_up_exps`/
+    `ffn_down_exps`) and the FUSED gate+up form `blk.N.ffn_gate_up_exps.weight` that Gemma 4 MoE
+    (`general.architecture=gemma4`) emits -- 7.98 GiB of the 26B-A4B QAT file, which classed as
+    `dense` and made every fit verdict for that model wrong in the unsafe direction until this
+    clause landed (`plans/gemma4-26b-a4b-qat-mtp-ladder.md`). The sibling `.scale` tensors
+    (`ffn_down_exps.scale`, `ffn_gate_inp.scale`) deliberately stay `dense`/GPU rather than
+    riding along with the experts `-ncmoe` moves: 0.35 MB total on that file (measured), too
+    small to be worth a second placement rule, and the router gate they belong to is GPU-side
+    work regardless -- a decision, not an omission.
     Never raises; an unrecognised name is `"dense"` by construction (the conservative default --
     it stays wherever `-ngl`/`-ot` would otherwise put a plain layer tensor)."""
     if _ROUTED_EXPERT_RE.match(name):

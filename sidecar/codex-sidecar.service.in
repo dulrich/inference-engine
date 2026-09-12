@@ -1,0 +1,15 @@
+[Unit]
+Description=codex app-server sidecar (Anthropic Messages front end for codex personas)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=@NODE@ @SIDECAR@
+Environment=PATH=@PATH@
+EnvironmentFile=%h/.config/codex-sidecar/env
+StandardInput=null
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

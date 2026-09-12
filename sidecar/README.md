@@ -103,4 +103,41 @@ cd sidecar && npm test          # node --test 'test/**/*.test.mjs'
 
 ## Launch
 
-*(systemd `--user` unit, installer and env file land in WP-2.)*
+The sidecar runs as a `systemd --user` service. The unit template lives here (`codex-sidecar.service.in`); `install.sh` renders it with absolute paths, because the systemd user PATH on this host contains neither the nvm node dir nor the persona-wrapper dir.
+
+**Install** (safe to re-run; a second run reports `unchanged`):
+
+```sh
+sidecar/install.sh                 # renders ~/.config/systemd/user/codex-sidecar.service
+sidecar/install.sh --home /tmp/x   # test render into a throwaway root; skips daemon-reload
+```
+
+It resolves `node` (refuses below major 24) and both persona wrappers (`codex-a`, `codex-b`), creates `~/.config/codex-sidecar/` (`0700`) and `env` (`0600`), and generates a `SIDECAR_KEY` **only when the env file is absent** — an existing key is never overwritten. The generated key is printed exactly once, at generation; after that it lives only in the env file and is never echoed again. Nothing is enabled or started: the installer ends by printing the lines below for you to run.
+
+**Enable** (`hold-for-user` — the agent cannot do this):
+
+```sh
+loginctl enable-linger $USER                    # only if install.sh reports linger NOT enabled
+systemctl --user enable --now codex-sidecar
+```
+
+**Verify:**
+
+```sh
+sidecar/status.sh
+```
+
+`status.sh` prints `systemctl --user status codex-sidecar` (tolerating a not-installed unit), then an authenticated `GET /healthz` with the key read from the env file — status code and body, never the key. It exits non-zero on 503 (a degraded persona) or a refused connection.
+
+**Rotate the key:**
+
+```sh
+systemctl --user stop codex-sidecar
+printf 'SIDECAR_KEY=%s\n' "$(openssl rand -hex 32)" > ~/.config/codex-sidecar/env
+chmod 0600 ~/.config/codex-sidecar/env
+systemctl --user start codex-sidecar
+```
+
+Then update the compose-side value to match.
+
+**Compose side:** the router reaches the sidecar with the same shared key under the name `CODEX_SIDECAR_KEY` in the fleet-tools `.env` (`hold-for-user`: the user adds `CODEX_SIDECAR_KEY` to that `.env` before the router restart). WP-3 wires the provider entries and `extra_hosts`; until then the key is only consumed here.

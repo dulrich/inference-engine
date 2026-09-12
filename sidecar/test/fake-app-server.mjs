@@ -12,6 +12,7 @@
 //     "threadStart": { "instructionSources": [..], "before": [action..], "error": {code,message} },
 //     "turns":       [ [action..] | {"error":{code,message}} , ... ],   // consumed in order
 //     "defaultTurn": [action..]                                        // when `turns` runs out
+//     "neverRespond": ["turn/start", ..]   // methods the server accepts and never answers
 //   }
 // Actions:
 //   {"delay": ms}                         pause
@@ -99,11 +100,15 @@ async function play(actions) {
   }
 }
 
+const NEVER_RESPOND = new Set(scenario.neverRespond || []);
+
 async function onMessage(m) {
   trace("in", { frame: m });
   // responses to our server -> client requests
   if (m.id !== undefined && m.method === undefined) { state.toolResponses += 1; return; }
   if (m.method === "initialized") return;
+  // a hung app-server: the request is accepted and simply never answered
+  if (NEVER_RESPOND.has(m.method)) { trace("never-respond", { method: m.method }); return; }
 
   if (m.method === "initialize") {
     reply(m.id, {

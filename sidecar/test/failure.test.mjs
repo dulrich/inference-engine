@@ -91,3 +91,35 @@ test("an error after message_start arrives as an SSE error frame", async t => {
   assert.match(last.data.error.message, /upstream blew up/);
   assert.ok(!r.events.some(e => e.event === "message_stop"), "a failed stream does not claim completion");
 });
+
+test("a turn/start the app-server never answers fails 502 at the turn timeout", async t => {
+  const h = await withSidecar({ scenario: { neverRespond: ["turn/start"] }, env: { SIDECAR_TURN_TIMEOUT_MS: "400" } });
+  t.after(() => h.close());
+
+  const t0 = Date.now();
+  const r = await req(h, "/codex-a/v1/messages", { body: msgBody({}) });
+  const ms = Date.now() - t0;
+
+  assert.equal(r.status, 502, r.text);
+  assert.match(r.json.error.message, /timed out waiting for the codex app-server \(turn\/start\)/);
+  assert.ok(ms >= 400 && ms < 5000, `the request failed after ${ms}ms, not at the configured turn timeout`);
+  assert.equal(sentTo(h.trace(), "turn/start").length, 1, "the hung turn was not retried");
+  const row = h.log().find(l => l.kind === "http-error");
+  assert.equal(row.status, 502);
+  assert.equal(row.mode, "new-thread");
+});
+
+test("a thread/start the app-server never answers fails 502 at the turn timeout", async t => {
+  const h = await withSidecar({ scenario: { neverRespond: ["thread/start"] }, env: { SIDECAR_TURN_TIMEOUT_MS: "400" } });
+  t.after(() => h.close());
+
+  const t0 = Date.now();
+  const r = await req(h, "/codex-a/v1/messages", { body: msgBody({}) });
+  const ms = Date.now() - t0;
+
+  assert.equal(r.status, 502, r.text);
+  assert.match(r.json.error.message, /timed out waiting for the codex app-server \(thread\/start\)/);
+  assert.ok(ms >= 400 && ms < 5000, `the request failed after ${ms}ms, not at the configured turn timeout`);
+  assert.equal(sentTo(h.trace(), "turn/start").length, 0, "no turn was started on a thread that never opened");
+  assert.ok(h.log().some(l => l.kind === "http-error" && l.status === 502 && l.mode === "new-thread"));
+});

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { withSidecar, req, msgBody } from "./helpers.mjs";
+import { withSidecar, req, msgBody, sentTo, waitFor } from "./helpers.mjs";
 
 const call = (callId, tool, args) => ({ request: "item/tool/call", params: { callId, tool, arguments: args } });
 const toolResponses = h => h.trace().filter(e => e.kind === "in" && e.frame?.result?.contentItems).map(e => e.frame.result);
@@ -74,4 +74,82 @@ test("streamed deltas keep their order and precede the tool_use block", async t 
   assert.equal(toolStart.data.index, 1);
   assert.equal(toolStart.data.content_block.id, "c1");
   assert.equal(r.events.at(-2).data.delta.stop_reason, "tool_use");
+});
+
+const READ = [{ name: "Read", description: "read", input_schema: { type: "object" } }];
+
+test("a tool_result for an unknown id is an orphan, never a fresh turn/start", async t => {
+  const h = await withSidecar({
+    scenario: { turns: [[call("c1", "Read", { path: "a" }), { awaitToolResults: 1 }, { text: "done" }, { complete: {} }]] },
+  });
+  t.after(() => h.close());
+
+  const first = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ }) });
+  assert.equal(first.json.stop_reason, "tool_use");
+
+  const second = await req(h, "/codex-a/v1/messages", {
+    body: msgBody({
+      tools: READ,
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: first.json.content },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "no-such-call", content: "stale" }] },
+      ],
+    }),
+  });
+
+  assert.equal(second.status, 200, second.text);
+  assert.ok(h.log().some(l => l.kind === "orphan-tool-result" && l.tool_use_id === "no-such-call"));
+  assert.equal(sentTo(h.trace(), "turn/start").length, 1, "an unmatched tool_result never opens a turn on a blocked thread");
+});
+
+test("a call parked after the response boundary survives the next request", async t => {
+  const h = await withSidecar({
+    scenario: {
+      turns: [[
+        call("c1", "Read", { path: "a" }), { delay: 400 }, call("c2", "Read", { path: "b" }),
+        { awaitToolResults: 2 }, { text: "done" }, { complete: {} },
+      ]],
+    },
+  });
+  t.after(() => h.close());
+
+  const first = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ }) });
+  assert.equal(first.json.stop_reason, "tool_use");
+  // c2 is minted while no request is in flight: it has never crossed the boundary
+  await waitFor(() => h.trace().some(e => e.kind === "out" && e.frame?.params?.callId === "c2"));
+
+  const second = await req(h, "/codex-a/v1/messages", {
+    body: msgBody({
+      tools: READ,
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: first.json.content },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "c1", content: "a" }] },
+      ],
+    }),
+  });
+  assert.equal(second.status, 200, second.text);
+  const block = second.json.content.find(b => b.type === "tool_use");
+  assert.equal(block.id, "c2", "the call parked after the boundary is delivered, not abandoned");
+
+  const third = await req(h, "/codex-a/v1/messages", {
+    body: msgBody({
+      tools: READ,
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: first.json.content },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "c1", content: "a" }] },
+        { role: "assistant", content: second.json.content },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "c2", content: "b" }] },
+      ],
+    }),
+  });
+
+  assert.equal(third.status, 200, third.text);
+  assert.equal(third.json.stop_reason, "end_turn");
+  assert.equal(third.json.content[0].text, "done");
+  assert.ok(!h.log().some(l => l.kind === "orphan-tool-result"), "the echoed id still matched its park");
+  assert.equal(sentTo(h.trace(), "turn/start").length, 1, "the follow-up was a tool-result, not a turn on a blocked thread");
+  assert.deepEqual(toolResponses(h).map(r => r.success), [true, true]);
 });

@@ -85,7 +85,7 @@ These exist only so the suite can run without a real codex binary and without wa
 | `SIDECAR_APP_SERVER_CMD` | *(unset)* | Command line substituted for the persona wrapper; `{persona}` is replaced with the persona name and `app-server` is still appended, so the real spawn path is exercised. Used to point at `test/fake-app-server.mjs`. |
 | `SIDECAR_PING_MS` | `15000` | SSE silence-ping interval. |
 | `SIDECAR_BATCH_MS` | `200` | Window for collecting parallel tool calls into one message. |
-| `SIDECAR_TURN_TIMEOUT_MS` | `300000` | How long a turn may run before the request fails 502. |
+| `SIDECAR_TURN_TIMEOUT_MS` | `300000` | How long a turn may run before the request fails 502. It bounds the `thread/start` and `turn/start` JSON-RPC awaits too, so an app-server that accepts a request and never answers it fails the HTTP request at the same deadline instead of stalling it forever. |
 | `SIDECAR_BACKOFF_MS` | `1000` | Child restart backoff floor (doubles to a 30 s cap; resets after the child survives 60 s). |
 
 ## Logs

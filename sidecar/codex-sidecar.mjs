@@ -478,6 +478,8 @@ class Session {
     this.turnId = null;
     this.model = null;
     this.parked = new Map();      // callId -> JSON-RPC request id
+    this.delivered = new Set();   // callIds already emitted to the client as tool_use blocks
+    this.turnOpen = false;        // the codex turn is still running, blocked on a tool call
     this.batch = [];              // tool calls collected inside the batching window
     this.batchTimer = null;
     this.msgCount = 0;
@@ -633,6 +635,16 @@ class Session {
     this.parked.delete(callId);
     this.persona.send({ jsonrpc: "2.0", id, result: { contentItems: [{ type: "inputText", text: text || "(empty)" }], success: !!success } });
     return true;
+  }
+
+  // End-of-request cleanup (Defect E1). Only a call the client has already been
+  // shown can be "unanswered": a call parked after the last response was written has
+  // never crossed the request boundary, so it must survive to be delivered on the
+  // next one instead of being answered with a refusal the model then has to absorb.
+  abandonDelivered(reason) {
+    for (const callId of [...this.parked.keys()]) {
+      if (this.delivered.has(callId)) this.answerParked(callId, reason, false);
+    }
   }
 
   abandonParked(reason) {
@@ -836,13 +848,31 @@ class Persona {
     return true;
   }
 
-  rpc(method, params) {
+  // `timeoutMs > 0` bounds the await (Defect E2): an app-server that never answers
+  // `thread/start`/`turn/start` used to park the HTTP handler forever, because the only
+  // guard (`Session.waitOutcome`) is armed after this await returns. The rejection is the
+  // same 502 the outcome timeout raises, so it surfaces the ordinary `http-error` row.
+  rpc(method, params, timeoutMs = 0) {
     return new Promise((resolve, reject) => {
       const id = this.rpcId++;
-      this.pending.set(id, { resolve, reject });
-      if (!this.send({ jsonrpc: "2.0", id, method, params })) {
+      let timer = null;
+      // settling always drops the pending entry, so a late response is ignored, never a crash
+      const once = fn => v => {
+        if (timer) { clearTimeout(timer); timer = null; }
         this.pending.delete(id);
-        reject(new SidecarError(502, "api_error", `the codex app-server for ${this.name} is not running`));
+        fn(v);
+      };
+      const entry = { resolve: once(resolve), reject: once(reject) };
+      this.pending.set(id, entry);
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          entry.reject(new SidecarError(502, "api_error",
+            `timed out waiting for the codex app-server (${method})`));
+        }, timeoutMs);
+        timer.unref?.();
+      }
+      if (!this.send({ jsonrpc: "2.0", id, method, params })) {
+        entry.reject(new SidecarError(502, "api_error", `the codex app-server for ${this.name} is not running`));
       }
     });
   }
@@ -983,7 +1013,10 @@ async function handleMessages(ctx, persona, body, req, res) {
     sess = new Session(persona, key);
     persona.sessions.set(key, sess);
     mode = "new-thread";
-  } else if (toolResults.length && sess.parked.size) {
+  } else if (toolResults.length && (sess.parked.size
+      || (sess.turnOpen && toolResults.some(tr => sess.delivered.has(tr.tool_use_id))))) {
+    // Defect E1: an echo of an id we handed out belongs to the turn that is still open,
+    // even if nothing is parked any more — never `turn/start` onto a blocked turn.
     mode = "tool-result";
   } else if (msgs.length < sess.msgCount) {
     ctx.logger.write("rewind", { persona: persona.name, key, seen: sess.msgCount, now: msgs.length, threadId: sess.threadId });
@@ -1032,7 +1065,7 @@ async function handleMessages(ctx, persona, body, req, res) {
         dynamicTools: toDynamicTools(body.tools),
         config: THREAD_CONFIG,
       };
-      const started = await persona.rpc("thread/start", params);
+      const started = await persona.rpc("thread/start", params, cfg.turnTimeoutMs);
       sess.threadId = started?.thread?.id ?? started?.threadId ?? null;
       sess.model = parsed.model;
       if (!sess.threadId) throw new SidecarError(502, "api_error", "thread/start returned no thread id");
@@ -1061,14 +1094,14 @@ async function handleMessages(ctx, persona, body, req, res) {
           ctx.logger.write("orphan-tool-result", { persona: persona.name, key, tool_use_id: tr.tool_use_id });
         }
       }
-      sess.abandonParked("no result returned by the client");
+      sess.abandonDelivered("no result returned by the client");
     } else {
       const text = turnInputText(mode, msgs, last, lastBlocks);
       const turnParams = { threadId: sess.threadId, input: [{ type: "text", text }], effort: parsed.effort };
       if (sess.model && parsed.model !== sess.model) { turnParams.model = parsed.model; sess.model = parsed.model; }
       sess.deltaItems.clear();
       sess.pendingOutcome = null;      // a stray outcome never leaks into a fresh turn
-      const turn = await persona.rpc("turn/start", turnParams);
+      const turn = await persona.rpc("turn/start", turnParams, cfg.turnTimeoutMs);
       sess.turnId = turn?.turn?.id ?? turn?.turnId ?? sess.turnId;
     }
 
@@ -1082,10 +1115,12 @@ async function handleMessages(ctx, persona, body, req, res) {
     if (out.kind === "tool_use") {
       stopReason = "tool_use";
       for (const call of out.batch) {
+        sess.delivered.add(call.params.callId);
         sink.toolUse({ type: "tool_use", id: call.params.callId, name: call.params.tool, input: call.params.arguments ?? {} });
       }
       if (out.batch.length > 1) ctx.logger.write("parallel-tool-batch", { persona: persona.name, threadId: sess.threadId, n: out.batch.length });
     }
+    sess.turnOpen = stopReason === "tool_use";
     const usage = sess.reconcile();
     sink.finish(stopReason, usage);
     ctx.logger.write("http", {
@@ -1097,6 +1132,7 @@ async function handleMessages(ctx, persona, body, req, res) {
     });
   } catch (e) {
     sess.detach();
+    sess.turnOpen = false;
     if (closedByClient) return;
     const err = asSidecarError(e);
     ctx.logger.write("http-error", {

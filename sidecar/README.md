@@ -48,12 +48,18 @@ Usage is **one call lagged** in `message_start` (the previous call's `tokenUsage
 
 ## Measured (WP-4)
 
-Spike-09 fixture task through the router at `:4813`. The campaign stopped after run 1: Claude Code 2.1.269's title query no longer matches the pinned title signature, so it opens the session's thread and the real task lands on it as a continuation — deterministic and upstream of model choice, so the remaining five metered runs were not spent. Evidence and root cause: `../docs/tool-calling-gateway/codex-sidecar.md` gap G1 and `../runs/dispatch/codex-appserver-sidecar-wp-4-report.md`.
+Spike-09 fixture task through the router at `:4813`, six metered `claude -p` runs on 2026-09-12, fixture reset before each: **six green gates**, zero `security-event`, zero `config-unverified`, one locally-answered title query per session (all `envelope: "pinned"`). Detail and caveats: `../docs/tool-calling-gateway/codex-sidecar.md` "Measured"; raw evidence in `../runs/dispatch/codex-appserver-sidecar-wp-4b-report.md`.
 
-| run | model | gate | first-turn input | usage sidecar vs `result.usage` | security-event | config-unverified | title-local | wall |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `luna-david` | `codex-a/gpt-5.6-luna` | red (G1) | 15,508 | exact: 15,508 in / 79 out, delta 0 | 0 | 0 | 0 (expected 1) | 5.1 s |
-| `sol-b`, `astra-b`, `astra-david`, `luna-conc-a`, `luna-conc-b` | — | not run | — | — | — | — | — | — |
+| run | model | effort | gate | turns | tool calls | codex cumulative input | output (sidecar / Claude Code) | security-event | config-unverified | title-local | wall |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `luna-david` | `codex-a/gpt-5.6-luna` | low | green | 9 | 8 | 23,131 | 526 / 526 | 0 | 0 | 1 (`pinned`) | 22.5 s |
+| `sol-b` | `codex-b/gpt-5.6-sol` | medium | green | 10 | 9 | 28,396 | 1,037 / 1,037 | 0 | 0 | 1 (`pinned`) | 37.1 s |
+| `astra-b` | `codex-b/gpt-6-astra` | medium | green | 11 | 10 | 27,096 | 321 / 321 | 0 | 0 | 1 (`pinned`) | 26.5 s |
+| `astra-david` | `codex-a/gpt-6-astra` | medium | green | 11 | 10 | 26,880 | 312 / 312 | 0 | 0 | 1 (`pinned`) | 20.9 s |
+| `luna-conc-a` | `codex-a/gpt-5.6-luna` | low | green | 5 | 4 | 23,274 | 597 / 597 | 0 | 0 | 1 (`pinned`) | 18.3 s |
+| `luna-conc-b` | `codex-a/gpt-5.6-luna` | low | green | 12 | 11 | 25,368 | 861 / 861 | 0 | 0 | 1 (`pinned`) | 30.6 s |
+
+`luna-conc-a` / `luna-conc-b` ran concurrently with the identical prompt on two fixture copies and kept two distinct session keys and two distinct `threadId`s on the same persona child.
 
 ## Environment
 

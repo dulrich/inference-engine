@@ -76,6 +76,7 @@ Spike-09 fixture task through the router at `:4813`, six metered `claude -p` run
 | `SIDECAR_LOG_DIR` | `~/.local/state/codex-sidecar/logs` | JSONL log directory (`0700`, files `0600`). |
 | `SIDECAR_LOG_KEEP_DAYS` | `14` | Log retention; pruned at startup and at each UTC day rollover. |
 | `SIDECAR_STATE_DIR` | `~/.local/state/codex-sidecar` | State root (holds `empty-cwd/`). |
+| `SIDECAR_OUTBOX_PATH` | *(unset)* | SQLite event outbox for the fleet-tools initiative tracker; unset = off. |
 
 `ANTHROPIC_API_KEY` is never read, set or forwarded. The execution-boundary item filter and the pinned `features.*` flags have no environment override by design.
 
@@ -131,6 +132,8 @@ sidecar/install.sh --home /tmp/x   # test render into a throwaway root; skips da
 ```
 
 It resolves `node` (refuses below major 24) and both persona wrappers (`codex-a`, `codex-b`), creates `~/.config/codex-sidecar/` (`0700`) and `env` (`0600`), and generates a `SIDECAR_KEY` **only when the env file is absent** — an existing key is never overwritten. The generated key is printed exactly once, at generation; after that it lives only in the env file and is never echoed again. Nothing is enabled or started: the installer ends by printing the lines below for you to run.
+
+The fleet value for `SIDECAR_OUTBOX_PATH` is `<code-root>/fleet-tools/data/outbox/events.db`; it is added to `~/.config/codex-sidecar/env` by hand and takes effect on `systemctl --user restart codex-sidecar`.
 
 **Enable** (`hold-for-user` — the agent cannot do this):
 

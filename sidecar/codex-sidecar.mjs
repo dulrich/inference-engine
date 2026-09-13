@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createOutboxWriter } from "./outbox.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VERSION = "0.1.0";
@@ -59,6 +60,8 @@ export function readConfig(env = process.env) {
     stateDir,
     logDir: env.SIDECAR_LOG_DIR || path.join(stateDir, "logs"),
     logKeepDays: num(env.SIDECAR_LOG_KEEP_DAYS, 14),
+    // SQLite event outbox for the fleet-tools initiative tracker. Unset = writer off.
+    outboxPath: env.SIDECAR_OUTBOX_PATH || "",
     // ---- test seams (documented in README; they never weaken an invariant) ----
     appServerCmd: env.SIDECAR_APP_SERVER_CMD || "",     // substitute the fake app-server
     pingMs: num(env.SIDECAR_PING_MS, 15000),            // SSE silence-ping interval
@@ -348,6 +351,58 @@ export function sessionKeyOf(body, systemText, firstUserText, headers = null) {
   return { key: hash, weak: true, scope };
 }
 
+// ---------------------------------------------------------------- outbox ----
+// Event rows for the fleet-tools initiative tracker (plan `tracker-event-seam.md`).
+// Every call here is fail-open: the writer swallows, so an outbox failure can never fail,
+// delay or log-as-error a request (the `Logger.write` contract).
+
+// A session key split into the tracker's (session_id, agent_id) pair: the parent's key is a
+// bare Claude Code session id, a subagent's is `<sid>:<suffix>`. A weak key (no
+// `metadata.user_id.session_id` at all) is not attributable to a session — it writes nothing.
+export function outboxKeyOf(key, weak) {
+  if (weak || typeof key !== "string" || key.length === 0) return null;
+  const i = key.indexOf(":");
+  return i < 0
+    ? { session_id: key, agent_id: null }
+    : { session_id: key.slice(0, i), agent_id: key.slice(i + 1) };
+}
+
+// The codex cumulative total for a thread, in the tracker's names. `usageOut` documents the
+// raw codex fields; `total` is the spend sum (input includes its cached share, as codex
+// reports it), not a context-window occupancy figure.
+const outboxUsage = u => {
+  const input = u?.inputTokens ?? 0;
+  const output = u?.outputTokens ?? 0;
+  return { input, output, total: input + output };
+};
+
+// One `turn.completed` per completed turn, plus `child.spawned` the first time a subagent key
+// is seen, the thread's cumulative `usage` when codex has reported one, and the `rate_limit`
+// recovery row that clears a persona-wide exhaustion. Never any message content.
+function outboxTurn(ctx, persona, sess, { model, effort, stopReason }) {
+  const okey = sess.outboxKey;
+  if (!okey || !ctx.config.outboxPath) return;
+  const base = {
+    harness: "codex-sidecar", leg: persona.name,
+    session_id: okey.session_id, agent_id: okey.agent_id, agent_type: null,
+  };
+  if (okey.agent_id && !ctx.outboxSpawned.has(sess.key)) {
+    ctx.outboxSpawned.add(sess.key);
+    ctx.outbox.record({ ...base, kind: "child.spawned", payload: { threadId: sess.threadId } });
+  }
+  ctx.outbox.record({
+    ...base, kind: "turn.completed",
+    payload: { model, effort, threadId: sess.threadId, stop_reason: stopReason },
+  });
+  if (sess.usageTotal) {
+    ctx.outbox.record({ ...base, kind: "usage", payload: { model, effort, ...outboxUsage(sess.usageTotal) } });
+  }
+  if (persona.rateLimited) {
+    persona.rateLimited = false;
+    ctx.outbox.record({ ...base, kind: "rate_limit", payload: { state: "ok" } });
+  }
+}
+
 // The title signature: empty tools, a short system prompt carrying the naming phrase, a single
 // user message. A miss must fail safe — a title query that reaches the app-server opens the
 // session's thread and the real task then lands as a continuation of "name this session"
@@ -599,6 +654,7 @@ class Session {
     this.deltaItems = new Set();  // item ids already streamed as deltas
     this.usageLast = null;        // previous call's tokenUsage.last (the lag)
     this.usageTotal = null;       // codex-side cumulative for this thread
+    this.outboxKey = null;        // {session_id, agent_id} for the tracker outbox; null = skip
     this.sent = { inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0 };
     this.sink = null;
     this.owner = null;            // the request currently driving this session (a request token)
@@ -828,6 +884,7 @@ class Persona {
     this.hookEvents = 0;
     this.mcpEvents = 0;
     this.rateLimit = null;
+    this.rateLimited = false;     // an exhaustion row is outstanding; the next turn clears it
     this.stopped = false;
   }
 
@@ -978,6 +1035,18 @@ class Persona {
         const err = new SidecarError(429, "rate_limit_error", `codex account rate limit reached (${hit.reason})`);
         if (hit.retryAfter != null) err.extra.retryAfter = hit.retryAfter;
         this.log("rate-limited", { persona: this.name, reason: hit.reason, retryAfter: hit.retryAfter ?? null });
+        // One outbox row per session settled by the exhaustion; the flag makes the next
+        // successful turn on this persona publish the matching `{state:'ok'}`.
+        this.rateLimited = true;
+        for (const s of [...this.bus.values()]) {
+          if (!s.outboxKey || !this.ctx.config.outboxPath) continue;
+          this.ctx.outbox.record({
+            harness: "codex-sidecar", leg: this.name,
+            session_id: s.outboxKey.session_id, agent_id: s.outboxKey.agent_id, agent_type: null,
+            kind: "rate_limit",
+            payload: { state: "exhausted", reason: hit.reason, retry_after_s: hit.retryAfter ?? undefined },
+          });
+        }
         for (const s of [...this.bus.values()]) s.settle({ kind: "error", error: err });
       }
       return;
@@ -1219,6 +1288,7 @@ async function handleMessages(ctx, persona, body, req, res) {
     mode = "next-turn";
   }
   sess.msgCount = msgs.length;
+  sess.outboxKey = outboxKeyOf(key, weak);
   const reqId = crypto.randomUUID().slice(0, 8);
   ctx.logger.write("http-start", { persona: persona.name, key, reqId, mode, stream: !!body.stream, nMessages: msgs.length });
 
@@ -1226,12 +1296,16 @@ async function handleMessages(ctx, persona, body, req, res) {
     ? new SseSink(res, body.model, cfg.pingMs)
     : new BufferSink(res, body.model);
   // One `http` row per request, same shape on every path (owner, joiner, replay).
-  const logHttp = ({ stopReason, toolCalls, usage, ...extra }) => ctx.logger.write("http", {
-    persona: persona.name, path: `/${persona.name}/v1/messages`, key, reqId, scope, mode, stream: !!body.stream,
-    model: parsed.model, effort: eff.effort, effortSource: eff.effortSource, threadId: sess.threadId, stop_reason: stopReason,
-    nMessages: msgs.length, nSystemRole: allMsgs.length - msgs.length, nTools: (body.tools || []).length,
-    toolCalls, usage: usageOut(usage), usageCodex: usage, headers: redactHeaders(req.headers), ...extra,
-  });
+  const logHttp = ({ stopReason, toolCalls, usage, ...extra }) => {
+    ctx.logger.write("http", {
+      persona: persona.name, path: `/${persona.name}/v1/messages`, key, reqId, scope, mode, stream: !!body.stream,
+      model: parsed.model, effort: eff.effort, effortSource: eff.effortSource, threadId: sess.threadId, stop_reason: stopReason,
+      nMessages: msgs.length, nSystemRole: allMsgs.length - msgs.length, nTools: (body.tools || []).length,
+      toolCalls, usage: usageOut(usage), usageCodex: usage, headers: redactHeaders(req.headers), ...extra,
+    });
+    // A joiner is a second view of the owner's turn, not a turn of its own: no outbox row.
+    if (!extra.joinedTo) outboxTurn(ctx, persona, sess, { model: parsed.model, effort: eff.effort, stopReason });
+  };
 
   // One request drives a session at a time. A second in-flight request on the same session
   // is, in practice, the client re-sending the *same* body: the 2026-09-13 storm was 89
@@ -1614,7 +1688,10 @@ export async function startSidecar(env = process.env) {
   const config = readConfig(env);
   if (!config.key) throw new Error("SIDECAR_KEY is required");
   const logger = new Logger(config.logDir, config.logKeepDays);
-  const ctx = { config, logger, personas: new Map() };
+  // One outbox writer per process; an unset `SIDECAR_OUTBOX_PATH` makes it a no-op that
+  // opens nothing. `outboxSpawned` is the per-process set of subagent keys already announced.
+  const outbox = createOutboxWriter({ path: config.outboxPath });
+  const ctx = { config, logger, outbox, outboxSpawned: new Set(), personas: new Map() };
   for (const name of config.personas) ctx.personas.set(name, new Persona(name, ctx));
 
   const handler = makeHandler(ctx);
@@ -1655,8 +1732,9 @@ export async function startSidecar(env = process.env) {
     })));
     logger.write("shutdown", {});
     logger.close();
+    outbox.close();
   };
-  return { ctx, config, logger, port, servers, close, personas: ctx.personas };
+  return { ctx, config, logger, outbox, port, servers, close, personas: ctx.personas };
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);

@@ -1,0 +1,1623 @@
+diff --git a/src/gateway/handler.ts b/src/gateway/handler.ts
+index cfeb7ed..568537f 100644
+--- a/src/gateway/handler.ts
++++ b/src/gateway/handler.ts
+@@ -66,6 +66,16 @@ import {
+   relayConvertedStreamFromUpstreamResponse
+ } from './streaming-conversion';
+ import { buildAnthropicHeaders } from '../adapters/builtins/common';
++// Patch 0006 (request-telemetry-jsonl): the bounded per-request jsonl sink. Every hook below
++// is fail-open — the module swallows its own errors, so no telemetry fault can fail a proxied
++// request. See request-telemetry.ts for the record contract.
++import {
++  beginRequestTelemetry,
++  noteRequestTelemetryAttempt,
++  noteRequestTelemetryFailure,
++  noteRequestTelemetryUsage,
++  tapUpstreamStreamForTelemetry
++} from './request-telemetry';
+ import {
+   addNamespaceFieldsToStandardResponse,
+   isHostedWebSearchTool
+@@ -298,6 +308,18 @@ export async function handleGatewayRequest(
+     source,
+     config
+   };
++
++  // Patch 0006: open the telemetry context here, before target resolution — the session id
++  // (`metadata.user_id`) and the subagent witness live in the CLIENT body, and the conversion
++  // leg drops `metadata` before the upstream body is built, so they are unreadable downstream.
++  let telemetryIsStreaming = false;
++  try {
++    telemetryIsStreaming = sourceAdapter.isStreamingRequest(adapterInput);
++  } catch {
++    telemetryIsStreaming = false;
++  }
++  beginRequestTelemetry(request, reply, source.adapterKey, body, telemetryIsStreaming);
++
+   const requestedModelSelector =
+     readHeader(request.headers['x-target-model']) || resolvePassthroughModel(body, source);
+   const virtualModelResolution = requestedModelSelector
+@@ -311,6 +333,7 @@ export async function handleGatewayRequest(
+     virtualModelResolution?.targetModelSelector || resolvePassthroughModel(body, source)
+   );
+   if (!targetProvidersResult.ok) {
++    noteRequestTelemetryFailure(request, 'target_resolution', targetProvidersResult.error);
+     return sendBadRequest(reply, targetProvidersResult.error);
+   }
+ 
+@@ -723,7 +746,19 @@ export async function handleGatewayRequest(
+       if (shouldForceEventStreamHeaders(source, isStreaming)) {
+         forceEventStreamHeaders(reply);
+       }
+-      return relayUpstreamResponse(reply, upstreamResponse, clientAbortSignal);
++      // Patch 0006: on the passthrough legs the upstream SSE bytes ARE the client's bytes, so
++      // the tap reads model/stop_reason/usage/TTFT off the same stream it relays, unchanged.
++      return relayUpstreamResponse(
++        reply,
++        isStreaming
++          ? tapUpstreamStreamForTelemetry(
++              request,
++              upstreamResponse,
++              source.adapterKey === 'anthropic_messages' ? 'anthropic_events' : 'openai_chunks'
++            )
++          : upstreamResponse,
++        clientAbortSignal
++      );
+     }
+ 
+     if (isStreaming) {
+@@ -962,10 +997,17 @@ export async function handleGatewayRequest(
+           clientAbortSignal
+         );
+         attachTargetRoutingHeaders(reply, targetProvider, targetProviderConfig?.name, attempts.length, targetProviderConfig);
++        // Patch 0006: tap the UPSTREAM stream, not the converted one — llama-server's
++        // `timings` object rides the final upstream chunk and does not survive the conversion
++        // (measured: zero `timings` mentions in the client stream, telemetry baseline WP-1).
+         return relayConvertedStreamFromUpstreamResponse(
+           reply,
+           source,
+-          upstreamResponse,
++          tapUpstreamStreamForTelemetry(
++            request,
++            upstreamResponse,
++            targetProvider === 'anthropic' ? 'anthropic_events' : 'openai_chunks'
++          ),
+           standardRequest,
+           clientAbortSignal
+         );
+@@ -1568,6 +1610,13 @@ export async function handleGatewayRequest(
+     );
+   }
+ 
++  // Patch 0006: the terminal record's `error` comes from the attempts envelope — stage and
++  // message only, never a body and never a header.
++  const lastAttempt = attempts[attempts.length - 1];
++  if (lastAttempt) {
++    noteRequestTelemetryFailure(request, lastAttempt.stage, lastAttempt.message);
++  }
++
+   return reply.send(fallbackFailure.payload);
+ }
+ 
+@@ -1605,6 +1654,10 @@ export async function handleAnthropicCountTokensRequest(
+     return sendBadRequest(reply, 'Request body must be a JSON object.');
+   }
+ 
++  // Patch 0006: count_tokens is a proxied request like any other and gets its own record
++  // (never streamed).
++  beginRequestTelemetry(request, reply, source.adapterKey, body, false);
++
+   const requestedModel =
+     readHeader(request.headers['x-target-model']) || resolvePassthroughModel(body, source);
+ 
+@@ -1615,6 +1668,7 @@ export async function handleAnthropicCountTokensRequest(
+     requestedModel
+   );
+   if (!targetProvidersResult.ok) {
++    noteRequestTelemetryFailure(request, 'target_resolution', targetProvidersResult.error);
+     return sendBadRequest(reply, targetProvidersResult.error);
+   }
+ 
+@@ -1636,6 +1690,7 @@ export async function handleAnthropicCountTokensRequest(
+   }
+ 
+   if (!resolvedTarget || !resolvedModel) {
++    noteRequestTelemetryFailure(request, 'model_resolution', 'Model not found for /v1/messages/count_tokens.');
+     return reply.code(404).send({
+       error: {
+         message: `Model not found for /v1/messages/count_tokens: ${requestedModel || '(none)'}`,
+@@ -1689,6 +1744,13 @@ export async function handleAnthropicCountTokensRequest(
+   ).body;
+ 
+   let upstreamResponse: Response;
++  noteRequestTelemetryAttempt(request, {
++    provider: resolvedTarget.provider,
++    providerName: resolvedProviderConfig?.name,
++    sourceAdapterKey: source.adapterKey,
++    upstreamUrl,
++    model: resolvedModel
++  });
+   try {
+     upstreamResponse = await callUpstream(
+       upstreamUrl,
+@@ -1708,6 +1770,11 @@ export async function handleAnthropicCountTokensRequest(
+       return;
+     }
+ 
++    noteRequestTelemetryFailure(
++      request,
++      'upstream_connect',
++      error instanceof Error ? error.message : 'Failed to reach upstream provider.'
++    );
+     return reply.code(502).send({
+       error: {
+         message: error instanceof Error ? error.message : 'Failed to reach upstream provider.'
+@@ -6300,6 +6367,18 @@ function attachBillingHeaders(
+     'Usage billing computed.'
+   );
+ 
++  // Patch 0006: the engine's own usage block, joined into this request's telemetry record.
++  noteRequestTelemetryUsage(
++    request,
++    {
++      input: billing.usage.input_tokens,
++      output: billing.usage.output_tokens,
++      cacheRead: billing.usage.cache_read_tokens,
++      cacheWrite: billing.usage.cache_write_tokens
++    },
++    model
++  );
++
+   publishBillingEventSafe(
+     request,
+     reply,
+@@ -6639,6 +6718,19 @@ async function tryPublishStreamingBillingEventFromUpstreamResponse(
+     'Streaming usage billing computed.'
+   );
+ 
++  // Patch 0006: same join for the streamed legs, where usage only exists after the client
++  // stream has already ended (hence the terminal record's finalize grace).
++  noteRequestTelemetryUsage(
++    request,
++    {
++      input: billing.usage.input_tokens,
++      output: billing.usage.output_tokens,
++      cacheRead: billing.usage.cache_read_tokens,
++      cacheWrite: billing.usage.cache_write_tokens
++    },
++    billingModel
++  );
++
+   publishBillingEventSafe(
+     request,
+     reply,
+@@ -7123,12 +7215,24 @@ async function callUpstreamWithFailureCapture(
+       details?: unknown;
+     }
+ > {
++  // Patch 0006: this is the single seam every upstream attempt passes through (the one patch
++  // 0004 already threads a logger/provider/adapter-key context into), so leg identity, upstream
++  // url and the attempt counter are recorded here once rather than at each call site.
++  noteRequestTelemetryAttempt(context.request, {
++    provider: context.targetProvider,
++    providerName: context.targetProviderConfig?.name,
++    sourceAdapterKey: context.sourceAdapterKey,
++    upstreamUrl: upstreamRequest.url,
++    model: context.model
++  });
++
+   const circuit = checkProviderCircuitBreaker(
+     context.config,
+     context.targetProvider,
+     context.targetProviderConfig
+   );
+   if (!circuit.ok) {
++    noteRequestTelemetryFailure(context.request, 'upstream_circuit_open', circuit.message);
+     return {
+       ok: false,
+       stage: 'upstream_circuit_open',
+@@ -7145,6 +7249,7 @@ async function callUpstreamWithFailureCapture(
+     context.clientAbortSignal
+   );
+   if (!slot.ok) {
++    noteRequestTelemetryFailure(context.request, 'upstream_concurrency', slot.message);
+     return {
+       ok: false,
+       stage: 'upstream_concurrency',
+@@ -7226,6 +7331,11 @@ async function callUpstreamWithFailureCapture(
+         'Failed to reach upstream provider.'
+       );
+     }
++    noteRequestTelemetryFailure(
++      context.request,
++      'upstream_connect',
++      'Failed to reach upstream provider.'
++    );
+     return {
+       ok: false,
+       stage: 'upstream_connect',
+diff --git a/src/gateway/request-telemetry.test.ts b/src/gateway/request-telemetry.test.ts
+new file mode 100644
+index 0000000..987d9e0
+--- /dev/null
++++ b/src/gateway/request-telemetry.test.ts
+@@ -0,0 +1,443 @@
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++import {
++  beginRequestTelemetry,
++  finishRequestTelemetry,
++  noteRequestTelemetryAttempt,
++  noteRequestTelemetryFailure,
++  noteRequestTelemetryUsage,
++  readClaudeCodeSessionId,
++  readSubagentWitness,
++  resolveTelemetryOptionsFromEnv,
++  setRequestTelemetrySinkForTests,
++  TelemetrySink,
++  noteRequestTelemetryStreamText,
++  tapUpstreamStreamForTelemetry
++} from './request-telemetry';
++
++/**
++ * Patch 0006 (request-telemetry-jsonl). The sink is the router's only per-request record, and
++ * the one thing it must never do is leak a credential or a prompt into a file a dashboard
++ * tails, so redaction is asserted against a request that carries a bearer, the gateway key
++ * header and real message text at once.
++ */
++
++const BEARER = 'sk-ant-oat01-TESTBEARER-DO-NOT-LOG';
++const GATEWAY_KEY = 'GATEWAYKEY-TESTVALUE-DO-NOT-LOG';
++const MESSAGE_TEXT = 'the capital of assyria is a secret prompt string';
++const SYSTEM_TEXT = 'You are Claude Code. cc_is_subagent=true; billing line';
++const SESSION_ID = '7f3c1e88-9d21-4a6b-bb0f-2c5d9e410000';
++
++let dir: string;
++
++function makeSink(overrides: Partial<{ maxBytes: number; keepFiles: number }> = {}) {
++  return new TelemetrySink({
++    dir,
++    maxBytes: overrides.maxBytes ?? 1024 * 1024,
++    keepFiles: overrides.keepFiles ?? 14
++  });
++}
++
++function makeRequest(): { request: unknown; reply: unknown; close: () => void } {
++  const closeHandlers: Array<() => void> = [];
++  const request = {
++    id: 'req-telemetry-1',
++    url: '/v1/messages?beta=true',
++    method: 'POST',
++    headers: {
++      authorization: `Bearer ${BEARER}`,
++      'x-gateway-key': GATEWAY_KEY,
++      'content-type': 'application/json'
++    },
++    log: { warn: vi.fn(), info: vi.fn() }
++  };
++  const reply = {
++    raw: {
++      statusCode: 200,
++      on: (event: string, handler: () => void) => {
++        if (event === 'close') {
++          closeHandlers.push(handler);
++        }
++      }
++    }
++  };
++  return {
++    request,
++    reply,
++    close: () => closeHandlers.forEach((handler) => handler())
++  };
++}
++
++function makeBody(): Record<string, unknown> {
++  return {
++    model: 'claude-local/qwen36-a3b',
++    stream: true,
++    metadata: { user_id: `user_abc123hash_account_11112222-3333-4444-5555-666677778888_session_${SESSION_ID}` },
++    system: [{ type: 'text', text: SYSTEM_TEXT }],
++    messages: [{ role: 'user', content: [{ type: 'text', text: MESSAGE_TEXT }] }]
++  };
++}
++
++function readLines(): Array<Record<string, unknown>> {
++  const files = fs
++    .readdirSync(dir)
++    .filter((name) => name.endsWith('.jsonl'))
++    .sort();
++  return files.flatMap((name) =>
++    fs
++      .readFileSync(path.join(dir, name), 'utf8')
++      .split('\n')
++      .filter((line) => line.trim())
++      .map((line) => JSON.parse(line) as Record<string, unknown>)
++  );
++}
++
++function readRawText(): string {
++  return fs
++    .readdirSync(dir)
++    .filter((name) => name.endsWith('.jsonl'))
++    .sort()
++    .map((name) => fs.readFileSync(path.join(dir, name), 'utf8'))
++    .join('');
++}
++
++beforeEach(() => {
++  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'router-telemetry-'));
++});
++
++afterEach(() => {
++  vi.useRealTimers();
++  setRequestTelemetrySinkForTests(undefined);
++  fs.rmSync(dir, { recursive: true, force: true });
++});
++
++describe('request telemetry record', () => {
++  it('writes one terminal request record carrying the pinned fields', async () => {
++    const sink = makeSink();
++    setRequestTelemetrySinkForTests(sink);
++    const { request, reply } = makeRequest();
++
++    beginRequestTelemetry(request as never, reply as never, 'anthropic_messages', makeBody(), true);
++    noteRequestTelemetryAttempt(request, {
++      provider: 'openai',
++      providerName: 'claude-local',
++      sourceAdapterKey: 'anthropic_messages',
++      upstreamUrl: 'http://inference-engine-llama:4806/v1/chat/completions',
++      model: 'qwen36-a3b'
++    });
++    noteRequestTelemetryStreamText(
++      request,
++      'data: {"model":"qwen36-a3b","choices":[{"delta":{"content":"hi"}}]}\n\n',
++      'openai_chunks'
++    );
++    noteRequestTelemetryStreamText(
++      request,
++      'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"timings":{"prompt_n":17,"prompt_ms":42.5,"predicted_n":40,"predicted_ms":900.25,"predicted_per_second":44.4}}\n\ndata: [DONE]\n\n',
++      'openai_chunks'
++    );
++    // The engine's billing model on the local leg is llama-server's absolute gguf path; it must
++    // not clobber the joinable id the resolved target/upstream chunk already supplied.
++    noteRequestTelemetryUsage(
++      request,
++      { input: 17, output: 40, cacheRead: 13, cacheWrite: 0 },
++      '/models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf'
++    );
++    finishRequestTelemetry(request);
++    await sink.flush();
++
++    const lines = readLines();
++    expect(lines).toHaveLength(1);
++    const record = lines[0] as Record<string, unknown>;
++    expect(record).toMatchObject({
++      kind: 'request',
++      reqId: 'req-telemetry-1',
++      route: '/v1/messages',
++      method: 'POST',
++      sourceAdapterKey: 'anthropic_messages',
++      leg: 'claude-local',
++      providerType: 'openai',
++      upstreamUrl: 'http://inference-engine-llama:4806/v1/chat/completions',
++      sessionId: SESSION_ID,
++      isSubagent: true,
++      modelRequested: 'claude-local/qwen36-a3b',
++      modelResolved: 'qwen36-a3b',
++      stream: true,
++      status: 200,
++      attemptSequence: 1,
++      stopReason: 'stop',
++      error: null
++    });
++    expect(record.usage).toEqual({ input: 17, output: 40, cacheRead: 13, cacheWrite: 0 });
++    // The llama-server timings object, read off the upstream chunk before the conversion drops it.
++    expect(record.upstreamTimings).toEqual({
++      prompt_n: 17,
++      prompt_ms: 42.5,
++      predicted_n: 40,
++      predicted_ms: 900.25,
++      predicted_per_second: 44.4
++    });
++    expect(typeof record.ts).toBe('string');
++    expect(typeof record.wallMs).toBe('number');
++    expect(record.ttftMs).toBeTypeOf('number');
++    expect(record.responseTokens).toBe(1);
++  });
++
++  it('never writes the bearer, the gateway key, the system text or message content', async () => {
++    const sink = makeSink();
++    setRequestTelemetrySinkForTests(sink);
++    const { request, reply } = makeRequest();
++
++    beginRequestTelemetry(request as never, reply as never, 'anthropic_messages', makeBody(), true);
++    noteRequestTelemetryAttempt(request, {
++      provider: 'openai',
++      providerName: 'claude-local',
++      sourceAdapterKey: 'anthropic_messages',
++      upstreamUrl: 'http://inference-engine-llama:4806/v1/chat/completions'
++    });
++    noteRequestTelemetryStreamText(
++      request,
++      `data: {"choices":[{"delta":{"content":"${MESSAGE_TEXT}"}}]}\n\n`,
++      'openai_chunks'
++    );
++    finishRequestTelemetry(request);
++    await sink.flush();
++
++    const raw = readRawText();
++    expect(raw.length).toBeGreaterThan(0);
++    expect(raw).not.toContain(BEARER);
++    expect(raw).not.toContain(GATEWAY_KEY);
++    expect(raw).not.toContain('Bearer ');
++    expect(raw).not.toContain(MESSAGE_TEXT);
++    expect(raw).not.toContain(SYSTEM_TEXT);
++    expect(raw).not.toContain('authorization');
++    expect(raw).not.toContain('x-gateway-key');
++    // The account/user segments of metadata.user_id are identity material: only the session
++    // segment is ever extracted.
++    expect(raw).not.toContain('user_abc123hash_account_');
++    expect(raw).toContain(SESSION_ID);
++  });
++
++  it('records the failing stage from the attempts envelope', async () => {
++    const sink = makeSink();
++    setRequestTelemetrySinkForTests(sink);
++    const { request, reply } = makeRequest();
++    (reply as { raw: { statusCode: number } }).raw.statusCode = 400;
++
++    beginRequestTelemetry(request as never, reply as never, 'anthropic_messages', makeBody(), false);
++    noteRequestTelemetryFailure(request, 'model_resolution', 'Model is not allowed for provider.');
++    finishRequestTelemetry(request);
++    await sink.flush();
++
++    const record = readLines()[0] as Record<string, unknown>;
++    expect(record.status).toBe(400);
++    expect(record.error).toEqual({
++      stage: 'model_resolution',
++      message: 'Model is not allowed for provider.'
++    });
++  });
++});
++
++describe('progress records', () => {
++  it('emits at most one progress line per interval and the terminal record last', async () => {
++    vi.useFakeTimers();
++    const sink = makeSink();
++    setRequestTelemetrySinkForTests(sink);
++    const { request, reply } = makeRequest();
++
++    beginRequestTelemetry(request as never, reply as never, 'anthropic_messages', makeBody(), true);
++    noteRequestTelemetryAttempt(request, { provider: 'openai', providerName: 'claude-local' });
++
++    const upstream = new Response(
++      new ReadableStream<Uint8Array>({
++        start(controller) {
++          controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{}}]}\n\n'));
++        }
++      }),
++      { status: 200 }
++    );
++    // Opening the tap starts the progress cadence; the stream is deliberately left open.
++    tapUpstreamStreamForTelemetry(request, upstream, 'openai_chunks');
++
++    vi.advanceTimersByTime(3500);
++    noteRequestTelemetryStreamText(
++      request,
++      'data: {"choices":[{"delta":{"content":"a"}}]}\n\n',
++      'openai_chunks'
++    );
++    vi.advanceTimersByTime(1000);
++    finishRequestTelemetry(request);
++    vi.advanceTimersByTime(5000);
++    await sink.flush();
++
++    const lines = readLines();
++    const progress = lines.filter((line) => line.kind === 'progress');
++    const terminal = lines.filter((line) => line.kind === 'request');
++    // 3500 ms then 1000 ms at a 1000 ms cadence: four ticks, never one per chunk.
++    expect(progress).toHaveLength(4);
++    expect(terminal).toHaveLength(1);
++    expect(lines[lines.length - 1]?.kind).toBe('request');
++    expect(progress[0]).toMatchObject({
++      kind: 'progress',
++      reqId: 'req-telemetry-1',
++      sessionId: SESSION_ID,
++      leg: 'claude-local',
++      phase: 'prefill',
++      responseTokens: 0
++    });
++    expect(progress[progress.length - 1]).toMatchObject({ phase: 'decode', responseTokens: 1 });
++    for (const line of progress) {
++      expect(typeof line.elapsedMs).toBe('number');
++    }
++  });
++
++  it('does not emit a second terminal record for the same request', async () => {
++    const sink = makeSink();
++    setRequestTelemetrySinkForTests(sink);
++    const { request, reply } = makeRequest();
++
++    beginRequestTelemetry(request as never, reply as never, 'anthropic_messages', makeBody(), false);
++    finishRequestTelemetry(request);
++    finishRequestTelemetry(request);
++    await sink.flush();
++
++    expect(readLines().filter((line) => line.kind === 'request')).toHaveLength(1);
++  });
++});
++
++describe('stream tap', () => {
++  it('relays the upstream bytes unchanged while reading model, stop reason and usage', async () => {
++    const sink = makeSink();
++    setRequestTelemetrySinkForTests(sink);
++    const { request, reply } = makeRequest();
++
++    beginRequestTelemetry(request as never, reply as never, 'anthropic_messages', makeBody(), true);
++    const frames = [
++      'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":32,"cache_read_input_tokens":189434}}}\n\n',
++      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hmm"}}\n\n',
++      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}\n\n',
++      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1865}}\n\n'
++    ];
++    const upstream = new Response(
++      new ReadableStream<Uint8Array>({
++        start(controller) {
++          for (const frame of frames) {
++            controller.enqueue(new TextEncoder().encode(frame));
++          }
++          controller.close();
++        }
++      }),
++      { status: 200, headers: { 'content-type': 'text/event-stream' } }
++    );
++
++    const tapped = tapUpstreamStreamForTelemetry(request, upstream, 'anthropic_events');
++    expect(tapped.status).toBe(200);
++    expect(tapped.headers.get('content-type')).toBe('text/event-stream');
++    expect(await tapped.text()).toBe(frames.join(''));
++
++    finishRequestTelemetry(request);
++    await sink.flush();
++
++    const record = readLines().find((line) => line.kind === 'request') as Record<string, unknown>;
++    expect(record).toMatchObject({
++      modelResolved: 'claude-sonnet-4-6',
++      stopReason: 'end_turn',
++      responseTokens: 1,
++      reasoningTokens: 1
++    });
++    expect(record.usage).toMatchObject({ input: 32, output: 1865, cacheRead: 189434 });
++    expect(record.ttftMs).toBeTypeOf('number');
++  });
++});
++
++describe('sink bounding', () => {
++  it('rotates by size into router-YYYY-MM-DD.N.jsonl and keeps at most keepFiles files', async () => {
++    const sink = makeSink({ maxBytes: 1024, keepFiles: 2 });
++    for (let index = 0; index < 40; index += 1) {
++      sink.write({ kind: 'request', reqId: `req-${index}`, filler: 'x'.repeat(200) });
++      await sink.flush();
++    }
++
++    const files = fs.readdirSync(dir).sort();
++    expect(files.length).toBe(2);
++    for (const name of files) {
++      expect(name).toMatch(/^router-\d{4}-\d{2}-\d{2}\.\d+\.jsonl$/);
++      expect(fs.statSync(path.join(dir, name)).size).toBeLessThanOrEqual(1024 + 256);
++    }
++    // Newest kept: the final record is still readable, and every kept line is whole JSON.
++    const lines = readRawText().split('\n').filter((line) => line.trim());
++    expect(lines.every((line) => JSON.parse(line) !== null)).toBe(true);
++    expect(lines[lines.length - 1]).toContain('"req-39"');
++  });
++
++  it('flushes whole lines only, so a tailing reader never sees a partial record', async () => {
++    const sink = makeSink();
++    for (let index = 0; index < 500; index += 1) {
++      sink.write({ kind: 'progress', reqId: `req-${index}`, filler: 'y'.repeat(300) });
++    }
++    await sink.flush();
++    const raw = readRawText();
++    expect(raw.endsWith('\n')).toBe(true);
++    for (const line of raw.split('\n').filter((entry) => entry.trim())) {
++      expect(() => JSON.parse(line)).not.toThrow();
++    }
++  });
++
++  it('disables itself with a single warning when the sink directory is not writable', () => {
++    // A regular file standing where the sink directory should be: the stale/absent-mount case,
++    // reproduced without depending on the runner's uid.
++    const blocker = path.join(dir, 'not-a-directory');
++    fs.writeFileSync(blocker, 'x');
++    const sink = new TelemetrySink({
++      dir: path.join(blocker, 'logs'),
++      maxBytes: 1024,
++      keepFiles: 2
++    });
++    const logger = { warn: vi.fn() };
++    sink.write({ kind: 'request' }, logger);
++    sink.write({ kind: 'request' }, logger);
++    expect(sink.isDisabled).toBe(true);
++    expect(logger.warn).toHaveBeenCalledTimes(1);
++  });
++});
++
++describe('configuration and client-body parsing', () => {
++  it('defaults to enabled at /var/log/inference-router and honours the env overrides', () => {
++    expect(resolveTelemetryOptionsFromEnv({} as NodeJS.ProcessEnv)).toEqual({
++      enabled: true,
++      options: { dir: '/var/log/inference-router', maxBytes: 16 * 1024 * 1024, keepFiles: 14 }
++    });
++    expect(
++      resolveTelemetryOptionsFromEnv({
++        ROUTER_TELEMETRY_ENABLED: 'false',
++        ROUTER_TELEMETRY_DIR: '/tmp/sink',
++        ROUTER_TELEMETRY_MAX_BYTES: '2048',
++        ROUTER_TELEMETRY_KEEP_FILES: '3'
++      } as NodeJS.ProcessEnv)
++    ).toEqual({
++      enabled: false,
++      options: { dir: '/tmp/sink', maxBytes: 2048, keepFiles: 3 }
++    });
++  });
++
++  it('parses the session id out of metadata.user_id and the subagent witness', () => {
++    expect(readClaudeCodeSessionId(makeBody())).toBe(SESSION_ID);
++    expect(readClaudeCodeSessionId({})).toBeUndefined();
++    expect(readClaudeCodeSessionId({ metadata: { user_id: 'user_nosession' } })).toBeUndefined();
++    expect(readSubagentWitness(makeBody())).toBe(true);
++    expect(readSubagentWitness({ system: [{ type: 'text', text: 'no witness here' }] })).toBe(false);
++    expect(readSubagentWitness({})).toBe(false);
++  });
++
++  it('writes nothing at all when telemetry is disabled', async () => {
++    setRequestTelemetrySinkForTests(null);
++    const { request, reply } = makeRequest();
++    beginRequestTelemetry(request as never, reply as never, 'anthropic_messages', makeBody(), true);
++    noteRequestTelemetryAttempt(request, { provider: 'openai', providerName: 'claude-local' });
++    finishRequestTelemetry(request);
++    expect(fs.readdirSync(dir)).toHaveLength(0);
++  });
++});
+diff --git a/src/gateway/request-telemetry.ts b/src/gateway/request-telemetry.ts
+new file mode 100644
+index 0000000..93715d6
+--- /dev/null
++++ b/src/gateway/request-telemetry.ts
+@@ -0,0 +1,929 @@
++/**
++ * Patch 0006 (request-telemetry-jsonl): a bounded, rotated, per-request jsonl telemetry sink.
++ *
++ * Why this exists: the engine's native pino surface joins a usage block to an access line by
++ * `reqId`, but carries no session id, no model id, no TTFT, no upstream timings and no error
++ * envelope as fields — and at the only level that emits usage it also dumps up to 32 KiB of
++ * every upstream request body (system prompt + conversation) into the container log. Measured
++ * facts: `docs/tool-calling-gateway/router-telemetry-baseline.md` (inference-engine repo).
++ *
++ * Contract (kept deliberately narrow):
++ *  - Two record kinds, one JSON object per line: `progress` (in-flight, at most one per
++ *    `PROGRESS_INTERVAL_MS` per request) and `request` (terminal, written exactly once, after
++ *    that request's last `progress` line).
++ *  - Field allowlist only. Never a credential, never a header, never message content. The
++ *    record builder can only reach scalars it was explicitly handed; there is no "spread the
++ *    body/headers in" path anywhere in this file, by construction.
++ *  - Telemetry must never fail the proxy: every public entry point is wrapped so that any
++ *    throw is swallowed, and an unusable sink directory disables the sink after one warning.
++ *  - Bounded: a 64 KiB line buffer flushed on newline boundaries (whole lines only, so a
++ *    tailing reader never sees a partial line), UTC-day + size-capped rotation to
++ *    `router-YYYY-MM-DD.N.jsonl`, and at most `keepFiles` files retained.
++ *
++ * The reader — not this writer — is what marks an abandoned stream `stale` (a stream with no
++ * progress line for 120 s); the writer never emits an outcome it did not observe.
++ */
++
++import { promises as fsp } from 'node:fs';
++import fs from 'node:fs';
++import path from 'node:path';
++
++import type { FastifyReply, FastifyRequest } from 'fastify';
++
++/** One progress line per request per interval — the plan's pinned 1000 ms throttle. */
++const PROGRESS_INTERVAL_MS = 1000;
++/** Hard cap on progress lines for a single request (1 h at the interval above). */
++const MAX_PROGRESS_RECORDS = 3600;
++/** Flush when the pending whole-line buffer reaches this, or on the timer below. */
++const FLUSH_BUFFER_BYTES = 64 * 1024;
++const FLUSH_INTERVAL_MS = 250;
++/**
++ * Grace between the client response closing and writing the terminal record: the engine's
++ * streaming billing usage is computed off a cloned upstream response *after* the client stream
++ * ends, so finalising the instant the socket closes would lose `usage` on every streamed turn.
++ */
++const FINALIZE_GRACE_MS = 400;
++/** A single SSE data line longer than this is not worth parsing for telemetry. */
++const MAX_PARSED_SSE_LINE_BYTES = 64 * 1024;
++/** Cap on the carry-over buffer for a partial SSE line. */
++const MAX_SSE_RESIDUAL_BYTES = 256 * 1024;
++
++const DEFAULT_DIR = '/var/log/inference-router';
++const DEFAULT_MAX_BYTES = 16 * 1024 * 1024;
++const DEFAULT_KEEP_FILES = 14;
++
++export interface TelemetrySinkOptions {
++  dir: string;
++  maxBytes: number;
++  keepFiles: number;
++}
++
++export interface TelemetryUsage {
++  input?: number;
++  output?: number;
++  cacheRead?: number;
++  cacheWrite?: number;
++}
++
++/** The llama-server `timings` object, passed through verbatim when the upstream supplies it. */
++export type UpstreamTimings = Record<string, number> | null;
++
++type SseShape = 'openai_chunks' | 'anthropic_events';
++
++interface TelemetryLogger {
++  warn: (...args: unknown[]) => void;
++}
++
++function readEnvFlag(value: string | undefined, fallback: boolean): boolean {
++  if (value === undefined || value.trim() === '') {
++    return fallback;
++  }
++  const normalized = value.trim().toLowerCase();
++  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
++    return true;
++  }
++  if (['0', 'false', 'no', 'off'].includes(normalized)) {
++    return false;
++  }
++  return fallback;
++}
++
++function readEnvInt(value: string | undefined, fallback: number): number {
++  if (!value || !value.trim()) {
++    return fallback;
++  }
++  const parsed = Number.parseInt(value.trim(), 10);
++  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
++}
++
++export function resolveTelemetryOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): {
++  enabled: boolean;
++  options: TelemetrySinkOptions;
++} {
++  return {
++    enabled: readEnvFlag(env.ROUTER_TELEMETRY_ENABLED, true),
++    options: {
++      dir: env.ROUTER_TELEMETRY_DIR?.trim() || DEFAULT_DIR,
++      maxBytes: readEnvInt(env.ROUTER_TELEMETRY_MAX_BYTES, DEFAULT_MAX_BYTES),
++      keepFiles: readEnvInt(env.ROUTER_TELEMETRY_KEEP_FILES, DEFAULT_KEEP_FILES)
++    }
++  };
++}
++
++const FILE_PATTERN = /^router-(\d{4}-\d{2}-\d{2})\.(\d+)\.jsonl$/;
++
++function utcDayStamp(now: Date): string {
++  return now.toISOString().slice(0, 10);
++}
++
++/**
++ * Append-only jsonl writer: whole lines only, size + UTC-day rotation, bounded retention.
++ * One instance per process; constructed directly by the tests with a temp directory.
++ */
++export class TelemetrySink {
++  private readonly dir: string;
++  private readonly maxBytes: number;
++  private readonly keepFiles: number;
++
++  private disabled = false;
++  private pending: string[] = [];
++  private pendingBytes = 0;
++  private flushTimer: NodeJS.Timeout | undefined;
++  private writeChain: Promise<void> = Promise.resolve();
++  private day: string | undefined;
++  private index = 0;
++  private currentBytes = 0;
++  private pruneAfterWrite = false;
++
++  constructor(options: TelemetrySinkOptions) {
++    this.dir = options.dir;
++    this.maxBytes = Math.max(1024, options.maxBytes);
++    this.keepFiles = Math.max(1, options.keepFiles);
++  }
++
++  get isDisabled(): boolean {
++    return this.disabled;
++  }
++
++  /** Queue one record. Never throws; never blocks the caller on I/O. */
++  write(record: Record<string, unknown>, logger?: TelemetryLogger): void {
++    if (this.disabled) {
++      return;
++    }
++    if (!this.ensureUsableDirectory(logger)) {
++      return;
++    }
++
++    let line: string;
++    try {
++      line = `${JSON.stringify(record)}\n`;
++    } catch {
++      return;
++    }
++
++    this.pending.push(line);
++    this.pendingBytes += Buffer.byteLength(line);
++    if (this.pendingBytes >= FLUSH_BUFFER_BYTES) {
++      void this.flush();
++      return;
++    }
++    if (!this.flushTimer) {
++      this.flushTimer = setTimeout(() => {
++        this.flushTimer = undefined;
++        void this.flush();
++      }, FLUSH_INTERVAL_MS);
++      this.flushTimer.unref?.();
++    }
++  }
++
++  /** Flush every buffered whole line. Resolves once the queued append has been attempted. */
++  flush(): Promise<void> {
++    if (this.flushTimer) {
++      clearTimeout(this.flushTimer);
++      this.flushTimer = undefined;
++    }
++    if (this.disabled || this.pending.length === 0) {
++      return this.writeChain;
++    }
++
++    const payload = this.pending.join('');
++    this.pending = [];
++    this.pendingBytes = 0;
++
++    this.writeChain = this.writeChain
++      .then(() => this.append(payload))
++      .catch(() => undefined);
++    return this.writeChain;
++  }
++
++  private async append(payload: string): Promise<void> {
++    if (this.disabled) {
++      return;
++    }
++    const bytes = Buffer.byteLength(payload);
++    const target = this.resolveTargetFile(bytes);
++    try {
++      await fsp.appendFile(target, payload, 'utf8');
++      this.currentBytes += bytes;
++      if (this.pruneAfterWrite) {
++        // Retention runs after the new file exists, so the count it prunes to is the count a
++        // reader will actually see — pruning before the append leaves keepFiles + 1 on disk.
++        this.pruneAfterWrite = false;
++        this.prune();
++      }
++    } catch {
++      // A write failure after the directory probe succeeded (disk full, mount yanked) is
++      // reported by dropping the record, never by failing the request that produced it.
++      this.disabled = true;
++    }
++  }
++
++  private resolveTargetFile(incomingBytes: number): string {
++    const day = utcDayStamp(new Date());
++    if (day !== this.day) {
++      this.day = day;
++      this.index = this.highestIndexForDay(day);
++      this.currentBytes = this.sizeOf(this.fileName(day, this.index));
++      this.pruneAfterWrite = true;
++    }
++    if (this.currentBytes > 0 && this.currentBytes + incomingBytes > this.maxBytes) {
++      this.index += 1;
++      this.currentBytes = 0;
++      this.pruneAfterWrite = true;
++    }
++    return path.join(this.dir, this.fileName(this.day, this.index));
++  }
++
++  private fileName(day: string | undefined, index: number): string {
++    return `router-${day ?? utcDayStamp(new Date())}.${index}.jsonl`;
++  }
++
++  private sizeOf(name: string): number {
++    try {
++      return fs.statSync(path.join(this.dir, name)).size;
++    } catch {
++      return 0;
++    }
++  }
++
++  private highestIndexForDay(day: string): number {
++    let highest = 0;
++    for (const name of this.listFiles()) {
++      const match = FILE_PATTERN.exec(name);
++      if (match && match[1] === day) {
++        highest = Math.max(highest, Number.parseInt(match[2] as string, 10));
++      }
++    }
++    return highest;
++  }
++
++  private listFiles(): string[] {
++    try {
++      return fs
++        .readdirSync(this.dir)
++        .filter((name) => FILE_PATTERN.test(name))
++        .sort();
++    } catch {
++      return [];
++    }
++  }
++
++  /** Retain at most `keepFiles` files, oldest first by (UTC day, index) filename order. */
++  private prune(): void {
++    const files = this.listFiles();
++    if (files.length <= this.keepFiles) {
++      return;
++    }
++    for (const name of files.slice(0, files.length - this.keepFiles)) {
++      try {
++        fs.unlinkSync(path.join(this.dir, name));
++      } catch {
++        // Retention is best effort; a file we cannot remove is not a request-path failure.
++      }
++    }
++  }
++
++  private ensureUsableDirectory(logger?: TelemetryLogger): boolean {
++    if (this.day !== undefined) {
++      return true;
++    }
++    try {
++      fs.mkdirSync(this.dir, { recursive: true });
++      fs.accessSync(this.dir, fs.constants.W_OK);
++    } catch (error) {
++      this.disabled = true;
++      logger?.warn(
++        {
++          dir: this.dir,
++          details: error instanceof Error ? error.message : String(error)
++        },
++        'Router request telemetry disabled: sink directory is missing or not writable.'
++      );
++      return false;
++    }
++    const day = utcDayStamp(new Date());
++    this.day = day;
++    this.index = this.highestIndexForDay(day);
++    this.currentBytes = this.sizeOf(this.fileName(day, this.index));
++    return true;
++  }
++}
++
++let activeSink: TelemetrySink | null | undefined;
++
++function getSink(): TelemetrySink | null {
++  if (activeSink !== undefined) {
++    return activeSink;
++  }
++  const { enabled, options } = resolveTelemetryOptionsFromEnv();
++  activeSink = enabled ? new TelemetrySink(options) : null;
++  return activeSink;
++}
++
++/** Test seam: install an explicit sink (or `null` to disable) and drop every live context. */
++export function setRequestTelemetrySinkForTests(sink: TelemetrySink | null | undefined): void {
++  liveContexts = new WeakMap<object, RequestTelemetryContext>();
++  activeSink = sink;
++}
++
++interface TelemetryAttempt {
++  provider?: string;
++  providerName?: string;
++  sourceAdapterKey?: string;
++  upstreamUrl?: string;
++  model?: string;
++}
++
++class RequestTelemetryContext {
++  readonly startedAt = Date.now();
++  readonly reqId: string;
++  readonly route: string;
++  readonly method: string;
++  readonly sourceAdapterKey: string;
++  readonly modelRequested: string | undefined;
++  readonly sessionId: string | undefined;
++  readonly isSubagent: boolean;
++  readonly stream: boolean;
++
++  private readonly sink: TelemetrySink;
++  private readonly logger: TelemetryLogger | undefined;
++  private readonly statusCode: () => number | undefined;
++
++  private leg: string | undefined;
++  private providerType: string | undefined;
++  private upstreamUrl: string | undefined;
++  private attemptSequence = 0;
++  private modelResolved: string | undefined;
++  private stopReason: string | undefined;
++  private usage: TelemetryUsage = {};
++  private upstreamTimings: UpstreamTimings = null;
++  private error: { stage: string; message?: string } | undefined;
++
++  private upstreamFirstByteAt: number | undefined;
++  private firstContentAt: number | undefined;
++  private responseTokens = 0;
++  private reasoningTokens = 0;
++
++  private progressTimer: NodeJS.Timeout | undefined;
++  private progressCount = 0;
++  private sseResidual = '';
++  private finalized = false;
++  private finalizeTimer: NodeJS.Timeout | undefined;
++
++  constructor(input: {
++    sink: TelemetrySink;
++    logger?: TelemetryLogger;
++    reqId: string;
++    route: string;
++    method: string;
++    sourceAdapterKey: string;
++    modelRequested?: string;
++    sessionId?: string;
++    isSubagent: boolean;
++    stream: boolean;
++    statusCode: () => number | undefined;
++  }) {
++    this.sink = input.sink;
++    this.logger = input.logger;
++    this.reqId = input.reqId;
++    this.route = input.route;
++    this.method = input.method;
++    this.sourceAdapterKey = input.sourceAdapterKey;
++    this.modelRequested = input.modelRequested;
++    this.sessionId = input.sessionId;
++    this.isSubagent = input.isSubagent;
++    this.stream = input.stream;
++    this.statusCode = input.statusCode;
++  }
++
++  noteAttempt(attempt: TelemetryAttempt): void {
++    this.attemptSequence += 1;
++    this.providerType = attempt.provider ?? this.providerType;
++    this.leg = attempt.providerName ?? this.leg;
++    this.upstreamUrl = attempt.upstreamUrl ?? this.upstreamUrl;
++    if (attempt.model) {
++      this.modelResolved = attempt.model;
++    }
++  }
++
++  noteFailure(stage: string, message?: string): void {
++    this.error = { stage, message };
++  }
++
++  noteUsage(usage: TelemetryUsage, model?: string): void {
++    this.usage = {
++      input: usage.input ?? this.usage.input,
++      output: usage.output ?? this.usage.output,
++      cacheRead: usage.cacheRead ?? this.usage.cacheRead,
++      cacheWrite: usage.cacheWrite ?? this.usage.cacheWrite
++    };
++    // First writer wins for the model on this path: the engine's billing model for the local
++    // leg is llama-server's absolute gguf path, while the resolved target model and the
++    // upstream's own `model`/`message_start` id are the ones a reader can join on.
++    if (model && !this.modelResolved) {
++      this.modelResolved = model;
++    }
++  }
++
++  /**
++   * Start the progress cadence. Called at request start for a streaming request — NOT when the
++   * upstream response arrives: on the local leg the upstream withholds its response headers
++   * until the model is loaded and prefill is done (measured: 18.8 s of a 20.3 s turn), and a
++   * live view that only starts at the first byte would show nothing for exactly the window
++   * that needs showing. Idempotent; the stream tap calls it again defensively.
++   */
++  startStream(): void {
++    if (this.progressTimer || this.finalized) {
++      return;
++    }
++    this.progressTimer = setInterval(() => this.emitProgress(), PROGRESS_INTERVAL_MS);
++    this.progressTimer.unref?.();
++  }
++
++  endStream(): void {
++    this.stopProgress();
++  }
++
++  private stopProgress(): void {
++    if (this.progressTimer) {
++      clearInterval(this.progressTimer);
++      this.progressTimer = undefined;
++    }
++  }
++
++  private emitProgress(): void {
++    if (this.finalized || this.progressCount >= MAX_PROGRESS_RECORDS) {
++      this.stopProgress();
++      return;
++    }
++    this.progressCount += 1;
++    this.sink.write(
++      {
++        kind: 'progress',
++        ts: new Date().toISOString(),
++        reqId: this.reqId,
++        sessionId: this.sessionId ?? null,
++        leg: this.leg ?? null,
++        modelResolved: this.modelResolved ?? null,
++        phase: this.firstContentAt === undefined ? 'prefill' : 'decode',
++        responseTokens: this.responseTokens,
++        reasoningTokens: this.reasoningTokens,
++        elapsedMs: Date.now() - this.startedAt
++      },
++      this.logger
++    );
++  }
++
++  /**
++   * Observe one decoded chunk of the upstream SSE stream. Two shapes are understood: the
++   * OpenAI chat chunks the local leg's conversion path consumes (the only place llama-server's
++   * `timings` object is visible — the conversion drops it before the client ever sees it), and
++   * the Anthropic events the passthrough legs relay byte-verbatim.
++   */
++  observeUpstreamText(text: string, shape: SseShape): void {
++    if (this.upstreamFirstByteAt === undefined) {
++      this.upstreamFirstByteAt = Date.now();
++    }
++
++    const combined = this.sseResidual + text;
++    const lines = combined.split('\n');
++    this.sseResidual = lines.pop() ?? '';
++    if (Buffer.byteLength(this.sseResidual) > MAX_SSE_RESIDUAL_BYTES) {
++      this.sseResidual = '';
++    }
++
++    for (const rawLine of lines) {
++      const line = rawLine.trim();
++      if (!line.startsWith('data:')) {
++        continue;
++      }
++      const payloadText = line.slice('data:'.length).trim();
++      if (!payloadText || payloadText === '[DONE]') {
++        continue;
++      }
++      if (Buffer.byteLength(payloadText) > MAX_PARSED_SSE_LINE_BYTES) {
++        continue;
++      }
++      let payload: unknown;
++      try {
++        payload = JSON.parse(payloadText);
++      } catch {
++        continue;
++      }
++      if (!isRecord(payload)) {
++        continue;
++      }
++      if (shape === 'openai_chunks') {
++        this.observeOpenAIChunk(payload);
++      } else {
++        this.observeAnthropicEvent(payload);
++      }
++    }
++  }
++
++  private observeOpenAIChunk(payload: Record<string, unknown>): void {
++    const model = asString(payload.model);
++    if (model && !this.modelResolved) {
++      this.modelResolved = model;
++    }
++
++    const timings = payload.timings;
++    if (isRecord(timings)) {
++      const numeric: Record<string, number> = {};
++      for (const [key, value] of Object.entries(timings)) {
++        if (typeof value === 'number' && Number.isFinite(value)) {
++          numeric[key] = value;
++        }
++      }
++      if (Object.keys(numeric).length > 0) {
++        this.upstreamTimings = numeric;
++      }
++    }
++
++    this.noteUsage(readOpenAIUsage(payload.usage));
++
++    const choices = Array.isArray(payload.choices) ? payload.choices : [];
++    for (const choice of choices) {
++      if (!isRecord(choice)) {
++        continue;
++      }
++      const finishReason = asString(choice.finish_reason);
++      if (finishReason) {
++        this.stopReason = finishReason;
++      }
++      const delta = isRecord(choice.delta) ? choice.delta : undefined;
++      if (!delta) {
++        continue;
++      }
++      const reasoning = asString(delta.reasoning_content) ?? asString(delta.reasoning);
++      if (reasoning) {
++        this.reasoningTokens += 1;
++        this.markFirstContent();
++      }
++      const content = asString(delta.content);
++      if (content) {
++        this.responseTokens += 1;
++        this.markFirstContent();
++      }
++    }
++  }
++
++  private observeAnthropicEvent(payload: Record<string, unknown>): void {
++    const type = asString(payload.type);
++    if (type === 'message_start') {
++      const message = isRecord(payload.message) ? payload.message : undefined;
++      const model = message ? asString(message.model) : undefined;
++      if (model) {
++        this.modelResolved = model;
++      }
++      if (message) {
++        this.noteUsage(readAnthropicUsage(message.usage));
++      }
++      return;
++    }
++    if (type === 'content_block_delta') {
++      const delta = isRecord(payload.delta) ? payload.delta : undefined;
++      const deltaType = delta ? asString(delta.type) : undefined;
++      if (deltaType === 'thinking_delta') {
++        this.reasoningTokens += 1;
++      } else {
++        this.responseTokens += 1;
++      }
++      this.markFirstContent();
++      return;
++    }
++    if (type === 'message_delta') {
++      const delta = isRecord(payload.delta) ? payload.delta : undefined;
++      const stopReason = delta ? asString(delta.stop_reason) : undefined;
++      if (stopReason) {
++        this.stopReason = stopReason;
++      }
++      this.noteUsage(readAnthropicUsage(payload.usage));
++    }
++  }
++
++  private markFirstContent(): void {
++    if (this.firstContentAt === undefined) {
++      this.firstContentAt = Date.now();
++    }
++  }
++
++  /** Schedule the terminal record; the grace lets the engine's async billing usage land. */
++  scheduleFinalize(): void {
++    if (this.finalized || this.finalizeTimer) {
++      return;
++    }
++    this.finalizeTimer = setTimeout(() => {
++      this.finalizeTimer = undefined;
++      this.finalize();
++    }, FINALIZE_GRACE_MS);
++    this.finalizeTimer.unref?.();
++  }
++
++  /** Write the terminal `request` record. Exactly once, always after the last progress line. */
++  finalize(): void {
++    if (this.finalized) {
++      return;
++    }
++    this.finalized = true;
++    this.stopProgress();
++    if (this.finalizeTimer) {
++      clearTimeout(this.finalizeTimer);
++      this.finalizeTimer = undefined;
++    }
++
++    const now = Date.now();
++    this.sink.write(
++      {
++        kind: 'request',
++        ts: new Date(now).toISOString(),
++        reqId: this.reqId,
++        route: this.route,
++        method: this.method,
++        sourceAdapterKey: this.sourceAdapterKey,
++        leg: this.leg ?? null,
++        providerType: this.providerType ?? null,
++        upstreamUrl: this.upstreamUrl ?? null,
++        sessionId: this.sessionId ?? null,
++        isSubagent: this.isSubagent,
++        modelRequested: this.modelRequested ?? null,
++        modelResolved: this.modelResolved ?? null,
++        stream: this.stream,
++        status: this.statusCode() ?? null,
++        attemptSequence: this.attemptSequence,
++        usage: {
++          input: this.usage.input ?? null,
++          output: this.usage.output ?? null,
++          cacheRead: this.usage.cacheRead ?? null,
++          cacheWrite: this.usage.cacheWrite ?? null
++        },
++        responseTokens: this.responseTokens,
++        reasoningTokens: this.reasoningTokens,
++        ttftMs:
++          this.firstContentAt === undefined ? null : this.firstContentAt - this.startedAt,
++        upstreamFirstByteMs:
++          this.upstreamFirstByteAt === undefined
++            ? null
++            : this.upstreamFirstByteAt - this.startedAt,
++        wallMs: now - this.startedAt,
++        upstreamTimings: this.upstreamTimings,
++        stopReason: this.stopReason ?? null,
++        error: this.error ? { stage: this.error.stage, message: this.error.message ?? null } : null
++      },
++      this.logger
++    );
++  }
++
++  dispose(): void {
++    this.stopProgress();
++    if (this.finalizeTimer) {
++      clearTimeout(this.finalizeTimer);
++      this.finalizeTimer = undefined;
++    }
++  }
++}
++
++/**
++ * Live contexts are held weakly by the Fastify request object: a request that never reaches a
++ * terminal record (a socket the process never sees close) is collected with its request, so a
++ * telemetry context can never accumulate into the container's 256 MiB budget.
++ */
++let liveContexts = new WeakMap<object, RequestTelemetryContext>();
++
++function contextFor(request: unknown): RequestTelemetryContext | undefined {
++  if (typeof request !== 'object' || request === null) {
++    return undefined;
++  }
++  return liveContexts.get(request);
++}
++
++function safely(run: () => void): void {
++  try {
++    run();
++  } catch {
++    // Telemetry never fails a request.
++  }
++}
++
++/**
++ * Open a telemetry context for one gateway request. Called at the top of
++ * `handleGatewayRequest`, before target resolution, because the session id and the subagent
++ * witness live in the **client** body: the conversion leg drops `metadata` (and `thinking`,
++ * `reasoning_effort`, `output_config`) before the upstream body is built, so they are
++ * unreadable anywhere downstream.
++ */
++export function beginRequestTelemetry(
++  request: FastifyRequest,
++  reply: FastifyReply,
++  sourceAdapterKey: string,
++  body: Record<string, unknown>,
++  isStreaming: boolean
++): void {
++  safely(() => {
++    const sink = getSink();
++    if (!sink || sink.isDisabled || liveContexts.has(request)) {
++      return;
++    }
++
++    const logger = (request as unknown as { log?: TelemetryLogger }).log;
++    const context = new RequestTelemetryContext({
++      sink,
++      logger,
++      reqId: String((request as unknown as { id?: unknown }).id ?? ''),
++      route: sanitizeRoute(typeof request.url === 'string' ? request.url : ''),
++      method: typeof request.method === 'string' ? request.method : '',
++      sourceAdapterKey,
++      modelRequested: asString(body.model),
++      sessionId: readClaudeCodeSessionId(body),
++      isSubagent: readSubagentWitness(body),
++      stream: isStreaming,
++      statusCode: () => {
++        const raw = (reply as unknown as { raw?: { statusCode?: number } }).raw;
++        return typeof raw?.statusCode === 'number' ? raw.statusCode : undefined;
++      }
++    });
++    liveContexts.set(request, context);
++    if (isStreaming) {
++      context.startStream();
++    }
++
++    const raw = (reply as unknown as { raw?: { on?: (event: string, fn: () => void) => void } })
++      .raw;
++    raw?.on?.('close', () => {
++      safely(() => {
++        context.scheduleFinalize();
++        setTimeout(() => {
++          context.dispose();
++          liveContexts.delete(request);
++        }, FINALIZE_GRACE_MS * 2).unref?.();
++      });
++    });
++  });
++}
++
++/** Record one upstream attempt: leg, provider type, upstream url, resolved model. */
++export function noteRequestTelemetryAttempt(
++  request: unknown,
++  attempt: TelemetryAttempt
++): void {
++  safely(() => contextFor(request)?.noteAttempt(attempt));
++}
++
++/** Record the failing stage/message from the attempts envelope (never a body, never a header). */
++export function noteRequestTelemetryFailure(
++  request: unknown,
++  stage: string,
++  message?: string
++): void {
++  safely(() => contextFor(request)?.noteFailure(stage, message));
++}
++
++/** Record the usage block the engine's own billing computation produced. */
++export function noteRequestTelemetryUsage(
++  request: unknown,
++  usage: TelemetryUsage,
++  model?: string
++): void {
++  safely(() => contextFor(request)?.noteUsage(usage, model));
++}
++
++/** Feed decoded upstream SSE text to the context (used by the stream tap and by tests). */
++export function noteRequestTelemetryStreamText(
++  request: unknown,
++  text: string,
++  shape: SseShape
++): void {
++  safely(() => contextFor(request)?.observeUpstreamText(text, shape));
++}
++
++/** Write the terminal record now (used by tests and by the synchronous failure paths). */
++export function finishRequestTelemetry(request: unknown): void {
++  safely(() => {
++    const context = contextFor(request);
++    if (!context) {
++      return;
++    }
++    context.finalize();
++    context.dispose();
++    if (typeof request === 'object' && request !== null) {
++      liveContexts.delete(request);
++    }
++  });
++}
++
++/**
++ * Wrap an upstream streaming response so every byte relayed to the client is also observed by
++ * this request's telemetry context. Pass-through, no buffering, no re-ordering: the transform
++ * enqueues each chunk unchanged. Any failure returns the original response untouched.
++ */
++export function tapUpstreamStreamForTelemetry(
++  request: unknown,
++  upstreamResponse: Response,
++  shape: SseShape
++): Response {
++  const context = contextFor(request);
++  if (!context || !upstreamResponse.body) {
++    return upstreamResponse;
++  }
++  const status = upstreamResponse.status;
++  if (status < 200 || status >= 300 || status === 204 || status === 205) {
++    return upstreamResponse;
++  }
++
++  try {
++    const decoder = new TextDecoder();
++    context.startStream();
++    const transform = new TransformStream<Uint8Array, Uint8Array>({
++      transform: (chunk, controller) => {
++        safely(() => context.observeUpstreamText(decoder.decode(chunk, { stream: true }), shape));
++        controller.enqueue(chunk);
++      },
++      flush: () => {
++        safely(() => context.endStream());
++      }
++    });
++    const tapped = upstreamResponse.body.pipeThrough(transform);
++    return new Response(tapped as unknown as ConstructorParameters<typeof Response>[0], {
++      status,
++      statusText: upstreamResponse.statusText,
++      headers: upstreamResponse.headers
++    });
++  } catch {
++    context.endStream();
++    return upstreamResponse;
++  }
++}
++
++function sanitizeRoute(url: string): string {
++  const queryIndex = url.indexOf('?');
++  return queryIndex === -1 ? url : url.slice(0, queryIndex);
++}
++
++/**
++ * Claude Code carries its session id inside `metadata.user_id`, a single opaque string of the
++ * shape `user_<hash>_account_<uuid>_session_<uuid>`. Only the session segment is extracted —
++ * the account/user segments are identity material and never reach the sink.
++ */
++export function readClaudeCodeSessionId(body: Record<string, unknown>): string | undefined {
++  const metadata = isRecord(body.metadata) ? body.metadata : undefined;
++  const userId = metadata ? asString(metadata.user_id) : undefined;
++  if (userId) {
++    const match = /_session_([A-Za-z0-9-]{8,})/.exec(userId);
++    if (match) {
++      return match[1];
++    }
++  }
++  const direct = metadata ? asString(metadata.session_id) ?? asString(metadata.sessionId) : undefined;
++  return direct;
++}
++
++/**
++ * Claude Code marks a subagent turn with a `cc_is_subagent=true;` witness in the billing line
++ * of the first system block. Only the boolean is kept; the system text itself never is.
++ */
++export function readSubagentWitness(body: Record<string, unknown>): boolean {
++  const system = body.system;
++  let text: string | undefined;
++  if (typeof system === 'string') {
++    text = system;
++  } else if (Array.isArray(system) && system.length > 0 && isRecord(system[0])) {
++    text = asString((system[0] as Record<string, unknown>).text);
++  }
++  return typeof text === 'string' && text.includes('cc_is_subagent=true');
++}
++
++function readOpenAIUsage(value: unknown): TelemetryUsage {
++  if (!isRecord(value)) {
++    return {};
++  }
++  const details = isRecord(value.prompt_tokens_details) ? value.prompt_tokens_details : undefined;
++  return {
++    input: asNumber(value.prompt_tokens),
++    output: asNumber(value.completion_tokens),
++    cacheRead: details ? asNumber(details.cached_tokens) : undefined
++  };
++}
++
++function readAnthropicUsage(value: unknown): TelemetryUsage {
++  if (!isRecord(value)) {
++    return {};
++  }
++  return {
++    input: asNumber(value.input_tokens),
++    output: asNumber(value.output_tokens),
++    cacheRead: asNumber(value.cache_read_input_tokens),
++    cacheWrite: asNumber(value.cache_creation_input_tokens)
++  };
++}
++
++function isRecord(value: unknown): value is Record<string, unknown> {
++  return typeof value === 'object' && value !== null && !Array.isArray(value);
++}
++
++function asString(value: unknown): string | undefined {
++  return typeof value === 'string' && value.trim() ? value : undefined;
++}
++
++function asNumber(value: unknown): number | undefined {
++  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
++}

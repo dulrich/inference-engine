@@ -56,7 +56,7 @@ const LAUNCH_PROFILE_ENV = {
 
 // Family/label table. `prefix` families may carry an effort suffix (`-low|-medium|-high`, plus
 // `-off` on the local leg); without one the family's own default applies. On the codex leg that
-// is a LABELLING rule only — a hand-typed suffix id still renders `Luna high (codex-b)` — not
+// is a LABELLING rule only — a hand-typed suffix id still renders `GPT-5.6 Luna high (codex-b)` — not
 // the selector: effort there is resolved per turn by the sidecar under the precedence rule
 // (suffix > `output_config.effort`/`thinking` > family default), see
 // `docs/tool-calling-gateway/codex-sidecar.md` "Effort precedence" and router/AGENTS.md, "The
@@ -68,9 +68,9 @@ const FAMILIES = [
   // `modelSettings.effortLevel`) chooses the level. `defaultEffort` is what applies when the
   // request carries no effort at all — it still labels the bare row, and it still labels a
   // hand-typed suffix id from its suffix.
-  { kind: "prefix", id: "gpt-5.6-luna", family: "Luna", defaultEffort: "low" },
-  { kind: "prefix", id: "gpt-5.6-sol", family: "Sol", defaultEffort: "medium" },
-  { kind: "prefix", id: "gpt-6-astra", family: "Astra", defaultEffort: "medium" },
+  { kind: "prefix", id: "gpt-5.6-luna", family: "GPT-5.6 Luna", defaultEffort: "low" },
+  { kind: "prefix", id: "gpt-5.6-sol", family: "GPT-5.6 Sol", defaultEffort: "medium" },
+  { kind: "prefix", id: "gpt-6-astra", family: "GPT-6 Astra", defaultEffort: "medium" },
   { kind: "exact", id: "z-ai/glm-5.2:free", family: "GLM 5.2 free" },
   { kind: "exact", id: "z-ai/glm-5.3", family: "GLM 5.3" },
   { kind: "exact", id: "qwen36-a3b", family: "Qwen3.6 A3B" },
@@ -193,7 +193,11 @@ export function buildRows(config) {
       if (!isClaudeCodeModel(provider, modelId)) continue;
       const entry = describeFamily(modelId);
       const effort = effortOf(modelId, entry);
-      const label = `${[entry.family, effort].filter(Boolean).join(" ")} (${leg})`;
+      // Codex bare ids carry the proper model name only (user, 2026-09-13): effort is the
+      // harness's per-turn control there, so the family default stays out of the label and
+      // lives in the description. A hand-typed suffix id still shows its pinned level.
+      const labelEffort = provider.name.startsWith("codex-") && !/-(low|medium|high)$/.test(modelId) ? undefined : effort;
+      const label = `${[entry.family, labelEffort].filter(Boolean).join(" ")} (${leg})`;
       rows.push({
         model: `${provider.name}/${modelId}`,
         label,

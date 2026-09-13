@@ -71,10 +71,10 @@ test("renders one row per Claude-Code-visible non-anthropic id, with the documen
   assert.equal(byModel["claude-local/some-future-model-9b"].label, "some-future-model-9b (local)");
   assert.equal(byModel["or-anthropic/z-ai/glm-5.3"].label, "GLM 5.3 (or-anthropic)");
   // Suffix-less codex ids take the persona default; suffixed ones take the suffix.
-  assert.equal(byModel["codex-a/gpt-5.6-luna"].label, "Luna low (codex-a)");
-  assert.equal(byModel["codex-a/gpt-6-astra-low"].label, "Astra low (codex-a)");
-  assert.equal(byModel["codex-b/gpt-5.6-sol"].label, "Sol medium (codex-b)");
-  assert.equal(byModel["codex-b/gpt-5.6-luna-high"].label, "Luna high (codex-b)");
+  assert.equal(byModel["codex-a/gpt-5.6-luna"].label, "GPT-5.6 Luna (codex-a)");
+  assert.equal(byModel["codex-a/gpt-6-astra-low"].label, "GPT-6 Astra low (codex-a)");
+  assert.equal(byModel["codex-b/gpt-5.6-sol"].label, "GPT-5.6 Sol (codex-b)");
+  assert.equal(byModel["codex-b/gpt-5.6-luna-high"].label, "GPT-5.6 Luna high (codex-b)");
   for (const row of rows) {
     assert.ok(row.description.length < 90, `description too long: ${row.description}`);
     assert.equal(row.behavesAs, undefined);

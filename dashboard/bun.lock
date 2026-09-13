@@ -22,7 +22,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@bench-dashboard/shared": "workspace:*",
-        "hono": "^4.6.0",
+        "hono": "^4.13.7",
         "zod": "^3.23.0",
       },
     },
@@ -51,7 +51,7 @@
     },
     "packages/signalworks": {
       "name": "@fleet-tools/signalworks",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "peerDependencies": {
         "lucide-svelte": ">=0.400.0",
         "svelte": "^5.0.0",
@@ -337,7 +337,7 @@
 
     "has-flag": ["has-flag@4.0.0", "", {}, "sha512-EykJT/Q1KjTWctppgIAgfSO0tKVuZUjhgMr17kqTumMl6Afv3EISleU7qZUzoXDFTAHTDC4NOoG/ZxU3EvlMPQ=="],
 
-    "hono": ["hono@4.13.3", "", {}, "sha512-r8AO2mYHoLxSHkgafNeC/BXyb2vWRxD3jem4Ts+ptav8oTG5FIRifAjuJEmZI4bSvvc2ns0GxmIYiZnHqN3mMw=="],
+    "hono": ["hono@4.13.7", "", {}, "sha512-c8/gF9ac8Y78/agExVocyLevgR+JlpNB444Py0FSX8pJoPdYUfUzRcXtYEYGwt6l19qIlVZPN5Mfsw9jFShmQQ=="],
 
     "ignore": ["ignore@5.3.2", "", {}, "sha512-hsBTNUqQTDwkWtcdYI2i06Y/nUBEsNEDJKjWdigLvegy8kDuJAS8uRlpkkcQpyEXL0Z/pjDy5HBmMjRCJ2gq+g=="],
 

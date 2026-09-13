@@ -37,9 +37,11 @@
 #   7. (--subscription only) one claude -p call through the gateway returns a completion.
 #   8. (--codex only, metered: one luna turn on the operator's Codex subscription) one
 #      non-streamed codex-a/gpt-5.6-luna completion via /v1/messages returns
-#      usage.input_tokens > 0 — proves the host sidecar leg (plans/codex-appserver-sidecar.md)
+#      usage.output_tokens > 0 — proves the host sidecar leg (plans/codex-appserver-sidecar.md)
 #      end to end through the router: extra_hosts, the shared CODEX_SIDECAR_KEY, and the
-#      engine's baseurl-with-path derivation.
+#      engine's baseurl-with-path derivation. (Not input_tokens: since 2026-09-13 the sidecar
+#      emits Anthropic usage semantics, so a fully cached turn legitimately reports
+#      input_tokens 0 with the prompt in cache_read_input_tokens.)
 #   9. POST /v1/messages/count_tokens via codex-a/gpt-5.6-luna returns an integer
 #      input_tokens (unmetered — the sidecar answers locally with a chars/4 estimate).
 #
@@ -258,11 +260,13 @@ if [ "$CODEX" -eq 1 ]; then
 		-H 'authorization: Bearer smoke-dummy-client-bearer' \
 		-H 'anthropic-version: 2023-06-01' \
 		-d '{"model":"codex-a/gpt-5.6-luna","max_tokens":32,"stream":false,"metadata":{"user_id":"{\"session_id\":\"smoke-router-codex\"}"},"messages":[{"role":"user","content":"Reply with the single word: pong"}]}') || codex_json=""
-	codex_in=$(echo "$codex_json" | jq -r '.usage.input_tokens | if type == "number" and . > 0 then . else empty end' 2>/dev/null)
-	if [ -n "$codex_in" ]; then
-		pass "/v1/messages (codex-a/gpt-5.6-luna) returned usage.input_tokens=$codex_in"
+	# Anthropic usage semantics (2026-09-13): input_tokens is the *uncached* prompt share, so a
+	# fully cached turn legitimately reports 0 — output_tokens is the liveness signal here.
+	codex_out=$(echo "$codex_json" | jq -r '.usage.output_tokens | if type == "number" and . > 0 then . else empty end' 2>/dev/null)
+	if [ -n "$codex_out" ]; then
+		pass "/v1/messages (codex-a/gpt-5.6-luna) returned usage.output_tokens=$codex_out"
 	else
-		bad "/v1/messages (codex-a/gpt-5.6-luna) did not return usage.input_tokens > 0. Response: $codex_json"
+		bad "/v1/messages (codex-a/gpt-5.6-luna) did not return usage.output_tokens > 0. Response: $codex_json"
 	fi
 else
 	note "--codex not passed: SKIPPING the metered codex-a/gpt-5.6-luna probe (one Codex-subscription turn)."

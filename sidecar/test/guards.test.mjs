@@ -96,7 +96,9 @@ test("the session-title signature is answered locally, and only that signature",
   assert.equal(title.status, 200, title.text);
   assert.deepEqual(title.json.content, [{ type: "text", text: "Session" }]);
   assert.equal(title.json.stop_reason, "end_turn");
-  assert.deepEqual(title.json.usage, { input_tokens: 0, output_tokens: 0 });
+  assert.deepEqual(title.json.usage, {
+    input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0,
+  }, "a locally answered title still carries all four Anthropic usage keys");
   assert.equal(sentTo(h.trace(), "thread/start").length, 0, "no thread is opened for a title query");
   assert.ok(h.log().some(l => l.kind === "title-local" && l.envelope === "pinned"));
 

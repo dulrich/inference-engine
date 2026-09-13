@@ -413,12 +413,25 @@ export function toDynamicTools(tools) {
 }
 
 const ZERO_USAGE = { inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0 };
-const usageOut = u => ({
-  input_tokens: u?.inputTokens ?? 0,
-  cache_creation_input_tokens: u?.cacheWriteInputTokens ?? 0,
-  cache_read_input_tokens: u?.cachedInputTokens ?? 0,
-  output_tokens: u?.outputTokens ?? 0,
-});
+
+// Raw codex usage -> Anthropic usage semantics. Codex's `inputTokens` is the WHOLE prompt,
+// with the cached share a subset of it; Anthropic's three input columns sit side by side, so
+// `input_tokens` is the *uncached* share only. Claude Code's context meter SUMS the three, so
+// relaying codex's raw figure double-counted the prompt — measured 2026-09-13: the same
+// 111-message conversation read 152,791 on one row and 79,952 eighteen seconds later, and a
+// failed audit's "327k" was 155,775 + 151,808 for a ~66k conversation (audit E1/E2).
+// Clamped at 0: a reconciled delta whose cache-read share exceeds its input share reports 0,
+// never a negative. `output_tokens` is unchanged on every path.
+export const usageOut = u => {
+  const cacheRead = u?.cachedInputTokens ?? 0;
+  const cacheWrite = u?.cacheWriteInputTokens ?? 0;
+  return {
+    input_tokens: Math.max(0, (u?.inputTokens ?? 0) - cacheRead - cacheWrite),
+    cache_creation_input_tokens: cacheWrite,
+    cache_read_input_tokens: cacheRead,
+    output_tokens: u?.outputTokens ?? 0,
+  };
+};
 
 // ----------------------------------------------------------------- sinks ----
 
@@ -720,7 +733,11 @@ class Session {
     }
   }
 
-  // Reconciled usage: cumulative reported == codex-side total after every message.
+  // Reconciled usage, in RAW CODEX UNITS: the ledger (`this.sent`) tracks what has already
+  // been reported per raw key, so cumulative reported == the codex-side total after every
+  // message. What leaves on the wire is the Anthropic projection of each delta (`usageOut`),
+  // which subtracts the cached share out of `input_tokens`; the ledger deliberately stays raw
+  // so the codex-side totals remain recoverable (the `http` row carries them as `usageCodex`).
   reconcile() {
     const target = this.usageTotal || this.usageLast || ZERO_USAGE;
     const out = {};
@@ -1074,7 +1091,7 @@ async function handleMessages(ctx, persona, body, req, res) {
   // (i) local session-title answer — before model validation, no thread opened
   if (isTitleRequest(body, systemText, msgs)) {
     ctx.logger.write("title-local", { persona: persona.name, stream: !!body.stream, envelope: titleEnvelope(msgs) });
-    const usage = { input_tokens: 0, output_tokens: 0 };
+    const usage = { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 };
     if (body.stream) {
       const msg = { ...messageSkeleton(body.model), usage };
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
@@ -1270,7 +1287,7 @@ async function handleMessages(ctx, persona, body, req, res) {
       model: parsed.model, effort: eff.effort, effortSource: eff.effortSource, threadId: sess.threadId, stop_reason: stopReason,
       nMessages: msgs.length, nSystemRole: allMsgs.length - msgs.length, nTools: (body.tools || []).length,
       toolCalls: out.kind === "tool_use" ? out.batch.map(c => c.params.tool) : [],
-      usage: usageOut(usage), headers: redactHeaders(req.headers),
+      usage: usageOut(usage), usageCodex: usage, headers: redactHeaders(req.headers),
     });
   } catch (e) {
     sess.detach(sink);

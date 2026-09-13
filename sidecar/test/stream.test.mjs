@@ -73,3 +73,28 @@ test("usage is one call lagged at message_start and reconciled at message_delta"
   assert.equal(reported, 150);
   assert.equal(deltaUsage(first).output_tokens + deltaUsage(second).output_tokens, 30);
 });
+
+test("the wire usage is the Anthropic projection; the http row keeps the raw codex delta beside it", async t => {
+  // Codex counts the whole prompt in `inputTokens` with the cached share a subset of it.
+  // On the wire `input_tokens` is the uncached share (6463 - 3840 = 2623), so a client that
+  // sums input + cache_read + cache_creation sees the prompt once, not twice.
+  const cached = {
+    last: { inputTokens: 6463, cachedInputTokens: 3840, cacheWriteInputTokens: 0, outputTokens: 12, reasoningOutputTokens: 0, totalTokens: 6475 },
+    total: { inputTokens: 6463, cachedInputTokens: 3840, cacheWriteInputTokens: 0, outputTokens: 12, reasoningOutputTokens: 0, totalTokens: 6475 },
+  };
+  const h = await withSidecar({ scenario: { turns: [[{ text: "one" }, { usage: cached }, { complete: {} }]] } });
+  t.after(() => h.close());
+
+  const r = await req(h, "/codex-a/v1/messages", { body: msgBody({ stream: true }) });
+  const delta = r.events.find(e => e.event === "message_delta").data.usage;
+  assert.deepEqual(delta, {
+    input_tokens: 2623, cache_creation_input_tokens: 0, cache_read_input_tokens: 3840, output_tokens: 12,
+  });
+  assert.equal(delta.input_tokens + delta.cache_read_input_tokens + delta.cache_creation_input_tokens, 6463);
+
+  const row = h.log().filter(e => e.kind === "http").at(-1);
+  assert.deepEqual(row.usage, delta, "the http row logs what went on the wire");
+  assert.deepEqual(row.usageCodex, {
+    inputTokens: 6463, cachedInputTokens: 3840, cacheWriteInputTokens: 0, outputTokens: 12,
+  }, "the raw codex delta stays recoverable for subscription-burn reading");
+});

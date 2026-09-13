@@ -6,7 +6,7 @@ import path from "node:path";
 import {
   parseModelId, isTitleRequest, titleEnvelope, extractCwd, conversational, sessionKeyOf, countTokensEstimate,
   verifyInstructionSources, mapUpstreamError, retryAfterSeconds, rateLimitExhaustion, presentedKey,
-  toDynamicTools, Logger,
+  toDynamicTools, Logger, usageOut,
 } from "../codex-sidecar.mjs";
 
 const TITLE_SYSTEM = "You are naming a coding session so the user can pick it out of a long list of sessions.";
@@ -120,4 +120,34 @@ test("the JSONL log is 0600 in a 0700 dir and prunes past the retention window",
   assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
   assert.equal(JSON.parse(fs.readFileSync(today, "utf8").trim()).kind, "listen");
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("usage is projected into Anthropic semantics: input_tokens is the uncached share, clamped at 0", () => {
+  // Codex reports the whole prompt in `inputTokens` with the cached share a subset of it;
+  // Claude Code's meter sums input + cache_read + cache_creation, so the raw figure counted
+  // the prompt twice (measured 2026-09-13: 152,791 vs 79,952 for one conversation).
+  assert.deepEqual(usageOut(undefined), {
+    input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0,
+  }, "no usage yet");
+  // first turn of a thread: nothing cached, so the uncached share is the whole prompt
+  assert.deepEqual(usageOut({ inputTokens: 6499, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0 }), {
+    input_tokens: 6499, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0,
+  });
+  // the normal case: a warm prefix cache. 6463 - 3840 = 2623 uncached, summing back to 6463.
+  const warm = usageOut({ inputTokens: 6463, cachedInputTokens: 3840, cacheWriteInputTokens: 0, outputTokens: 12 });
+  assert.deepEqual(warm, {
+    input_tokens: 2623, cache_creation_input_tokens: 0, cache_read_input_tokens: 3840, output_tokens: 12,
+  });
+  assert.equal(warm.input_tokens + warm.cache_read_input_tokens + warm.cache_creation_input_tokens, 6463,
+    "a client summing the three input columns gets the prompt exactly once");
+  // cache writes come out of the same prompt total
+  assert.deepEqual(usageOut({ inputTokens: 10000, cachedInputTokens: 6000, cacheWriteInputTokens: 1500, outputTokens: 40 }), {
+    input_tokens: 2500, cache_creation_input_tokens: 1500, cache_read_input_tokens: 6000, output_tokens: 40,
+  });
+  // clamp: a reconciled delta whose cache-read share exceeds its input share reports 0, never negative
+  assert.deepEqual(usageOut({ inputTokens: 128, cachedInputTokens: 3840, cacheWriteInputTokens: 0, outputTokens: 7 }), {
+    input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 3840, output_tokens: 7,
+  });
+  // output_tokens passes through untouched on every path
+  assert.equal(usageOut({ inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 5418 }).output_tokens, 5418);
 });

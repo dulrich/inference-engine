@@ -35,7 +35,7 @@ Errors are Anthropic-shaped `{"type":"error","error":{"type":…,"message":…}}
 
 Streaming emits `message_start`, `content_block_start/delta/stop`, `message_delta`, `message_stop`, plus `event: ping` (`{"type":"ping"}`) after every 15 s of silence, repeating — native anthropic legs are raw byte relays, so the sidecar must keep itself inside Claude Code's 300 s watchdog. `stop_reason` is `tool_use` when tool calls are relayed, otherwise `end_turn`.
 
-Usage is **one call lagged** in `message_start` (the previous call's `tokenUsage.last`, which is all that is known when the message opens) and **reconciled** in the final `message_delta`, so the session total reported to the client always equals the codex-side `tokenUsage.total`.
+Usage is **one call lagged** in `message_start` (the previous call's `tokenUsage.last`, which is all that is known when the message opens) and **reconciled** in the final `message_delta`, so the session total reported to the client always equals the codex-side `tokenUsage.total` — in **raw codex units**; what leaves on the wire is the Anthropic projection of each reconciled delta (`input_tokens` is the *uncached* prompt share, clamped at 0), with the raw delta kept beside it on the `http` log row as `usageCodex`. See `docs/tool-calling-gateway/codex-sidecar.md` "Usage reconciliation, restated".
 
 ## Model ids
 

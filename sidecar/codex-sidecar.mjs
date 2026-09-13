@@ -556,14 +556,20 @@ class Session {
     this.usageTotal = null;       // codex-side cumulative for this thread
     this.sent = { inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0 };
     this.sink = null;
-    this.pendingOutcome = null;
+    this.owner = null;            // the request currently driving this session ({ reqId })
+    this.pendingOutcomes = [];    // settled outcomes not yet handed to a request, in order
     this.resolveOutcome = null;
     this.timeoutTimer = null;
     this.closed = false;
   }
 
   attach(sink) { this.sink = sink; }
-  detach() { this.sink = null; }
+  detach(sink) { if (!sink || this.sink === sink) this.sink = null; }
+
+  // A newer request on the same session takes over: the request parked in
+  // waitOutcome is resolved with the given error (its timer is cleared by the
+  // resolver) instead of being silently orphaned with its slot overwritten.
+  preempt(error) { this.resolveOutcome?.({ kind: "error", error }); }
 
   // Outcome protocol: the HTTP handler awaits one outcome per request.
   waitOutcome(timeoutMs) {
@@ -582,17 +588,18 @@ class Session {
     });
   }
 
+  // Outcomes queue in order (a tool-call batch settled while no request is attached
+  // must not drop the next one — each parked call has to be delivered exactly once);
+  // an error replaces whatever is queued.
   settle(outcome) {
-    if (this.pendingOutcome && outcome.kind !== "error") return;
-    this.pendingOutcome = outcome;
+    if (outcome.kind === "error") this.pendingOutcomes = [outcome];
+    else this.pendingOutcomes.push(outcome);
     this.drain();
   }
 
   drain() {
-    if (!this.pendingOutcome || !this.resolveOutcome) return;
-    const o = this.pendingOutcome;
-    this.pendingOutcome = null;
-    this.resolveOutcome(o);
+    if (!this.pendingOutcomes.length || !this.resolveOutcome) return;
+    this.resolveOutcome(this.pendingOutcomes.shift());
   }
 
   #armBatch() {
@@ -1102,17 +1109,33 @@ async function handleMessages(ctx, persona, body, req, res) {
     mode = "next-turn";
   }
   sess.msgCount = msgs.length;
+  const reqId = crypto.randomUUID().slice(0, 8);
+  ctx.logger.write("http-start", { persona: persona.name, key, reqId, mode, stream: !!body.stream, nMessages: msgs.length });
 
   const sink = body.stream
     ? new SseSink(res, body.model, cfg.pingMs)
     : new BufferSink(res, body.model);
+  // One request drives a session at a time. A second in-flight request (a client or
+  // router retry) used to overwrite the first's sink/outcome slot silently, leaving the
+  // first hanging with no timeout and its parked answers already consumed (the live
+  // "orphan-tool-result then silent stall" signature). Now the newer request supersedes
+  // the older one loudly: the older fails with a 409 and an http-error row.
+  const token = { reqId };
+  const superseded = () => new SidecarError(409, "api_error", "superseded by a newer request on this session");
+  if (sess.owner) {
+    ctx.logger.write("superseded-request", { persona: persona.name, key, reqId, supersededReqId: sess.owner.reqId, mode });
+    sess.preempt(superseded());
+  }
+  sess.owner = token;
   sess.attach(sink);
+  const stillMine = () => { if (sess.owner !== token) throw superseded(); };
 
   let closedByClient = false;
   const onClose = () => {
     if (sink.done) return;
     closedByClient = true;
     sink.abort();
+    if (sess.owner !== token) return;   // a superseded request never tears down its successor's session
     persona.interrupt(sess, "client disconnect");
     persona.dropSession(sess);
     sess.settle({ kind: "error", error: new SidecarError(499, "api_error", "client disconnected") });
@@ -1135,6 +1158,7 @@ async function handleMessages(ctx, persona, body, req, res) {
         config: THREAD_CONFIG,
       };
       const started = await persona.rpc("thread/start", params, cfg.turnTimeoutMs);
+      stillMine();
       sess.threadId = started?.thread?.id ?? started?.threadId ?? null;
       sess.model = parsed.model;
       if (!sess.threadId) throw new SidecarError(502, "api_error", "thread/start returned no thread id");
@@ -1169,14 +1193,16 @@ async function handleMessages(ctx, persona, body, req, res) {
       const turnParams = { threadId: sess.threadId, input: [{ type: "text", text }], effort: parsed.effort };
       if (sess.model && parsed.model !== sess.model) { turnParams.model = parsed.model; sess.model = parsed.model; }
       sess.deltaItems.clear();
-      sess.pendingOutcome = null;      // a stray outcome never leaks into a fresh turn
+      sess.pendingOutcomes = [];      // a stray outcome never leaks into a fresh turn
       const turn = await persona.rpc("turn/start", turnParams, cfg.turnTimeoutMs);
+      stillMine();
       sess.turnId = turn?.turn?.id ?? turn?.turnId ?? sess.turnId;
     }
 
+    stillMine();
     sink.start(sess.lagUsage());
     const out = await sess.waitOutcome(cfg.turnTimeoutMs);
-    sess.detach();
+    sess.detach(sink);
     if (closedByClient) return;
 
     if (out.kind === "error") throw out.error;
@@ -1193,23 +1219,24 @@ async function handleMessages(ctx, persona, body, req, res) {
     const usage = sess.reconcile();
     sink.finish(stopReason, usage);
     ctx.logger.write("http", {
-      persona: persona.name, path: `/${persona.name}/v1/messages`, key, scope, mode, stream: !!body.stream,
+      persona: persona.name, path: `/${persona.name}/v1/messages`, key, reqId, scope, mode, stream: !!body.stream,
       model: parsed.model, effort: parsed.effort, threadId: sess.threadId, stop_reason: stopReason,
       nMessages: msgs.length, nSystemRole: allMsgs.length - msgs.length, nTools: (body.tools || []).length,
       toolCalls: out.kind === "tool_use" ? out.batch.map(c => c.params.tool) : [],
       usage: usageOut(usage), headers: redactHeaders(req.headers),
     });
   } catch (e) {
-    sess.detach();
-    sess.turnOpen = false;
+    sess.detach(sink);
+    if (sess.owner === token) sess.turnOpen = false;
     if (closedByClient) return;
     const err = asSidecarError(e);
     ctx.logger.write("http-error", {
-      persona: persona.name, key, mode, status: err.status, type: err.anthropicType,
+      persona: persona.name, key, reqId, mode, status: err.status, type: err.anthropicType,
       message: err.message, headers: redactHeaders(req.headers),
     });
     sink.error(err);
   } finally {
+    if (sess.owner === token) sess.owner = null;
     res.off("close", onClose);
   }
 }

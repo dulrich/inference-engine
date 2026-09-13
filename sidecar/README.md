@@ -91,7 +91,7 @@ These exist only so the suite can run without a real codex binary and without wa
 
 ## Logs
 
-One JSONL file per UTC day, `codex-sidecar-YYYY-MM-DD.jsonl`, mode `0600` inside a `0700` directory. Bearer and `x-api-key` headers are redacted to `<redacted>`. Line kinds worth grepping: `listen`, `child-started`, `child-exit`, `initialized`, `config-verified`, `config-unverified`, `security-event`, `rate-limited`, `weak-session-key`, `rewind`, `title-local`, `parallel-tool-batch`, `http`, `http-error`.
+One JSONL file per UTC day, `codex-sidecar-YYYY-MM-DD.jsonl`, mode `0600` inside a `0700` directory. Bearer and `x-api-key` headers are redacted to `<redacted>`. Line kinds worth grepping: `listen`, `child-started`, `child-exit`, `initialized`, `config-verified`, `config-unverified`, `security-event`, `rate-limited`, `weak-session-key`, `rewind`, `title-local`, `parallel-tool-batch`, `http-start`, `superseded-request`, `http`, `http-error`.
 
 ## Running it by hand
 

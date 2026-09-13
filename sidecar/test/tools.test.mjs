@@ -153,3 +153,65 @@ test("a call parked after the response boundary survives the next request", asyn
   assert.equal(sentTo(h.trace(), "turn/start").length, 1, "the follow-up was a tool-result, not a turn on a blocked thread");
   assert.deepEqual(toolResponses(h).map(r => r.success), [true, true]);
 });
+
+test("three parallel calls spaced beyond batchMs are each delivered exactly once (no dropped outcome)", async t => {
+  const h = await withSidecar({
+    scenario: {
+      turns: [[
+        call("c1", "Read", { path: "a" }), { delay: 400 }, call("c2", "Read", { path: "b" }), { delay: 400 }, call("c3", "Read", { path: "c" }),
+        { awaitToolResults: 3 }, { text: "done" }, { complete: {} },
+      ]],
+    },
+  });
+  t.after(() => h.close());
+
+  const first = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ }) });
+  assert.equal(first.json.stop_reason, "tool_use");
+  // both c2 and c3 settle while no request is attached — the second used to be dropped
+  await waitFor(() => h.trace().some(e => e.kind === "out" && e.frame?.params?.callId === "c3"));
+  await new Promise(r => setTimeout(r, 300));
+
+  const hist = [{ role: "user", content: "hi" }, { role: "assistant", content: first.json.content },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "c1", content: "a" }] }];
+  const second = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ, messages: hist }) });
+  assert.deepEqual(second.json.content.filter(b => b.type === "tool_use").map(b => b.id), ["c2"]);
+  hist.push({ role: "assistant", content: second.json.content }, { role: "user", content: [{ type: "tool_result", tool_use_id: "c2", content: "b" }] });
+  const third = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ, messages: hist }) });
+  assert.equal(third.status, 200, third.text);
+  assert.deepEqual(third.json.content.filter(b => b.type === "tool_use").map(b => b.id), ["c3"]);
+  assert.ok(!h.log().some(l => l.kind === "http-error"));
+});
+
+test("a second in-flight request on one session supersedes the first loudly instead of orphaning it", async t => {
+  const h = await withSidecar({
+    scenario: {
+      turns: [[
+        call("c1", "Read", { path: "a" }), { awaitToolResults: 1 }, { delay: 1500 }, call("c2", "Read", { path: "b" }),
+        { awaitToolResults: 1 }, { text: "done" }, { complete: {} },
+      ]],
+    },
+  });
+  t.after(() => h.close());
+
+  const first = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ }) });
+  assert.equal(first.json.stop_reason, "tool_use");
+  const body = msgBody({ tools: READ, messages: [{ role: "user", content: "hi" }, { role: "assistant", content: first.json.content },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "c1", content: "a" }] }] });
+  const t0 = Date.now();
+  const older = req(h, "/codex-a/v1/messages", { body }).then(r => ({ r, ms: Date.now() - t0 }));
+  await new Promise(r => setTimeout(r, 400));
+  const newer = req(h, "/codex-a/v1/messages", { body }).then(r => ({ r, ms: Date.now() - t0 }));
+
+  const a = await older;
+  assert.equal(a.r.status, 409, a.r.text);                      // fails fast and loud …
+  assert.ok(a.ms < 1500, `superseded request returned after ${a.ms}ms`);  // … well inside turnTimeoutMs (8 s in tests)
+  const b = await newer;
+  assert.equal(b.r.status, 200, b.r.text);
+  assert.deepEqual(b.r.json.content.filter(x => x.type === "tool_use").map(x => x.id), ["c2"]);
+
+  const log = h.log();
+  assert.ok(log.some(l => l.kind === "superseded-request"));
+  assert.ok(log.some(l => l.kind === "http-error" && l.status === 409));
+  assert.ok(log.some(l => l.kind === "orphan-tool-result" && l.tool_use_id === "c1"), "the duplicate's echo of c1 is still reported");
+  assert.equal(sentTo(h.trace(), "turn/start").length, 1, "no fresh turn/start on the blocked thread");
+});

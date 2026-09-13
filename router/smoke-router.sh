@@ -21,7 +21,8 @@
 #                   code path but never exercises it.
 #
 # Checks (all by response body):
-#   1. GET /v1/models lists both the claude-local/* ids and the hosted anthropic/* ids.
+#   1. GET /v1/models lists both the claude-local/* ids (including the four qwen38 reasoning-
+#      effort ids) and the hosted anthropic/* ids.
 #   2. A request with a missing gateway key, and one with a wrong gateway key, each return a
 #      401 error body (asserted on the body's error message, not just the status).
 #   3. One non-streamed chat completion via claude-local/qwen36-a3b returns non-empty content.
@@ -95,7 +96,18 @@ note "checking GET /v1/models ..."
 models_json=$(curl -s --max-time 10 -H "x-gateway-key: $GATEWAY_KEY" "$BASE_URL/v1/models") || models_json=""
 model_ids=$(echo "$models_json" | jq -r '.data[]?.id // empty' 2>/dev/null)
 models_local_ok=1
-for id in claude-local/qwen36-a3b claude-local/qwen38-27b-iq3s claude-local/nemotron-4b; do
+# The four qwen38-27b-iq3s-{off,low,medium,high} ids are the local leg's reasoning-effort surface
+# (plans/local-leg-claude-code-serving-fit.md WP-2): each is a llama-swap alias whose own cmd
+# carries the reasoning flags, so an id missing here means llama/config.yaml and
+# router/gateway.config.json have drifted apart and the picker row 400s at model_resolution.
+for id in \
+	claude-local/qwen36-a3b \
+	claude-local/qwen38-27b-iq3s \
+	claude-local/qwen38-27b-iq3s-off \
+	claude-local/qwen38-27b-iq3s-low \
+	claude-local/qwen38-27b-iq3s-medium \
+	claude-local/qwen38-27b-iq3s-high \
+	claude-local/nemotron-4b; do
 	if ! echo "$model_ids" | grep -qx "$id"; then
 		models_local_ok=0
 	fi

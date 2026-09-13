@@ -51,16 +51,22 @@ function run(args, expectedStatus = 0) {
   return { status, stdout, stderr };
 }
 
-test("renders one row per non-anthropic id, with the documented labels", () => {
+test("renders one row per Claude-Code-visible non-anthropic id, with the documented labels", () => {
   const rows = JSON.parse(run(["--config", FIXTURE_CONFIG]).stdout);
-  assert.equal(rows.length, 9);
+  assert.equal(rows.length, 11);
   assert.equal(rows.filter((r) => r.model.startsWith("anthropic/")).length, 0);
   const byModel = Object.fromEntries(rows.map((r) => [r.model, r]));
-  assert.equal(byModel["claude-local/qwen38-27b-iq3s"].label, "Qwen3.8 27B (local)");
-  assert.equal(byModel["claude-local/nemotron-4b"].label, "Nemotron 4B (local)");
+  // The local qwen38 family is a prefix family: the id suffix is the effort selector on this leg,
+  // and the unsuffixed id renders as the "default" entry rather than duplicating the -high label.
+  assert.equal(byModel["claude-local/qwen38-27b-iq3s"].label, "Qwen3.8 27B default (local)");
+  assert.equal(byModel["claude-local/qwen38-27b-iq3s-off"].label, "Qwen3.8 27B off (local)");
+  assert.equal(byModel["claude-local/qwen38-27b-iq3s-low"].label, "Qwen3.8 27B low (local)");
+  assert.equal(byModel["claude-local/qwen38-27b-iq3s-medium"].label, "Qwen3.8 27B medium (local)");
+  assert.equal(byModel["claude-local/qwen38-27b-iq3s-high"].label, "Qwen3.8 27B high (local)");
+  assert.match(byModel["claude-local/qwen38-27b-iq3s-high"].description, /reasoning high is in the id suffix/);
+  assert.match(byModel["claude-local/qwen38-27b-iq3s"].description, /no suffix means the default budget/);
   // Unknown ids are additive-config normal: bare id verbatim, never a failure.
   assert.equal(byModel["claude-local/some-future-model-9b"].label, "some-future-model-9b (local)");
-  assert.equal(byModel["openrouter/z-ai/glm-5.2:free"].label, "GLM 5.2 free (openrouter)");
   assert.equal(byModel["or-anthropic/z-ai/glm-5.3"].label, "GLM 5.3 (or-anthropic)");
   // Suffix-less codex ids take the persona default; suffixed ones take the suffix.
   assert.equal(byModel["codex-a/gpt-5.6-luna"].label, "Luna low (codex-a)");
@@ -73,10 +79,34 @@ test("renders one row per non-anthropic id, with the documented labels", () => {
   }
 });
 
-test("the real config yields 25 rows and no anthropic id", () => {
+test("the real config yields 24 Claude-Code rows: the four effort ids in, the openwebui ids out", () => {
   const rows = JSON.parse(run(["--config", REAL_CONFIG]).stdout);
-  assert.equal(rows.length, 25);
+  assert.equal(rows.length, 24);
   assert.equal(rows.filter((r) => r.model.startsWith("anthropic/")).length, 0);
+  const models = rows.map((r) => r.model);
+  for (const effort of ["off", "low", "medium", "high"]) {
+    assert.ok(models.includes(`claude-local/qwen38-27b-iq3s-${effort}`), `missing effort id ${effort}`);
+  }
+  // Tagged for OpenWebUI only — these are the rows the tag exists to remove from the picker.
+  assert.equal(models.filter((m) => m.startsWith("openrouter/") || m.startsWith("or-anthropic/")).length, 0);
+  assert.equal(models.includes("claude-local/nemotron-4b"), false);
+});
+
+test("consumer tags: untagged is every consumer, provider-level and per-model tags both filter", () => {
+  const rows = JSON.parse(run(["--config", FIXTURE_CONFIG]).stdout);
+  const models = new Set(rows.map((r) => r.model));
+  // Untagged provider: unchanged, every id renders (the pre-tag behaviour of every provider).
+  assert.ok(models.has("or-anthropic/z-ai/glm-5.3"));
+  assert.ok(models.has("codex-a/gpt-5.6-luna"));
+  // Provider-level ["openwebui"]: every id of that provider disappears.
+  assert.equal([...models].some((m) => m.startsWith("openrouter/")), false);
+  // Provider-level ["cc","openwebui"]: a multi-consumer tag that includes cc keeps its rows.
+  assert.ok(models.has("codex-b/gpt-5.6-sol"));
+  assert.ok(models.has("codex-b/gpt-5.6-luna-high"));
+  // Mixed per-model map on one provider: cc-tagged in, openwebui-tagged out, untagged still in.
+  assert.ok(models.has("claude-local/qwen38-27b-iq3s-low"));
+  assert.equal(models.has("claude-local/nemotron-4b"), false);
+  assert.ok(models.has("claude-local/some-future-model-9b"));
 });
 
 test("--write preserves unrelated keys and their order, and is idempotent", (t) => {
@@ -89,7 +119,7 @@ test("--write preserves unrelated keys and their order, and is idempotent", (t) 
   const parsed = JSON.parse(first);
   assert.deepEqual(Object.keys(parsed), ["permissions", "statusLine", "zzz", "modelPicker"]);
   assert.deepEqual(parsed.permissions, before.permissions);
-  assert.equal(parsed.modelPicker.options.length, 9);
+  assert.equal(parsed.modelPicker.options.length, 11);
   assert.equal(parsed.modelPicker.replaceBuiltInOptions, undefined);
   assert.equal(parsed.env, undefined);
 
@@ -97,13 +127,50 @@ test("--write preserves unrelated keys and their order, and is idempotent", (t) 
   assert.equal(fs.readFileSync(settings, "utf8"), first, "second --write must produce zero diff");
 });
 
-test("non-canonical settings JSON is refused with exit 2 and the file is untouched", (t) => {
+test("non-canonical settings JSON is refused with exit 2, naming --canonicalize, file untouched", (t) => {
   const { dir, settings } = tempHome(t);
   const original = '{"permissions":{"allow":[]}}';
   fs.writeFileSync(settings, original);
   const res = run(["--config", FIXTURE_CONFIG, "--home", dir, "--write"], 2);
   assert.match(res.stderr, /not canonical 2-space JSON; refusing to rewrite/);
+  assert.match(res.stderr, /--canonicalize/);
   assert.equal(fs.readFileSync(settings, "utf8"), original);
+  // --check never rewrites, so the flag is rejected there rather than silently accepted.
+  const misuse = run(["--config", FIXTURE_CONFIG, "--home", dir, "--check", "--canonicalize"], 2);
+  assert.match(misuse.stderr, /--canonicalize needs --write/);
+  assert.equal(fs.readFileSync(settings, "utf8"), original);
+});
+
+test("--canonicalize reformats a non-canonical file in place, preserving semantic content", (t) => {
+  const { dir, settings } = tempHome(t);
+  fs.writeFileSync(settings, '{"permissions":{"allow":["Bash(ls:*)"]},\n\t"zzz":1}');
+  run(["--config", FIXTURE_CONFIG, "--home", dir, "--write", "--canonicalize"]);
+  const written = fs.readFileSync(settings, "utf8");
+  const parsed = JSON.parse(written);
+  // Canonical serialisation, unrelated keys and their order intact, rows applied.
+  assert.equal(written, `${JSON.stringify(parsed, null, 2)}\n`);
+  assert.deepEqual(Object.keys(parsed), ["permissions", "zzz", "modelPicker"]);
+  assert.deepEqual(parsed.permissions, { allow: ["Bash(ls:*)"] });
+  assert.equal(parsed.zzz, 1);
+  assert.equal(parsed.modelPicker.options.length, 11);
+  run(["--config", FIXTURE_CONFIG, "--home", dir, "--check"]);
+});
+
+test("--canonicalize on an already-canonical file is byte-identical to --write without it", (t) => {
+  const { dir, settings } = tempHome(t);
+  const before = `${JSON.stringify({ permissions: { allow: [] }, zzz: 1 }, null, 2)}\n`;
+
+  fs.writeFileSync(settings, before);
+  run(["--config", FIXTURE_CONFIG, "--home", dir, "--write"]);
+  const plain = fs.readFileSync(settings, "utf8");
+
+  fs.writeFileSync(settings, before);
+  run(["--config", FIXTURE_CONFIG, "--home", dir, "--write", "--canonicalize"]);
+  assert.equal(fs.readFileSync(settings, "utf8"), plain, "--canonicalize must not change canonical output");
+
+  // And it stays a no-op on a second pass over its own output.
+  run(["--config", FIXTURE_CONFIG, "--home", dir, "--write", "--canonicalize"]);
+  assert.equal(fs.readFileSync(settings, "utf8"), plain);
 });
 
 test("--check is 1 when stale and 0 when fresh", (t) => {

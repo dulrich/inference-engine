@@ -9,9 +9,21 @@
       "baseurl": "http://inference-engine-llama:4806/v1",
       "models": [
         "qwen38-27b-iq3s",
+        "qwen38-27b-iq3s-off",
+        "qwen38-27b-iq3s-low",
+        "qwen38-27b-iq3s-medium",
+        "qwen38-27b-iq3s-high",
         "nemotron-4b",
         "some-future-model-9b"
-      ]
+      ],
+      "consumers": {
+        "qwen38-27b-iq3s": ["cc"],
+        "qwen38-27b-iq3s-off": ["cc"],
+        "qwen38-27b-iq3s-low": ["cc"],
+        "qwen38-27b-iq3s-medium": ["cc"],
+        "qwen38-27b-iq3s-high": ["cc"],
+        "nemotron-4b": ["openwebui"]
+      }
     },
     {
       "name": "anthropic",
@@ -29,7 +41,8 @@
       "baseurl": "https://openrouter.ai/api/v1",
       "models": [
         "z-ai/glm-5.2:free"
-      ]
+      ],
+      "consumers": ["openwebui"]
     },
     {
       "name": "or-anthropic",
@@ -58,7 +71,8 @@
       "models": [
         "gpt-5.6-sol",
         "gpt-5.6-luna-high"
-      ]
+      ],
+      "consumers": ["cc", "openwebui"]
     }
   ]
 }

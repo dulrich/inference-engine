@@ -211,3 +211,63 @@ test("two subagents of one parent with different first prompts get two threads",
   assert.equal(keys.size, 2);
   assert.equal([...keys].every(k => k.startsWith(`${PARENT_SID}:`)), true);
 });
+
+// ---- per-turn effort (WP-1) ------------------------------------------------
+// Effort is a turn-level field, not a thread-level one (measured 2026-09-13: low->high->low on
+// one open thread gave 0/87/0 reasoning tokens). A change between turns therefore costs one
+// prefix-cache miss and nothing else — no new thread, no interrupt, one `effort-changed` row.
+const EFFORT_SID = "eeeeeeee-0000-0000-0000-000000000005";
+
+test("a mid-session effort change re-sends effort on the same thread and logs effort-changed", async t => {
+  const h = await withSidecar({ scenario });
+  t.after(() => h.close());
+
+  const turn = (effort, messages) => req(h, "/codex-a/v1/messages", {
+    body: msgBody({ model: "gpt-5.6-sol", sessionId: EFFORT_SID, messages, extra: { output_config: { effort } } }),
+  });
+
+  const first = await turn("low", [{ role: "user", content: "one" }]);
+  assert.equal(first.status, 200, first.text);
+  const second = await turn("high", [
+    { role: "user", content: "one" },
+    { role: "assistant", content: "hello world" },
+    { role: "user", content: "two" },
+  ]);
+  assert.equal(second.status, 200, second.text);
+
+  assert.equal(sentTo(h.trace(), "thread/start").length, 1, "an effort change must never open a new thread");
+  const turns = sentTo(h.trace(), "turn/start");
+  assert.deepEqual(turns.map(f => f.params.effort), ["low", "high"], "effort rides on every turn/start");
+  assert.equal(new Set(turns.map(f => f.params.threadId)).size, 1, "both turns run on the same thread");
+
+  const changed = h.log().filter(l => l.kind === "effort-changed");
+  assert.equal(changed.length, 1, "exactly one effort-changed row");
+  assert.equal(changed[0].from, "low");
+  assert.equal(changed[0].to, "high");
+  assert.equal(changed[0].source, "request");
+  assert.equal(changed[0].key, EFFORT_SID);
+  assert.equal(changed[0].threadId, turns[0].params.threadId);
+});
+
+test("config-verified and http rows carry effortSource alongside effort", async t => {
+  const h = await withSidecar({ scenario });
+  t.after(() => h.close());
+
+  // the request field is honoured on a bare id …
+  const asked = await req(h, "/codex-a/v1/messages", {
+    body: msgBody({ model: "gpt-5.6-sol", sessionId: EFFORT_SID, extra: { output_config: { effort: "max" } } }),
+  });
+  assert.equal(asked.status, 200, asked.text);
+  // … and loses to an explicit id suffix (separate session, so no effort-changed row)
+  const suffixed = await req(h, "/codex-a/v1/messages", {
+    body: msgBody({ model: "gpt-5.6-sol-low", sessionId: "ffffffff-0000-0000-0000-000000000006", extra: { output_config: { effort: "high" } } }),
+  });
+  assert.equal(suffixed.status, 200, suffixed.text);
+
+  const verified = h.log().filter(l => l.kind === "config-verified");
+  assert.deepEqual(verified.map(l => [l.effort, l.effortSource]), [["high", "request"], ["low", "suffix"]]);
+  const http = h.log().filter(l => l.kind === "http");
+  assert.deepEqual(http.map(l => [l.model, l.effort, l.effortSource]),
+    [["gpt-5.6-sol", "high", "request"], ["gpt-5.6-sol", "low", "suffix"]]);
+  assert.equal(h.log().filter(l => l.kind === "effort-changed").length, 0, "two sessions, no change within either");
+});

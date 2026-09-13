@@ -43,9 +43,11 @@ Usage is **one call lagged** in `message_start` (the previous call's `tokenUsage
 
 | id | model | effort |
 | --- | --- | --- |
-| `gpt-5.6-luna` | luna | low (family default) |
-| `gpt-5.6-sol`, `gpt-6-astra` | sol / astra | medium (family default) |
-| `…-low`, `…-medium`, `…-high` | as named | as named |
+| `gpt-5.6-luna` | luna | low (family default — only when the request carries no `output_config.effort`) |
+| `gpt-5.6-sol`, `gpt-6-astra` | sol / astra | medium (family default — only when the request carries no `output_config.effort`) |
+| `…-low`, `…-medium`, `…-high` | as named | as named (an explicit suffix wins over the request) |
+
+**Effort precedence**, per turn, highest first: the id suffix (`effortSource: "suffix"`) → the request's `output_config.effort` (`low`/`medium`/`high` onto themselves, `max`/`xhigh` → `high`; `"request"`) → `thinking:{"type":"disabled"}` → `low`, the app-server's floor (`"request"`) → the family default (`"default"`). An unrecognised value or an absent field falls to the default and is never a 400. The resolved value rides on every `turn/start` and applies to that turn only; a change mid-thread is logged as `effort-changed` and costs one prefix-cache miss. Full rule and the measurement: `../docs/tool-calling-gateway/codex-sidecar.md` "Effort precedence".
 
 ## Measured (WP-4)
 
@@ -91,7 +93,7 @@ These exist only so the suite can run without a real codex binary and without wa
 
 ## Logs
 
-One JSONL file per UTC day, `codex-sidecar-YYYY-MM-DD.jsonl`, mode `0600` inside a `0700` directory. Bearer and `x-api-key` headers are redacted to `<redacted>`. Line kinds worth grepping: `listen`, `child-started`, `child-exit`, `initialized`, `config-verified`, `config-unverified`, `security-event`, `rate-limited`, `weak-session-key`, `rewind`, `title-local`, `parallel-tool-batch`, `http-start`, `superseded-request`, `http`, `http-error`.
+One JSONL file per UTC day, `codex-sidecar-YYYY-MM-DD.jsonl`, mode `0600` inside a `0700` directory. Bearer and `x-api-key` headers are redacted to `<redacted>`. Line kinds worth grepping: `listen`, `child-started`, `child-exit`, `initialized`, `config-verified`, `config-unverified`, `security-event`, `rate-limited`, `weak-session-key`, `rewind`, `title-local`, `parallel-tool-batch`, `effort-changed`, `http-start`, `superseded-request`, `http`, `http-error`.
 
 ## Running it by hand
 

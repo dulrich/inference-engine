@@ -29,6 +29,8 @@ const THREAD_CONFIG = JSON.parse(fs.readFileSync(path.join(HERE, "thread-config.
 const INBAND_ITEM_TYPES = new Set(["agentMessage", "reasoning", "dynamicToolCall", "userMessage"]);
 
 const MODEL_FAMILIES = { "gpt-5.6-luna": "low", "gpt-5.6-sol": "medium", "gpt-6-astra": "medium" };
+// The harness's `output_config.effort` vocabulary folded onto the app-server's low|medium|high.
+const EFFORT_LEVELS = { low: "low", medium: "medium", high: "high", max: "high", xhigh: "high" };
 const TITLE_PHRASE = "You are naming a coding session so the user can pick it out of a long list of sessions";
 const TITLE_MAX_SYSTEM_CHARS = 4000;
 // Spike-era envelope was the bare <session> block; Claude Code 2.1.269 appends a language
@@ -196,10 +198,39 @@ export function parseModelId(raw) {
   if (!id) return null;
   // the gateway may hand us either `gpt-5.6-luna` or `codex-a/gpt-5.6-luna`
   const bare = id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id;
-  if (Object.hasOwn(MODEL_FAMILIES, bare)) return { model: bare, effort: MODEL_FAMILIES[bare] };
+  // `effortSource` records WHY this effort holds: an explicit `-low|-medium|-high` suffix, or the
+  // MODEL_FAMILIES default. `resolveEffort` needs that distinction — a suffix wins over the
+  // request's `output_config.effort`, a family default loses to it. The suffix grammar and the
+  // `effort` values themselves are unchanged (contract).
+  if (Object.hasOwn(MODEL_FAMILIES, bare)) return { model: bare, effort: MODEL_FAMILIES[bare], effortSource: "default" };
   const m = /^(.*)-(low|medium|high)$/.exec(bare);
-  if (m && Object.hasOwn(MODEL_FAMILIES, m[1])) return { model: m[1], effort: m[2] };
+  if (m && Object.hasOwn(MODEL_FAMILIES, m[1])) return { model: m[1], effort: m[2], effortSource: "suffix" };
   return null;
+}
+
+// Effort precedence for one turn (plan `codex-leg-effort-and-auditor-unpinning`, WP-1), highest
+// first: the id suffix (explicit beats implicit, even against a conflicting request field) ->
+// the harness's `output_config.effort` -> `thinking.type === "disabled"` -> the family default.
+//
+// `max`/`xhigh` fold onto `high`: the app-server's ladder is low|medium|high only. `disabled`
+// maps to `low` because the app-server has no "off" level and `low` is its floor — and it ranks
+// BELOW an explicit level here, a deliberate divergence from the local leg's patch 0007
+// (`router/AGENTS.md:58`), which ranks `disabled` first because that leg has a real off switch.
+// 0007's `thinking:{type:"enabled", budget_tokens}` rung is deliberately OMITTED on this leg
+// (plan "Decisions locked"): the only client sends `type:"adaptive"` (measured 2026-09-13), so a
+// budget->level table would be an unmeasured guess. `enabled`, `adaptive`, an unrecognised
+// `effort` value and an absent field all fall to the family default.
+//
+// The no-op invariant, inherited from 0007: this never throws and never yields an error — no
+// request shape that succeeded before may fail now.
+export function resolveEffort(parsed, body) {
+  if (parsed?.effortSource === "suffix") return { effort: parsed.effort, effortSource: "suffix" };
+  const want = body?.output_config?.effort;
+  if (typeof want === "string" && Object.hasOwn(EFFORT_LEVELS, want)) {
+    return { effort: EFFORT_LEVELS[want], effortSource: "request" };
+  }
+  if (body?.thinking?.type === "disabled") return { effort: "low", effortSource: "request" };
+  return { effort: parsed?.effort ?? null, effortSource: "default" };
 }
 
 export const blocksOf = content => (Array.isArray(content)
@@ -545,6 +576,7 @@ class Session {
     this.threadId = null;
     this.turnId = null;
     this.model = null;
+    this.lastEffort = null;       // effort sent on this thread's previous turn/start (effort-changed)
     this.parked = new Map();      // callId -> JSON-RPC request id
     this.delivered = new Set();   // callIds already emitted to the client as tool_use blocks
     this.turnOpen = false;        // the codex turn is still running, blocked on a tool call
@@ -1072,6 +1104,10 @@ async function handleMessages(ctx, persona, body, req, res) {
     throw new SidecarError(400, "invalid_request_error",
       `unknown model id "${String(body.model ?? "")}" — expected one of ${Object.keys(MODEL_FAMILIES).join(", ")} with an optional -low/-medium/-high suffix`);
   }
+  // Effort is resolved per request, not per thread: it rides on every `turn/start` and takes
+  // effect for that turn only (measured 2026-09-13 — low/high/low on one open thread gave
+  // 0/87/0 reasoning tokens). `thread/start` carries no effort field.
+  const eff = resolveEffort(parsed, body);
 
   const firstUser = msgs.find(m => m.role === "user");
   const { key, weak, scope } = sessionKeyOf(body, systemText, textOf(firstUser?.content), req.headers);
@@ -1174,7 +1210,8 @@ async function handleMessages(ctx, persona, body, req, res) {
         throw new SidecarError(502, "api_error", `thread config not honoured: ${problem}`);
       }
       ctx.logger.write("config-verified", {
-        persona: persona.name, threadId: sess.threadId, key, scope, cwd, model: parsed.model, effort: parsed.effort,
+        persona: persona.name, threadId: sess.threadId, key, scope, cwd, model: parsed.model,
+        effort: eff.effort, effortSource: eff.effortSource,
         instructionSources: started?.instructionSources ?? [], nTools: params.dynamicTools.length,
         preambleChars: PREAMBLE.length, systemChars: systemText.length, interleavedSystemChars: interleavedText.length,
       });
@@ -1190,11 +1227,21 @@ async function handleMessages(ctx, persona, body, req, res) {
       sess.abandonDelivered("no result returned by the client");
     } else {
       const text = turnInputText(mode, msgs, last, lastBlocks);
-      const turnParams = { threadId: sess.threadId, input: [{ type: "text", text }], effort: parsed.effort };
+      const turnParams = { threadId: sess.threadId, input: [{ type: "text", text }], effort: eff.effort };
       if (sess.model && parsed.model !== sess.model) { turnParams.model = parsed.model; sess.model = parsed.model; }
+      // A mid-thread effort change is legal and costs exactly one prefix-cache miss on the
+      // changed turn (measured 2026-09-13: cachedInputTokens 0 on that turn, neighbours cached).
+      // So it is logged and nothing else — no new thread, no interrupt.
+      if (sess.lastEffort !== null && sess.lastEffort !== eff.effort) {
+        ctx.logger.write("effort-changed", {
+          persona: persona.name, threadId: sess.threadId, key,
+          from: sess.lastEffort, to: eff.effort, source: eff.effortSource,
+        });
+      }
       sess.deltaItems.clear();
       sess.pendingOutcomes = [];      // a stray outcome never leaks into a fresh turn
       const turn = await persona.rpc("turn/start", turnParams, cfg.turnTimeoutMs);
+      sess.lastEffort = eff.effort;   // what this thread last ran at, for the next turn's compare
       stillMine();
       sess.turnId = turn?.turn?.id ?? turn?.turnId ?? sess.turnId;
     }
@@ -1220,7 +1267,7 @@ async function handleMessages(ctx, persona, body, req, res) {
     sink.finish(stopReason, usage);
     ctx.logger.write("http", {
       persona: persona.name, path: `/${persona.name}/v1/messages`, key, reqId, scope, mode, stream: !!body.stream,
-      model: parsed.model, effort: parsed.effort, threadId: sess.threadId, stop_reason: stopReason,
+      model: parsed.model, effort: eff.effort, effortSource: eff.effortSource, threadId: sess.threadId, stop_reason: stopReason,
       nMessages: msgs.length, nSystemRole: allMsgs.length - msgs.length, nTools: (body.tools || []).length,
       toolCalls: out.kind === "tool_use" ? out.batch.map(c => c.params.tool) : [],
       usage: usageOut(usage), headers: redactHeaders(req.headers),

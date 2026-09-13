@@ -12,14 +12,16 @@ import {
 const TITLE_SYSTEM = "You are naming a coding session so the user can pick it out of a long list of sessions.";
 
 test("effort lives in the model-id suffix", () => {
-  assert.deepEqual(parseModelId("gpt-5.6-luna"), { model: "gpt-5.6-luna", effort: "low" });
-  assert.deepEqual(parseModelId("gpt-5.6-sol"), { model: "gpt-5.6-sol", effort: "medium" });
-  assert.deepEqual(parseModelId("gpt-6-astra"), { model: "gpt-6-astra", effort: "medium" });
-  assert.deepEqual(parseModelId("gpt-6-astra-low"), { model: "gpt-6-astra", effort: "low" });
-  assert.deepEqual(parseModelId("gpt-5.6-luna-high"), { model: "gpt-5.6-luna", effort: "high" });
-  assert.deepEqual(parseModelId("gpt-5.6-sol-low"), { model: "gpt-5.6-sol", effort: "low" });
+  // `effortSource` says whether the effort came from the suffix or the family default; the
+  // `effort` values themselves are unchanged (precedence lives in resolveEffort — effort.test.mjs).
+  assert.deepEqual(parseModelId("gpt-5.6-luna"), { model: "gpt-5.6-luna", effort: "low", effortSource: "default" });
+  assert.deepEqual(parseModelId("gpt-5.6-sol"), { model: "gpt-5.6-sol", effort: "medium", effortSource: "default" });
+  assert.deepEqual(parseModelId("gpt-6-astra"), { model: "gpt-6-astra", effort: "medium", effortSource: "default" });
+  assert.deepEqual(parseModelId("gpt-6-astra-low"), { model: "gpt-6-astra", effort: "low", effortSource: "suffix" });
+  assert.deepEqual(parseModelId("gpt-5.6-luna-high"), { model: "gpt-5.6-luna", effort: "high", effortSource: "suffix" });
+  assert.deepEqual(parseModelId("gpt-5.6-sol-low"), { model: "gpt-5.6-sol", effort: "low", effortSource: "suffix" });
   // the gateway may or may not strip the provider segment
-  assert.deepEqual(parseModelId("codex-a/gpt-5.6-luna-medium"), { model: "gpt-5.6-luna", effort: "medium" });
+  assert.deepEqual(parseModelId("codex-a/gpt-5.6-luna-medium"), { model: "gpt-5.6-luna", effort: "medium", effortSource: "suffix" });
   // unknown suffix and unknown family are rejected (the caller answers 400)
   assert.equal(parseModelId("gpt-5.6-luna-ultra"), null);
   assert.equal(parseModelId("gpt-7-nova"), null);

@@ -601,7 +601,11 @@ class Session {
     this.usageTotal = null;       // codex-side cumulative for this thread
     this.sent = { inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0 };
     this.sink = null;
-    this.owner = null;            // the request currently driving this session ({ reqId })
+    this.owner = null;            // the request currently driving this session (a request token)
+    this.ownerGone = false;       // the owner's socket closed but a joiner keeps the turn alive
+    this.joiners = new Set();     // duplicate requests attached to the owner's turn (WP-5)
+    this.turnText = [];           // text emitted to the owner's sink since this request attached
+    this.lastOutcome = null;      // the last completed request's outcome, for straggler replay
     this.pendingOutcomes = [];    // settled outcomes not yet handed to a request, in order
     this.resolveOutcome = null;
     this.timeoutTimer = null;
@@ -610,6 +614,22 @@ class Session {
 
   attach(sink) { this.sink = sink; }
   detach(sink) { if (!sink || this.sink === sink) this.sink = null; }
+
+  // The joiners bound to one owner (its request token, by identity). `joiners` is
+  // session-global, so every read filters: a request only ever writes to, drains, promotes
+  // or settles the duplicates that joined *it* (audit defect B3, 2026-09-13).
+  joinersOf(owner) { return owner ? [...this.joiners].filter(j => j.ownerToken === owner) : []; }
+
+  // Every byte of assistant text goes through here: to the owner's sink, to every
+  // duplicate joined to *the current owner*, and into `turnText` so a joiner attaching
+  // mid-stream can be replayed the text it missed. A promoted joiner is both `sink` and a
+  // member of `joiners`, so it is written exactly once.
+  emitText(t) {
+    if (!t) return;
+    this.turnText.push(t);
+    this.sink?.textDelta(t);
+    for (const j of this.joinersOf(this.owner)) if (j.sink !== this.sink) j.sink.textDelta(t);
+  }
 
   // A newer request on the same session takes over: the request parked in
   // waitOutcome is resolved with the given error (its timer is cleared by the
@@ -686,13 +706,13 @@ class Session {
       case "item/agentMessage/delta":
         if (typeof p.delta === "string" && p.delta) {
           if (p.itemId) this.deltaItems.add(p.itemId);
-          this.sink?.textDelta(p.delta);
+          this.emitText(p.delta);
         }
         break;
       case "item/completed": {
         const item = p.item;
         if (item?.type === "agentMessage" && typeof item.text === "string" && item.text && !this.deltaItems.has(item.id)) {
-          this.sink?.textDelta(item.text);   // buffered fallback when no deltas arrived
+          this.emitText(item.text);          // buffered fallback when no deltas arrived
         }
         break;
       }
@@ -1080,6 +1100,43 @@ function readBody(req) {
   });
 }
 
+// A request's identity is a DIGEST of everything that decides what the model would do
+// with it — model id, resolved effort, system text, the tool list, and the whole parsed
+// message array (every content byte, `is_error` included). Shape is not identity: the same
+// message count echoing the same `tool_use_id`s with a *different* `tool_result.content` is
+// a genuinely different request, and joining it to an in-flight turn (or answering it from
+// a replayed outcome) would silently drop it and return a stale answer — acceptance-audit
+// defects B1/B2, 2026-09-13. Only a byte-for-byte re-send of the execution-affecting request
+// earns a JOIN or a replay; anything else supersedes.
+//
+// `canon` gives JSON.stringify a stable key order so two structurally identical bodies that
+// differ only in property order digest the same (no dependency; arrays keep their order,
+// because message and block order is semantic).
+const canon = v => Array.isArray(v)
+  ? v.map(canon)
+  : (v && typeof v === "object")
+    ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canon(v[k])]))
+    : v;
+const requestDigest = ({ model, effort, system, tools, messages }) => crypto.createHash("sha256")
+  .update(JSON.stringify(canon({ model, effort, system, tools, messages })))
+  .digest("hex");
+const shortDigest = d => (d ? d.slice(0, 12) : null);
+
+const isDuplicateRequest = (owner, token) => !!owner
+  && owner.mode === token.mode          // cheap pre-check; the digest is the decision
+  && owner.digest === token.digest;
+
+// A straggler: a retry still in the client's backoff queue when the turn it belongs to
+// completed. Every id it echoes is answered, nothing is parked, no turn is open, and it is
+// the same request by digest — so its answer is that turn's outcome, replayed.
+const isStragglerRetry = (sess, token) => {
+  const lo = sess.lastOutcome;
+  return !!lo && !sess.turnOpen && sess.parked.size === 0
+    && token.toolResultIds.length > 0
+    && token.digest === lo.digest
+    && token.toolResultIds.every(id => sess.delivered.has(id));
+};
+
 async function handleMessages(ctx, persona, body, req, res) {
   const cfg = ctx.config;
   const systemText = systemTextOf(body);
@@ -1168,20 +1225,120 @@ async function handleMessages(ctx, persona, body, req, res) {
   const sink = body.stream
     ? new SseSink(res, body.model, cfg.pingMs)
     : new BufferSink(res, body.model);
-  // One request drives a session at a time. A second in-flight request (a client or
-  // router retry) used to overwrite the first's sink/outcome slot silently, leaving the
-  // first hanging with no timeout and its parked answers already consumed (the live
-  // "orphan-tool-result then silent stall" signature). Now the newer request supersedes
-  // the older one loudly: the older fails with a 409 and an http-error row.
-  const token = { reqId };
+  // One `http` row per request, same shape on every path (owner, joiner, replay).
+  const logHttp = ({ stopReason, toolCalls, usage, ...extra }) => ctx.logger.write("http", {
+    persona: persona.name, path: `/${persona.name}/v1/messages`, key, reqId, scope, mode, stream: !!body.stream,
+    model: parsed.model, effort: eff.effort, effortSource: eff.effortSource, threadId: sess.threadId, stop_reason: stopReason,
+    nMessages: msgs.length, nSystemRole: allMsgs.length - msgs.length, nTools: (body.tools || []).length,
+    toolCalls, usage: usageOut(usage), usageCodex: usage, headers: redactHeaders(req.headers), ...extra,
+  });
+
+  // One request drives a session at a time. A second in-flight request on the same session
+  // is, in practice, the client re-sending the *same* body: the 2026-09-13 storm was 89
+  // byte-identical `tool-result` retries in 13 minutes, each superseding the previous with a
+  // 409 the Anthropic SDK treats as retryable — a livelock (spike record, WP-5 phase 1).
+  // So a duplicate JOINS the in-flight turn as a second sink (fix shape (ii), user decision
+  // 2026-09-13): no 409, no error frame, no orphan row, no retry signal of any kind, and
+  // every attached connection receives the same outcome. Only a genuinely different second
+  // request still supersedes the older one loudly (409 + `http-error` row).
+  const token = {
+    reqId, mode,
+    // ids only for the straggler guards ("every id it echoes is already answered"); they are
+    // never the identity — the digest is.
+    toolResultIds: toolResults.map(tr => tr.tool_use_id).filter(Boolean).sort(),
+    digest: requestDigest({
+      model: body.model, effort: eff.effort, system: systemText, tools: body.tools ?? [], messages: msgs,
+    }),
+  };
   const superseded = () => new SidecarError(409, "api_error", "superseded by a newer request on this session");
+
+  // A straggler retry of a turn that has already completed: replay its outcome with ZERO
+  // usage — the reconciliation ledger was charged once, when the turn actually ran.
+  if (!sess.owner && isStragglerRetry(sess, token)) {
+    const lo = sess.lastOutcome;
+    ctx.logger.write("replayed-outcome", { persona: persona.name, key, reqId, ownerReqId: lo.reqId, reqDigest: shortDigest(token.digest) });
+    sink.start(sess.lagUsage());
+    for (const b of lo.blocks) {
+      if (b.type === "text") sink.textDelta(b.text);
+      else sink.toolUse(b);
+    }
+    sink.finish(lo.stopReason, ZERO_USAGE);
+    logHttp({ stopReason: lo.stopReason, toolCalls: lo.toolCalls, usage: ZERO_USAGE });
+    return;
+  }
+
+  // The join. Everything up to `sess.joiners.add` is synchronous, so a joiner is never
+  // registered after the owner has finished settling its joiners.
+  if (isDuplicateRequest(sess.owner, token)) {
+    const ownerReqId = sess.owner.reqId;
+    ctx.logger.write("joined-request", {
+      persona: persona.name, key, reqId, ownerReqId, mode, stream: !!body.stream, reqDigest: shortDigest(token.digest),
+    });
+    let settleJoin;
+    const joined = new Promise(r => { settleJoin = r; });
+    // `ownerToken` binds this joiner to the exact request it joined. `sess.joiners` is
+    // session-global and may hold another owner's joiners, so every consumer filters on it
+    // (audit defect B3): nobody inherits a joiner, and nobody else's joiner is written to.
+    const joiner = { token, ownerToken: sess.owner, sink, settled: false, settle(o) { if (this.settled) return; this.settled = true; settleJoin(o); } };
+    sink.start(sess.lagUsage());
+    const missed = sess.turnText.join("");      // text this request already emitted — never truncate a late joiner
+    if (missed) sink.textDelta(missed);
+    sess.joiners.add(joiner);
+    const onJoinerClose = () => {
+      if (sink.done) return;                    // the outcome is already on the wire
+      sink.abort();
+      sess.joiners.delete(joiner);
+      // The owner is gone and this was the last connection holding the turn open: only now
+      // does the abort path apply (with a live connection attached it never does).
+      if (sess.ownerGone && !sess.joinersOf(joiner.ownerToken).length) {
+        persona.interrupt(sess, "client disconnect");
+        persona.dropSession(sess);
+        sess.settle({ kind: "error", error: new SidecarError(499, "api_error", "client disconnected") });
+      }
+      joiner.settle({ kind: "closed" });
+    };
+    res.on("close", onJoinerClose);
+    try {
+      const o = await joined;
+      if (o.kind === "closed") return;
+      if (o.kind === "error") {
+        ctx.logger.write("http-error", {
+          persona: persona.name, key, reqId, mode, status: o.error.status, type: o.error.anthropicType,
+          message: o.error.message, headers: redactHeaders(req.headers), joinedTo: ownerReqId,
+        });
+        return;
+      }
+      // Same figures as the owner's row: the ledger is charged once per turn, and a joiner
+      // row is a second view of that one charge, not a second charge.
+      logHttp({ stopReason: o.stopReason, toolCalls: o.toolCalls, usage: o.usage, joinedTo: ownerReqId });
+    } finally {
+      sess.joiners.delete(joiner);
+      res.off("close", onJoinerClose);
+    }
+    return;
+  }
+
   if (sess.owner) {
-    ctx.logger.write("superseded-request", { persona: persona.name, key, reqId, supersededReqId: sess.owner.reqId, mode });
+    const oldOwner = sess.owner;
+    ctx.logger.write("superseded-request", { persona: persona.name, key, reqId, supersededReqId: oldOwner.reqId, mode });
+    // A superseded owner takes its joiners with it (audit defect B3). They joined *that*
+    // request; they are no audience for this one, and leaving them attached would deliver
+    // this request's text and outcome to a connection that never asked for it.
+    for (const j of sess.joinersOf(oldOwner)) {
+      sess.joiners.delete(j);
+      const err = superseded();
+      j.sink.error(err);              // its own await path logs the 409 `http-error` row
+      j.settle({ kind: "error", error: err });
+    }
     sess.preempt(superseded());
   }
   sess.owner = token;
+  sess.ownerGone = false;
+  sess.turnText.length = 0;       // per request: a joiner is replayed only what *this* request emitted
   sess.attach(sink);
   const stillMine = () => { if (sess.owner !== token) throw superseded(); };
+  let joiners = [];               // duplicates this request answers alongside its own sink
+  let dedupedToolResults = 0;     // re-sent tool_results silently absorbed (see below)
 
   let closedByClient = false;
   const onClose = () => {
@@ -1189,6 +1346,17 @@ async function handleMessages(ctx, persona, body, req, res) {
     closedByClient = true;
     sink.abort();
     if (sess.owner !== token) return;   // a superseded request never tears down its successor's session
+    const mine = sess.joinersOf(token);
+    if (mine.length) {
+      // Promotion: the owner's socket is gone but a duplicate is still holding on, so the
+      // turn keeps running and the first live joiner's sink becomes the session's sink.
+      // The request token is deliberately NOT transferred — this handler is still the one
+      // driving the turn, and it delivers the outcome to everyone attached.
+      sess.ownerGone = true;
+      sess.detach(sink);
+      sess.attach(mine[0].sink);
+      return;
+    }
     persona.interrupt(sess, "client disconnect");
     persona.dropSession(sess);
     sess.settle({ kind: "error", error: new SidecarError(499, "api_error", "client disconnected") });
@@ -1237,9 +1405,11 @@ async function handleMessages(ctx, persona, body, req, res) {
     if (mode === "tool-result") {
       for (const tr of toolResults) {
         const text = typeof tr.content === "string" ? tr.content : textOf(tr.content) || JSON.stringify(tr.content ?? "");
-        if (!sess.answerParked(tr.tool_use_id, text, !tr.is_error)) {
-          ctx.logger.write("orphan-tool-result", { persona: persona.name, key, tool_use_id: tr.tool_use_id });
-        }
+        if (sess.answerParked(tr.tool_use_id, text, !tr.is_error)) continue;
+        // Already answered on this thread (a re-sent result, 93 such rows in the storm
+        // window): a silent no-op, not an orphan. Only an id we never handed out is one.
+        if (sess.delivered.has(tr.tool_use_id)) { dedupedToolResults += 1; continue; }
+        ctx.logger.write("orphan-tool-result", { persona: persona.name, key, tool_use_id: tr.tool_use_id });
       }
       sess.abandonDelivered("no result returned by the client");
     } else {
@@ -1266,42 +1436,73 @@ async function handleMessages(ctx, persona, body, req, res) {
     stillMine();
     sink.start(sess.lagUsage());
     const out = await sess.waitOutcome(cfg.turnTimeoutMs);
+    // The audience is everyone still attached: this request's sink plus every duplicate
+    // that joined the turn (a promoted joiner is `sess.sink` as well, hence the dedupe).
+    // Only the request still driving the session owns the joiners — a request that was
+    // superseded meanwhile answers its own sink and nobody else's.
+    if (sess.owner === token) {
+      joiners = sess.joinersOf(token);
+      for (const j of joiners) sess.joiners.delete(j);
+      sess.detach(sess.sink);                          // a promoted joiner's sink, if any
+    }
     sess.detach(sink);
-    if (closedByClient) return;
+    const audience = [sink, ...joiners.map(j => j.sink)].filter((sk, i, a) => sk && !sk.done && a.indexOf(sk) === i);
+    // The client-abort path is unchanged only when nothing else is attached.
+    if (closedByClient && !joiners.length) return;
 
     if (out.kind === "error") throw out.error;
     let stopReason = "end_turn";
+    const toolCalls = out.kind === "tool_use" ? out.batch.map(c => c.params.tool) : [];
     if (out.kind === "tool_use") {
       stopReason = "tool_use";
       for (const call of out.batch) {
         sess.delivered.add(call.params.callId);
-        sink.toolUse({ type: "tool_use", id: call.params.callId, name: call.params.tool, input: call.params.arguments ?? {} });
+        const block = { type: "tool_use", id: call.params.callId, name: call.params.tool, input: call.params.arguments ?? {} };
+        for (const sk of audience) sk.toolUse(block);
       }
       if (out.batch.length > 1) ctx.logger.write("parallel-tool-batch", { persona: persona.name, threadId: sess.threadId, n: out.batch.length });
     }
     sess.turnOpen = stopReason === "tool_use";
-    const usage = sess.reconcile();
-    sink.finish(stopReason, usage);
-    ctx.logger.write("http", {
-      persona: persona.name, path: `/${persona.name}/v1/messages`, key, reqId, scope, mode, stream: !!body.stream,
-      model: parsed.model, effort: eff.effort, effortSource: eff.effortSource, threadId: sess.threadId, stop_reason: stopReason,
-      nMessages: msgs.length, nSystemRole: allMsgs.length - msgs.length, nTools: (body.tools || []).length,
-      toolCalls: out.kind === "tool_use" ? out.batch.map(c => c.params.tool) : [],
-      usage: usageOut(usage), usageCodex: usage, headers: redactHeaders(req.headers),
-    });
+    const usage = sess.reconcile();                     // once per turn, whatever is attached
+    for (const sk of audience) sk.finish(stopReason, usage);
+    // What a straggler retry of this exact request gets replayed, should one still be in a
+    // client backoff queue (blocks in emission order: this request's text, then its calls).
+    const emitted = sess.turnText.join("");
+    sess.lastOutcome = {
+      reqId, digest: token.digest, stopReason, toolCalls,
+      blocks: [
+        ...(emitted ? [{ type: "text", text: emitted }] : []),
+        ...(out.kind === "tool_use" ? out.batch.map(c => ({ type: "tool_use", id: c.params.callId, name: c.params.tool, input: c.params.arguments ?? {} })) : []),
+      ],
+    };
+    logHttp({ stopReason, toolCalls, usage, ...(dedupedToolResults ? { dedupedToolResults } : {}) });
+    for (const j of joiners) j.settle({ kind: "done", stopReason, toolCalls, usage });
   } catch (e) {
+    if (sess.owner === token) {
+      for (const j of sess.joinersOf(token)) { joiners.push(j); sess.joiners.delete(j); }
+      sess.turnOpen = false;
+      sess.detach(sess.sink);
+    }
     sess.detach(sink);
-    if (sess.owner === token) sess.turnOpen = false;
-    if (closedByClient) return;
     const err = asSidecarError(e);
+    for (const j of joiners) j.settle({ kind: "error", error: err });
+    const audience = [sink, ...joiners.map(j => j.sink)].filter((sk, i, a) => sk && !sk.done && a.indexOf(sk) === i);
+    if (closedByClient && !joiners.length) return;
     ctx.logger.write("http-error", {
       persona: persona.name, key, reqId, mode, status: err.status, type: err.anthropicType,
       message: err.message, headers: redactHeaders(req.headers),
     });
-    sink.error(err);
+    for (const sk of audience) sk.error(err);
   } finally {
-    if (sess.owner === token) sess.owner = null;
+    const driving = sess.owner === token;
+    if (driving) { sess.owner = null; sess.ownerGone = false; }
     res.off("close", onClose);
+    // No joiner outlives the turn that was driving it (settle is idempotent).
+    const stalled = new SidecarError(502, "api_error", "the turn driving this joined request ended without an outcome");
+    for (const j of [...sess.joinersOf(token), ...joiners]) {
+      sess.joiners.delete(j);
+      if (!j.settled) { j.sink.error(stalled); j.settle({ kind: "error", error: stalled }); }
+    }
   }
 }
 

@@ -93,7 +93,7 @@ These exist only so the suite can run without a real codex binary and without wa
 
 ## Logs
 
-One JSONL file per UTC day, `codex-sidecar-YYYY-MM-DD.jsonl`, mode `0600` inside a `0700` directory. Bearer and `x-api-key` headers are redacted to `<redacted>`. Line kinds worth grepping: `listen`, `child-started`, `child-exit`, `initialized`, `config-verified`, `config-unverified`, `security-event`, `rate-limited`, `weak-session-key`, `rewind`, `title-local`, `parallel-tool-batch`, `effort-changed`, `http-start`, `superseded-request`, `http`, `http-error`.
+One JSONL file per UTC day, `codex-sidecar-YYYY-MM-DD.jsonl`, mode `0600` inside a `0700` directory. Bearer and `x-api-key` headers are redacted to `<redacted>`. Line kinds worth grepping: `listen`, `child-started`, `child-exit`, `initialized`, `config-verified`, `config-unverified`, `security-event`, `rate-limited`, `weak-session-key`, `rewind`, `title-local`, `parallel-tool-batch`, `effort-changed`, `http-start`, `superseded-request`, `joined-request` (a duplicate request attached to the in-flight turn — a duplicate is one whose SHA-256 digest over model id, effort, system text, tools and all messages matches the owner's, never merely the same shape; `reqDigest` is that digest's first 12 hex chars), `replayed-outcome` (a straggler retry answered from the last completed outcome), `http` (per request; `usage` is the Anthropic projection, `usageCodex` the raw codex delta beside it, and `joinedTo` names the owning request on a joiner's row), `http-error`.
 
 ## Running it by hand
 

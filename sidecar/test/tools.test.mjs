@@ -182,7 +182,7 @@ test("three parallel calls spaced beyond batchMs are each delivered exactly once
   assert.ok(!h.log().some(l => l.kind === "http-error"));
 });
 
-test("a second in-flight request on one session supersedes the first loudly instead of orphaning it", async t => {
+test("a duplicate second request joins the in-flight turn: both connections get the outcome, no 409, no orphan row", async t => {
   const h = await withSidecar({
     scenario: {
       turns: [[
@@ -197,21 +197,22 @@ test("a second in-flight request on one session supersedes the first loudly inst
   assert.equal(first.json.stop_reason, "tool_use");
   const body = msgBody({ tools: READ, messages: [{ role: "user", content: "hi" }, { role: "assistant", content: first.json.content },
     { role: "user", content: [{ type: "tool_result", tool_use_id: "c1", content: "a" }] }] });
-  const t0 = Date.now();
-  const older = req(h, "/codex-a/v1/messages", { body }).then(r => ({ r, ms: Date.now() - t0 }));
+  const older = req(h, "/codex-a/v1/messages", { body });
   await new Promise(r => setTimeout(r, 400));
-  const newer = req(h, "/codex-a/v1/messages", { body }).then(r => ({ r, ms: Date.now() - t0 }));
+  const newer = req(h, "/codex-a/v1/messages", { body });   // byte-identical: a retry, not a new request
 
-  const a = await older;
-  assert.equal(a.r.status, 409, a.r.text);                      // fails fast and loud …
-  assert.ok(a.ms < 1500, `superseded request returned after ${a.ms}ms`);  // … well inside turnTimeoutMs (8 s in tests)
-  const b = await newer;
-  assert.equal(b.r.status, 200, b.r.text);
-  assert.deepEqual(b.r.json.content.filter(x => x.type === "tool_use").map(x => x.id), ["c2"]);
+  // Both connections are answered, with the same outcome, when the turn actually produces one.
+  for (const [name, p] of [["older", older], ["newer", newer]]) {
+    const r = await p;
+    assert.equal(r.status, 200, `${name}: ${r.text}`);
+    assert.deepEqual(r.json.content.filter(x => x.type === "tool_use").map(x => x.id), ["c2"], name);
+  }
 
   const log = h.log();
-  assert.ok(log.some(l => l.kind === "superseded-request"));
-  assert.ok(log.some(l => l.kind === "http-error" && l.status === 409));
-  assert.ok(log.some(l => l.kind === "orphan-tool-result" && l.tool_use_id === "c1"), "the duplicate's echo of c1 is still reported");
+  assert.equal(log.filter(l => l.kind === "joined-request").length, 1);
+  assert.equal(log.filter(l => l.kind === "superseded-request").length, 0);
+  assert.equal(log.filter(l => l.kind === "http-error").length, 0);
+  assert.equal(log.filter(l => l.kind === "orphan-tool-result").length, 0, "the duplicate's echo of c1 is absorbed, not reported");
+  assert.equal(log.filter(l => l.kind === "http" && l.mode === "tool-result").length, 2, "one http row per request");
   assert.equal(sentTo(h.trace(), "turn/start").length, 1, "no fresh turn/start on the blocked thread");
 });

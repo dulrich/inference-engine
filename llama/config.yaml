@@ -73,6 +73,12 @@
 #                                         is what makes serving these vectors from llama.cpp
 #                                         instead of sentence-transformers safe — enrich has no
 #                                         embedding-space guard of its own.
+#   gemma-4-26b-a4b   (none yet)          NO CONSUMER YET — added 2026-09-13
+#                                         (plans/gemma4-26b-a4b-qat-mtp-ladder.md WP-4), the
+#                                         served 128k rung of the QAT+MTP context ladder. Listed
+#                                         here from landing so the append-only contract covers it
+#                                         before anything stores it; this row gains a consumer the
+#                                         day one actually does.
 #   (model keys)      Open WebUI          per-model settings (capability toggles, description)
 #                                         in Open WebUI's own config DB, keyed by `/v1/models`
 #                                         `id` — which llama-swap sets to the model KEY, not the
@@ -545,6 +551,85 @@ models:
       --load-mode none
       --spec-type draft-mtp
       -c 131072
+      -ub 2048
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
+  # ── Gemma 4 26B A4B QAT + MTP (unsloth/gemma-4-26B-A4B-it-qat-GGUF), no external consumer yet
+  # — see plans/gemma4-26b-a4b-qat-mtp-ladder.md. A NEW alias, deliberately not a repoint of
+  # `gemma-4-12b-qat` above (append-only contract). Sparse-MoE sibling of the served 12B: same
+  # QAT recipe family, same vendor-published drafter (`mtp-gemma-4-26B-A4B-it.gguf`, a sidecar,
+  # `--spec-type draft-mtp`) and mmproj (vision) from the same repo, plus `-ncmoe` expert offload
+  # to host RAM — which is what makes a 26B fit this card at all.
+  # ── Served rung = 128k (user decision 2026-09-13), picked from the measured 4-rung ladder:
+  # docs/test-matrix-results.md "## gemma4-26b-a4b-ladder-v1" (thinking-mode timing/VRAM
+  # reference) and "## gemma4-26b-a4b-ladder-v2" (the recall measurement — v1's needle verdicts
+  # measure Gemma 4's default thinking budget against the battery's response cap, NOT recall).
+  # At this entry's real `-c 131072` with `-ncmoe 18`: live loaded 13.59 GiB (v1 and v2 agree to
+  # ±0.01 GiB) over a 0.6 GiB quiesced baseline, against the ≈14.8 GiB headless live budget;
+  # prefill ≈1.46k t/s; decode 51 t/s with a 125k-token KV attached, against 35 t/s on the
+  # no-MTP base-decode control arm — MTP buys 1.45× here (v1 measured 1.46×, mode-independent).
+  # No-think needle recall at 128k is 22-26/27 (MTP arm 22, base arm 26, QAT-Q4_0 25 — one band
+  # at n=1 trials, not a quant or spec-decode ranking), with `single_needle` 9/9 at every depth;
+  # 32k and 64k are 27/27.
+  # Step-down fallback, already measured, if this rung ever proves unsafe: `-c 65536` at
+  # `-ncmoe 14` — 13.48 GiB live, 66 t/s, 27/27. Step-up is available but not free: 262144 at
+  # `-ncmoe 24` is a working rung — 13.56 GiB, 23/27, 38 t/s. Note the fit math UNDER-predicts
+  # the live footprint by ~1.0-1.2 GiB on this entry (compute buffers at `-ub 2048`); the
+  # figures above are live read-backs, not predictions.
+  # ── Consumer caveat, carried verbatim from `gemma-4-12b-qat` (same family, same template) ──
+  # a chat completion needs `max_tokens >= 128`, because the model spends its early completion
+  # tokens on `reasoning_content` before it emits `content`; vision and short-answer callers send
+  # `reasoning_effort: "none"`, a correctness requirement — without it the model spends the
+  # completion budget on reasoning_content and returns empty `content`. This entry keeps the
+  # template's DEFAULT reasoning, request-controllable exactly as `gemma-4-12b-qat` is:
+  # `--reasoning off` was the ladder-v2 measurement setting, never a serving decision.
+  # `--load-mode none` per docs/moe-offload-serving-recipe.md (this is the second production
+  # entry with CPU-resident expert tensors); `-ub 2048`, `-ctk/-ctv f16` and `-fa auto` are the
+  # measured ladder cell's own values, carried over unchanged so the served config is the one
+  # that was measured.
+  gemma-4-26B-A4B-it-qat-UD-Q4_K_XL:
+    name: "Gemma 4 26B A4B it QAT (UD-Q4_K_XL)"
+    aliases:
+      - gemma-4-26b-a4b
+    metadata:
+      context_length: 131072
+      input_modalities: ["text", "image"]
+      output_modalities: ["text"]
+      # Both live-verified at landing (2026-09-13, router :4811, by body): default request ->
+      # `reasoning_content` present; `reasoning_effort: "none"` -> clean `content`, no reasoning
+      # field; a `tools` request with `reasoning_effort: "none"` -> `finish_reason: tool_calls`
+      # with a well-formed `get_weather` call. Caveat stronger than the 12B's: the default request
+      # with `max_tokens: 256` spent ALL 256 tokens in `reasoning_content` and returned empty
+      # `content` -- short-answer callers send `reasoning_effort: "none"` or a much larger cap.
+      tool_calling: true
+      reasoning: "request-controllable"
+      serving:
+        quant: "UD-Q4_K_XL"
+        kv_cache_type: "f16"
+        flash_attention: false
+        mtp: true
+        moe_cpu_offload_layers: 18
+        ubatch: 2048
+      # Advisory provenance (docs/model-capabilities.md): the gemma4 family card's recommended
+      # sampling, carried from `gemma-4-12b-qat` — no 26B-A4B-specific card source verified yet.
+      sampling:
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 64
+        source: "https://huggingface.co/google/gemma-4-12B-it (researched 2026-08-23; same-family card, carried from gemma-4-12b-qat)"
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf
+      --mmproj /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/mmproj-BF16.gguf
+      -md /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/mtp-gemma-4-26B-A4B-it.gguf
+      --spec-type draft-mtp
+      -ncmoe 18
+      --load-mode none
+      -c 131072
+      -ctk f16 -ctv f16
+      -fa auto
       -ub 2048
       --jinja
     ttl: 1800
@@ -1370,6 +1455,36 @@ groups:
       # registry comment); their WP-4 step-5 placement records (`-ncmoe 34`/`-ncmoe 35`) live in
       # the registry comment and docs/qwen36-35b-a3b-bakeoff-results.md for any future re-add.
       - Qwen3.6-35B-A3B-UD-Q4_K_XL
+
+  # ── gemma-26b-a4b — Gemma 4 26B A4B QAT + MTP, no external consumer yet (see
+  # plans/gemma4-26b-a4b-qat-mtp-ladder.md WP-4). Its own group, modelled on `qwen36-a3b-bakeoff`
+  # above and with the same swap/exclusive/persistent semantics — the other MoE-offload entry is
+  # its nearest neighbour in footprint and placement behaviour, not the 12B it shares a family
+  # with.
+  #
+  # ── VRAM fit math (live read-backs from the two ladder windows, headless profile;
+  # docs/test-matrix-results.md "## gemma4-26b-a4b-ladder-v1" / "## gemma4-26b-a4b-ladder-v2") ──
+  # at this group's only member's real `-c 131072`, `-ncmoe 18`, f16 KV, `--mmproj` and the MTP
+  # draft both resident: 13.59 GiB loaded (both ladders, ±0.01 GiB) over a 0.59-0.77 GiB quiesced
+  # baseline, against the ≈14.8 GiB headless live budget — ≈1.2 GiB free, and only because the
+  # routed experts of 18 layers sit in host RAM rather than VRAM. Every other measured rung sits
+  # in the same 13.5-13.6 GiB band by construction (the `-ncmoe` step-up holds the footprint flat
+  # while the KV grows): 13.48 GiB at 64k/`-ncmoe 14`, 13.56 GiB at 256k/`-ncmoe 24`. Our static
+  # fit math under-predicts all of these by ~1.0-1.2 GiB (compute buffers at `-ub 2048`).
+  #
+  # `exclusive: true` follows directly from that 13.59 GiB: it does not fit beside the ≈1.5 GiB
+  # `retrieval` pair on this 16 GiB card with a desktop attached, so a request for this alias
+  # evicts whatever else is resident first, and a retrieval request afterwards reloads. `swap:
+  # true`/`persistent: false` + `ttl: 1800` return both the VRAM and the pinned host-side expert
+  # buffer that `--load-mode none` allocates (an anonymous `Vulkan_Host` buffer rather than
+  # evictable page cache, on a 62 GB host — the same RAM consequence `qwen36-a3b` carries) after
+  # 30 idle minutes.
+  gemma-26b-a4b:
+    swap: true
+    exclusive: true
+    persistent: false
+    members:
+      - gemma-4-26B-A4B-it-qat-UD-Q4_K_XL
 
   # ── qwen38-27b-bakeoff — Qwen3.8-27B dense, testing only (see plans/serving-harness-round-2.md
   # WP-5). Same shape as the other bake-off groups: swap:true/exclusive:true.

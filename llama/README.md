@@ -71,24 +71,40 @@ Bind-mounted **read-only** at `/app/config.yaml`; the Dockerfile does not `COPY`
 it (adding a model, changing a `ttl`) needs no image rebuild — only a container restart. See the
 file itself for the full annotated shape; the essentials:
 
+The live alias set, as of 2026-09-13 (refreshed from `config.yaml` itself — the retired
+`gemma-4-12b` row is gone; see the tombstone in that file's consumer-registry header):
+
 | Alias | Group | Role | ttl | Notes |
 |---|---|---|---|---|
-| `bge-m3` | `retrieval` | embedding | 1800s | f16, 1024d |
+| `bge-m3` | `retrieval` | embedding | 1800s | f16, 1024d, `--embeddings` |
 | `bge-reranker-v2` | `retrieval` | rerank | 1800s | Q8_0, `/rerank` only |
-| `gemma-4-12b` | `chat` | chat | 1800s | Q4_K_M, `-c 32768`, `--jinja`; cutover-tested |
-| `nemotron-4b` | `chat` | chat | 1800s | Q4_K_M, `-c 32768`, `--jinja`; small/fast option |
+| `bge-small` | `retrieval` | embedding | 1800s | f16, 384d; news-ingestion stores it as `bge-small-en-v1.5` |
+| `nemotron-4b` | `chat` | chat | 1800s | UD-Q4_K_XL, `-c 131072`, `--jinja`; small/fast option |
+| `ling-3-tiny-ud-q4-xl` | `ling-bakeoff` | chat | 1800s | Ling-3.0-tiny UD-Q4_K_XL, `-c 131072` (its real ceiling) |
+| `ling-3-tiny-ud-q6-xl` | `ling-bakeoff` | chat | 1800s | same model, UD-Q6_K_XL |
+| `ling-3-tiny-q8` | `ling-bakeoff` | chat | 1800s | same model, Q8_0 reference quant |
+| `gemma-4-12b-qat` | `gemma-qat-bakeoff` | chat + vision | 1800s | QAT UD-Q4_K_XL, `-c 131072`, `--mmproj`, MTP sidecar (`--spec-type draft-mtp`) |
+| `qwen36-a3b` | `qwen36-a3b-bakeoff` | chat | 1800s | MoE UD-Q4_K_XL, `-c 131072`, `-ncmoe 32` + `--load-mode none`, `-ub 2048`, embedded MTP heads |
+| `gemma-4-26b-a4b` | `gemma-26b-a4b` | chat + vision | 1800s | MoE QAT UD-Q4_K_XL, `-c 131072`, `-ncmoe 18` + `--load-mode none`, `-ub 2048`, `--mmproj`, MTP sidecar; served rung of the measured context ladder |
+| `qwen38-27b-iq3xxs` | `qwen38-27b-bakeoff` | chat | 1800s | dense UD-IQ3_XXS, `-c 131072`, q4_0/q4_0 KV, `-fa on` |
+| `qwen38-27b-iq3s` | `qwen38-27b-bakeoff` | chat | 1800s | dense UD-IQ3_S, same KV recipe; `--reasoning-budget 8192` backstop; the Claude Code picker row |
+| `qwen38-27b-q3kxl` | `qwen38-27b-bakeoff` | chat | 1800s | dense UD-Q3_K_XL, `-c 65536` (its max-safe rung) |
+| `qwen38-27b-iq3s-off` / `-low` / `-medium` / `-high` | `qwen38-27b-bakeoff` | chat | 1800s | the IQ3_S weights again, differing only in their server-enforced reasoning hard cap (off / 1024 / 4096 / unbudgeted); router-internal consumer only |
 
 - **Aliases are the API surface, append-only.** `bge-m3` and `bge-reranker-v2` are the exact
   `modelId` values Crucible's live plugin settings (`data.json`) already store for the embed and
   rerank provider entries — that's what makes pointing a vault at this service a base-URL-only
   change instead of a model-id rewrite. Never rename or delete an alias once a vault may be
-  using it; only add new ones. `gemma-4-12b` and `nemotron-4b` are the first two additions.
-- **`retrieval` group** (`swap: false, exclusive: false, persistent: false`) holds both retrieval
-  models — small enough, and used closely enough together by one search/rerank flow, that
+  using it; only add new ones. `gemma-4-12b` and `nemotron-4b` were the first two additions
+  (`gemma-4-12b` has since been removed from serving — the alias stays reserved forever).
+- **`retrieval` group** (`swap: false, exclusive: false, persistent: false`) holds all three
+  retrieval models — small enough, and used closely enough together by one search/rerank flow, that
   neither should evict the other. `ttl: 1800` (30 min) unloads an idle model and returns its
   VRAM; `persistent` staying `false` is what lets that `ttl` actually apply.
-- **`chat` group** (`swap: true, exclusive: true, persistent: false`) holds `gemma-4-12b` and
-  `nemotron-4b` — the opposite policy from `retrieval`, because a chat model is large enough
+- **`chat` group** (`swap: true, exclusive: true, persistent: false`) today holds `nemotron-4b`
+  alone (it held `gemma-4-12b` too until that alias was removed from serving 2026-08-25); every
+  later chat model got its own same-shaped group instead, one per family — the opposite policy
+  from `retrieval`, because a chat model is large enough
   that it cannot safely coexist with another chat model or the retrieval pair under this GPU's
   VRAM. `exclusive: true` means a chat request evicts `bge-m3`/`bge-reranker-v2` first; a
   retrieval request afterward reloads without evicting the chat model. The eviction mechanics

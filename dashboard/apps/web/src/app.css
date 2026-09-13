@@ -377,3 +377,117 @@
   color: var(--text);
   font-size: 0.8rem;
 }
+
+/* ---- Router (WP-4, `plans/router-observability-and-tool-search-conformance.md`) ---------
+   Layout only: every colour is a Signalworks token, status hue arrives via the canon
+   `.pill-*` classes, and the leg filter reuses `.seg-group`/`.seg` verbatim (CC-16 — no
+   tool-side rule targets a seg class). Ambient polled readouts stay at weight 400 (CC-18);
+   the in-flight token split is a SERIES, so it paints `--viz-1`/`--viz-2`, never a status
+   hue (CC-17). */
+
+.router-panel {
+  margin-top: 20px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+  background: var(--panel);
+}
+
+.router-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.router-panel h2,
+.router-panel h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.router-panel h3 {
+  margin-top: 18px;
+}
+
+.router-ambient {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 400;
+}
+
+.router-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.router-card {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+}
+
+.router-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 4px;
+}
+
+.router-card-name {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+}
+
+.router-meta-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-bottom: 8px;
+}
+
+.router-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin-bottom: 10px;
+}
+
+/* Two-segment series bar: reasoning then response, widths supplied inline from
+   `lib/router/inflight.ts`. */
+.router-split {
+  display: flex;
+  overflow: hidden;
+  width: 140px;
+  height: 8px;
+  margin-bottom: 4px;
+  border-radius: var(--r-pill);
+  background: var(--panel-2);
+}
+
+.router-split-reasoning {
+  background: var(--viz-1);
+}
+
+.router-split-response {
+  background: var(--viz-2);
+}
+
+.router-error-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.router-error-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 4px 0;
+  border-top: 1px solid var(--line);
+  font-size: 0.76rem;
+}

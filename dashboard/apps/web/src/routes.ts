@@ -1,5 +1,5 @@
-// Hand-rolled path routing for the app's six views (Runs/Ladders/Long-context/Fit/
-// Serving/Queue) plus Runs' drill-down -- following `fleet-tools/model_scoreboard`'s
+// Hand-rolled path routing for the app's seven views (Runs/Ladders/Long-context/Fit/
+// Serving/Queue/Router) plus Runs' drill-down -- following `fleet-tools/model_scoreboard`'s
 // own `apps/web/src/routes.ts` precedent (pattern router, no dependency; the API's SPA
 // fallback, `apps/api/src/app.ts spaResponse`, makes every path here refresh-safe; History
 // API driven directly from App.svelte). Queue (WP-C, plan
@@ -10,8 +10,12 @@
 // becomes the default landing route of the SPA") -- Runs moved to its own bare `/runs` path,
 // distinct from the existing `/runs/:id` drill-down pattern below (`RUN_DETAIL_PATH` requires
 // a non-empty id segment, so it never matches the bare `/runs`).
+//
+// Router (WP-4, `plans/router-observability-and-tool-search-conformance.md`) is the seventh
+// view -- read-only over `GET /api/router/{telemetry,slots,sidecar}`, no drill-down path of
+// its own, same `{refreshToken}`-only prop shape as Queue.
 
-export type Tab = "runs" | "ladders" | "longcontext" | "fit" | "serving" | "queue";
+export type Tab = "runs" | "ladders" | "longcontext" | "fit" | "serving" | "queue" | "router";
 
 const TAB_PATHS: Record<Tab, string> = {
   runs: "/runs",
@@ -20,6 +24,7 @@ const TAB_PATHS: Record<Tab, string> = {
   fit: "/fit",
   serving: "/",
   queue: "/queue",
+  router: "/router",
 };
 
 export function tabToPath(tab: Tab): string {

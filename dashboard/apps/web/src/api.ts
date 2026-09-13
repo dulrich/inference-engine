@@ -6,6 +6,9 @@ import {
   LadderRowSchema,
   MetricRowSchema,
   QueueListResponseSchema,
+  RouterSidecarResponseSchema,
+  RouterSlotsResponseSchema,
+  RouterTelemetryResponseSchema,
   ServingResponseSchema,
   ServingTimingRowSchema,
   TrialRowSchema,
@@ -17,6 +20,9 @@ import {
   type HealthResponse,
   type LadderRow,
   type QueueListResponse,
+  type RouterSidecarResponse,
+  type RouterSlotsResponse,
+  type RouterTelemetryResponse,
   type ServingResponse,
   type ServingTimingRow,
 } from "@bench-dashboard/shared";
@@ -131,4 +137,23 @@ export function postControlStop(): Promise<ControlAcceptedResponse> {
 
 export function postControlCancel(body: ControlCancelRequest): Promise<ControlAcceptedResponse> {
   return postControlAction("/api/control/cancel", body);
+}
+
+// `GET /api/router/{telemetry,slots,sidecar}` (WP-3/WP-4, `plans/router-observability-and-
+// tool-search-conformance.md`) -- the Router tab's three independent read-only feeds. Each
+// is a discriminated union on `available`: an unset env var or an unreadable/empty source
+// directory is a typed `{available:false, reason}` at 200, NOT an error, so only a genuine
+// transport/parse failure ever throws out of these. Both `/telemetry` and `/slots` accept an
+// optional `?staleMs`; the UI deliberately does not surface it -- the API's defaults are the
+// contract.
+export function getRouterTelemetry(): Promise<RouterTelemetryResponse> {
+  return getJson("/api/router/telemetry", RouterTelemetryResponseSchema);
+}
+
+export function getRouterSlots(): Promise<RouterSlotsResponse> {
+  return getJson("/api/router/slots", RouterSlotsResponseSchema);
+}
+
+export function getRouterSidecar(): Promise<RouterSidecarResponse> {
+  return getJson("/api/router/sidecar", RouterSidecarResponseSchema);
 }

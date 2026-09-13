@@ -9,6 +9,7 @@ describe("tabToPath / runDetailPath", () => {
     expect(tabToPath("fit")).toBe("/fit");
     expect(tabToPath("serving")).toBe("/");
     expect(tabToPath("queue")).toBe("/queue");
+    expect(tabToPath("router")).toBe("/router");
   });
 
   test("runDetailPath encodes the experiment id", () => {
@@ -24,6 +25,7 @@ describe("parsePath", () => {
     expect(parsePath("/longcontext")).toEqual({ tab: "longcontext", matched: true });
     expect(parsePath("/fit")).toEqual({ tab: "fit", matched: true });
     expect(parsePath("/queue")).toEqual({ tab: "queue", matched: true });
+    expect(parsePath("/router")).toEqual({ tab: "router", matched: true });
   });
 
   test("the pre-WP-2 \"/serving\" path is no longer a tab path (Serving moved to \"/\") -- unmatched, normalizes to Serving anyway via the shared fallback", () => {

@@ -222,6 +222,28 @@ export function systemTextOf(body) {
 export const conversational = msgs => (Array.isArray(msgs) ? msgs : [])
   .filter(m => m && (m.role === "user" || m.role === "assistant"));
 
+// ...but their *text* is not disposable. Claude Code advertises the deferred-tool name list
+// (ENABLE_TOOL_SEARCH), the agent-type listing and the installed-skills listing ONLY inside those
+// interleaved entries — never in top-level `system`. Dropping them hands the model a working
+// `ToolSearch` tool with nothing to search for, so it answers "no such tool" with no error
+// (measured: docs/tool-calling-gateway/tool-search-conformance-spike.md, "Named defect").
+// Collected here in message order and folded into the thread's baseInstructions.
+export const interleavedSystemText = msgs => (Array.isArray(msgs) ? msgs : [])
+  .filter(m => m && m.role === "system")
+  .map(m => textOf(m.content).trim())
+  .filter(Boolean)
+  .join("\n\n");
+
+// preamble + top-level `system` + the interleaved role:"system" text, in that order. With no
+// interleaved text this is byte-identical to what the thread used to start with. It is computed
+// only at `thread/start`, and every input is stable across an agent's own turns, so the WP-3
+// subagent discriminator — which hashes top-level `system` minus the billing line, not this —
+// is unaffected.
+export function baseInstructionsOf(systemText, interleaved) {
+  const head = systemText || "You are a coding assistant driven by an external harness.";
+  return [PREAMBLE, head, interleaved].filter(Boolean).join("\n\n");
+}
+
 export function hasImageBlock(body) {
   for (const m of (Array.isArray(body?.messages) ? body.messages : [])) {
     for (const b of blocksOf(m?.content)) {
@@ -1007,6 +1029,7 @@ async function handleMessages(ctx, persona, body, req, res) {
   const systemText = systemTextOf(body);
   const allMsgs = Array.isArray(body.messages) ? body.messages : [];
   const rawCwd = extractCwd(allMsgs, systemText);
+  const interleavedText = interleavedSystemText(allMsgs);
   const msgs = conversational(allMsgs);
 
   // (i) local session-title answer — before model validation, no thread opened
@@ -1107,7 +1130,7 @@ async function handleMessages(ctx, persona, body, req, res) {
         approvalPolicy: "never",
         sandbox: "read-only",
         ephemeral: true,
-        baseInstructions: `${PREAMBLE}\n\n${systemText || "You are a coding assistant driven by an external harness."}`,
+        baseInstructions: baseInstructionsOf(systemText, interleavedText),
         dynamicTools: toDynamicTools(body.tools),
         config: THREAD_CONFIG,
       };
@@ -1129,7 +1152,7 @@ async function handleMessages(ctx, persona, body, req, res) {
       ctx.logger.write("config-verified", {
         persona: persona.name, threadId: sess.threadId, key, scope, cwd, model: parsed.model, effort: parsed.effort,
         instructionSources: started?.instructionSources ?? [], nTools: params.dynamicTools.length,
-        preambleChars: PREAMBLE.length, systemChars: systemText.length,
+        preambleChars: PREAMBLE.length, systemChars: systemText.length, interleavedSystemChars: interleavedText.length,
       });
     }
 

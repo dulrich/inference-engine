@@ -1,20 +1,26 @@
 # router/Dockerfile — @the-next-ai/ai-gateway (https://github.com/The-NeXT-AI/ai-gateway),
-# built from source at a pinned commit with a six-patch vendored series. Never `npm install
+# built from source at a pinned commit with a seven-patch vendored series. Never `npm install
 # @the-next-ai/ai-gateway` and never a moving branch/tag — the pin below is a commit SHA.
 #
 # See router/AGENTS.md for the patch rationale and the never-set-ANTHROPIC_API_KEY constraint,
-# and router/patches/000{1,2,3,4,5,6}-*.patch for the changes themselves: 0001 omits x-api-key
+# and router/patches/000{1,2,3,4,5,6,7}-*.patch for the changes themselves: 0001 omits x-api-key
 # for the passthrough OAuth bearer, 0002 adds the local-leg prefill/idle-gap ping keepalive,
 # 0003 relays upstream error bodies byte-verbatim to Anthropic-protocol clients on the final
 # attempt, 0004 adds the POST /v1/messages/count_tokens route, 0005 is a dependency-only
 # lockfile bump (find-my-way 9.9.0, fast-uri 3.1.6, brace-expansion 5.0.9 — transitive
-# dependencies, within their parents' already-declared semver ranges, no source change), and
-# 0006 adds the bounded, rotated per-request telemetry jsonl sink. The replace-vs-integrate
-# design spike the stabilization series (plans/router-prefill-keepalive-and-protocol-gaps.md)
-# required before any further semantic patch was run and answered "continue vendoring on this
-# pin" with evidence — docs/tool-calling-gateway/router-telemetry-baseline.md, section
-# "Replace-vs-integrate verdict" — which is what authorises 0006; the next semantic patch after
-# it, or the first nontrivial pin-upgrade rebase, re-triggers that spike.
+# dependencies, within their parents' already-declared semver ranges, no source change),
+# 0006 adds the bounded, rotated per-request telemetry jsonl sink, and 0007 maps the client's
+# reasoning intent (thinking / output_config.effort) onto per-model chat_template_kwargs on the
+# openai_chat_completions conversion leg, from the new gateway.config.json `effortKwargs` key.
+# The replace-vs-integrate design spike the stabilization series
+# (plans/router-prefill-keepalive-and-protocol-gaps.md) required before any further semantic
+# patch was run and answered "continue vendoring on this pin" with evidence —
+# docs/tool-calling-gateway/router-telemetry-baseline.md, section "Replace-vs-integrate
+# verdict" — which is what authorises 0006; 0007 is authorised by that section's dated second
+# entry ("Second entry — 2026-09-12, before semantic patch 0007 (effort mapping)"), which
+# re-ran the spike for a semantic conversion patch and again answered continue-vendoring. The
+# next semantic patch after 0007, or the first nontrivial pin-upgrade rebase, re-triggers that
+# spike.
 #
 # Deviation from the plan's literal example command (recorded in
 # runs/dispatch/resident-router-wp-1-report.md): `git fetch --depth 1 origin 782cd51` (the short
@@ -67,6 +73,10 @@ COPY patches/0006-request-telemetry-jsonl.patch /tmp/0006-request-telemetry-json
 RUN git apply --check /tmp/0006-request-telemetry-jsonl.patch \
     && git apply /tmp/0006-request-telemetry-jsonl.patch
 
+COPY patches/0007-effort-mapping-claude-local.patch /tmp/0007-effort-mapping-claude-local.patch
+RUN git apply --check /tmp/0007-effort-mapping-claude-local.patch \
+    && git apply /tmp/0007-effort-mapping-claude-local.patch
+
 # The repo's own package-lock.json — measured green 2026-08-25 (145 packages, <1s).
 RUN npm ci
 
@@ -83,9 +93,14 @@ RUN npm run build
 # the telemetry sink added by 0006 — record fields, redaction (a request carrying a bearer, the
 # gateway key header and message text must leave none of them in the written line), the 1000 ms
 # progress cadence, and size rotation/retention — is locked by request-telemetry.test.ts (12).
-# Baseline at 782cd51 with 0001-0005 applied is 163/163; with 0006 it is 175/175, 0 failing. A
-# non-zero exit here fails the image build.
-RUN npx vitest run src/adapters/builtins/common.test.ts src/gateway/streaming-conversion.test.ts src/gateway/routes.test.ts src/gateway/request-telemetry.test.ts
+# The effort->chat_template_kwargs mapping added by 0007 — the level table
+# (output_config.effort incl. max/xhigh, thinking disabled, the budget_tokens cut points),
+# the no-op cases (no map, no level, non-chat target, no
+# standardRequest) and the body-keys-win merge, end to end through the Responses target build
+# and through parseProvidersFromRaw — is locked by effort-kwargs.test.ts (21). Baseline at
+# 782cd51 with 0001-0005 applied is 163/163; with 0006 it is 175/175; with 0007 it is 196/196,
+# 0 failing. A non-zero exit here fails the image build.
+RUN npx vitest run src/adapters/builtins/common.test.ts src/gateway/streaming-conversion.test.ts src/gateway/routes.test.ts src/gateway/request-telemetry.test.ts src/adapters/builtins/target/openai-chat-compat/effort-kwargs.test.ts
 
 # esbuild bundles everything except fastify/undici/ws (build.js's `external` list) into
 # dist/index.js, so pruning devDependencies is the only trim the runtime stage needs.
@@ -94,7 +109,7 @@ RUN npm prune --omit=dev
 FROM node:24-slim AS runtime
 
 LABEL org.opencontainers.image.title="inference-engine-router" \
-      org.opencontainers.image.description="@the-next-ai/ai-gateway 1.0.18, source build at 782cd51, six-patch series: x-api-key passthrough-bearer omission, prefill/idle-gap ping keepalive, upstream error-body passthrough, /v1/messages/count_tokens route, dependency-only lockfile bump (find-my-way/fast-uri/brace-expansion), per-request telemetry jsonl sink"
+      org.opencontainers.image.description="@the-next-ai/ai-gateway 1.0.18, source build at 782cd51, seven-patch series: x-api-key passthrough-bearer omission, prefill/idle-gap ping keepalive, upstream error-body passthrough, /v1/messages/count_tokens route, dependency-only lockfile bump (find-my-way/fast-uri/brace-expansion), per-request telemetry jsonl sink, effort -> chat_template_kwargs mapping on the openai_chat_completions leg"
 
 WORKDIR /app
 

@@ -1,0 +1,660 @@
+diff --git a/src/adapters/builtins/target/openai-chat-compat/effort-kwargs.test.ts b/src/adapters/builtins/target/openai-chat-compat/effort-kwargs.test.ts
+new file mode 100644
+index 0000000..070b690
+--- /dev/null
++++ b/src/adapters/builtins/target/openai-chat-compat/effort-kwargs.test.ts
+@@ -0,0 +1,369 @@
++import { describe, expect, it } from 'vitest';
++import { parseProvidersFromRaw } from '../../../../config';
++import type { ProviderConfig, StandardRequest } from '../../../../types';
++import { parseAnthropicMessagesRequest, parseOpenAIResponsesRequest } from '../../source/parsers';
++import { openAIResponsesTargetAdapter } from '../openai-responses';
++import { rewriteOpenAIChatCompatibleRequest } from '../shared';
++import { applyConfiguredEffortKwargs, deriveEffortKwargsLevel } from './effort-kwargs';
++
++const EFFORT_KWARGS: ProviderConfig['effortKwargs'] = {
++  'qwen38-27b-iq3s': {
++    low: { reasoning_effort: 'low' },
++    medium: { reasoning_effort: 'medium' },
++    high: { reasoning_effort: 'xhigh' },
++    disabled: { enable_thinking: false }
++  }
++};
++
++function localProviderConfig(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
++  return {
++    name: 'claude-local',
++    type: 'openai_chat_completions',
++    baseurl: 'http://inference-engine-llama:4806/v1',
++    models: ['qwen38-27b-iq3s', 'qwen36-a3b'],
++    effortKwargs: EFFORT_KWARGS,
++    ...overrides
++  } as ProviderConfig;
++}
++
++function standardRequest(overrides: Partial<StandardRequest> = {}): StandardRequest {
++  return {
++    model: 'qwen38-27b-iq3s',
++    ...overrides
++  } as StandardRequest;
++}
++
++function apply(
++  request: StandardRequest | undefined,
++  body: Record<string, unknown> = { model: 'qwen38-27b-iq3s' },
++  providerConfig: ProviderConfig | undefined = localProviderConfig(),
++  model = 'qwen38-27b-iq3s'
++): Record<string, unknown> {
++  return applyConfiguredEffortKwargs(body, providerConfig, request, model);
++}
++
++describe('deriveEffortKwargsLevel', () => {
++  it('maps output_config.effort low/medium/high onto themselves', () => {
++    expect(deriveEffortKwargsLevel(standardRequest({ output_config: { effort: 'low' } }))).toBe('low');
++    expect(deriveEffortKwargsLevel(standardRequest({ output_config: { effort: 'medium' } }))).toBe(
++      'medium'
++    );
++    expect(deriveEffortKwargsLevel(standardRequest({ output_config: { effort: 'high' } }))).toBe('high');
++  });
++
++  it('folds max and xhigh onto high, case- and whitespace-insensitively', () => {
++    expect(deriveEffortKwargsLevel(standardRequest({ output_config: { effort: 'max' } }))).toBe('high');
++    expect(deriveEffortKwargsLevel(standardRequest({ output_config: { effort: 'xhigh' } }))).toBe('high');
++    expect(deriveEffortKwargsLevel(standardRequest({ output_config: { effort: ' HIGH ' } }))).toBe('high');
++  });
++
++  it('derives disabled from thinking.type, ahead of any effort', () => {
++    expect(
++      deriveEffortKwargsLevel(
++        standardRequest({ thinking: { type: 'disabled' }, output_config: { effort: 'high' } })
++      )
++    ).toBe('disabled');
++  });
++
++  it('derives no level from adaptive, absent or unknown intent', () => {
++    expect(deriveEffortKwargsLevel(standardRequest({ thinking: { type: 'adaptive' } }))).toBeUndefined();
++    expect(deriveEffortKwargsLevel(standardRequest())).toBeUndefined();
++    expect(
++      deriveEffortKwargsLevel(standardRequest({ output_config: { effort: 'turbo' } }))
++    ).toBeUndefined();
++    expect(deriveEffortKwargsLevel(standardRequest({ output_config: { effort: 7 } }))).toBeUndefined();
++  });
++
++  it('maps thinking.budget_tokens at the documented cut points', () => {
++    const level = (budget_tokens: number) =>
++      deriveEffortKwargsLevel(standardRequest({ thinking: { type: 'enabled', budget_tokens } }));
++
++    expect(level(0)).toBe('low');
++    expect(level(2047)).toBe('low');
++    expect(level(2048)).toBe('medium');
++    expect(level(8191)).toBe('medium');
++    expect(level(8192)).toBe('high');
++    expect(level(32000)).toBe('high');
++  });
++
++  it('ignores a non-numeric or absent budget on thinking.type enabled', () => {
++    expect(
++      deriveEffortKwargsLevel(standardRequest({ thinking: { type: 'enabled', budget_tokens: '4096' } }))
++    ).toBeUndefined();
++    expect(deriveEffortKwargsLevel(standardRequest({ thinking: { type: 'enabled' } }))).toBeUndefined();
++  });
++
++  it('prefers an explicit effort over the budget table', () => {
++    expect(
++      deriveEffortKwargsLevel(
++        standardRequest({ thinking: { type: 'enabled', budget_tokens: 32000 }, output_config: { effort: 'low' } })
++      )
++    ).toBe('low');
++  });
++});
++
++describe('applyConfiguredEffortKwargs', () => {
++  it('merges the mapped kwargs for each level', () => {
++    expect(apply(standardRequest({ output_config: { effort: 'low' } })).chat_template_kwargs).toEqual({
++      reasoning_effort: 'low'
++    });
++    expect(apply(standardRequest({ output_config: { effort: 'medium' } })).chat_template_kwargs).toEqual({
++      reasoning_effort: 'medium'
++    });
++    expect(apply(standardRequest({ output_config: { effort: 'max' } })).chat_template_kwargs).toEqual({
++      reasoning_effort: 'xhigh'
++    });
++    expect(apply(standardRequest({ thinking: { type: 'disabled' } })).chat_template_kwargs).toEqual({
++      enable_thinking: false
++    });
++  });
++
++  it('leaves the rest of the body, including the model id, untouched', () => {
++    const body = { model: 'qwen38-27b-iq3s', messages: [], temperature: 0, thinking: { type: 'disabled' } };
++    const next = apply(standardRequest({ thinking: { type: 'disabled' } }), body);
++
++    expect(next.model).toBe('qwen38-27b-iq3s');
++    expect(next.messages).toBe(body.messages);
++    expect(next.temperature).toBe(0);
++    expect(next.thinking).toEqual({ type: 'disabled' });
++    expect(body).not.toHaveProperty('chat_template_kwargs');
++  });
++
++  it('is a no-op without a standardRequest, so a merged object survives the per-attempt rewrite', () => {
++    const body = { model: 'qwen38-27b-iq3s', chat_template_kwargs: { reasoning_effort: 'low' } };
++
++    expect(apply(undefined, body)).toBe(body);
++    expect(apply(undefined, body).chat_template_kwargs).toEqual({ reasoning_effort: 'low' });
++  });
++
++  it('is a no-op for a target that is not openai_chat_completions', () => {
++    const body = { model: 'qwen38-27b-iq3s' };
++    const anthropicTarget = localProviderConfig({ type: 'anthropic_messages' as ProviderConfig['type'] });
++
++    expect(apply(standardRequest({ output_config: { effort: 'low' } }), body, anthropicTarget)).toBe(body);
++    expect(
++      applyConfiguredEffortKwargs(
++        body,
++        undefined,
++        standardRequest({ output_config: { effort: 'low' } }),
++        'qwen38-27b-iq3s'
++      )
++    ).toBe(body);
++  });
++
++  it('is a no-op when the provider has no effortKwargs at all', () => {
++    const body = { model: 'qwen38-27b-iq3s' };
++    const bare = localProviderConfig({ effortKwargs: undefined });
++
++    expect(apply(standardRequest({ output_config: { effort: 'low' } }), body, bare)).toBe(body);
++  });
++
++  it('is a no-op for a model without a map, and for a level the map omits', () => {
++    const body = { model: 'qwen36-a3b' };
++
++    expect(apply(standardRequest({ model: 'qwen36-a3b', output_config: { effort: 'low' } }), body, localProviderConfig(), 'qwen36-a3b')).toBe(body);
++
++    const partial = localProviderConfig({
++      effortKwargs: { 'qwen38-27b-iq3s': { low: { reasoning_effort: 'low' } } }
++    });
++    const highBody = { model: 'qwen38-27b-iq3s' };
++    expect(apply(standardRequest({ output_config: { effort: 'high' } }), highBody, partial)).toBe(highBody);
++  });
++
++  it('lets keys already on the body win, deeply', () => {
++    const nested = localProviderConfig({
++      effortKwargs: {
++        'qwen38-27b-iq3s': { low: { reasoning_effort: 'low', opts: { a: 1, b: 2 } } }
++      }
++    });
++    const body = {
++      model: 'qwen38-27b-iq3s',
++      chat_template_kwargs: { reasoning_effort: 'caller', opts: { b: 99 } }
++    };
++
++    expect(apply(standardRequest({ output_config: { effort: 'low' } }), body, nested).chat_template_kwargs).toEqual({
++      reasoning_effort: 'caller',
++      opts: { a: 1, b: 99 }
++    });
++  });
++
++  it('maps an OpenAI-chat source request only through the same fields', () => {
++    const openAISource = parseOpenAIResponsesRequest({
++      model: 'qwen38-27b-iq3s',
++      input: 'hello'
++    });
++    expect(openAISource.ok).toBe(true);
++    if (!openAISource.ok) {
++      return;
++    }
++
++    const body = { model: 'qwen38-27b-iq3s' };
++    expect(apply(openAISource.value, body)).toBe(body);
++
++    const withEffort = parseOpenAIResponsesRequest({
++      model: 'qwen38-27b-iq3s',
++      output_config: { effort: 'medium' },
++      input: 'hello'
++    });
++    expect(withEffort.ok).toBe(true);
++    if (!withEffort.ok) {
++      return;
++    }
++
++    expect(apply(withEffort.value, { model: 'qwen38-27b-iq3s' }).chat_template_kwargs).toEqual({
++      reasoning_effort: 'medium'
++    });
++  });
++});
++
++describe('rewriteOpenAIChatCompatibleRequest with effortKwargs', () => {
++  it('merges after the generic branch and keeps its reasoning-split handling', () => {
++    const rewritten = rewriteOpenAIChatCompatibleRequest(
++      { model: 'qwen38-27b-iq3s', messages: [], interleaved_thinking: true },
++      localProviderConfig(),
++      { standardRequest: standardRequest({ output_config: { effort: 'high' } }) }
++    ) as Record<string, unknown>;
++
++    expect(rewritten.chat_template_kwargs).toEqual({ reasoning_effort: 'xhigh' });
++    expect(rewritten.reasoning_split).toBe(true);
++  });
++
++  it('does not strip the merged object on the per-attempt call without a standardRequest', () => {
++    const rewritten = rewriteOpenAIChatCompatibleRequest(
++      { model: 'qwen38-27b-iq3s', messages: [], chat_template_kwargs: { reasoning_effort: 'medium' } },
++      localProviderConfig()
++    ) as Record<string, unknown>;
++
++    expect(rewritten.chat_template_kwargs).toEqual({ reasoning_effort: 'medium' });
++  });
++});
++
++describe('effortKwargs end to end', () => {
++  it('reaches the upstream body built from an Anthropic-shape request', () => {
++    const parsed = parseAnthropicMessagesRequest({
++      model: 'qwen38-27b-iq3s',
++      max_tokens: 256,
++      output_config: { effort: 'low' },
++      thinking: { type: 'adaptive' },
++      messages: [{ role: 'user', content: 'hello' }]
++    });
++
++    expect(parsed.ok).toBe(true);
++    if (!parsed.ok) {
++      return;
++    }
++
++    const built = openAIResponsesTargetAdapter.buildRequestFromStandard({
++      request: { headers: {} } as never,
++      standardRequest: parsed.value,
++      config: { openaiApiKey: 'sk-test', openaiBaseUrl: 'https://mock.local/v1' } as never,
++      targetProviderConfig: localProviderConfig() as never
++    });
++
++    expect(built.ok).toBe(true);
++    if (!built.ok) {
++      return;
++    }
++
++    const body = built.value.body as Record<string, unknown>;
++    expect(body.chat_template_kwargs).toEqual({ reasoning_effort: 'low' });
++    expect(body.model).toBe('qwen38-27b-iq3s');
++  });
++
++  it('leaves the upstream body untouched when the provider has no map', () => {
++    const parsed = parseAnthropicMessagesRequest({
++      model: 'qwen38-27b-iq3s',
++      max_tokens: 256,
++      output_config: { effort: 'low' },
++      messages: [{ role: 'user', content: 'hello' }]
++    });
++
++    expect(parsed.ok).toBe(true);
++    if (!parsed.ok) {
++      return;
++    }
++
++    const built = openAIResponsesTargetAdapter.buildRequestFromStandard({
++      request: { headers: {} } as never,
++      standardRequest: parsed.value,
++      config: { openaiApiKey: 'sk-test', openaiBaseUrl: 'https://mock.local/v1' } as never,
++      targetProviderConfig: localProviderConfig({ effortKwargs: undefined }) as never
++    });
++
++    expect(built.ok).toBe(true);
++    if (!built.ok) {
++      return;
++    }
++
++    expect(built.value.body as Record<string, unknown>).not.toHaveProperty('chat_template_kwargs');
++  });
++});
++
++describe('parseProvidersFromRaw effortKwargs', () => {
++  it('reads the per-model map off provider config', () => {
++    const [provider] = parseProvidersFromRaw([
++      {
++        name: 'claude-local',
++        type: 'openai_chat_completions',
++        baseurl: 'http://inference-engine-llama:4806/v1',
++        models: ['qwen36-a3b', 'qwen38-27b-iq3s'],
++        effortKwargs: {
++          'qwen38-27b-iq3s': {
++            low: { reasoning_effort: 'low' },
++            medium: { reasoning_effort: 'medium' },
++            high: { reasoning_effort: 'xhigh' },
++            disabled: { enable_thinking: false }
++          }
++        }
++      }
++    ]);
++
++    expect(provider.effortKwargs).toEqual({
++      'qwen38-27b-iq3s': {
++        low: { reasoning_effort: 'low' },
++        medium: { reasoning_effort: 'medium' },
++        high: { reasoning_effort: 'xhigh' },
++        disabled: { enable_thinking: false }
++      }
++    });
++
++    const body = applyConfiguredEffortKwargs(
++      { model: 'qwen38-27b-iq3s' },
++      provider,
++      standardRequest({ output_config: { effort: 'high' } }),
++      'qwen38-27b-iq3s'
++    );
++    expect(body.chat_template_kwargs).toEqual({ reasoning_effort: 'xhigh' });
++  });
++
++  it('drops unknown model keys and non-object levels without throwing, and stays undefined when empty', () => {
++    const [provider] = parseProvidersFromRaw([
++      {
++        name: 'claude-local',
++        type: 'openai_chat_completions',
++        models: ['qwen38-27b-iq3s'],
++        effortKwargs: {
++          'qwen38-27b-iq3s': { low: { reasoning_effort: 'low' }, medium: 'nope' },
++          'not-a-model': { low: { reasoning_effort: 'low' } }
++        }
++      }
++    ]);
++
++    expect(provider.effortKwargs).toEqual({ 'qwen38-27b-iq3s': { low: { reasoning_effort: 'low' } } });
++
++    const [bare] = parseProvidersFromRaw([
++      {
++        name: 'claude-local',
++        type: 'openai_chat_completions',
++        models: ['qwen38-27b-iq3s'],
++        effortKwargs: { 'not-a-model': { low: { reasoning_effort: 'low' } } }
++      }
++    ]);
++    expect(bare.effortKwargs).toBeUndefined();
++
++    const [absent] = parseProvidersFromRaw([
++      { name: 'claude-local', type: 'openai_chat_completions', models: ['qwen38-27b-iq3s'] }
++    ]);
++    expect(absent.effortKwargs).toBeUndefined();
++  });
++});
+diff --git a/src/adapters/builtins/target/openai-chat-compat/effort-kwargs.ts b/src/adapters/builtins/target/openai-chat-compat/effort-kwargs.ts
+new file mode 100644
+index 0000000..fb6ca63
+--- /dev/null
++++ b/src/adapters/builtins/target/openai-chat-compat/effort-kwargs.ts
+@@ -0,0 +1,161 @@
++import type { ProviderConfig, ProviderEffortKwargsConfig, StandardRequest } from '../../../../types';
++
++/**
++ * Maps the Anthropic-protocol reasoning intent (`thinking` / `output_config.effort`) that the
++ * Anthropic -> openai_chat_completions conversion leg otherwise drops onto a per-model
++ * `chat_template_kwargs` object, configured per provider as `effortKwargs`.
++ *
++ * Invariants (never a 400, never an unmapped value):
++ *   - only `openai_chat_completions` targets;
++ *   - only models that have an `effortKwargs` map entry;
++ *   - only levels that map entry lists;
++ *   - a no-op without a `standardRequest` (the per-attempt `applyProviderRequestOverrides` call
++ *     runs this same rewrite without one and must not disturb an already-merged object);
++ *   - keys already on the body win, so a caller-supplied kwargs value is never overwritten.
++ *     `extraBody` is deep-merged into the body *after* this step by the handler, so a static
++ *     `extraBody[model].chat_template_kwargs` also still wins.
++ */
++
++export type EffortKwargsLevel = 'low' | 'medium' | 'high' | 'disabled';
++
++/** budget_tokens cut points (plan WP-2 / audit E1); 8192 is the unsuffixed entry's backstop. */
++const EFFORT_KWARGS_BUDGET_LOW_MAX = 2048;
++const EFFORT_KWARGS_BUDGET_MEDIUM_MAX = 8192;
++
++export function applyConfiguredEffortKwargs(
++  body: Record<string, unknown>,
++  targetProviderConfig: ProviderConfig | undefined,
++  standardRequest: StandardRequest | undefined,
++  model: string | undefined
++): Record<string, unknown> {
++  if (!standardRequest || targetProviderConfig?.type !== 'openai_chat_completions') {
++    return body;
++  }
++
++  const levels = readEffortKwargsForModel(targetProviderConfig.effortKwargs, model);
++  if (!levels) {
++    return body;
++  }
++
++  const level = deriveEffortKwargsLevel(standardRequest);
++  if (!level) {
++    return body;
++  }
++
++  const kwargs = levels[level];
++  if (!isEffortKwargsRecord(kwargs)) {
++    return body;
++  }
++
++  return {
++    ...body,
++    chat_template_kwargs: mergeEffortKwargs(kwargs, body.chat_template_kwargs)
++  };
++}
++
++export function deriveEffortKwargsLevel(
++  standardRequest: StandardRequest
++): EffortKwargsLevel | undefined {
++  const thinkingType = readEffortKwargsThinkingType(standardRequest.thinking);
++  if (thinkingType === 'disabled') {
++    return 'disabled';
++  }
++
++  const effort = normalizeEffortKwargsEffort(
++    readEffortKwargsNestedValue(standardRequest.output_config, 'effort')
++  );
++  if (effort) {
++    return effort;
++  }
++
++  if (thinkingType === 'enabled') {
++    const budget = readEffortKwargsNestedValue(standardRequest.thinking, 'budget_tokens');
++    if (typeof budget === 'number' && Number.isFinite(budget)) {
++      if (budget < EFFORT_KWARGS_BUDGET_LOW_MAX) {
++        return 'low';
++      }
++      if (budget < EFFORT_KWARGS_BUDGET_MEDIUM_MAX) {
++        return 'medium';
++      }
++      return 'high';
++    }
++  }
++
++  return undefined;
++}
++
++function readEffortKwargsForModel(
++  config: ProviderEffortKwargsConfig | undefined,
++  model: string | undefined
++): Record<string, unknown> | undefined {
++  const key = model?.trim();
++  if (!key || !isEffortKwargsRecord(config)) {
++    return undefined;
++  }
++
++  const direct = config[key];
++  if (isEffortKwargsRecord(direct)) {
++    return direct;
++  }
++
++  const normalized = key.toLowerCase();
++  for (const [candidate, levels] of Object.entries(config)) {
++    if (candidate.trim().toLowerCase() === normalized && isEffortKwargsRecord(levels)) {
++      return levels;
++    }
++  }
++
++  return undefined;
++}
++
++function normalizeEffortKwargsEffort(value: unknown): EffortKwargsLevel | undefined {
++  if (typeof value !== 'string') {
++    return undefined;
++  }
++
++  const normalized = value.trim().toLowerCase();
++  if (normalized === 'low' || normalized === 'medium' || normalized === 'high') {
++    return normalized;
++  }
++  if (normalized === 'max' || normalized === 'xhigh') {
++    return 'high';
++  }
++  return undefined;
++}
++
++function readEffortKwargsThinkingType(value: unknown): 'enabled' | 'disabled' | undefined {
++  const type = readEffortKwargsNestedValue(value, 'type');
++  if (typeof type !== 'string') {
++    return undefined;
++  }
++
++  const normalized = type.trim().toLowerCase();
++  if (normalized === 'enabled' || normalized === 'disabled') {
++    return normalized;
++  }
++  return undefined;
++}
++
++function readEffortKwargsNestedValue(value: unknown, key: string): unknown {
++  return isEffortKwargsRecord(value) ? value[key] : undefined;
++}
++
++/** Deep merge, with `existing` (already on the body) winning over the configured kwargs. */
++function mergeEffortKwargs(configured: Record<string, unknown>, existing: unknown): Record<string, unknown> {
++  if (!isEffortKwargsRecord(existing)) {
++    return { ...configured };
++  }
++
++  const merged: Record<string, unknown> = { ...configured };
++  for (const [key, value] of Object.entries(existing)) {
++    const base = merged[key];
++    merged[key] =
++      isEffortKwargsRecord(base) && isEffortKwargsRecord(value) ? mergeEffortKwargs(base, value) : value;
++  }
++
++  return merged;
++}
++
++function isEffortKwargsRecord(value: unknown): value is Record<string, unknown> {
++  return typeof value === 'object' && value !== null && !Array.isArray(value);
++}
+diff --git a/src/adapters/builtins/target/shared.ts b/src/adapters/builtins/target/shared.ts
+index 5300014..46e5758 100644
+--- a/src/adapters/builtins/target/shared.ts
++++ b/src/adapters/builtins/target/shared.ts
+@@ -13,6 +13,7 @@ import { err, ok } from '../../../types';
+ import { asBoolean, asNumber, asString, extractTextFromPart, isObject } from '../../../utils';
+ import { OPENAI_RESPONSES_REASONING_FORMAT } from '../reasoning-envelope';
+ import { resolveOpenAIChatProviderThinkingAdapter } from './openai-chat-compat';
++import { applyConfiguredEffortKwargs } from './openai-chat-compat/effort-kwargs';
+ 
+ interface OpenAIChatCompatibleRewriteOptions {
+   generatedReasoningMessageFields?: boolean;
+@@ -43,6 +44,8 @@ export function rewriteOpenAIChatCompatibleRequest(
+     nextBody = rewriteGenericOpenAIChatCompatibleRequest(nextBody, targetProviderConfig, options);
+   }
+ 
++  nextBody = applyConfiguredEffortKwargs(nextBody, targetProviderConfig, options.standardRequest, model);
++
+   if (shouldStripOpenAIChatThinkingOptions(targetProviderConfig)) {
+     nextBody = omitOpenAIChatThinkingOptionsFields(nextBody);
+   }
+diff --git a/src/config.ts b/src/config.ts
+index 23e7d30..971dcc2 100644
+--- a/src/config.ts
++++ b/src/config.ts
+@@ -158,6 +158,7 @@ interface ProviderJsonConfig {
+   chatThinkingOptions?: unknown;
+   thinkingOptions?: unknown;
+   modelMetadata?: unknown;
++  effortKwargs?: unknown;
+   extraHeaders?: unknown;
+   extraBody?: unknown;
+   billing?: unknown;
+@@ -3648,6 +3649,7 @@ function parseProvidersConfig(value: unknown): ProviderConfig[] {
+           item.thinkingOptions
+       ),
+       modelMetadata: parseProviderModelMetadata(item.modelMetadata, models),
++      effortKwargs: parseProviderEffortKwargs(item.effortKwargs, models),
+       extraHeaders: parseModelScopedHeaders(item.extraHeaders, models),
+       extraBody: parseModelScopedBody(item.extraBody, models),
+       billing: parseModelScopedBilling(item.billing, models),
+@@ -4611,6 +4613,49 @@ function parseProviderReasoningLevels(
+   return levels;
+ }
+ 
++/**
++ * `effortKwargs`: per-model reasoning-level -> `chat_template_kwargs` map. Model keys are
++ * validated against the provider's own `models[]` (unknown keys are dropped silently, never a
++ * load-time throw) and every level value must be a plain object; undefined when nothing survives.
++ */
++function parseProviderEffortKwargs(
++  value: unknown,
++  models: string[]
++): ProviderConfig['effortKwargs'] {
++  if (!isPlainObject(value)) {
++    return undefined;
++  }
++
++  const modelNames = new Set(models.map((model) => model.trim().toLowerCase()).filter(Boolean));
++  const parsed: NonNullable<ProviderConfig['effortKwargs']> = {};
++  for (const [rawModel, rawLevels] of Object.entries(value)) {
++    const model = rawModel.trim();
++    if (
++      !model ||
++      !isPlainObject(rawLevels) ||
++      (modelNames.size > 0 && !modelNames.has(model.toLowerCase()))
++    ) {
++      continue;
++    }
++
++    const levels: Record<string, Record<string, unknown>> = {};
++    for (const [rawLevel, rawKwargs] of Object.entries(rawLevels)) {
++      const level = rawLevel.trim().toLowerCase();
++      if (!level || !isPlainObject(rawKwargs)) {
++        continue;
++      }
++
++      levels[level] = cloneObject(rawKwargs);
++    }
++
++    if (Object.keys(levels).length > 0) {
++      parsed[model] = levels;
++    }
++  }
++
++  return Object.keys(parsed).length > 0 ? parsed : undefined;
++}
++
+ function parseModelScopedBody(value: unknown, models: string[]): ModelScopedBodyConfig {
+   if (!isPlainObject(value)) {
+     return {
+diff --git a/src/types.ts b/src/types.ts
+index 85b6b19..2cf192e 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -59,6 +59,14 @@ export interface ProviderModelMetadata {
+   supportedReasoningLevels?: ProviderModelReasoningLevel[];
+ }
+ 
++/**
++ * Per-model reasoning-effort level -> literal `chat_template_kwargs` object to merge into the
++ * upstream body on `openai_chat_completions` targets. Keyed by the provider-side model id, then
++ * by level (`low` | `medium` | `high` | `disabled`); values are template vocabulary, so only
++ * models someone has measured get a map.
++ */
++export type ProviderEffortKwargsConfig = Record<string, Record<string, Record<string, unknown>>>;
++
+ export type ProviderHealthStatus = 'healthy' | 'degraded' | 'unknown' | 'down';
+ 
+ export interface ProviderHealthConfig {
+@@ -110,6 +118,7 @@ export interface ProviderConfig {
+   openaiChatReasoningSplit?: 'auto' | 'enabled' | 'disabled';
+   openaiChatThinkingOptions?: 'auto' | 'enabled' | 'disabled';
+   modelMetadata?: Record<string, ProviderModelMetadata>;
++  effortKwargs?: ProviderEffortKwargsConfig;
+   extraHeaders: ModelScopedHeadersConfig;
+   extraBody: ModelScopedBodyConfig;
+   billing: ModelScopedBillingConfig;

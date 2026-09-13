@@ -1,4 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
+  // `allowJs` (not `checkJs`): `src/router/slotsPoller.test.ts` imports the host-side
+  // poller `dashboard/scripts/router-slots-poller.mjs` so the writer and the reader are
+  // tested against ONE definition. The .mjs is outside `include` and is pulled in only as
+  // a dependency; without this, tsc reports TS7016 for it.
+  "compilerOptions": { "allowJs": true },
   "include": ["src/**/*"]
 }

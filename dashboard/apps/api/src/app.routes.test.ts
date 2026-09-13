@@ -355,3 +355,24 @@ describe("GET /api/export/scoreboard-capture", () => {
     expect(() => ConsumerFrozenCheckSchema.parse(raw)).not.toThrow();
   });
 });
+
+describe("GET /api/router/{telemetry,slots,sidecar}", () => {
+  // The one thing `routes/routerStatus.test.ts` cannot cover: that `app.ts` actually
+  // registers all three paths, BEFORE the SPA wildcard. The env vars
+  // (`ROUTER_TELEMETRY_DIR` / `CODEX_SIDECAR_LOG_DIR`) are not set in a `bun test` process,
+  // so the honest answer here is a typed unavailable payload — 200 with `available: false`,
+  // never a 404 (unregistered) and never a 500 (`config.ts`'s absence-is-off convention).
+  const RouterStatusEnvelopeSchema = z.union([
+    z.object({ available: z.literal(true) }).passthrough(),
+    z.object({ available: z.literal(false), reason: z.enum(["disabled", "unreadable", "empty"]) }),
+  ]);
+
+  test("all three are registered and answer 200 with a valid router-status envelope", async () => {
+    for (const path of ["/api/router/telemetry", "/api/router/slots", "/api/router/sidecar"]) {
+      const response = await app.request(path);
+      expect(response.status).toBe(200);
+      const raw: unknown = await response.json();
+      expect(() => RouterStatusEnvelopeSchema.parse(raw)).not.toThrow();
+    }
+  });
+});

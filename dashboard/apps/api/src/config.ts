@@ -43,4 +43,21 @@ export const config = {
   // dir containing `status.json`, mounted `…/control/host:/control/host:ro` (WP-6).
   controlRequestsDir: process.env.CONTROL_REQUESTS_DIR,
   controlHostDir: process.env.CONTROL_HOST_DIR,
+
+  // Router status plane (WP-3, `plans/router-observability-and-tool-search-conformance.md`)
+  // — both optional and BOTH left `undefined` when unset, exactly like the `CONTROL_*` pair
+  // above: absence is the "router status off" signal, and every `/api/router/*` route then
+  // answers 200 with `{available: false, reason: "disabled"}` rather than 500.
+  //
+  // `ROUTER_TELEMETRY_DIR` — the router's own jsonl sink dir (patch 0006), mounted
+  // `…/.local/state/inference-router/logs:/var/log/inference-router:ro`. Read by BOTH
+  // `/api/router/telemetry` (the `router-*.jsonl` sink) and `/api/router/slots`, because
+  // the host slots poller writes `slots-*.jsonl` into that same directory.
+  // `CODEX_SIDECAR_LOG_DIR` — the sidecar's jsonl dir, mounted
+  // `…/.local/state/codex-sidecar/logs:/var/log/codex-sidecar:ro`.
+  //
+  // Read-only on both mounts: this API writes neither feed, and every read goes through
+  // the bounded byte-window tail reader (`apps/api/src/router/tailReader.ts`).
+  routerTelemetryDir: process.env.ROUTER_TELEMETRY_DIR,
+  codexSidecarLogDir: process.env.CODEX_SIDECAR_LOG_DIR,
 };

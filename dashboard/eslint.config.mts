@@ -40,7 +40,9 @@ export default tseslint.config(
     },
   },
   {
-    files: ["apps/api/**/*.ts", "packages/shared/**/*.ts", "*.config.{js,ts,mts}"],
+    // `scripts/**` is host-side Bun tooling (the router slots poller and its installer),
+    // not part of any workspace build -- same Bun+node global set as the API.
+    files: ["apps/api/**/*.ts", "packages/shared/**/*.ts", "scripts/**/*.{js,mjs,ts}", "*.config.{js,ts,mts}"],
     languageOptions: {
       globals: {
         ...globals.bun,

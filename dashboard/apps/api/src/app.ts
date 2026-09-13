@@ -9,6 +9,7 @@ import { registerExportRoutes } from "./routes/export.ts";
 import { registerHealthRoutes } from "./routes/health.ts";
 import { registerLadderRoutes } from "./routes/ladders.ts";
 import { registerQueueRoutes } from "./routes/queue.ts";
+import { registerRouterStatusRoutes } from "./routes/routerStatus.ts";
 import { registerServingRoutes } from "./routes/serving.ts";
 import { registerServingTimingRoutes } from "./routes/servingTiming.ts";
 
@@ -27,6 +28,7 @@ registerServingTimingRoutes(app);
 registerExportRoutes(app);
 registerQueueRoutes(app);
 registerControlRoutes(app);
+registerRouterStatusRoutes(app);
 
 /** Serves the built SPA: any path inside the web root that exists on disk is returned as
  * a file, anything else falls back to `index.html` so the client-side router owns it.

@@ -1,0 +1,8 @@
+{"ts":"2026-09-13T03:59:00.000Z","kind":"listen","persona":"codex-b","userAgent":"codex-sidecar/1"}
+{"ts":"2026-09-13T03:59:10.000Z","kind":"config-verified","persona":"codex-b","threadId":"01a098ec-6ba9-7e41-87f6-c0e802f57acd","scope":"subagent","model":"gpt-5.6-sol","effort":"medium","nTools":3}
+{"ts":"2026-09-13T03:59:20.000Z","kind":"http-start","persona":"codex-b","reqId":"9f06f784","mode":"turn","nMessages":4,"stream":true}
+{"ts":"2026-09-13T03:59:30.000Z","kind":"http","persona":"codex-b","threadId":"01a098ec-6ba9-7e41-87f6-c0e802f57acd","model":"gpt-5.6-sol","stop_reason":"tool_use","usage":{"input_tokens":11,"output_tokens":22}}
+{"ts":"2026-09-13T03:59:40.000Z","kind":"http-error","persona":"codex-b","reqId":"9f06f784","mode":"tool-result","status":409,"type":"api_error","message":"superseded by a newer request on this session"}
+{"ts":"2026-09-13T03:59:45.000Z","kind":"orphan-tool-result","persona":"codex-b","tool_use_id":"toolu_01abc"}
+{"ts":"2026-09-13T03:59:50.000Z","kind":"child-stderr","persona":"codex-a","text":"warning: thread pool saturated"}
+{"ts":"2026-09-13T04:00:00.000Z","kind":"count_tokens","persona":"codex-a","input_tokens":812}

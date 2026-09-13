@@ -8,6 +8,10 @@ import {
   HealthResponseSchema,
   LadderRowSchema,
   QueueListResponseSchema,
+  RouterSidecarResponseSchema,
+  RouterSlotsRecordSchema,
+  RouterSlotsResponseSchema,
+  RouterTelemetryResponseSchema,
   ServingResponseSchema,
   ServingTimingRowSchema,
   TrialRowSchema,
@@ -483,5 +487,147 @@ describe("QueueListResponseSchema", () => {
       },
     };
     expect(() => QueueListResponseSchema.parse(badResponse)).toThrow();
+  });
+});
+
+describe("RouterTelemetryResponseSchema", () => {
+  const record = {
+    kind: "request" as const,
+    ts: "2026-09-13T04:00:00.000Z",
+    reqId: "0d037a4a-4af9-416e-8916-ca9725618ee7",
+    route: "/v1/messages",
+    method: "POST",
+    leg: "claude-local",
+    modelResolved: "qwen36-a3b",
+    sessionId: "1f0e9b2c-4a7d-4f31-9c88-abcdef012345",
+    isSubagent: true,
+    stream: true,
+    status: 200,
+    responseTokens: 0,
+    reasoningTokens: 36,
+    ttftMs: 430,
+    wallMs: 1533,
+    error: null,
+    modelRequested: "claude-local/qwen36-a3b",
+    providerType: "openai",
+    sourceAdapterKey: "anthropic_messages",
+    upstreamUrl: "http://inference-engine-llama:4806/v1/chat/completions",
+    upstreamFirstByteMs: 430,
+    attemptSequence: 1,
+    stopReason: "length",
+    upstreamTimings: { prompt_n: 38, predicted_n: 48, draft_n_accepted: 34 },
+    usage: { input: 38, output: 48, cacheRead: 0, cacheWrite: 0 },
+  };
+  const valid = {
+    available: true as const,
+    generatedAt: "2026-09-13T04:00:10.000Z",
+    windowBytes: 1048576,
+    file: "router-2026-09-13.0.jsonl",
+    recent: [record],
+    inFlight: [
+      {
+        reqId: "374ccb44-2624-4b05-8df5-5e26db94101a",
+        leg: "claude-local",
+        modelResolved: "qwen36-a3b",
+        sessionId: null,
+        phase: "decode" as const,
+        responseTokens: 60,
+        reasoningTokens: 90,
+        elapsedMs: 4000,
+        lastSeenTs: "2026-09-13T04:00:09.000Z",
+        tokPerSec: 50,
+      },
+    ],
+    legs: [{ leg: "claude-local", requests: 1, errors: 0, p50TtftMs: 430 }],
+  };
+
+  test("round-trips a telemetry response with a request record, an in-flight stream and a leg rollup", () => {
+    expect(RouterTelemetryResponseSchema.parse(valid)).toEqual(valid);
+  });
+
+  test("rejects a `recent` record missing reqId, and keeps unknown sink keys via passthrough", () => {
+    const withoutReqId: Record<string, unknown> = { ...record };
+    delete withoutReqId.reqId;
+    expect(() => RouterTelemetryResponseSchema.parse({ ...valid, recent: [withoutReqId] })).toThrow();
+    // The sink evolves under `router/`: a key this schema has never heard of survives.
+    const parsed = RouterTelemetryResponseSchema.parse({
+      ...valid,
+      recent: [{ ...record, someFutureSinkField: 7 }],
+    });
+    if (!parsed.available) throw new Error("expected available");
+    expect((parsed.recent[0] as Record<string, unknown>).someFutureSinkField).toBe(7);
+  });
+});
+
+describe("RouterSlotsResponseSchema / RouterSlotsRecordSchema", () => {
+  test("round-trips the response AND the on-disk poller record they share", () => {
+    const response = {
+      available: true as const,
+      sampledAt: "2026-09-13T04:00:05.000Z",
+      ageMs: 5000,
+      stale: false,
+      models: [
+        {
+          model: "Qwen3.8-27B-UD-IQ3_S",
+          state: "ready",
+          ttl: 1800,
+          nCtx: 131072,
+          recipe: { ctk: "q8_0", ctv: "q8_0", fa: "on", reasoningBudget: 8192, mtp: true, moeCpuLayers: 12 },
+          slots: [
+            { id: 0, nCtx: 131072, isProcessing: true, promptTokens: 2000, promptTokensCache: 1500, cacheHitRatio: 0.75 },
+          ],
+          error: null,
+        },
+      ],
+    };
+    expect(RouterSlotsResponseSchema.parse(response)).toEqual(response);
+
+    const onDisk = {
+      kind: "slots" as const,
+      ts: "2026-09-13T04:00:05.000Z",
+      sampledAt: "2026-09-13T04:00:05.000Z",
+      error: null,
+      models: [
+        { model: "nemotron-4b", state: "starting", ttl: 1800, cmd: null, slots: null, error: null },
+        { model: "bge-m3-f16", state: "ready", ttl: 1800, cmd: "/app/llama-server -c 8192", slots: [{ id: 0, n_ctx: 8192 }], error: null },
+      ],
+    };
+    expect(RouterSlotsRecordSchema.parse(onDisk)).toEqual(onDisk);
+
+    // …and the `available: false` arm of the same discriminated union: `reason` is
+    // required and closed to the three documented values.
+    expect(() => RouterSlotsResponseSchema.parse({ available: false })).toThrow();
+    expect(() => RouterSlotsResponseSchema.parse({ available: false, reason: "who-knows" })).toThrow();
+    expect(RouterSlotsResponseSchema.parse({ available: false, reason: "unreadable" })).toEqual({
+      available: false,
+      reason: "unreadable",
+    });
+  });
+});
+
+describe("RouterSidecarResponseSchema", () => {
+  test("round-trips an open kind map, and rejects a persona missing lastSeenTs", () => {
+    const valid = {
+      available: true as const,
+      generatedAt: "2026-09-13T04:00:10.000Z",
+      file: "codex-sidecar-2026-09-13.jsonl",
+      byKind: { http: 179, "http-error": 89, "a-kind-invented-tomorrow": 1 },
+      personas: [
+        {
+          persona: "codex-b",
+          threadId: "01a098ec-6ba9-7e41-87f6-c0e802f57acd",
+          model: "gpt-5.6-sol",
+          lastSeenTs: "2026-09-13T04:00:00.000Z",
+          lastKind: "http",
+        },
+      ],
+      recentErrors: [
+        { ts: "2026-09-13T04:00:55.813Z", persona: "codex-b", kind: "http-error", status: 409, message: "superseded" },
+      ],
+    };
+    expect(RouterSidecarResponseSchema.parse(valid)).toEqual(valid);
+    const brokenPersona: Record<string, unknown> = { ...(valid.personas[0] as (typeof valid.personas)[number]) };
+    delete brokenPersona.lastSeenTs;
+    expect(() => RouterSidecarResponseSchema.parse({ ...valid, personas: [brokenPersona] })).toThrow();
   });
 });

@@ -1,0 +1,67 @@
+{
+  "lineage": {
+    "hf_repo": "unsloth/gemma-4-26B-A4B-it-qat-GGUF",
+    "hf_revision": null,
+    "filename": "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
+    "file_size": 14249047104,
+    "sha256": null,
+    "llama_cpp_build": "b10534"
+  },
+  "sweep_cell": {
+    "cell_id": "g26-qat-c64k-f16-mtp-ctkf16-ctvf16-faauto-c65536-02135724",
+    "alias": "g26-qat-c64k-f16-mtp",
+    "server_flags": {
+      "--host": "0.0.0.0",
+      "-lv": 9,
+      "-ctk": "f16",
+      "-ctv": "f16",
+      "-fa": "auto",
+      "-ngl": 99,
+      "--jinja": true,
+      "-ncmoe": 14,
+      "--mmproj": "/models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/mmproj-BF16.gguf",
+      "-md": "/models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/mtp-gemma-4-26B-A4B-it.gguf",
+      "--spec-type": "draft-mtp",
+      "-ub": 2048,
+      "--load-mode": "none",
+      "-c": 65536
+    },
+    "model_host_path": "/models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
+    "battery": [
+      "timing",
+      "needle"
+    ],
+    "sampling_arm": "capability",
+    "model": "gemma-4-26b-a4b-qat-c64k",
+    "spec_decode": "mtp",
+    "gpu_weights_bytes": null,
+    "kv_attention_layers": null,
+    "swa_layer_spec": null,
+    "kv_indexer_geometry": null
+  },
+  "vram": {
+    "baseline_bytes": 768262144,
+    "loaded_bytes": 14615797760,
+    "after_teardown_bytes": null
+  },
+  "wilson_summary": null,
+  "vram_profile": "headless",
+  "response_caps": {
+    "default": 256,
+    "by_task": {
+      "multi_needle": 768
+    }
+  },
+  "cell_started_at": "2026-09-12T23:50:04+00:00",
+  "cell_ended_at": "2026-09-13T00:06:03+00:00",
+  "cell_wall_seconds": 959.4836048500001,
+  "scratch_startup_seconds": 6.080309219993069,
+  "experiment_id": "g26-qat-c64k-f16-mtp-ctkf16-ctvf16-faauto-c65536-02135724",
+  "timestamp": "2026-09-13T00:06:03.697588+00:00",
+  "schema_version": 2,
+  "size_check": {
+    "total_bytes": 85946,
+    "limit_bytes": 26214400,
+    "within_budget": true
+  }
+}

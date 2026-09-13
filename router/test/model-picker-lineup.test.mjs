@@ -81,11 +81,22 @@ test("renders one row per Claude-Code-visible non-anthropic id, with the documen
   }
 });
 
-test("the real config yields 20 Claude-Code rows: the four effort ids out, the openwebui ids out", () => {
+test("the real config yields 8 Claude-Code rows: every effort id out, the openwebui ids out", () => {
   const rows = JSON.parse(run(["--config", REAL_CONFIG]).stdout);
-  assert.equal(rows.length, 20);
+  assert.equal(rows.length, 8);
   assert.equal(rows.filter((r) => r.model.startsWith("anthropic/")).length, 0);
   const models = rows.map((r) => r.model);
+  // The exact lineup: two local rows plus one bare codex id per family per persona.
+  assert.deepEqual(models, [
+    "claude-local/qwen36-a3b",
+    "claude-local/qwen38-27b-iq3s",
+    "codex-a/gpt-5.6-luna",
+    "codex-a/gpt-5.6-sol",
+    "codex-a/gpt-6-astra",
+    "codex-b/gpt-5.6-luna",
+    "codex-b/gpt-5.6-sol",
+    "codex-b/gpt-6-astra",
+  ]);
   // Reasoning effort on the local leg is a request field since router patch 0007
   // (plans/router-effort-mapping-claude-local.md): the harness's own effort control maps onto
   // chat_template_kwargs, so the picker carries exactly ONE Qwen3.8 row and the four suffix ids —
@@ -109,6 +120,32 @@ test("the real config yields 20 Claude-Code rows: the four effort ids out, the o
       claudeLocal.models.includes(`qwen38-27b-iq3s-${effort}`),
       `effort id ${effort} must stay resolvable in claude-local.models[]`,
     );
+  }
+  // Same story on the codex leg since plans/codex-leg-effort-and-auditor-unpinning.md WP-2: effort
+  // is the harness's own control, resolved per turn by the sidecar, so the picker carries exactly
+  // ONE row per family per persona (the bare id) and the 12 suffix ids are tagged ["router"].
+  const CODEX_PERSONAS = ["codex-a", "codex-b"];
+  const CODEX_SUFFIX_IDS = [
+    "gpt-5.6-luna-medium",
+    "gpt-5.6-luna-high",
+    "gpt-5.6-sol-low",
+    "gpt-5.6-sol-high",
+    "gpt-6-astra-low",
+    "gpt-6-astra-high",
+  ];
+  for (const persona of CODEX_PERSONAS) {
+    const provider = config.providers.find((p) => p.name === persona);
+    for (const id of CODEX_SUFFIX_IDS) {
+      assert.equal(models.includes(`${persona}/${id}`), false, `${persona}/${id} must not be a picker row`);
+      // Not a picker row is not "gone" — the suffix ids stay resolvable (alias contract) and are
+      // the explicit-effort escape hatch that outranks the request field.
+      assert.ok(provider.models.includes(id), `${persona}/${id} must stay resolvable in models[]`);
+    }
+    for (const bare of ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra"]) {
+      const row = rows.find((r) => r.model === `${persona}/${bare}`);
+      assert.ok(row, `${persona}/${bare} must be a picker row`);
+      assert.match(row.description, /effort via the harness/);
+    }
   }
   // Tagged for OpenWebUI only — these are the rows the tag exists to remove from the picker.
   assert.equal(models.filter((m) => m.startsWith("openrouter/") || m.startsWith("or-anthropic/")).length, 0);

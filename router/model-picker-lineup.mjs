@@ -55,9 +55,19 @@ const LAUNCH_PROFILE_ENV = {
 };
 
 // Family/label table. `prefix` families may carry an effort suffix (`-low|-medium|-high`, plus
-// `-off` on the local leg); without one the family's own default applies (router/AGENTS.md, "The
-// codex sidecar leg").
+// `-off` on the local leg); without one the family's own default applies. On the codex leg that
+// is a LABELLING rule only — a hand-typed suffix id still renders `Luna high (codex-b)` — not
+// the selector: effort there is resolved per turn by the sidecar under the precedence rule
+// (suffix > `output_config.effort`/`thinking` > family default), see
+// `docs/tool-calling-gateway/codex-sidecar.md` "Effort precedence" and router/AGENTS.md, "The
+// codex sidecar leg".
 const FAMILIES = [
+  // Codex families (WP-2, plans/codex-leg-effort-and-auditor-unpinning.md): the six suffix ids per
+  // persona are tagged `["router"]` in gateway.config.json, so only the bare id is a picker row and
+  // the harness's own effort control (`/model` effort, `--effort`, agent frontmatter `effort:`,
+  // `modelSettings.effortLevel`) chooses the level. `defaultEffort` is what applies when the
+  // request carries no effort at all — it still labels the bare row, and it still labels a
+  // hand-typed suffix id from its suffix.
   { kind: "prefix", id: "gpt-5.6-luna", family: "Luna", defaultEffort: "low" },
   { kind: "prefix", id: "gpt-5.6-sol", family: "Sol", defaultEffort: "medium" },
   { kind: "prefix", id: "gpt-6-astra", family: "Astra", defaultEffort: "medium" },
@@ -137,9 +147,12 @@ function effortOf(modelId, entry) {
 
 function describeRow(providerName, leg, modelId, effort) {
   if (providerName.startsWith("codex-")) {
+    // Bare id: effort comes from the harness and is resolved per turn by the sidecar; the family
+    // default applies only when the request carries none. A hand-typed suffix id still wins.
+    // (Descriptions are asserted < 90 chars by the test, hence the compressed wording.)
     const tail = /-(low|medium|high)$/.test(modelId)
       ? `effort ${effort} is in the id suffix`
-      : `no suffix means the ${effort} default`;
+      : `effort via the harness, default ${effort}`;
     return `${providerName} sidecar leg via the router (:4813); ${tail}`;
   }
   if (providerName === "claude-local") {

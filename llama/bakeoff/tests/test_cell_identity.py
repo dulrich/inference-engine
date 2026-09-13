@@ -211,6 +211,18 @@ GOLDEN_CELL_IDS = {
         "g26-q40-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-2bd65ba0",
         "g26-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-89c80044",
     ],
+    # WP-2b of plans/gemma4-26b-a4b-qat-mtp-ladder.md: the same ladder with thinking OFF
+    # (`"--reasoning": "off"` in every registry entry's server_flags, which shapes the cell id).
+    # A new queue rather than an edit of v1 -- a queue is immutable once its `.state.json`
+    # exists -- so the `g26nt-*` aliases are fresh and v1's `g26-*` stay reserved.
+    "gemma4-26b-a4b-ladder-v2": [  # 6 cells, sha256(chr(10).join(ids))[:16] == "a949075786771276"
+        "g26nt-qat-c32k-f16-mtp-ctkf16-ctvf16-faauto-c32768-887b1d4e",
+        "g26nt-qat-c64k-f16-mtp-ctkf16-ctvf16-faauto-c65536-e2862bd9",
+        "g26nt-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-8b16b9dc",
+        "g26nt-qat-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-8f9356bd",
+        "g26nt-q40-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-f55449e1",
+        "g26nt-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-c14c8df3",
+    ],
     # WP-2 of plans/moe-offload-load-mode-and-qwen4exp-fit-math.md: `--load-mode none` A/B,
     # dense pair first (no CPU experts, faster load), then the MoE-offload pair.
     "lm-ab-v1": [  # 4 cells, sha256(chr(10).join(ids))[:16] == "74df1f6c88682f9f"
@@ -236,6 +248,7 @@ GOLDEN_DIGESTS = {
     "minicpm5-2b-ladder-v1": (9, "dd3b61c2c84eb07d"),
     "lm-ab-v1": (4, "74df1f6c88682f9f"),
     "gemma4-26b-a4b-ladder-v1": (6, "c618905ef5cf34ed"),
+    "gemma4-26b-a4b-ladder-v2": (6, "a949075786771276"),
 }
 
 

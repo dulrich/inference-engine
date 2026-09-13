@@ -8,10 +8,10 @@ attempted at all, and the built command is the exact process a bake-off measures
 that silently shifts either does not error -- it quietly changes what the fleet runs and what
 its recorded numbers mean.
 
-The current lock: 12 committed queues, 132 cells --
+The current lock: 13 committed queues, 138 cells --
 
-    fit_classifications  51845f5f73509e9d  n=132
-    build_commands       0a984493131e9630  n=132
+    fit_classifications  e9c8494cf5ab38ca  n=138
+    build_commands       2571ce75b9bd783c  n=138
     vram_budgets         2f795a1ad011a72b
     geometry_shape       89c2f041b8feb1bf
     kv_bytes_table       5cc5a673e0dffe7b
@@ -29,10 +29,14 @@ re-derived unchanged before that WP's append; extended by WP-2 of
 `plans/moe-offload-load-mode-and-qwen4exp-fit-math.md` (`lm-ab-v1.json` joined) to an
 11-queue/126-cell state (`19b0f305383da67f`/`d0c807d4af2e8f57`), with the 122-cell digests
 re-derived unchanged before that append; extended by WP-2 of
-`plans/gemma4-26b-a4b-qat-mtp-ladder.md` (`gemma4-26b-a4b-ladder-v1.json` joined) to the current
-12-queue/132-cell state above, with the 126-cell digests re-derived unchanged -- and re-derived
-unchanged again AFTER that WP's `gguf_fit._ROUTED_EXPERT_RE` fused-expert (`ffn_gate_up_exps`)
-fix, which no pre-existing committed queue's model has a tensor for -- before this append.
+`plans/gemma4-26b-a4b-qat-mtp-ladder.md` (`gemma4-26b-a4b-ladder-v1.json` joined) to a
+12-queue/132-cell state (`51845f5f73509e9d`/`0a984493131e9630`), with the 126-cell digests
+re-derived unchanged -- and re-derived unchanged again AFTER that WP's
+`gguf_fit._ROUTED_EXPERT_RE` fused-expert (`ffn_gate_up_exps`) fix, which no pre-existing
+committed queue's model has a tensor for -- before that append; extended by WP-2b of the same
+plan (`gemma4-26b-a4b-ladder-v2.json` joined, the no-think `--reasoning off` twin of that
+ladder) to the current 13-queue/138-cell state above, with the 132-cell digests re-derived
+unchanged before this append.
 
 The per-cell table below is the human-auditable form of the first two; the digests are a second,
 cheaper assertion over the *full* fit dicts (every byte count and margin, not just the
@@ -861,17 +865,65 @@ GOLDEN = {
             ),
         ],
     ),
+    # WP-2b of plans/gemma4-26b-a4b-qat-mtp-ladder.md: the same ladder run with thinking OFF
+    # (`"--reasoning": "off"` in every registry entry, so it lands in each argv between
+    # `--mmproj` and `--spec-type` and shapes every cell id). v1 measures Gemma 4 in its
+    # default thinking mode; v2 is the needle-recall measurement. A queue is immutable once its
+    # `.state.json` exists, so this is a NEW queue, never an edit of v1 -- the 132-cell digests
+    # above were re-derived unchanged before this append (additivity proof).
+    #
+    # `-ncmoe` per rung (14/14/18/24; the q40 entry uses the 128k value) is v1's finals
+    # verbatim, and the 11.30 GiB headless injection here makes `g26nt-qat-c64k-f16-mtp` lock
+    # "marginal" for exactly the reason its v1 twin does (predicted margin 1.87 GiB, just under
+    # MARGINAL_MARGIN_GIB, against "fits" under the dry-run's 12.8 GiB `desktop-shared`). That
+    # is a property of this file's fixed injection, not of the real card; `-ncmoe` is never
+    # tuned to it.
+    "gemma4-26b-a4b-ladder-v2": GoldenQueue(
+        vram_profile="headless",
+        cells=[
+            GoldenCell(
+                cell_id="g26nt-qat-c32k-f16-mtp-ctkf16-ctvf16-faauto-c32768-887b1d4e",
+                classification="fits",
+                command="llama-server -m /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf --port 8080 -c 32768 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --load-mode none --mmproj /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/mmproj-BF16.gguf --reasoning off --spec-type draft-mtp -lv 9 -md /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/mtp-gemma-4-26B-A4B-it.gguf -ncmoe 14 -ub 2048",
+            ),
+            GoldenCell(
+                cell_id="g26nt-qat-c64k-f16-mtp-ctkf16-ctvf16-faauto-c65536-e2862bd9",
+                classification="marginal",
+                command="llama-server -m /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf --port 8080 -c 65536 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --load-mode none --mmproj /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/mmproj-BF16.gguf --reasoning off --spec-type draft-mtp -lv 9 -md /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/mtp-gemma-4-26B-A4B-it.gguf -ncmoe 14 -ub 2048",
+            ),
+            GoldenCell(
+                cell_id="g26nt-qat-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-8b16b9dc",
+                classification="fits",
+                command="llama-server -m /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --load-mode none --mmproj /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/mmproj-BF16.gguf --reasoning off --spec-type draft-mtp -lv 9 -md /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/mtp-gemma-4-26B-A4B-it.gguf -ncmoe 18 -ub 2048",
+            ),
+            GoldenCell(
+                cell_id="g26nt-qat-c128k-f16-base-ctkf16-ctvf16-faauto-c131072-8f9356bd",
+                classification="fits",
+                command="llama-server -m /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --load-mode none --mmproj /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/mmproj-BF16.gguf --reasoning off -lv 9 -ncmoe 18 -ub 2048",
+            ),
+            GoldenCell(
+                cell_id="g26nt-q40-c128k-f16-mtp-ctkf16-ctvf16-faauto-c131072-f55449e1",
+                classification="fits",
+                command="llama-server -m /models/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/gemma-4-26B-A4B-it-QAT-Q4_0.gguf --port 8080 -c 131072 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --load-mode none --mmproj /models/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/mmproj-gemma-4-26B-A4B-it-QAT-BF16.gguf --reasoning off --spec-type draft-mtp -lv 9 -md /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/mtp-gemma-4-26B-A4B-it.gguf -ncmoe 18 -ub 2048",
+            ),
+            GoldenCell(
+                cell_id="g26nt-qat-c256k-f16-mtp-ctkf16-ctvf16-faauto-c262144-c14c8df3",
+                classification="fits",
+                command="llama-server -m /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf --port 8080 -c 262144 -ctk f16 -ctv f16 -fa auto -ngl 99 --host 0.0.0.0 --jinja --load-mode none --mmproj /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/mmproj-BF16.gguf --reasoning off --spec-type draft-mtp -lv 9 -md /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/mtp-gemma-4-26B-A4B-it.gguf -ncmoe 24 -ub 2048",
+            ),
+        ],
+    ),
 }
 
 # sha256(json.dumps(x, sort_keys=True, default=str))[:16] over the FULL per-cell fit dicts and
-# the FULL argv lists, in committed-queue order across all 12 queues (WP-2 of
-# plans/gemma4-26b-a4b-qat-mtp-ladder.md added gemma4-26b-a4b-ladder-v1; the pre-WP-2 11-queue/
-# 126-cell digests (19b0f305383da67f/d0c807d4af2e8f57) were re-derived unchanged by this WP's
-# additivity proof, WITH the `_ROUTED_EXPERT_RE` `gate_up` fix already in place -- see this
+# the FULL argv lists, in committed-queue order across all 13 queues (WP-2b of
+# plans/gemma4-26b-a4b-qat-mtp-ladder.md added gemma4-26b-a4b-ladder-v2, the no-think twin of
+# the v1 ladder; the pre-WP-2b 12-queue/132-cell digests (51845f5f73509e9d/0a984493131e9630)
+# were re-derived unchanged before that append, which is this WP's additivity proof -- see this
 # file's module docstring).
-GOLDEN_FIT_DIGEST = "51845f5f73509e9d"
-GOLDEN_COMMAND_DIGEST = "0a984493131e9630"
-GOLDEN_CELL_COUNT = 132
+GOLDEN_FIT_DIGEST = "e9c8494cf5ab38ca"
+GOLDEN_COMMAND_DIGEST = "2571ce75b9bd783c"
+GOLDEN_CELL_COUNT = 138
 
 # `compute_vram_budget_bytes` for both profiles under the pinned injections. `desktop-shared` is
 # the static REALISTIC_FREE_VRAM_GIB cap and touches neither reader; `headless` is

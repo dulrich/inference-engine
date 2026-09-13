@@ -56,8 +56,10 @@ test("renders one row per Claude-Code-visible non-anthropic id, with the documen
   assert.equal(rows.length, 11);
   assert.equal(rows.filter((r) => r.model.startsWith("anthropic/")).length, 0);
   const byModel = Object.fromEntries(rows.map((r) => [r.model, r]));
-  // The local qwen38 family is a prefix family: the id suffix is the effort selector on this leg,
-  // and the unsuffixed id renders as the "default" entry rather than duplicating the -high label.
+  // The local qwen38 family is a prefix family: the FAMILIES entry still labels a hand-typed
+  // suffix id (the fixture tags all five ["cc"]; the real config tags the four suffixed ones
+  // router-internal — see the real-config test), and the unsuffixed id renders as the "default"
+  // entry rather than duplicating the -high label.
   assert.equal(byModel["claude-local/qwen38-27b-iq3s"].label, "Qwen3.8 27B default (local)");
   assert.equal(byModel["claude-local/qwen38-27b-iq3s-off"].label, "Qwen3.8 27B off (local)");
   assert.equal(byModel["claude-local/qwen38-27b-iq3s-low"].label, "Qwen3.8 27B low (local)");
@@ -79,13 +81,34 @@ test("renders one row per Claude-Code-visible non-anthropic id, with the documen
   }
 });
 
-test("the real config yields 24 Claude-Code rows: the four effort ids in, the openwebui ids out", () => {
+test("the real config yields 20 Claude-Code rows: the four effort ids out, the openwebui ids out", () => {
   const rows = JSON.parse(run(["--config", REAL_CONFIG]).stdout);
-  assert.equal(rows.length, 24);
+  assert.equal(rows.length, 20);
   assert.equal(rows.filter((r) => r.model.startsWith("anthropic/")).length, 0);
   const models = rows.map((r) => r.model);
+  // Reasoning effort on the local leg is a request field since router patch 0007
+  // (plans/router-effort-mapping-claude-local.md): the harness's own effort control maps onto
+  // chat_template_kwargs, so the picker carries exactly ONE Qwen3.8 row and the four suffix ids —
+  // now the server-enforced hard-cap surface, tagged router-internal (["router"]) — are not rows.
+  assert.ok(models.includes("claude-local/qwen38-27b-iq3s"), "the unsuffixed qwen38 row must stay");
+  assert.equal(models.filter((m) => m.startsWith("claude-local/qwen38-27b-iq3s")).length, 1);
   for (const effort of ["off", "low", "medium", "high"]) {
-    assert.ok(models.includes(`claude-local/qwen38-27b-iq3s-${effort}`), `missing effort id ${effort}`);
+    assert.equal(
+      models.includes(`claude-local/qwen38-27b-iq3s-${effort}`),
+      false,
+      `effort id ${effort} must not be a picker row`,
+    );
+  }
+  // Not a picker row is not "gone": the four must stay RESOLVABLE ids, i.e. still listed in the
+  // same provider's models[] (an id dropped from there 400s at model_resolution for the callers
+  // that want the hard cap). /v1/models on the live router is smoke-router.sh check 1's job.
+  const config = JSON.parse(fs.readFileSync(REAL_CONFIG, "utf8"));
+  const claudeLocal = config.providers.find((p) => p.name === "claude-local");
+  for (const effort of ["off", "low", "medium", "high"]) {
+    assert.ok(
+      claudeLocal.models.includes(`qwen38-27b-iq3s-${effort}`),
+      `effort id ${effort} must stay resolvable in claude-local.models[]`,
+    );
   }
   // Tagged for OpenWebUI only — these are the rows the tag exists to remove from the picker.
   assert.equal(models.filter((m) => m.startsWith("openrouter/") || m.startsWith("or-anthropic/")).length, 0);

@@ -42,5 +42,14 @@ if [ -e "$ENV_FILE" ]; then
     set +a
 fi
 
+# The dispatcher's reconciliation legs shell out to `node` (router/model-picker-lineup.mjs) and
+# `python3`; cron's PATH has neither the nvm node dir nor ~/.local/bin. Prefer the version-stable
+# ~/.nvm/current link (the same one sidecar/install.sh renders against), so a node bump never
+# strands the cron on a deleted version dir.
+if [ -x "$HOME/.nvm/current/bin/node" ]; then
+    PATH="$HOME/.nvm/current/bin:$PATH"
+    export PATH
+fi
+
 # Resolved from this script's own real path, never the cwd: a cron line has no working directory.
 exec python3 "$(dirname "$(readlink -f "$0")")/serving_dispatcher.py" dispatch "$@"

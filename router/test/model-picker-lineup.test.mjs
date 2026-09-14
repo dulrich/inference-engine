@@ -278,6 +278,21 @@ test("non-canonical settings JSON is refused with exit 2, naming --canonicalize,
   assert.equal(fs.readFileSync(settings, "utf8"), original);
 });
 
+test("Python ensure_ascii escapes (\\uXXXX for non-ASCII) still count as canonical 2-space JSON", (t) => {
+  // Fleet installers rewrite settings.json with Python's json.dump, which escapes non-ASCII;
+  // the first live serving-control apply failed on exactly this (2026-09-14).
+  const { dir, settings } = tempHome(t);
+  const before = `${JSON.stringify({ permissions: { allow: ["Bash(ls:*)"] }, note: "a \u2014 b \u00e9" }, null, 2)}\n`
+    .replace(/[\u0080-\uffff]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  assert.match(before, /\\u2014/);
+  fs.writeFileSync(settings, before);
+  run([...FIXTURE_ARGS, "--home", dir, "--write"]);
+  const parsed = JSON.parse(fs.readFileSync(settings, "utf8"));
+  assert.equal(parsed.note, "a \u2014 b \u00e9");
+  assert.equal(parsed.modelPicker.options.length, 11);
+  run([...FIXTURE_ARGS, "--home", dir, "--check"]);
+});
+
 test("--canonicalize reformats a non-canonical file in place, preserving semantic content", (t) => {
   const { dir, settings } = tempHome(t);
   fs.writeFileSync(settings, '{"permissions":{"allow":["Bash(ls:*)"]},\n\t"zzz":1}');

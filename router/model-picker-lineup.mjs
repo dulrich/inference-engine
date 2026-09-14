@@ -355,9 +355,18 @@ function serialize(obj) {
 // silently reflowed under the user. `--canonicalize` is the explicit opt-in to that reflow: the
 // rewrite below re-serialises the parsed object anyway, so all this has to do is stand aside.
 // Semantic content is unchanged either way, and `--check` never reaches here.
+// "Canonical" means 2-space layout, not one JSON encoder's escape choice: Python's json.dump
+// (ensure_ascii, the fleet installers that also maintain this file) writes `\u2014` where
+// JSON.stringify writes `—`. Both decode identically, so the guard compares with non-ASCII
+// escaped the way Python does it (lowercase hex, UTF-16 code units).
+function escapeNonAscii(text) {
+  return text.replace(/[\u0080-\uffff]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 function assertCanonical(original, canonicalize) {
   if (original === null || canonicalize) return;
-  if (serialize(JSON.parse(original)) !== original) {
+  const canonical = serialize(JSON.parse(original));
+  if (canonical !== original && escapeNonAscii(canonical) !== original) {
     die("settings.json is not canonical 2-space JSON; refusing to rewrite — re-run with --canonicalize to reformat it in place");
   }
 }

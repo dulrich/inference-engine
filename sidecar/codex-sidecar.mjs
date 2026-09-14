@@ -527,6 +527,16 @@ export function clampUsage(raw, window) {
 
 // ----------------------------------------------------------------- sinks ----
 
+// The id the client selected, restored for the wire: the router strips its provider prefix
+// (`codex-b/gpt-5.6-sol` reaches us as `gpt-5.6-sol`, router/AGENTS.md), and Claude Code
+// persists the response envelope's `model` per turn — a bare name there means `--resume` cannot
+// match the session's model to a picker row ("could not be restored", measured 2026-09-14). The
+// persona IS the provider prefix, so re-prefixing is exact; an already-prefixed id passes through.
+export function wireModelId(personaName, requested) {
+  const id = String(requested ?? "");
+  return id.includes("/") ? id : `${personaName}/${id}`;
+}
+
 function messageSkeleton(model) {
   return {
     id: `msg_${crypto.randomBytes(12).toString("hex")}`,
@@ -1327,7 +1337,7 @@ async function handleMessages(ctx, persona, body, req, res) {
     ctx.logger.write("title-local", { persona: persona.name, stream: !!body.stream, envelope: titleEnvelope(msgs) });
     const usage = { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 };
     if (body.stream) {
-      const msg = { ...messageSkeleton(body.model), usage };
+      const msg = { ...messageSkeleton(wireModelId(persona.name, body.model)), usage };
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
       const w = (t, o) => res.write(`event: ${t}\ndata: ${JSON.stringify(o)}\n\n`);
       w("message_start", { type: "message_start", message: msg });
@@ -1340,7 +1350,7 @@ async function handleMessages(ctx, persona, body, req, res) {
       return;
     }
     sendJson(res, 200, {
-      ...messageSkeleton(body.model),
+      ...messageSkeleton(wireModelId(persona.name, body.model)),
       content: [{ type: "text", text: "Session" }],
       stop_reason: "end_turn",
       usage,
@@ -1400,9 +1410,10 @@ async function handleMessages(ctx, persona, body, req, res) {
   const reqId = crypto.randomUUID().slice(0, 8);
   ctx.logger.write("http-start", { persona: persona.name, key, reqId, mode, stream: !!body.stream, nMessages: msgs.length });
 
+  const wireModel = wireModelId(persona.name, body.model);
   const sink = body.stream
-    ? new SseSink(res, body.model, cfg.pingMs)
-    : new BufferSink(res, body.model);
+    ? new SseSink(res, wireModel, cfg.pingMs)
+    : new BufferSink(res, wireModel);
   // One `http` row per request, same shape on every path (owner, joiner, replay).
   // `usage` is what went on the wire (clamped when the clamp fired); `usageRaw`, when given,
   // is the unclamped codex figure, so `usageCodex` is always the raw per-turn occupancy and

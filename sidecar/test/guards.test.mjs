@@ -101,6 +101,7 @@ test("a honoured feature set is recorded on config-verified", async t => {
 
   const r = await req(h, "/codex-a/v1/messages", { body: msgBody({}) });
   assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.model, "codex-a/gpt-5.6-luna", "the envelope restores the provider-prefixed id the client selected");
 
   const line = h.log().find(l => l.kind === "config-verified");
   assert.ok(line, "the honoured readings are recorded");

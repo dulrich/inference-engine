@@ -35,6 +35,8 @@ ANTHROPIC_SMALL_FAST_MODEL=codex-a/gpt-5.6-luna
 
 Set **all** of the default-model slots, not just `ANTHROPIC_MODEL`: Claude Code issues side queries (session title, and whatever else it routes to the small/fast slot) that would otherwise leave this leg. Never set `ANTHROPIC_API_KEY` anywhere near the router — with gateway auth on, the engine prefers a managed key and silently re-bills the session.
 
+**The response envelope's `model` is the provider-prefixed id the client selected** (`codex-b/gpt-5.6-sol`), not the bare name the router forwards after stripping its prefix: Claude Code persists that field per turn and matches it against the picker on `--resume` — with a bare name it reports `Session model gpt-5.6-sol could not be restored` and falls back (measured 2026-09-14). The sidecar's `http`/outbox rows and the `thread/start` model stay bare; only the wire echo is prefixed (`wireModelId`).
+
 **Declare the window too: `CLAUDE_CODE_MAX_CONTEXT_TOKENS=258400`.** Claude Code does not recognise `codex-*/…` ids and assumes a 200,000 window for them, so its "Context limit reached · /compact" gate trips near 178k while the codex thread still has room (measured 2026-09-14: a session cut off at a true per-turn occupancy of 177,288). Every model in both persona catalogs declares 272,000; 258,400 is the sidecar's own clamp (`SIDECAR_CONTEXT_WINDOW_TOKENS`), so the meter and the wire share one ceiling. The router-managed launch profile (`router/model-picker-lineup.mjs --write --launch-profile`) writes this key into `~/.claude/settings.json` `env` alongside the other generated keys; a hand-rolled env block needs the same line.
 
 ## Pinned config and preamble

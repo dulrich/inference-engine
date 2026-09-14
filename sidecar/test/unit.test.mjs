@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   parseModelId, isTitleRequest, titleEnvelope, extractCwd, conversational, sessionKeyOf, countTokensEstimate,
-  verifyInstructionSources, verifyFeatures, mapUpstreamError, retryAfterSeconds, rateLimitExhaustion, presentedKey,
+  verifyInstructionSources, verifyFeatures, wireModelId, mapUpstreamError, retryAfterSeconds, rateLimitExhaustion, presentedKey,
   toDynamicTools, Logger, usageOut,
 } from "../codex-sidecar.mjs";
 
@@ -105,6 +105,11 @@ test("upstream errors, rate-limit windows and instruction sources map as the sch
   assert.match(verifyFeatures(declaredFeatures, reported({ multi_agent: true, hooks: true })), /hooks=true \(declared false\)/);
   assert.equal(verifyFeatures(declaredFeatures, []), null, "a flag the binary does not report is unknown, not a mismatch");
   assert.equal(verifyFeatures(declaredFeatures, undefined), null);
+
+  // the wire model id: the router-stripped bare id is re-prefixed with the persona, a prefixed one passes
+  assert.equal(wireModelId("codex-b", "gpt-5.6-sol"), "codex-b/gpt-5.6-sol");
+  assert.equal(wireModelId("codex-b", "gpt-5.6-sol-high"), "codex-b/gpt-5.6-sol-high");
+  assert.equal(wireModelId("codex-a", "codex-a/gpt-5.6-luna"), "codex-a/gpt-5.6-luna");
 
   assert.equal(presentedKey({ authorization: "Bearer sekret" }), "sekret");
   assert.equal(presentedKey({ "x-api-key": "sekret" }), "sekret");

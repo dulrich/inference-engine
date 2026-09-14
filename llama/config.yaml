@@ -121,6 +121,17 @@
 #                                            INACTIVE rather than no row at all. Every other Open
 #                                            WebUI setting stays admin-owned, and the script still
 #                                            never deletes — hiding is deactivation.
+#                                         ── 2026-09-14 (plans/owui-effort-rows-and-arming.md):
+#                                            the sync also owns DERIVED effort rows, one Open WebUI
+#                                            row per reasoning level with the stored id
+#                                            `<model key>--effort-<none|low|medium|xhigh>`
+#                                            (`base_model_id` = the model key, `params.
+#                                            reasoning_effort` = the level). The id family is a
+#                                            stored identifier in Open WebUI's DB — append-only
+#                                            under this contract from the first row landed
+#                                            (`Qwen3.8-27B-UD-IQ3_S--effort-low`, WP-1). Levels come
+#                                            from router/gateway.config.json `effortKwargs` (+ none);
+#                                            a key with no entry gets no derived rows.
 #
 # The onnx tier next door keeps its own registry with the same rules and the same header:
 # `onnx/models.yaml` (aliases `gliner2-base`, `gliner2-pii`).

@@ -95,6 +95,8 @@ const FAMILIES = [
   { kind: "prefix", id: "gpt-6-astra", family: "GPT-6 Astra", defaultEffort: "medium" },
   { kind: "exact", id: "z-ai/glm-5.2:free", family: "GLM 5.2 free" },
   { kind: "exact", id: "z-ai/glm-5.3", family: "GLM 5.3" },
+  // Exact, not prefix: a prefix rule on `z-ai/glm-5.3` would swallow this id's label.
+  { kind: "exact", id: "z-ai/glm-5.3-flash", family: "GLM 5.3 Flash" },
   { kind: "exact", id: "qwen36-a3b", family: "Qwen3.6 A3B" },
   // Local-leg effort ids (WP-2): on this leg the id suffix IS the effort selector, because the
   // router's Anthropic->OpenAI conversion leg forwards no per-request effort field of any shape

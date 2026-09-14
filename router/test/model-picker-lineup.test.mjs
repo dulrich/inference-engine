@@ -87,15 +87,17 @@ test("renders one row per Claude-Code-visible non-anthropic id, with the documen
   }
 });
 
-test("the real config yields 8 Claude-Code rows: every effort id out, the openwebui ids out", () => {
+test("the real config yields 9 Claude-Code rows: every effort id out, the openwebui ids out", () => {
   const rows = JSON.parse(run(["--config", REAL_CONFIG, "--visibility", REAL_VISIBILITY]).stdout);
-  assert.equal(rows.length, 8);
+  assert.equal(rows.length, 9);
   assert.equal(rows.filter((r) => r.model.startsWith("anthropic/")).length, 0);
   const models = rows.map((r) => r.model);
-  // The exact lineup: two local rows plus one bare codex id per family per persona.
+  // The exact lineup: two local rows, the one cc-tagged OpenRouter id, then one bare codex id per
+  // family per persona.
   assert.deepEqual(models, [
     "claude-local/qwen36-a3b",
     "claude-local/qwen38-27b-iq3s",
+    "or-anthropic/z-ai/glm-5.3-flash",
     "codex-a/gpt-5.6-luna",
     "codex-a/gpt-5.6-sol",
     "codex-a/gpt-6-astra",
@@ -117,6 +119,11 @@ test("the real config yields 8 Claude-Code rows: every effort id out, the openwe
       `effort id ${effort} must not be a picker row`,
     );
   }
+  // The OpenRouter legs are per-model tagged, not wholesale openwebui, since glm-5.3-flash landed
+  // (user decision 2026-09-14): exactly one OR id is a Claude Code row, it is on the NATIVE
+  // Anthropic leg, and the OpenAI-compat conversion leg contributes none.
+  assert.deepEqual(models.filter((m) => m.startsWith("or-anthropic/")), ["or-anthropic/z-ai/glm-5.3-flash"]);
+  assert.deepEqual(models.filter((m) => m.startsWith("openrouter/")), []);
   // Not a picker row is not "gone": the four must stay RESOLVABLE ids, i.e. still listed in the
   // same provider's models[] (an id dropped from there 400s at model_resolution for the callers
   // that want the hard cap). /v1/models on the live router is smoke-router.sh check 1's job.
@@ -154,8 +161,14 @@ test("the real config yields 8 Claude-Code rows: every effort id out, the openwe
       assert.match(row.description, /effort via the harness/);
     }
   }
-  // Tagged for OpenWebUI only — these are the rows the tag exists to remove from the picker.
-  assert.equal(models.filter((m) => m.startsWith("openrouter/") || m.startsWith("or-anthropic/")).length, 0);
+  // Tagged for OpenWebUI only — these are the rows the tag exists to remove from the picker. The
+  // two original GLM ids stay openwebui-only on BOTH legs; glm-5.3-flash is the one cc exception
+  // and it is asserted above, on the native Anthropic leg alone.
+  for (const leg of ["openrouter", "or-anthropic"]) {
+    for (const id of ["z-ai/glm-5.2:free", "z-ai/glm-5.3"]) {
+      assert.equal(models.includes(`${leg}/${id}`), false, `${leg}/${id} must not be a picker row`);
+    }
+  }
   assert.equal(models.includes("claude-local/nemotron-4b"), false);
 });
 

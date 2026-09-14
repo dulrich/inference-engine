@@ -52,8 +52,12 @@ fi
 # --- resolve the executables the unit needs by absolute path ------------------
 # The systemd --user PATH on this host contains neither the nvm node dir nor
 # ~/.local/sbin, so both must be baked in absolutely.
-NODE_BIN="$(command -v node || true)"
-[ -n "$NODE_BIN" ] || die "node not found on PATH; need node >= ${MIN_NODE_MAJOR}"
+# Prefer the version-stable ~/.nvm/current link (maintained by nvm under
+# NVM_SYMLINK_CURRENT=true, see the tracked bashrc) so the rendered unit survives
+# a node bump without a re-render; fall back to whatever node is on PATH.
+NODE_BIN="$INSTALL_HOME/.nvm/current/bin/node"
+[ -x "$NODE_BIN" ] || NODE_BIN="$(command -v node || true)"
+[ -n "$NODE_BIN" ] || die "node not found (no $INSTALL_HOME/.nvm/current/bin/node and none on PATH); need node >= ${MIN_NODE_MAJOR}"
 case "$NODE_BIN" in /*) ;; *) die "node resolved to a non-absolute path: $NODE_BIN" ;; esac
 
 NODE_VERSION="$("$NODE_BIN" --version)"          # e.g. v24.15.0

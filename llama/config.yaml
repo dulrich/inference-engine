@@ -330,7 +330,17 @@ models:
       sampling:
         temperature: 1.0
         top_p: 0.95
-        source: "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16 (researched 2026-08-23)"
+      max_output:
+        reasoning_budget: -1
+        answer_tokens: 32768
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16", verified: "2026-09-14"}
+        "sampling.top_p": {url: "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16", verified: "2026-09-14"}
+        "sampling.top_k": {url: "none", reason: "the NVIDIA card and the unsloth Nemotron 3 guide both state only temperature/top_p; neither states top_k"}
+        "sampling.min_p": {url: "none", reason: "card silent; the unsloth guide's only --min-p is in its 30B-A3B example, not this 4B"}
+        "sampling.presence_penalty": {url: "none", reason: "card and unsloth guide silent; no vLLM or SGLang recipe page exists for Nemotron 3"}
+        "sampling.repetition_penalty": {url: "none", reason: "card and unsloth guide silent; no vLLM or SGLang recipe page exists for Nemotron 3"}
+        "max_output.answer_tokens": {url: "https://docs.unsloth.ai/models/nemotron-3", verified: "2026-09-14"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-UD-Q4_K_XL.gguf
@@ -378,7 +388,17 @@ models:
         temperature: 1.0
         top_p: 0.95
         top_k: 20
-        source: "https://huggingface.co/inclusionAI/Ling-3.0-tiny (researched 2026-08-23)"
+      max_output:
+        reasoning_budget: -1
+        answer_tokens: -1
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/inclusionAI/Ling-3.0-tiny", verified: "2026-09-14"}
+        "sampling.top_p": {url: "https://huggingface.co/inclusionAI/Ling-3.0-tiny", verified: "2026-09-14"}
+        "sampling.top_k": {url: "https://huggingface.co/inclusionAI/Ling-3.0-tiny", verified: "2026-09-14"}
+        "sampling.min_p": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
+        "sampling.presence_penalty": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
+        "sampling.repetition_penalty": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
+        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this family; -1 records the served behaviour (no -n/--n-predict flag is served, so the llama-server default, unrestricted), never a recommendation"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q4_K_XL.gguf
@@ -406,7 +426,17 @@ models:
         temperature: 1.0
         top_p: 0.95
         top_k: 20
-        source: "https://huggingface.co/inclusionAI/Ling-3.0-tiny (researched 2026-08-23)"
+      max_output:
+        reasoning_budget: -1
+        answer_tokens: -1
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/inclusionAI/Ling-3.0-tiny", verified: "2026-09-14"}
+        "sampling.top_p": {url: "https://huggingface.co/inclusionAI/Ling-3.0-tiny", verified: "2026-09-14"}
+        "sampling.top_k": {url: "https://huggingface.co/inclusionAI/Ling-3.0-tiny", verified: "2026-09-14"}
+        "sampling.min_p": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
+        "sampling.presence_penalty": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
+        "sampling.repetition_penalty": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
+        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this family; -1 records the served behaviour (no -n/--n-predict flag is served, so the llama-server default, unrestricted), never a recommendation"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q6_K_XL.gguf
@@ -434,7 +464,17 @@ models:
         temperature: 1.0
         top_p: 0.95
         top_k: 20
-        source: "https://huggingface.co/inclusionAI/Ling-3.0-tiny (researched 2026-08-23)"
+      max_output:
+        reasoning_budget: -1
+        answer_tokens: -1
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/inclusionAI/Ling-3.0-tiny", verified: "2026-09-14"}
+        "sampling.top_p": {url: "https://huggingface.co/inclusionAI/Ling-3.0-tiny", verified: "2026-09-14"}
+        "sampling.top_k": {url: "https://huggingface.co/inclusionAI/Ling-3.0-tiny", verified: "2026-09-14"}
+        "sampling.min_p": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
+        "sampling.presence_penalty": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
+        "sampling.repetition_penalty": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
+        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this family; -1 records the served behaviour (no -n/--n-predict flag is served, so the llama-server default, unrestricted), never a recommendation"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q8_0.gguf
@@ -476,7 +516,17 @@ models:
         temperature: 1.0
         top_p: 0.95
         top_k: 64
-        source: "https://huggingface.co/google/gemma-4-12B-it (researched 2026-08-23)"
+      max_output:
+        reasoning_budget: -1
+        answer_tokens: -1
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/google/gemma-4-12B-it", verified: "2026-09-14"}
+        "sampling.top_p": {url: "https://huggingface.co/google/gemma-4-12B-it", verified: "2026-09-14"}
+        "sampling.top_k": {url: "https://huggingface.co/google/gemma-4-12B-it", verified: "2026-09-14"}
+        "sampling.min_p": {url: "none", reason: "the card's Best Practices state only temperature/top_p/top_k; the unsloth gemma-4-12B-it-qat GGUF card, the unsloth Gemma 4 guide and the vLLM Gemma 4 recipe all state none"}
+        "sampling.presence_penalty": {url: "none", reason: "the card's Best Practices state only temperature/top_p/top_k; the unsloth gemma-4-12B-it-qat GGUF card, the unsloth Gemma 4 guide and the vLLM Gemma 4 recipe all state none"}
+        "sampling.repetition_penalty": {url: "none", reason: "the card's Best Practices state only temperature/top_p/top_k; the unsloth gemma-4-12B-it-qat GGUF card, the unsloth Gemma 4 guide and the vLLM Gemma 4 recipe all state none"}
+        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this family; -1 records the served behaviour (no -n/--n-predict flag is served, so the llama-server default, unrestricted), never a recommendation"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf
@@ -543,7 +593,17 @@ models:
         min_p: 0.0
         presence_penalty: 1.5
         repetition_penalty: 1.0
-        source: "https://huggingface.co/Qwen/Qwen3.6-35B-A3B (researched 2026-08-23)"
+      max_output:
+        reasoning_budget: -1
+        answer_tokens: 32768
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.6-35B-A3B", verified: "2026-09-14"}
+        "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.6-35B-A3B", verified: "2026-09-14"}
+        "sampling.top_k": {url: "https://huggingface.co/Qwen/Qwen3.6-35B-A3B", verified: "2026-09-14"}
+        "sampling.min_p": {url: "https://huggingface.co/Qwen/Qwen3.6-35B-A3B", verified: "2026-09-14"}
+        "sampling.presence_penalty": {url: "https://huggingface.co/Qwen/Qwen3.6-35B-A3B", verified: "2026-09-14"}
+        "sampling.repetition_penalty": {url: "https://huggingface.co/Qwen/Qwen3.6-35B-A3B", verified: "2026-09-14"}
+        "max_output.answer_tokens": {url: "https://huggingface.co/Qwen/Qwen3.6-35B-A3B", verified: "2026-09-14"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
@@ -612,13 +672,26 @@ models:
         mtp: true
         moe_cpu_offload_layers: 18
         ubatch: 2048
-      # Advisory provenance (docs/model-capabilities.md): the gemma4 family card's recommended
-      # sampling, carried from `gemma-4-12b-qat` — no 26B-A4B-specific card source verified yet.
+      # Advisory provenance (docs/model-capabilities.md): re-verified 2026-09-14 against this
+      # model's OWN card (google/gemma-4-26B-A4B-it) during the recipe audit
+      # (plans/bench-dashboard-serving-control.md WP-2) — the values are unchanged from the
+      # gemma4 family set carried from `gemma-4-12b-qat`, but they are no longer carried: the
+      # 26B-A4B card states the same standardized sampling configuration itself.
       sampling:
         temperature: 1.0
         top_p: 0.95
         top_k: 64
-        source: "https://huggingface.co/google/gemma-4-12B-it (researched 2026-08-23; same-family card, carried from gemma-4-12b-qat)"
+      max_output:
+        reasoning_budget: -1
+        answer_tokens: -1
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/google/gemma-4-26B-A4B-it", verified: "2026-09-14"}
+        "sampling.top_p": {url: "https://huggingface.co/google/gemma-4-26B-A4B-it", verified: "2026-09-14"}
+        "sampling.top_k": {url: "https://huggingface.co/google/gemma-4-26B-A4B-it", verified: "2026-09-14"}
+        "sampling.min_p": {url: "none", reason: "the card's Best Practices state only temperature/top_p/top_k; the unsloth gemma-4-26B-A4B-it-qat GGUF card, the unsloth Gemma 4 guide and the vLLM Gemma 4 recipe all state none"}
+        "sampling.presence_penalty": {url: "none", reason: "the card's Best Practices state only temperature/top_p/top_k; the unsloth gemma-4-26B-A4B-it-qat GGUF card, the unsloth Gemma 4 guide and the vLLM Gemma 4 recipe all state none"}
+        "sampling.repetition_penalty": {url: "none", reason: "the card's Best Practices state only temperature/top_p/top_k; the unsloth gemma-4-26B-A4B-it-qat GGUF card, the unsloth Gemma 4 guide and the vLLM Gemma 4 recipe all state none"}
+        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this family; -1 records the served behaviour (no -n/--n-predict flag is served, so the llama-server default, unrestricted), never a recommendation"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf
@@ -679,7 +752,17 @@ models:
         min_p: 0.0
         presence_penalty: 0.0
         repetition_penalty: 1.0
-        source: "https://huggingface.co/Qwen/Qwen3.8-27B (researched 2026-08-23)"
+      max_output:
+        reasoning_budget: -1
+        answer_tokens: 131072
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.top_k": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.min_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.presence_penalty": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.repetition_penalty": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "max_output.answer_tokens": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_XXS.gguf
@@ -756,7 +839,17 @@ models:
         min_p: 0.0
         presence_penalty: 0.0
         repetition_penalty: 1.0
-        source: "https://huggingface.co/Qwen/Qwen3.8-27B (researched 2026-08-23)"
+      max_output:
+        reasoning_budget: 8192
+        answer_tokens: 131072
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.top_k": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.min_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.presence_penalty": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.repetition_penalty": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "max_output.answer_tokens": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
     # ── Runaway-output backstop (plans/local-leg-claude-code-serving-fit.md WP-2, 2026-09-12) ──
     # This is the id Claude Code's local leg runs on by default, and an unbounded reasoning run on
     # it reached 22,159 output tokens against Claude Code's 32,000-token CLIENT ceiling (the
@@ -814,7 +907,17 @@ models:
         min_p: 0.0
         presence_penalty: 0.0
         repetition_penalty: 1.0
-        source: "https://huggingface.co/Qwen/Qwen3.8-27B (researched 2026-08-23)"
+      max_output:
+        reasoning_budget: -1
+        answer_tokens: 131072
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.top_k": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.min_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.presence_penalty": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.repetition_penalty": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "max_output.answer_tokens": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q3_K_XL.gguf
@@ -911,7 +1014,17 @@ models:
         min_p: 0.0
         presence_penalty: 0.0
         repetition_penalty: 1.0
-        source: "https://huggingface.co/Qwen/Qwen3.8-27B (researched 2026-08-23)"
+      max_output:
+        reasoning_budget: -1
+        answer_tokens: 131072
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.top_k": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.min_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.presence_penalty": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.repetition_penalty": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "max_output.answer_tokens": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf
@@ -948,7 +1061,17 @@ models:
         min_p: 0.0
         presence_penalty: 0.0
         repetition_penalty: 1.0
-        source: "https://huggingface.co/Qwen/Qwen3.8-27B (researched 2026-08-23)"
+      max_output:
+        reasoning_budget: 1024
+        answer_tokens: 131072
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.top_k": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.min_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.presence_penalty": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.repetition_penalty": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "max_output.answer_tokens": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf
@@ -986,7 +1109,17 @@ models:
         min_p: 0.0
         presence_penalty: 0.0
         repetition_penalty: 1.0
-        source: "https://huggingface.co/Qwen/Qwen3.8-27B (researched 2026-08-23)"
+      max_output:
+        reasoning_budget: 4096
+        answer_tokens: 131072
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.top_k": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.min_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.presence_penalty": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.repetition_penalty": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "max_output.answer_tokens": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf
@@ -1024,7 +1157,17 @@ models:
         min_p: 0.0
         presence_penalty: 0.0
         repetition_penalty: 1.0
-        source: "https://huggingface.co/Qwen/Qwen3.8-27B (researched 2026-08-23)"
+      max_output:
+        reasoning_budget: -1
+        answer_tokens: 131072
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.top_k": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.min_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.presence_penalty": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "sampling.repetition_penalty": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
+        "max_output.answer_tokens": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf

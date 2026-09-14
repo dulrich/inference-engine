@@ -1,0 +1,89 @@
+{
+  "schema": "serving-visibility-v1",
+  "models": {
+    "bge-m3-f16": {
+      "gateway_id": null,
+      "consumers": []
+    },
+    "bge-reranker-v2-m3-Q8_0": {
+      "gateway_id": null,
+      "consumers": []
+    },
+    "bge-small-en-v1.5-f16": {
+      "gateway_id": null,
+      "consumers": []
+    },
+    "nemotron-3-nano-4B-UD-Q4_K_XL": {
+      "gateway_id": "nemotron-4b",
+      "consumers": [
+        "openwebui"
+      ]
+    },
+    "Ling-3.0-tiny-UD-Q4_K_XL": {
+      "gateway_id": null,
+      "consumers": [
+        "openwebui"
+      ]
+    },
+    "Ling-3.0-tiny-UD-Q6_K_XL": {
+      "gateway_id": null,
+      "consumers": []
+    },
+    "Ling-3.0-tiny-Q8_0": {
+      "gateway_id": null,
+      "consumers": []
+    },
+    "gemma-4-12B-it-qat-UD-Q4_K_XL": {
+      "gateway_id": null,
+      "consumers": [
+        "openwebui"
+      ]
+    },
+    "Qwen3.6-35B-A3B-UD-Q4_K_XL": {
+      "gateway_id": "qwen36-a3b",
+      "consumers": [
+        "cc",
+        "openwebui"
+      ]
+    },
+    "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL": {
+      "gateway_id": null,
+      "consumers": [
+        "openwebui"
+      ]
+    },
+    "Qwen3.8-27B-UD-IQ3_XXS": {
+      "gateway_id": null,
+      "consumers": [
+        "openwebui"
+      ]
+    },
+    "Qwen3.8-27B-UD-IQ3_S": {
+      "gateway_id": "qwen38-27b-iq3s",
+      "consumers": [
+        "cc",
+        "openwebui"
+      ]
+    },
+    "Qwen3.8-27B-UD-Q3_K_XL": {
+      "gateway_id": null,
+      "consumers": []
+    },
+    "Qwen3.8-27B-UD-IQ3_S-reasoning-off": {
+      "gateway_id": "qwen38-27b-iq3s-off",
+      "consumers": []
+    },
+    "Qwen3.8-27B-UD-IQ3_S-reasoning-low": {
+      "gateway_id": "qwen38-27b-iq3s-low",
+      "consumers": []
+    },
+    "Qwen3.8-27B-UD-IQ3_S-reasoning-medium": {
+      "gateway_id": "qwen38-27b-iq3s-medium",
+      "consumers": []
+    },
+    "Qwen3.8-27B-UD-IQ3_S-reasoning-high": {
+      "gateway_id": "qwen38-27b-iq3s-high",
+      "consumers": []
+    }
+  }
+}

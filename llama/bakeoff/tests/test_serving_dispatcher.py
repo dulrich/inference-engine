@@ -36,6 +36,10 @@ from control_store import flock_nonblocking_acquire, flock_release  # noqa: E402
 
 FIXTURES = REPO_ROOT / "dashboard" / "apps" / "api" / "fixtures" / "serving" / "contract-v1"
 DECLARATION_PATH = REPO_ROOT / "router" / "visibility.json"
+# A FROZEN copy of the declaration, committed beside the dashboard fixtures. The status fixture is
+# pinned to THIS, never to the live `router/visibility.json`, so a live visibility toggle is a
+# one-file commit instead of a fixture refresh. It is a sample, never re-synced by a toggle.
+SAMPLE_DECLARATION_PATH = FIXTURES / "router" / "visibility.sample.json"
 WRAPPER = BAKEOFF_DIR / "serving-dispatch.sh"
 
 NOW = datetime(2026, 9, 13, 12, 0, 0, tzinfo=timezone.utc)
@@ -65,6 +69,10 @@ class _Recorder:
 
 def _declaration() -> dict:
     return json.loads(DECLARATION_PATH.read_text(encoding="utf-8"))
+
+
+def _sample_declaration() -> dict:
+    return json.loads(SAMPLE_DECLARATION_PATH.read_text(encoding="utf-8"))
 
 
 def _fixture_bytes(*parts: str) -> bytes:
@@ -167,12 +175,23 @@ class TestCrossLanguageContract(unittest.TestCase):
         self.assertEqual(sp.validate_status_file(bad), f"status schema is not {sp.SCHEMA_STATUS}")
 
     def test_the_status_fixture_carries_the_declarations_own_matrix(self):
-        """Drift alarm: WP-4's fixture claims to be `router/visibility.json`'s map verbatim, and
-        this plane re-publishes that map as the chips' only source of truth."""
+        """Drift alarm, pinned to the FROZEN SAMPLE (`router/visibility.sample.json`) rather than
+        to the live `router/visibility.json`: the fixture claims to be a declaration's map
+        verbatim, and this plane re-publishes that map as the chips' only source of truth. The two
+        files move together as one committed pair; a live visibility toggle does not touch
+        either."""
         status = json.loads(_fixture_bytes("control", "host", "serving-status.json"))
-        models = _declaration()["models"]
+        models = _sample_declaration()["models"]
         self.assertEqual(list(status["visibility"]), list(models))
         self.assertEqual(status["visibility"], models)
+
+    def test_compose_status_publishes_the_sample_declarations_map_verbatim(self):
+        """The publisher still round-trips: the sample is a valid `serving-visibility-v1` document,
+        and composing a status from it reproduces the fixture's `visibility` block exactly."""
+        sample = _sample_declaration()
+        self.assertIsNotNone(sp.declared_models(sample))
+        status = json.loads(_fixture_bytes("control", "host", "serving-status.json"))
+        self.assertEqual(sp.compose_status(sample, [], NOW)["visibility"], status["visibility"])
 
     def test_compose_status_reproduces_the_fixtures_shape(self):
         body = sp.compose_status(_declaration(), [], NOW)

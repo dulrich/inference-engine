@@ -1316,13 +1316,22 @@ async function handleMessages(ctx, persona, body, req, res) {
   // every attached connection receives the same outcome. Only a genuinely different second
   // request still supersedes the older one loudly (409 + `http-error` row).
   const token = {
-    reqId, mode,
+    reqId, mode, nMessages: msgs.length,
     // ids only for the straggler guards ("every id it echoes is already answered"); they are
     // never the identity — the digest is.
     toolResultIds: toolResults.map(tr => tr.tool_use_id).filter(Boolean).sort(),
     digest: requestDigest({
       model: body.model, effort: eff.effort, system: systemText, tools: body.tools ?? [], messages: msgs,
     }),
+    // Diagnostic (2026-09-14): per-component digests, logged on `superseded-request` only, so a
+    // storm of shape-identical non-joining duplicates names the component that differs.
+    parts: {
+      model: shortDigest(requestDigest({ model: body.model })),
+      effort: shortDigest(requestDigest({ effort: eff.effort })),
+      system: shortDigest(requestDigest({ system: systemText })),
+      tools: shortDigest(requestDigest({ tools: body.tools ?? [] })),
+      messages: shortDigest(requestDigest({ messages: msgs })),
+    },
   };
   const superseded = () => new SidecarError(409, "api_error", "superseded by a newer request on this session");
 
@@ -1394,7 +1403,7 @@ async function handleMessages(ctx, persona, body, req, res) {
 
   if (sess.owner) {
     const oldOwner = sess.owner;
-    ctx.logger.write("superseded-request", { persona: persona.name, key, reqId, supersededReqId: oldOwner.reqId, mode });
+    ctx.logger.write("superseded-request", { persona: persona.name, key, reqId, supersededReqId: oldOwner.reqId, mode, nMessages: msgs.length, ownerNMessages: oldOwner.nMessages, reqDigest: shortDigest(token.digest), ownerDigest: shortDigest(oldOwner.digest), parts: token.parts, ownerParts: oldOwner.parts });
     // A superseded owner takes its joiners with it (audit defect B3). They joined *that*
     // request; they are no audience for this one, and leaving them attached would deliver
     // this request's text and outcome to a connection that never asked for it.

@@ -47,6 +47,36 @@ export type ServingFlags = z.infer<typeof ServingFlagsSchema>;
 // pins both vocabularies "append-only": a future value this not-yet-updated dashboard
 // doesn't recognize must still round-trip and render as its own label (CC-04: the label
 // text IS the information), never fail closed on an unknown-but-valid wire value.
+// Advisory-value provenance (WP-1, `plans/bench-dashboard-serving-control.md`) -- the
+// `metadata.sources` map in `llama/config.yaml`, keyed by DOTTED FIELD PATH in the YAML's own
+// spelling (`sampling.temperature` ... `max_output.answer_tokens`), never camelCased: the key IS
+// the contract-doc field name, so it stays byte-identical to what `docs/model-capabilities.md`
+// and `/v1/models` carry. Two shapes: a citation (`{url, verified}`) or an explicit gap
+// (`{url: "none", reason}`) -- "the card is silent" is a recorded research result, not a hole.
+//
+// `verified` is a bare `YYYY-MM-DD` date, pinned by the exported pattern below so the wire
+// schema and `dashboard/scripts/check-serving-recipes.ts` cannot drift into two spellings of
+// "the date this was checked" (an ISO timestamp and a free-text "researched 2026-08-23" are
+// both rejected here). Provenance covers the ADVISORY values only -- projections of the served
+// `cmd:` cite nothing and are gate-checked against the flag instead.
+export const SERVING_VERIFIED_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+export const ServingSourceSchema = z.union([
+  z.object({
+    url: z.literal("none"),
+    reason: z.string(),
+    // `.nullish()`, not `.default(null)`: a gap record simply omits `verified`, and the reader
+    // carries entries through verbatim, so "absent" must stay a representable output state.
+    verified: z.string().regex(SERVING_VERIFIED_DATE_PATTERN).nullish(),
+  }),
+  z.object({
+    url: z.string(),
+    verified: z.string().regex(SERVING_VERIFIED_DATE_PATTERN),
+    reason: z.string().nullish(),
+  }),
+]);
+export type ServingSource = z.infer<typeof ServingSourceSchema>;
+
 export const ServingCapabilitySchema = z.object({
   contextLength: z.number().int().nullable(),
   inputModalities: z.array(z.string()).default([]),
@@ -61,7 +91,41 @@ export const ServingCapabilitySchema = z.object({
     // Optional serving keys (contract doc: "absent means macro default, never unknown").
     moeCpuOffloadLayers: z.number().int().nullable().default(null),
     ubatch: z.number().int().nullable().default(null),
+    reasoningMode: z.string().nullable().default(null),
+    reasoningBudget: z.number().int().nullable().default(null),
   }),
+  // Additive (WP-1), every one `.nullable().default(null)`-widened exactly as `capability`
+  // itself is on `ServingAliasSchema` below: a pre-WP-1 `GET /api/serving` payload that
+  // carries none of these three still round-trips, so nothing on the wire breaks ahead of the
+  // recipe audit (WP-2) that fills them in.
+  //
+  // `sampling` stays SIX FLAT SCALARS and `sources` sits BESIDE it, never inside it: the Open
+  // WebUI sync writes these six straight into `params` and obsidian-crucible reads the
+  // `meta.llamaswap.*` scalars directly (`docs/model-capabilities.md`), so nesting provenance
+  // under a sampling key would be a breaking wire change for both consumers.
+  sampling: z
+    .object({
+      temperature: z.number().nullable().default(null),
+      topP: z.number().nullable().default(null),
+      topK: z.number().int().nullable().default(null),
+      minP: z.number().nullable().default(null),
+      presencePenalty: z.number().nullable().default(null),
+      repetitionPenalty: z.number().nullable().default(null),
+    })
+    .nullable()
+    .default(null),
+  // `reasoningBudget` mirrors `serving.reasoningBudget` (a projection of `--reasoning-budget`,
+  // `-1` when the flag is absent); `answerTokens` is the card/recipe-recommended answer cap and
+  // is advisory like `sampling`. Two independent server controls (`--reasoning-budget` and
+  // `-n`), so never one collapsed integer.
+  maxOutput: z
+    .object({
+      reasoningBudget: z.number().int().nullable().default(null),
+      answerTokens: z.number().int().nullable().default(null),
+    })
+    .nullable()
+    .default(null),
+  sources: z.record(z.string(), ServingSourceSchema).nullable().default(null),
 });
 export type ServingCapability = z.infer<typeof ServingCapabilitySchema>;
 

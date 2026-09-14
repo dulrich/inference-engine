@@ -107,7 +107,16 @@ describe("readServingConfig", () => {
         mtp: false,
         moeCpuOffloadLayers: 8,
         ubatch: 2048,
+        reasoningMode: null,
+        reasoningBudget: null,
       },
+      // WP-1 (`plans/bench-dashboard-serving-control.md`): absent `sampling:`/`max_output:`/
+      // `sources:` blocks resolve to `null`, never `{}` -- "no recipe research yet" is a
+      // different fact from "researched, and the card is silent", which is what a `sources`
+      // entry with `url: "none"` records.
+      sampling: null,
+      maxOutput: null,
+      sources: null,
     });
   });
 
@@ -127,7 +136,39 @@ describe("readServingConfig", () => {
         mtp: false,
         moeCpuOffloadLayers: null,
         ubatch: null,
+        reasoningMode: null,
+        reasoningBudget: null,
       },
+      sampling: null,
+      maxOutput: null,
+      sources: null,
+    });
+  });
+
+  // WP-1 (`plans/bench-dashboard-serving-control.md`): the advisory block and its provenance
+  // map reach the parsed capability at all -- `sampling` camelCased leaf by leaf, `sources`
+  // carried through VERBATIM (dotted YAML keys, unnormalized entries), because validating
+  // provenance belongs to `scripts/check-serving-recipes.ts` and a reader that repaired a
+  // malformed entry would make that gate blind to it.
+  test("carries sampling, max_output and the sources provenance map through to capability", async () => {
+    const response = await readServingConfig(join(import.meta.dir, "../../fixtures/serving/conforming.yaml"));
+    const chat = response.models.find((m) => m.modelKey === "fixture-chat-UD-Q4_K_XL");
+    expect(chat?.capability?.sampling).toEqual({
+      temperature: 0.6,
+      topP: 0.95,
+      topK: 20,
+      minP: 0,
+      presencePenalty: null,
+      repetitionPenalty: null,
+    });
+    expect(chat?.capability?.maxOutput).toEqual({ reasoningBudget: -1, answerTokens: 32768 });
+    expect(chat?.capability?.sources?.["sampling.temperature"]).toEqual({
+      url: "https://huggingface.co/fixturelab/Fixture-Chat-12B",
+      verified: "2026-09-13",
+    });
+    expect(chat?.capability?.sources?.["sampling.presence_penalty"]).toEqual({
+      url: "none",
+      reason: "the card is silent on this value",
     });
   });
 

@@ -193,8 +193,80 @@ describe("ServingResponseSchema", () => {
         },
       ],
     };
+    // A pre-WP-1 capability payload -- no `sampling`, no `maxOutput`, no `sources`, and no
+    // `serving.reasoningMode`/`reasoningBudget`. It still round-trips (that is the additive
+    // wire invariant), with every WP-1 field widened in as `null` rather than rejected.
     const parsed = ServingResponseSchema.parse(response);
-    expect(parsed.models[0]?.capability).toEqual(response.models[0]?.capability);
+    expect(parsed.models[0]?.capability).toMatchObject(response.models[0]?.capability ?? {});
+    expect(parsed.models[0]?.capability?.sampling).toBeNull();
+    expect(parsed.models[0]?.capability?.maxOutput).toBeNull();
+    expect(parsed.models[0]?.capability?.sources).toBeNull();
+    expect(parsed.models[0]?.capability?.serving.reasoningMode).toBeNull();
+  });
+
+  // WP-1 (`plans/bench-dashboard-serving-control.md`): the advisory block and its provenance.
+  // `sources` is a SIBLING of `sampling`, keyed by dotted field path -- never nested inside
+  // `sampling`, whose six leaves stay plain scalars for the Open WebUI sync and obsidian-crucible.
+  test("round-trips the WP-1 advisory block: sampling scalars, maxOutput, and the sources map", () => {
+    const capability = {
+      contextLength: 131072,
+      inputModalities: ["text"],
+      outputModalities: ["text"],
+      toolCalling: true,
+      reasoning: "budgeted",
+      serving: {
+        quant: "UD-IQ3_S",
+        kvCacheType: "q4_0",
+        flashAttention: true,
+        mtp: false,
+        moeCpuOffloadLayers: null,
+        ubatch: null,
+        reasoningMode: null,
+        reasoningBudget: 8192,
+      },
+      sampling: {
+        temperature: 0.6,
+        topP: 0.95,
+        topK: 20,
+        minP: 0,
+        presencePenalty: null,
+        repetitionPenalty: null,
+      },
+      maxOutput: { reasoningBudget: 8192, answerTokens: 32768 },
+      sources: {
+        "sampling.temperature": { url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-13", reason: null },
+        "sampling.presence_penalty": { url: "none" as const, reason: "the card is silent on this value", verified: null },
+      },
+    };
+    const response = {
+      configPath: "/fixtures/llama-config.yaml",
+      models: [
+        { modelKey: "Qwen3.8-27B-UD-IQ3_S", name: null, aliases: ["qwen38-27b-iq3s"], ttl: 1800, checkEndpoint: "/health",
+          flags: { contextLength: 131072, kvCacheTypeK: "q4_0", kvCacheTypeV: "q4_0", flashAttention: "on", gpuLayers: 99 },
+          capability },
+      ],
+    };
+    expect(ServingResponseSchema.parse(response).models[0]?.capability).toEqual(capability);
+  });
+
+  // Cycle-2 E3: `verified` is a bare `YYYY-MM-DD` date in exactly one spelling -- neither a
+  // boolean nor an ISO timestamp is a date this schema accepts.
+  test("rejects a `verified` that is not a YYYY-MM-DD string", () => {
+    const withVerified = (verified: unknown) => ({
+      configPath: "/fixtures/llama-config.yaml",
+      models: [
+        { modelKey: "m", name: null, aliases: ["a"], ttl: null, checkEndpoint: null,
+          flags: { contextLength: null, kvCacheTypeK: null, kvCacheTypeV: null, flashAttention: null, gpuLayers: null },
+          capability: {
+            contextLength: null, inputModalities: [], outputModalities: [], toolCalling: null, reasoning: null,
+            serving: { quant: null, kvCacheType: null, flashAttention: null, mtp: null },
+            sources: { "sampling.temperature": { url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified } },
+          } },
+      ],
+    });
+    expect(() => ServingResponseSchema.parse(withVerified("2026-09-13"))).not.toThrow();
+    expect(() => ServingResponseSchema.parse(withVerified(true))).toThrow();
+    expect(() => ServingResponseSchema.parse(withVerified("2026-09-13T00:00:00Z"))).toThrow();
   });
 
   test("accepts a `capability` entirely absent from the payload (backward-compat default)", () => {

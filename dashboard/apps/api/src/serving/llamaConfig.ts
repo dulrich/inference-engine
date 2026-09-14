@@ -5,6 +5,7 @@ import type {
   ServingFlags,
   ServingRecipe,
   ServingResponse,
+  ServingSource,
 } from "@bench-dashboard/shared";
 import { projectRecipe } from "./recipe.ts";
 
@@ -39,6 +40,20 @@ interface LlamaConfigCapabilityServing {
   mtp?: boolean;
   moe_cpu_offload_layers?: number;
   ubatch?: number;
+  reasoning_mode?: string;
+  reasoning_budget?: number;
+}
+interface LlamaConfigCapabilitySampling {
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  min_p?: number;
+  presence_penalty?: number;
+  repetition_penalty?: number;
+}
+interface LlamaConfigCapabilityMaxOutput {
+  reasoning_budget?: number;
+  answer_tokens?: number;
 }
 interface LlamaConfigCapability {
   context_length?: number;
@@ -47,6 +62,9 @@ interface LlamaConfigCapability {
   tool_calling?: boolean;
   reasoning?: string;
   serving?: LlamaConfigCapabilityServing;
+  sampling?: LlamaConfigCapabilitySampling;
+  max_output?: LlamaConfigCapabilityMaxOutput;
+  sources?: Record<string, ServingSource>;
 }
 interface LlamaConfigModel {
   name?: string;
@@ -180,7 +198,9 @@ function extractRecipe(cmdText: string): ServingRecipe {
   };
 }
 
-/** `metadata:` -> the typed capability block (WP-2, `docs/model-capabilities.md`). `null`
+/** `metadata:` -> the typed capability block (WP-2, `docs/model-capabilities.md`; extended by
+ * WP-1 of `plans/bench-dashboard-serving-control.md` with `sampling`, `max_output` and the
+ * `sources` provenance map, none of which this reader carried before). `null`
  * when a model carries no `metadata:` key at all -- a real serving fact for a config
  * predating WP-1, never a parse error. A present block is trusted field-by-field (WP-1's
  * exit bar already verifies every real served model's block is complete); any individual
@@ -203,7 +223,32 @@ function extractCapability(metadata: LlamaConfigCapability | undefined): Serving
       mtp: serving.mtp ?? null,
       moeCpuOffloadLayers: serving.moe_cpu_offload_layers ?? null,
       ubatch: serving.ubatch ?? null,
+      reasoningMode: serving.reasoning_mode ?? null,
+      reasoningBudget: serving.reasoning_budget ?? null,
     },
+    sampling:
+      metadata.sampling === undefined
+        ? null
+        : {
+            temperature: metadata.sampling.temperature ?? null,
+            topP: metadata.sampling.top_p ?? null,
+            topK: metadata.sampling.top_k ?? null,
+            minP: metadata.sampling.min_p ?? null,
+            presencePenalty: metadata.sampling.presence_penalty ?? null,
+            repetitionPenalty: metadata.sampling.repetition_penalty ?? null,
+          },
+    maxOutput:
+      metadata.max_output === undefined
+        ? null
+        : {
+            reasoningBudget: metadata.max_output.reasoning_budget ?? null,
+            answerTokens: metadata.max_output.answer_tokens ?? null,
+          },
+    // Carried through VERBATIM, entry for entry, with no normalization and nothing dropped:
+    // validating provenance is `dashboard/scripts/check-serving-recipes.ts`'s job, and a
+    // malformed entry that this reader silently repaired or discarded would be invisible to
+    // that gate. The reader's contract is "what the YAML says", same as every field above.
+    sources: metadata.sources ?? null,
   };
 }
 

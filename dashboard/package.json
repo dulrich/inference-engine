@@ -15,6 +15,7 @@
     "ingest": "bun run --filter '@bench-dashboard/api' ingest",
     "smoke": "bun run --filter '@bench-dashboard/api' smoke",
     "test": "bun test apps packages",
+    "check:recipes": "bun scripts/check-serving-recipes.ts",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc -p packages/shared/tsconfig.json && tsc -p apps/api/tsconfig.json && bun run --filter '@bench-dashboard/web' check",
     "test:theme": "bun packages/signalworks/scripts/check-contrast.mjs --signalworks packages/signalworks/css apps/web/src",

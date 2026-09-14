@@ -22,7 +22,12 @@ function capability(overrides: Partial<ServingCapability> = {}): ServingCapabili
       mtp: false,
       moeCpuOffloadLayers: null,
       ubatch: null,
+      reasoningMode: null,
+      reasoningBudget: null,
     },
+    sampling: null,
+    maxOutput: null,
+    sources: null,
     ...overrides,
   };
 }
@@ -70,7 +75,7 @@ describe("formatCapabilityServingSummary", () => {
 
   test("flash attention and MTP are only listed when true", () => {
     const summary = formatCapabilityServingSummary(
-      capability({ serving: { quant: "UD-IQ3_S", kvCacheType: "q4_0", flashAttention: true, mtp: false, moeCpuOffloadLayers: null, ubatch: null } }),
+      capability({ serving: { quant: "UD-IQ3_S", kvCacheType: "q4_0", flashAttention: true, mtp: false, moeCpuOffloadLayers: null, ubatch: null, reasoningMode: null, reasoningBudget: null } }),
     );
     expect(summary).toBe("131072 ctx · UD-IQ3_S · q4_0 kv · fa");
   });
@@ -78,7 +83,7 @@ describe("formatCapabilityServingSummary", () => {
   test("both optional serving keys append in order when present", () => {
     const summary = formatCapabilityServingSummary(
       capability({
-        serving: { quant: "UD-Q4_K_XL", kvCacheType: "f16", flashAttention: false, mtp: true, moeCpuOffloadLayers: 32, ubatch: 2048 },
+        serving: { quant: "UD-Q4_K_XL", kvCacheType: "f16", flashAttention: false, mtp: true, moeCpuOffloadLayers: 32, ubatch: 2048, reasoningMode: null, reasoningBudget: null },
       }),
     );
     expect(summary).toBe("131072 ctx · UD-Q4_K_XL · f16 kv · mtp · ncmoe 32 · ub 2048");
@@ -88,7 +93,7 @@ describe("formatCapabilityServingSummary", () => {
     const summary = formatCapabilityServingSummary(
       capability({
         contextLength: null,
-        serving: { quant: null, kvCacheType: null, flashAttention: null, mtp: null, moeCpuOffloadLayers: null, ubatch: null },
+        serving: { quant: null, kvCacheType: null, flashAttention: null, mtp: null, moeCpuOffloadLayers: null, ubatch: null, reasoningMode: null, reasoningBudget: null },
       }),
     );
     expect(summary).toBe("—");

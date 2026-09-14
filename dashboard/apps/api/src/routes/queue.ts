@@ -276,6 +276,8 @@ function projectControlLastRun(raw: unknown): unknown {
     endedAt: raw.ended_at,
     runExit: raw.run_exit,
     verifyExit: raw.verify_exit,
+    // Absent on a status.json written before the field existed -> null, never undefined.
+    restartFailed: raw.restart_failed ?? null,
     disposition: raw.disposition,
   };
 }

@@ -47,6 +47,9 @@ export const ControlLastRunSchema = z.object({
   endedAt: z.string(),
   runExit: z.number().int().nullable(),
   verifyExit: z.number().int().nullable(),
+  /** Router (GPU tier) restart failure after the run -- the detail string, or null. Non-null
+   * always pairs with a non-`clean` disposition (control_phases.map_last_run_disposition). */
+  restartFailed: z.string().nullable(),
   disposition: ControlLastRunDispositionSchema,
 });
 export type ControlLastRun = z.infer<typeof ControlLastRunSchema>;

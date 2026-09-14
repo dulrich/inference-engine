@@ -80,6 +80,7 @@ import argparse
 import json
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 # `sweep` and the `control_*` modules live beside this file with no package `__init__.py` under
@@ -191,6 +192,7 @@ def write_result(
     pid: Optional[int] = None, pgid: Optional[int] = None,
     pid_starttime: Optional[str] = None, boot_id: Optional[str] = None,
     run_exit: Optional[int] = None, verify_exit: Optional[int] = None,
+    restart_failed: Optional[str] = None,
     ended_at: Optional[str] = None, now_fn: Optional[Callable[[], datetime]] = None,
 ) -> Dict[str, Any]:
     """`results/<inv-id>.json` -- wrapper-owned evidence channel, stage advances via repeated
@@ -202,7 +204,7 @@ def write_result(
     existing["stage"] = stage
     for key, value in (
         ("pid", pid), ("pgid", pgid), ("pid_starttime", pid_starttime), ("boot_id", boot_id),
-        ("run_exit", run_exit), ("verify_exit", verify_exit),
+        ("run_exit", run_exit), ("verify_exit", verify_exit), ("restart_failed", restart_failed),
     ):
         if value is not None:
             existing[key] = value
@@ -310,10 +312,18 @@ def cmd_result_write(args: argparse.Namespace) -> int:
     boot_id = args.boot_id
     if boot_id is None and args.stage in ("wrapper-started",):
         boot_id = read_boot_id()
+    restart_failed = args.restart_failed
+    if restart_failed is None and args.restart_failure_file is not None:
+        # batch.py's `<stem>.restart-failure.json`; an unreadable file is itself the failure
+        # signal (the file only exists because the restart failed), never a reason to stay quiet.
+        record = read_json_safe(Path(args.restart_failure_file))
+        error = record.get("error") if isinstance(record, dict) else None
+        restart_failed = error if isinstance(error, str) and error else f"restart failed (unreadable record {args.restart_failure_file})"
     write_result(
         paths, args.invocation_id, args.stage,
         pid=args.pid, pgid=args.pgid, pid_starttime=pid_starttime, boot_id=boot_id,
-        run_exit=args.run_exit, verify_exit=args.verify_exit, ended_at=args.ended_at,
+        run_exit=args.run_exit, verify_exit=args.verify_exit, restart_failed=restart_failed,
+        ended_at=args.ended_at,
     )
     return 0
 
@@ -377,6 +387,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_result.add_argument("--boot-id", default=None, help="default: real /proc/sys/kernel/random/boot_id read")
     p_result.add_argument("--run-exit", type=int, default=None)
     p_result.add_argument("--verify-exit", type=int, default=None)
+    p_result.add_argument("--restart-failed", default=None, help="router restart failure detail (forces needs-attention)")
+    p_result.add_argument("--restart-failure-file", default=None, help="batch.py's <stem>.restart-failure.json; its `error` becomes --restart-failed")
     p_result.add_argument("--ended-at", default=None, help="default: now, only meaningful at --stage exited")
     p_result.set_defaults(func=cmd_result_write)
 

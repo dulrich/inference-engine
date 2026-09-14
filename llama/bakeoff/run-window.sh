@@ -76,6 +76,9 @@ if [ -z "${REQUEST_ID}" ]; then log "ERROR: missing required --request-id"; exit
 
 QUEUE_STEM="$(basename "${QUEUE}" .json)"
 STATE_FILE="$(dirname "${QUEUE}")/${QUEUE_STEM}.state.json"
+# Written by batch.py (record_restart_failure) when the post-run `docker start` of the GPU tier
+# failed; cleared by batch.py at the start of every run. Forwarded into results/<inv>.json.
+RESTART_FAILURE_FILE="$(dirname "${QUEUE}")/${QUEUE_STEM}.restart-failure.json"
 
 STATE_DIR="${BAKEOFF_STATE_DIR:-${HOME}/.local/state/inference-bakeoff}"
 export BAKEOFF_STATE_DIR="${STATE_DIR}"
@@ -196,11 +199,19 @@ verify_exit=$?
 log "batch verify exit=${verify_exit} (reports: ${RUN_DIR}/verify_report.{json,md})"
 
 # --- Step 8: publish exit evidence and clear liveness.
+RESTART_ARGS=()
+if [ -f "${RESTART_FAILURE_FILE}" ]; then
+    RESTART_ARGS=(--restart-failure-file "${RESTART_FAILURE_FILE}")
+fi
 CTL result-write --invocation-id "${REQUEST_ID}" --stage exited \
-    --run-exit "${run_exit}" --verify-exit "${verify_exit}"
+    --run-exit "${run_exit}" --verify-exit "${verify_exit}" "${RESTART_ARGS[@]}"
 CTL live-clear
 
 needs_attention=0
+if [ -f "${RESTART_FAILURE_FILE}" ]; then
+    log "NEEDS-ATTENTION: router container restart FAILED after the run -- the GPU tier is down until started by hand ($(cat "${RESTART_FAILURE_FILE}"))"
+    needs_attention=1
+fi
 if [ "${run_exit}" -ne 0 ]; then
     log "NEEDS-ATTENTION: batch run exited ${run_exit} (hang-abort or interruption)"
     needs_attention=1

@@ -317,6 +317,7 @@ describe("buildControlSection", () => {
       endedAt: "2026-08-22T23:59:00Z",
       runExit: 0,
       verifyExit: 0,
+      restartFailed: null,
       disposition: "clean",
     });
     expect(section.requests).toHaveLength(1);
@@ -331,6 +332,23 @@ describe("buildControlSection", () => {
     const section = await buildControlSection(dir);
     expect(section).not.toBeNull();
     expect(section?.stale).toBe(true);
+  });
+
+  test("a restart failure survives projection and pairs with needs-attention", async () => {
+    const dir = makeControlHostDir("restart-failed");
+    const body = validStatusBody(new Date().toISOString());
+    body.last_run = {
+      request_id: "req-20260914T000000Z-fedcba9876543210",
+      ended_at: "2026-09-14T02:00:00Z",
+      run_exit: 0,
+      verify_exit: 0,
+      restart_failed: "CalledProcessError: Command '['docker', 'start', 'inference-engine-llama']' returned non-zero exit status 1.",
+      disposition: "needs-attention",
+    };
+    writeStatus(dir, body);
+    const section = await buildControlSection(dir);
+    expect(section?.lastRun?.restartFailed).toMatch(/docker.*start/);
+    expect(section?.lastRun?.disposition).toBe("needs-attention");
   });
 
   test("null live/lastRun round-trip as null, not dropped", async () => {

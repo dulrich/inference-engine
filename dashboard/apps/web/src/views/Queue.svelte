@@ -274,6 +274,12 @@
               {lastRunDispositionLabel(control.lastRun.disposition)}
             </span>
           </div>
+          {#if control.lastRun.restartFailed !== null}
+            <div class="field">
+              <span>Router restart</span>
+              <span class="pill pill-error" title={control.lastRun.restartFailed}>failed — GPU tier is down until started by hand</span>
+            </div>
+          {/if}
         {/if}
       </section>
 

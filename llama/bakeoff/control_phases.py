@@ -397,14 +397,18 @@ def terminalize_phase(
 # -------------------------------------------------------------------------------------------
 
 
-def map_last_run_disposition(run_exit: Optional[int], verify_exit: Optional[int], late_launch: bool) -> str:
+def map_last_run_disposition(
+    run_exit: Optional[int], verify_exit: Optional[int], late_launch: bool, restart_failed: Optional[str] = None,
+) -> str:
     """Pinned (WP-3 brief): `clean` iff both exit codes are exactly 0 (a deadline/stop pause is a
     NORMAL `batch run` exit-0 outcome, not a needs-attention condition on its own -- queue state
     is surfaced separately); a `late-launch-after-terminal` anomaly attached to the run always
-    forces `needs-attention` even over a clean exit pair; anything else needs attention.
-    `crashed` is never returned here -- it's janitor-composed only, from a dead group with no
-    `stage:"exited"` result at all."""
-    if late_launch:
+    forces `needs-attention` even over a clean exit pair; a recorded router-restart failure
+    (`restart_failed`, plan restart-failure-surfacing WP-1) likewise forces `needs-attention`
+    over a clean exit pair -- the GPU tier is down and `restart: unless-stopped` will not bring
+    it back; anything else needs attention. `crashed` is never returned here -- it's
+    janitor-composed only, from a dead group with no `stage:"exited"` result at all."""
+    if late_launch or restart_failed:
         return "needs-attention"
     if run_exit == 0 and verify_exit == 0:
         return "clean"
@@ -414,6 +418,7 @@ def map_last_run_disposition(run_exit: Optional[int], verify_exit: Optional[int]
 def compose_last_run(
     paths: Paths, now_fn: Callable[[], datetime],
     late_launch_ids: Set[str], janitor_crash_invocation_id: Optional[str] = None,
+    janitor_restart_failed: Optional[str] = None,
 ) -> None:
     """Composes `last-run.json` from the NEWEST terminal evidence across every
     `results/*.json` at `stage:"exited"` plus (if given) a freshly-janitor-detected crash --
@@ -430,17 +435,21 @@ def compose_last_run(
             continue
         inv_id = result.get("invocation_id") or result_file.stem
         run_exit, verify_exit = result.get("run_exit"), result.get("verify_exit")
+        restart_failed = result.get("restart_failed")
+        restart_failed = restart_failed if isinstance(restart_failed, str) and restart_failed else None
         candidates.append({
             "invocation_id": inv_id, "request_id": inv_id,
             "ended_at": result.get("ended_at"),
             "run_exit": run_exit, "verify_exit": verify_exit,
-            "disposition": map_last_run_disposition(run_exit, verify_exit, inv_id in late_launch_ids),
+            "restart_failed": restart_failed,
+            "disposition": map_last_run_disposition(run_exit, verify_exit, inv_id in late_launch_ids, restart_failed),
         })
     if janitor_crash_invocation_id is not None:
         candidates.append({
             "invocation_id": janitor_crash_invocation_id, "request_id": janitor_crash_invocation_id,
             "ended_at": iso_z(now_fn()),
-            "run_exit": None, "verify_exit": None, "disposition": "crashed",
+            "run_exit": None, "verify_exit": None,
+            "restart_failed": janitor_restart_failed, "disposition": "crashed",
         })
     if not candidates:
         return
@@ -505,11 +514,24 @@ def janitor_phase(
             teardown_fn(port, container=scratch_container)
         except Exception:  # noqa: BLE001
             pass
+    # Never block recovery on a failed restart attempt -- but record it: the default
+    # `router_start_fn` is `subprocess.run([...], check=False)`, so failure arrives as a nonzero
+    # `returncode`, not an exception; a custom seam may raise instead. Both become one anomaly
+    # line and ride into `last-run.json` (plan restart-failure-surfacing WP-1).
+    restart_failed: Optional[str] = None
     try:
-        router_start_fn(router_container)
-    except Exception:  # noqa: BLE001 -- never block termination on a failed restart attempt
-        pass
-    compose_last_run(paths, now_fn, late_launch_ids, janitor_crash_invocation_id=live.get("invocation_id"))
+        started = router_start_fn(router_container)
+        returncode = getattr(started, "returncode", 0)
+        if isinstance(returncode, int) and returncode != 0:
+            restart_failed = f"docker start {router_container} exited {returncode}"
+    except Exception as exc:  # noqa: BLE001
+        restart_failed = f"docker start {router_container}: {type(exc).__name__}: {exc}"
+    if restart_failed is not None:
+        anomalies.append(f"router-restart-failed: {restart_failed}")
+    compose_last_run(
+        paths, now_fn, late_launch_ids,
+        janitor_crash_invocation_id=live.get("invocation_id"), janitor_restart_failed=restart_failed,
+    )
     try:
         paths.live_path.unlink()
     except FileNotFoundError:
@@ -593,6 +615,7 @@ def compose_status(
         last_run = {
             "request_id": last_run_raw.get("request_id"), "ended_at": last_run_raw.get("ended_at"),
             "run_exit": last_run_raw.get("run_exit"), "verify_exit": last_run_raw.get("verify_exit"),
+            "restart_failed": last_run_raw.get("restart_failed"),
             "disposition": last_run_raw.get("disposition"),
         }
     status = {

@@ -116,6 +116,7 @@ describe("status.json: the file Python writes and this API reads", () => {
       endedAt: "2026-08-27T09:00:00Z",
       runExit: 0,
       verifyExit: 0,
+      restartFailed: null,
       disposition: "clean",
     });
     expect(section.anomalies).toEqual([]);

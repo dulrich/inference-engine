@@ -167,6 +167,38 @@ MODULE_DIR = Path(__file__).resolve().parent
 # -------------------------------------------------------------------------------------------
 
 
+def restart_failure_path(state_path: Path) -> Path:
+    """`<stem>.restart-failure.json` beside the queue's `<stem>.state.json` -- the durable
+    record that the post-run router restart failed. `run-window.sh` derives the same path from
+    `QUEUE_STEM` and forwards it to `result-write`."""
+    name = state_path.name
+    stem = name[: -len(".state.json")] if name.endswith(".state.json") else state_path.stem
+    return state_path.with_name(f"{stem}.restart-failure.json")
+
+
+def clear_restart_failure(state_path: Path) -> None:
+    """Runs at the top of every run so a previous window's record can never be re-reported."""
+    try:
+        restart_failure_path(state_path).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def record_restart_failure(
+    state_path: Path, container: Optional[str], exc: BaseException, now_fn: Callable[[], datetime],
+) -> Dict[str, Any]:
+    record = {
+        "container": container,
+        "error": f"{type(exc).__name__}: {exc}",
+        "at": now_fn().isoformat().replace("+00:00", "Z"),
+    }
+    path = restart_failure_path(state_path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+    return record
+
+
 class ContainerController:
     """Real `docker stop`/`docker start` against the router container. Only ever constructed and
     invoked by `cmd_run` for a non-dry-run CLI invocation -- `run_queue` itself just calls
@@ -440,6 +472,8 @@ def _run_resolved_queue(
     # before anything (container stop, first cell) happens.
     sweep.compute_vram_budget_bytes(effective_vram_profile, vram_total_bytes_fn, vram_used_bytes_fn)
 
+    restart_failure: Optional[Dict[str, Any]] = None
+    clear_restart_failure(state_path)
     if container_controller is not None:
         container_controller.stop()
     old_handlers = _install_signal_traps()
@@ -521,11 +555,18 @@ def _run_resolved_queue(
         if container_controller is not None:
             try:
                 container_controller.start()
-            except Exception:  # noqa: BLE001 -- see below
-                pass  # never block termination on a failed restart attempt
+            except Exception as exc:  # noqa: BLE001 -- see below
+                # Never block termination on a failed restart attempt -- but never be silent
+                # about it either: the maintenance window explicitly `docker stop`ped the whole
+                # GPU tier and `restart: unless-stopped` will NOT bring it back, so a failed
+                # start leaves the tier down until a human notices. The record written here is
+                # what `run-window.sh` forwards into `results/<inv>.json` -> `last-run.json` ->
+                # the dashboard's disposition pill (plan restart-failure-surfacing WP-1).
+                restart_failure = record_restart_failure(state_path, getattr(container_controller, "container", None), exc, now_fn)
+                print(f"batch run: ROUTER RESTART FAILED -- {restart_failure['error']}", file=sys.stderr)
         _restore_signal_traps(old_handlers)
 
-    return {"noop": False, "queue_state": state["queue_state"], "state": state}
+    return {"noop": False, "queue_state": state["queue_state"], "state": state, "restart_failure": restart_failure}
 
 
 def _dry_run_report(

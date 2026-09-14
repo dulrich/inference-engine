@@ -385,6 +385,43 @@ class TestRunQueueEndToEnd(unittest.TestCase):
                 )
             self.assertEqual(str(ctx.exception), "boom")
             self.assertEqual(controller.calls, ["stop", "start"])  # start was still attempted
+            # ...and the failure is a durable record beside the state file, never a silent pass
+            # (plan restart-failure-surfacing WP-1).
+            record_path = batch.restart_failure_path(batch.default_state_path(queue_path))
+            self.assertTrue(record_path.exists(), record_path)
+            record = json.loads(record_path.read_text())
+            self.assertIn("error", record)
+            self.assertIn("at", record)
+
+    def test_container_restart_failure_is_recorded_and_returned_on_a_clean_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FakeContainerController(fail_start=True)
+            queue_path = _write_queue(tmp, _minimal_queue())
+            result = batch.run_queue(
+                    queue_path,
+                    scratch_server_fn=fake_scratch_server_factory(),
+                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                    vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
+                    vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
+                    container_controller=controller,
+                )
+            # termination completed (the run itself is fine) but the failure is not swallowed
+            self.assertEqual(result["queue_state"], batch.QUEUE_COMPLETED)
+            self.assertIsNotNone(result["restart_failure"])
+            record_path = batch.restart_failure_path(batch.default_state_path(queue_path))
+            self.assertTrue(record_path.exists())
+            # a following run clears the stale record before it starts
+            ok = FakeContainerController()
+            result2 = batch.run_queue(
+                queue_path,
+                scratch_server_fn=fake_scratch_server_factory(),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 2, 0, tzinfo=timezone.utc)),
+                vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
+                vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
+                container_controller=ok, re_arm=True,
+            )
+            self.assertIsNone(result2["restart_failure"])
+            self.assertFalse(record_path.exists())
 
 
 class TestBudgetArithmeticInRunQueue(unittest.TestCase):

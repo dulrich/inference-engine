@@ -1079,9 +1079,20 @@ silently re-runs it. A wrapper that dies while its `batch.py` child is still run
 `running (wrapper lost)` -- an anomaly, not a crash; `stop` stays admissible since `batch.py`
 (the marker consumer) is the survivor. `last-run.json`'s own `disposition` is `clean` (both exit
 codes 0 -- a deadline/stop pause is a normal exit-0 outcome, not an attention condition on its
-own), `needs-attention` (any other exit-code combination, or very rarely a late launch-evidence
-anomaly attached to an already-terminalized request), or `crashed` (janitor-composed only, never
-from a `stage:"exited"` result).
+own), `needs-attention` (any other exit-code combination, a recorded router-restart failure, or
+very rarely a late launch-evidence anomaly attached to an already-terminalized request), or
+`crashed` (janitor-composed only, never from a `stage:"exited"` result).
+
+**A failed post-run router restart is never silent.** The maintenance window `docker stop`s
+`inference-engine-llama` (the whole GPU tier) and `restart: unless-stopped` deliberately will not
+resurrect an explicitly stopped container, so a failed `docker start` would otherwise leave the
+tier down until a human noticed while the run still reported clean. `batch.py` records the failure
+as `<stem>.restart-failure.json` beside the queue's state file (cleared at the start of every run)
+and prints it to stderr; `run-window.sh` forwards it as `result-write --restart-failure-file`, so
+`results/<inv>.json` and `last-run.json` carry `restart_failed` (the error string, else `null`),
+the disposition is forced to `needs-attention` even over a clean exit pair, and the dashboard's
+Queue view shows a "Router restart: failed" pill. The janitor's crash-recovery restart records the
+same field on its `crashed` last-run plus a `router-restart-failed: ...` anomaly line.
 
 ## Verifier (`verify_run.py`)
 

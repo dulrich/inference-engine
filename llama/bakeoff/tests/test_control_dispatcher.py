@@ -537,6 +537,46 @@ class TestJanitor(unittest.TestCase):
             self.assertEqual(last_run["invocation_id"], "req-inv")
             self.assertIsNone(last_run["run_exit"])
 
+    def test_group_dead_router_restart_nonzero_returncode_is_an_anomaly_and_rides_into_last_run(self):
+        class Done:
+            returncode = 1
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _make_paths(tmp)
+            self._live(paths)
+            anomalies = cd.janitor_phase(
+                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=timezone.utc),
+                lambda: BOOT_ID, _never_alive, lambda pid, st: False,
+                find_pid_fn=lambda port, container=None: None,
+                teardown_fn=lambda port, container=None: None,
+                router_start_fn=lambda name: Done(),
+                port=8899, scratch_container="bakeoff-scratch", router_container="inference-engine-llama",
+                late_launch_ids=set(),
+            )
+            self.assertEqual(anomalies, ["router-restart-failed: docker start inference-engine-llama exited 1"])
+            last_run = json.loads(paths.last_run_path.read_text())
+            self.assertEqual(last_run["disposition"], "crashed")
+            self.assertEqual(last_run["restart_failed"], "docker start inference-engine-llama exited 1")
+            self.assertFalse(paths.live_path.exists())  # recovery still completed
+
+    def test_group_dead_router_restart_raising_is_an_anomaly_and_recovery_completes(self):
+        def boom(name):
+            raise OSError("docker socket gone")
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _make_paths(tmp)
+            self._live(paths)
+            anomalies = cd.janitor_phase(
+                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=timezone.utc),
+                lambda: BOOT_ID, _never_alive, lambda pid, st: False,
+                find_pid_fn=lambda port, container=None: None,
+                teardown_fn=lambda port, container=None: None,
+                router_start_fn=boom,
+                port=8899, scratch_container="bakeoff-scratch", router_container="inference-engine-llama",
+                late_launch_ids=set(),
+            )
+            self.assertEqual(anomalies, ["router-restart-failed: docker start inference-engine-llama: OSError: docker socket gone"])
+            self.assertFalse(paths.live_path.exists())
+            self.assertIn("docker socket gone", json.loads(paths.last_run_path.read_text())["restart_failed"])
+
     def test_group_dead_no_orphan_found_skips_teardown_but_still_restarts_router(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
@@ -840,7 +880,7 @@ class TestStatusShape(unittest.TestCase):
             })
             self.assertEqual(status["last_run"], {
                 "request_id": "req-inv", "ended_at": "2026-08-23T23:00:00Z",
-                "run_exit": 0, "verify_exit": 0, "disposition": "clean",
+                "run_exit": 0, "verify_exit": 0, "restart_failed": None, "disposition": "clean",
             })
             self.assertEqual(status["anomalies"], ["some anomaly"])
             self.assertEqual(status["ignored_invalid_names"], 3)
@@ -931,3 +971,37 @@ class TestCliArgParsing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRestartFailureForcesNeedsAttention(unittest.TestCase):
+    """Plan restart-failure-surfacing WP-1: a recorded router-restart failure must move the
+    disposition even over a clean exit pair, and must survive results -> last-run -> status."""
+
+    def test_map_last_run_disposition_treats_restart_failure_like_a_late_launch(self):
+        self.assertEqual(cd.map_last_run_disposition(0, 0, False), "clean")
+        self.assertEqual(cd.map_last_run_disposition(0, 0, False, "docker start x exited 1"), "needs-attention")
+        self.assertEqual(cd.map_last_run_disposition(0, 0, False, None), "clean")
+
+    def test_restart_failure_written_by_the_wrapper_reaches_status_json_with_needs_attention(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _make_paths(tmp)
+            now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=timezone.utc)
+            cd.write_result(paths, "inv-1", "exited", run_exit=0, verify_exit=0,
+                            restart_failed="CalledProcessError: docker start", now_fn=lambda: now)
+            _run_dispatch(paths, Path(tmp) / "queues")
+            last_run = json.loads(paths.last_run_path.read_text())
+            self.assertEqual(last_run["disposition"], "needs-attention")
+            self.assertEqual(last_run["restart_failed"], "CalledProcessError: docker start")
+            status = json.loads(paths.status_path.read_text())
+            self.assertEqual(status["last_run"]["restart_failed"], "CalledProcessError: docker start")
+            self.assertEqual(status["last_run"]["disposition"], "needs-attention")
+
+    def test_a_clean_result_without_the_field_reports_restart_failed_null(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _make_paths(tmp)
+            now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=timezone.utc)
+            cd.write_result(paths, "inv-1", "exited", run_exit=0, verify_exit=0, now_fn=lambda: now)
+            _run_dispatch(paths, Path(tmp) / "queues")
+            status = json.loads(paths.status_path.read_text())
+            self.assertIsNone(status["last_run"]["restart_failed"])
+            self.assertEqual(status["last_run"]["disposition"], "clean")

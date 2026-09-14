@@ -517,6 +517,7 @@ describe("QueueListResponseSchema", () => {
           endedAt: "2026-08-22T23:59:00Z",
           runExit: 0,
           verifyExit: 0,
+          restartFailed: null,
           disposition: "clean" as const,
         },
         anomalies: ["late-launch-after-terminal"],

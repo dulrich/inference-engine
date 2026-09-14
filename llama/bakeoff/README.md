@@ -1047,6 +1047,13 @@ OPENWEBUI_API_KEY=<the Open WebUI admin key, same value as fleet-tools/.env>
 
 **Both the env file and the crontab line are installed by the operator, never by an agent** -- the same rule as the two lines above, and the first live end-to-end apply is an operator-present exercise. Until they are installed the plane is simply inert: no status file is published, `GET /api/serving/status` answers `{available: false}`, and the dashboard's chips render disabled with the reason. The dispatcher's own stdout is a one-line JSON pass summary (`{"applied":0,"failed":0,"ignored":0,"pruned":0,"rejected":0}`), which is the whole content of a quiet minute in that log.
 
+**Applying and confirming a toggle (operator checklist).** A chip click on the Serving tab records a request; nothing is applied until the next cron pass, and nothing is *finished* until the repo commit below. In order:
+
+1. **Click the chip** (Serving tab, Visibility column). The API answers `accepted: true` — that means the `srv-*.json` file was written to the drop-box, not that anything changed yet.
+2. **Wait up to a minute**, then confirm the dispatcher took it: `curl -s http://<dashboard-bind>:4810/api/serving/status | python3 -m json.tool` — `last_request.state` must be `applied` (a `failed`/`rejected` state carries a `reason`); the chips re-render from the same file. Equivalently the newest line of `~/.local/state/inference-bakeoff/serving-dispatch.log` shows `"applied": 1`.
+3. **Confirm each projection landed**: `git -C . diff router/visibility.json` shows exactly the one `consumers` change; `node router/model-picker-lineup.mjs --check` is silent (Claude Code picker in sync); `OPENWEBUI_URL=… OPENWEBUI_API_KEY=… python3 scripts/sync-openwebui-capabilities.py` (dry-run) prints `0 pending`. For an `openwebui` toggle, the Open WebUI picker reflects it on the next page load — no container restart on either side.
+4. **Commit the declaration** — the dispatcher edits the working tree and never commits. Refresh the pinned status fixture to the new map first (`test_the_status_fixture_carries_the_declarations_own_matrix` fails until it matches): update `visibility` in `dashboard/apps/api/fixtures/serving/contract-v1/control/host/serving-status.json` to `router/visibility.json`'s `models` map, run `llama/bakeoff/gates.sh`, and commit both files by path (`serving: <model> <on|off> in <consumer>; status fixture refreshed`). An uncommitted toggle is live but unrecorded; a later checkout would silently revert it.
+
 ### Manual-window flow
 
 A manual start (`POST /api/control/start {queueStem, minutes}` once the dashboard API is wired,

@@ -10,6 +10,7 @@ import {
   RouterSlotsResponseSchema,
   RouterTelemetryResponseSchema,
   ServingResponseSchema,
+  ServingStatusResponseSchema,
   ServingTimingRowSchema,
   TrialRowSchema,
   type ControlAcceptedResponse,
@@ -24,7 +25,9 @@ import {
   type RouterSlotsResponse,
   type RouterTelemetryResponse,
   type ServingResponse,
+  type ServingStatusResponse,
   type ServingTimingRow,
+  type ServingVisibilityRequest,
 } from "@bench-dashboard/shared";
 import { z } from "zod";
 import { parseControlActionResponse } from "./lib/queue/control.ts";
@@ -137,6 +140,23 @@ export function postControlStop(): Promise<ControlAcceptedResponse> {
 
 export function postControlCancel(body: ControlCancelRequest): Promise<ControlAcceptedResponse> {
   return postControlAction("/api/control/cancel", body);
+}
+
+// `GET /api/serving/status` + `POST /api/serving/visibility` (WP-4, `plans/bench-dashboard-
+// serving-control.md`) -- the serving-visibility control pair, fetched by `Serving.svelte`
+// ALONGSIDE `getServing()`/`getServingTiming()`. The status read is a discriminated union on
+// `available` (an unset env var, a missing/unparseable/empty file, or a `generated_at` older
+// than 180 s is a typed `{available:false, reason}` at 200, never an error), so only a
+// genuine transport/parse failure throws out of it -- the router-status posture. The POST
+// only ever RECORDS a request into the host dispatcher's drop-box: `accepted: true` means
+// *recorded*, never *executed*, and the chips learn the real outcome from the next status
+// poll.
+export function getServingStatus(): Promise<ServingStatusResponse> {
+  return getJson("/api/serving/status", ServingStatusResponseSchema);
+}
+
+export function postServingVisibility(body: ServingVisibilityRequest): Promise<ControlAcceptedResponse> {
+  return postControlAction("/api/serving/visibility", body);
 }
 
 // `GET /api/router/{telemetry,slots,sidecar}` (WP-3/WP-4, `plans/router-observability-and-

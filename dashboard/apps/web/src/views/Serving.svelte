@@ -24,8 +24,28 @@
   // driven by `capability.serving.mtp` (config truth) with the recipe's `specType` as
   // title/detail text (`lib/serving/capability.ts mtpDetail`) -- the product-surface label
   // is always "MTP", never the underlying method name (`draft-mtp` today).
-  import type { ExperimentSummary, ServingTimingRow } from "@bench-dashboard/shared";
-  import { getServing, getServingTiming } from "../api.ts";
+  //
+  // Visibility chips (WP-4, `plans/bench-dashboard-serving-control.md`): two per row, `cc`
+  // and `openwebui`, whose ONLY source is `GET /api/serving/status`'s `visibility` map -- the
+  // host dispatcher's republication of `router/visibility.json`, never this view's YAML parse
+  // (which carries no visibility at all). Toggling POSTs the full desired `consumers` array
+  // for that model, which only RECORDS a request; the chip enters an optimistic "requested"
+  // state keyed by the returned `requestId` and settles when a later status shows that id in
+  // `recent[]`. An unavailable status -- unset, unreadable, empty or stale -- disables the
+  // chips with the reason in words rather than guessing. No restart banner: nothing on this
+  // path requires one. All derivations live in `lib/serving/visibility.ts`; this file stays
+  // markup-thin, and owns NO timer (refresh is `refreshToken`, CC-06/07).
+  import type { ExperimentSummary, ServingStatusResponse, ServingTimingRow } from "@bench-dashboard/shared";
+  import { getServing, getServingStatus, getServingTiming, postServingVisibility } from "../api.ts";
+  import {
+    rowChips,
+    settlePending,
+    unavailableReasonText,
+    visibilityEntry,
+    visibilityRequestBody,
+    type PendingVisibilityMap,
+    type ServingChipState,
+  } from "../lib/serving/visibility.ts";
   import { matchServingToMeasured } from "../lib/serving/matchMeasured.ts";
   import { formatServingDecodeCell, formatServingPrefillCell, matchServingTiming } from "../lib/serving/matchTiming.ts";
   import { expandToggleLabel, flagValueClass, formatFlagValue, toggleExpandedRow } from "../lib/serving/expand.ts";
@@ -62,6 +82,17 @@
   let servingLoading = $state(false);
   let servingError = $state("");
 
+  // Visibility control state. `servingStatus` stays `null` until a status response parses --
+  // null is "unknown", and the chips render disabled rather than inventing a value.
+  // `pendingVisibility` is the optimistic layer, keyed by `modelKey`.
+  let servingStatus = $state<ServingStatusResponse | null>(null);
+  let statusError = $state("");
+  let visibilityError = $state("");
+  let pendingVisibility = $state<PendingVisibilityMap>({});
+  // A plain array, not a `Set`: `svelte/prefer-svelte-reactivity` forbids a mutable built-in
+  // `Set` inside a component, and this is a two-element-at-most in-flight guard anyway.
+  let busyKeys = $state<string[]>([]);
+
   // Per-row expand/collapse for the full serving config (WP-1) -- collapsed by default,
   // keyed by `modelKey` (same key the `{#each}` below uses). `lib/serving/expand.ts` owns
   // the toggle logic and the CC-04 label pair as plain, tested functions.
@@ -71,20 +102,66 @@
     expandedRows = toggleExpandedRow(expandedRows, modelKey);
   }
 
+  // `Promise.allSettled`, the Router.svelte pattern: the visibility status is an INDEPENDENT
+  // feed, so a status failure never blanks the served-alias table (and vice versa). The
+  // config/timing pair keeps its previous all-or-nothing error behaviour.
   async function loadServing(exps: ExperimentSummary[]) {
     servingLoading = true;
     servingError = "";
+    const [servingResult, timingResult, statusResult] = await Promise.allSettled([
+      getServing(),
+      getServingTiming(),
+      getServingStatus(),
+    ]);
+    if (servingResult.status === "fulfilled" && timingResult.status === "fulfilled") {
+      configPath = servingResult.value.configPath;
+      rows = matchServingToMeasured(servingResult.value.models, exps);
+      timingRows = timingResult.value;
+    } else {
+      const failure = servingResult.status === "rejected" ? servingResult.reason : (timingResult as PromiseRejectedResult).reason;
+      servingError = failure instanceof Error ? failure.message : "Unable to load served aliases";
+    }
+    if (statusResult.status === "fulfilled") {
+      servingStatus = statusResult.value;
+      statusError = "";
+      // Any request the dispatcher has now dispositioned stops being "requested".
+      pendingVisibility = settlePending(pendingVisibility, servingStatus);
+    } else {
+      statusError =
+        statusResult.reason instanceof Error ? statusResult.reason.message : "Unable to load the visibility status";
+    }
+    servingLoading = false;
+  }
+
+  /** Toggling a chip POSTs the FULL desired `consumers` array for that model, built from the
+   * DECLARED array (never from the chip's rendering), and records the returned `requestId` as
+   * this row's optimistic pending state. `accepted` means recorded, never executed. */
+  async function toggleVisibility(modelKey: string, chip: ServingChipState) {
+    if (chip.disabled || busyKeys.includes(modelKey)) return;
+    const entry = visibilityEntry(servingStatus, modelKey);
+    if (entry === null) return;
+    const body = visibilityRequestBody(modelKey, entry, chip.consumer, !chip.on);
+    visibilityError = "";
+    busyKeys = [...busyKeys, modelKey];
     try {
-      const [response, timing] = await Promise.all([getServing(), getServingTiming()]);
-      configPath = response.configPath;
-      rows = matchServingToMeasured(response.models, exps);
-      timingRows = timing;
+      const accepted = await postServingVisibility(body);
+      pendingVisibility = { ...pendingVisibility, [modelKey]: { requestId: accepted.requestId, consumers: body.consumers } };
     } catch (e) {
-      servingError = e instanceof Error ? e.message : "Unable to load served aliases";
+      visibilityError = e instanceof Error ? e.message : "Unable to record the visibility change";
     } finally {
-      servingLoading = false;
+      busyKeys = busyKeys.filter((key) => key !== modelKey);
     }
   }
+
+  // One line explaining why every chip is inert, when that is the case -- the per-chip
+  // tooltip carries the same reason, but a table of uniformly dead chips deserves a sentence.
+  const visibilityNote = $derived(
+    statusError !== ""
+      ? statusError
+      : servingStatus !== null && !servingStatus.available
+        ? `Visibility controls are read-only: ${unavailableReasonText(servingStatus.reason)}.`
+        : "",
+  );
 
   // ONE effect tracking both `experiments` and `refreshToken` -- see Runs.svelte's own
   // comment on why this isn't split into two effects.
@@ -100,6 +177,13 @@
   Aliases currently served by the llama router, joined to their most recent measured cell where one exists.
   {#if configPath}<code>{configPath}</code>{/if}
 </p>
+
+{#if visibilityNote}
+  <p class="run-table-muted">{visibilityNote}</p>
+{/if}
+{#if visibilityError}
+  <p class="error-text">{visibilityError}</p>
+{/if}
 
 {#if loading || servingLoading}
   <p>Loading…</p>
@@ -124,6 +208,7 @@
           <th>KV V</th>
           <th>FA</th>
           <th>Capabilities</th>
+          <th>Visibility</th>
           <th>MTP</th>
           <th class="run-table-num">Prefill tok/s (p50/p90)</th>
           <th class="run-table-num">Decode tok/s (p50/p90)</th>
@@ -166,6 +251,22 @@
               {/if}
             </td>
             <td>
+              <div class="serving-visibility">
+                {#each rowChips(row.alias.modelKey, servingStatus, pendingVisibility, statusError) as chip (chip.consumer)}
+                  <button
+                    type="button"
+                    class="pill serving-chip {chip.pillClass}"
+                    disabled={chip.disabled || busyKeys.includes(row.alias.modelKey)}
+                    aria-pressed={chip.on}
+                    title={chip.title}
+                    onclick={() => void toggleVisibility(row.alias.modelKey, chip)}
+                  >
+                    {chip.label} {chip.stateLabel}
+                  </button>
+                {/each}
+              </div>
+            </td>
+            <td>
               <span class="pill {mtpPillClass(row.alias.capability?.serving.mtp ?? null)}" title={mtpDetail(row.alias.recipe)}>
                 {mtpLabel(row.alias.capability?.serving.mtp ?? null)}
               </span>
@@ -197,7 +298,7 @@
           </tr>
           {#if expandedRows.has(row.alias.modelKey)}
             <tr class="serving-flags-row">
-              <td colspan="12">
+              <td colspan="13">
                 {#if row.alias.flags.allFlags.length === 0}
                   <p class="run-table-muted">No flags found in the served command.</p>
                 {:else}

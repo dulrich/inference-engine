@@ -56,10 +56,16 @@ function isEexist(error: unknown): boolean {
  * then `fs.linkSync(tmp, dst)` — throws `EEXIST` on an id collision, in which case a
  * fresh id is generated and creation is retried (bounded, `MAX_ID_ATTEMPTS`) — then
  * unlink the temp file. Never a destructive rename over an existing request. `idFactory`
- * defaults to `generateRequestId`; overridable so tests can force+observe a collision. */
-export function writeControlRequestExclusive(
+ * defaults to `generateRequestId`; overridable so tests can force+observe a collision.
+ *
+ * Generic in the body type since WP-4 (`plans/bench-dashboard-serving-control.md`): the
+ * serving plane drops `serving-request-v1` files into the SAME drop-box with the same
+ * mechanics and a different body/id grammar (`routes/servingControl.ts`), so it reuses this
+ * function rather than duplicating the temp+link+unlink dance. `Body` is inferred from
+ * `buildBody`, so every existing call site is unchanged. */
+export function writeControlRequestExclusive<Body>(
   requestsDir: string,
-  buildBody: (requestId: string, requestedAt: string) => ControlRequestFileV1,
+  buildBody: (requestId: string, requestedAt: string) => Body,
   idFactory: () => string = generateRequestId,
 ): string {
   for (let attempt = 0; attempt < MAX_ID_ATTEMPTS; attempt++) {

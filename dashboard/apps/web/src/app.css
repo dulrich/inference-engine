@@ -226,6 +226,26 @@
   font-size: 0.7rem;
 }
 
+/* ---- Serving: visibility chips (WP-4, bench-dashboard-serving-control) ------
+   Layout only -- each chip IS a `.pill` + one of the shared `.pill-*` classes, so this adds
+   no colour of its own (CC-16); the chip's own words carry its state and a disabled chip
+   carries its reason in `title`. */
+
+.serving-visibility {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.serving-chip {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.serving-chip:disabled {
+  cursor: not-allowed;
+}
+
 /* ---- Serving: per-row full-config expand (WP-1) ---------------------------- */
 
 .serving-flags-row td {

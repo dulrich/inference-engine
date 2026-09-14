@@ -11,6 +11,7 @@ import { registerLadderRoutes } from "./routes/ladders.ts";
 import { registerQueueRoutes } from "./routes/queue.ts";
 import { registerRouterStatusRoutes } from "./routes/routerStatus.ts";
 import { registerServingRoutes } from "./routes/serving.ts";
+import { registerServingControlRoutes } from "./routes/servingControl.ts";
 import { registerServingTimingRoutes } from "./routes/servingTiming.ts";
 
 // Fleet scaffold convention (model_scoreboard `app.ts`): the Hono app object only — no
@@ -25,6 +26,7 @@ registerLadderRoutes(app);
 registerCurveRoutes(app);
 registerServingRoutes(app);
 registerServingTimingRoutes(app);
+registerServingControlRoutes(app);
 registerExportRoutes(app);
 registerQueueRoutes(app);
 registerControlRoutes(app);

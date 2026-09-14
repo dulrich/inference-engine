@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { ServingRequest, ServingStatusFile, ServingVisibilityRequest } from "./index.ts";
 import {
   CaptureEnvelopeSchema,
   CaptureRecordSchema,
@@ -12,8 +13,12 @@ import {
   RouterSlotsRecordSchema,
   RouterSlotsResponseSchema,
   RouterTelemetryResponseSchema,
+  SERVING_STATUS_STALE_MS,
+  ServingRequestSchema,
   ServingResponseSchema,
+  ServingStatusResponseSchema,
   ServingTimingRowSchema,
+  ServingVisibilityRequestSchema,
   TrialRowSchema,
 } from "./index.ts";
 
@@ -701,5 +706,104 @@ describe("RouterSidecarResponseSchema", () => {
     const brokenPersona: Record<string, unknown> = { ...(valid.personas[0] as (typeof valid.personas)[number]) };
     delete brokenPersona.lastSeenTs;
     expect(() => RouterSidecarResponseSchema.parse({ ...valid, personas: [brokenPersona] })).toThrow();
+  });
+});
+
+describe("ServingVisibilityRequestSchema / ServingRequestSchema (WP-4, serving control)", () => {
+  test("the POST body is camelCase and closed to the two-consumer vocabulary", () => {
+    const valid: ServingVisibilityRequest = { modelKey: "Qwen3.8-27B-UD-IQ3_S", consumers: ["cc", "openwebui"] };
+    expect(ServingVisibilityRequestSchema.parse(valid)).toEqual(valid);
+    // An empty array is the unpublish request, not an invalid one.
+    expect(ServingVisibilityRequestSchema.parse({ modelKey: "k", consumers: [] }).consumers).toEqual([]);
+    expect(() => ServingVisibilityRequestSchema.parse({ modelKey: "", consumers: [] })).toThrow();
+    expect(() => ServingVisibilityRequestSchema.parse({ modelKey: "k", consumers: ["ollama"] })).toThrow();
+    expect(() => ServingVisibilityRequestSchema.parse({ consumers: ["cc"] })).toThrow();
+  });
+
+  test("the on-disk file is snake_case, pins the schema literal and the srv- id grammar", () => {
+    const valid: ServingRequest = {
+      schema: "serving-request-v1" as const,
+      request_id: "srv-20260913T115900Z-00000000000000a1",
+      action: "set-visibility" as const,
+      model_key: "Qwen3.8-27B-UD-IQ3_S",
+      consumers: ["cc", "openwebui"],
+      requested_at: "2026-09-13T11:59:00.480Z",
+    };
+    expect(ServingRequestSchema.parse(valid)).toEqual(valid);
+    expect(() => ServingRequestSchema.parse({ ...valid, schema: "serving-request-v2" })).toThrow();
+    // The bake-off plane's own `req-` id is NOT a serving request id: the two planes share
+    // one drop-box directory and each ignores the other's basenames.
+    expect(() => ServingRequestSchema.parse({ ...valid, request_id: "req-20260913T115900Z-00000000000000a1" })).toThrow();
+    expect(() => ServingRequestSchema.parse({ ...valid, model_key: "" })).toThrow();
+    expect(() => ServingRequestSchema.parse({ ...valid, consumers: ["cc", "ollama"] })).toThrow();
+  });
+});
+
+describe("ServingStatusResponseSchema (WP-4, serving control)", () => {
+  const statusFile: ServingStatusFile = {
+    schema: "serving-status-v1" as const,
+    generated_at: "2026-09-13T12:00:00.000Z",
+    visibility: {
+      "Qwen3.8-27B-UD-IQ3_S": { gateway_id: "qwen38-27b-iq3s", consumers: ["cc", "openwebui"] },
+      "bge-m3-f16": { gateway_id: null, consumers: [] },
+    },
+    last_request: {
+      request_id: "srv-20260913T115930Z-00000000000000a2",
+      state: "applied" as const,
+      reason: null,
+      applied_at: "2026-09-13T11:59:31.004Z",
+    },
+    recent: [
+      {
+        request_id: "srv-20260913T115930Z-00000000000000a2",
+        state: "applied" as const,
+        reason: null,
+        applied_at: "2026-09-13T11:59:31.004Z",
+      },
+      {
+        request_id: "srv-20260913T115800Z-00000000000000b1",
+        state: "rejected" as const,
+        reason: "cc requires a gateway id",
+        applied_at: "2026-09-13T11:58:01.508Z",
+      },
+    ],
+  };
+
+  test("round-trips the available arm, carrying the whole declared visibility map", () => {
+    const valid = { available: true as const, ...statusFile };
+    expect(ServingStatusResponseSchema.parse(valid)).toEqual(valid);
+  });
+
+  test("`reason` defaults to null so a writer that omits it on the happy path still parses", () => {
+    const thin = {
+      available: true as const,
+      ...statusFile,
+      recent: [{ request_id: "srv-20260913T115930Z-00000000000000a2", state: "applied" as const, applied_at: "x" }],
+    };
+    const parsed = ServingStatusResponseSchema.parse(thin);
+    if (!parsed.available) throw new Error("expected available");
+    expect(parsed.recent[0]?.reason).toBeNull();
+  });
+
+  test("the unavailable arm is closed to the four reasons, staleness pinned at 180 s", () => {
+    expect(SERVING_STATUS_STALE_MS).toBe(180_000);
+    for (const reason of ["disabled", "unreadable", "empty", "stale"] as const) {
+      expect(ServingStatusResponseSchema.parse({ available: false, reason })).toEqual({ available: false, reason });
+    }
+    expect(() => ServingStatusResponseSchema.parse({ available: false })).toThrow();
+    expect(() => ServingStatusResponseSchema.parse({ available: false, reason: "who-knows" })).toThrow();
+  });
+
+  test("rejects an available payload missing the visibility map or carrying a bad state word", () => {
+    const withoutVisibility: Record<string, unknown> = { available: true, ...statusFile };
+    delete withoutVisibility.visibility;
+    expect(() => ServingStatusResponseSchema.parse(withoutVisibility)).toThrow();
+    expect(() =>
+      ServingStatusResponseSchema.parse({
+        available: true,
+        ...statusFile,
+        recent: [{ request_id: "srv-1", state: "in-flight", reason: null, applied_at: "x" }],
+      }),
+    ).toThrow();
   });
 });

@@ -1,0 +1,10 @@
+{
+  "schema": "serving-request-v1",
+  "request_id": "srv-20260913T120300Z-00000000000000c3",
+  "action": "set-visibility",
+  "model_key": "",
+  "consumers": [
+    "openwebui"
+  ],
+  "requested_at": "2026-09-13T12:03:00.000Z"
+}

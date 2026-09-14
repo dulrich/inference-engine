@@ -1,0 +1,11 @@
+{
+  "schema": "serving-request-v1",
+  "request_id": "srv-20260913T115900Z-00000000000000a1",
+  "action": "set-visibility",
+  "model_key": "Qwen3.8-27B-UD-IQ3_S",
+  "consumers": [
+    "cc",
+    "openwebui"
+  ],
+  "requested_at": "2026-09-13T11:59:00.480Z"
+}

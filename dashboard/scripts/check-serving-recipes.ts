@@ -21,12 +21,39 @@
 //     projection would be a category error; the gate never asks for one.
 //   - LIVE-PROBED (`reasoning`) -- a response-body fact no flag determines, so the gate checks
 //     only that the value is a member of the enumeration and leaves the evidence bar in the doc.
-import { join } from "node:path";
+//
+// WP-3 adds a second, orthogonal job on the same parse: the VISIBILITY DECLARATION
+// (`router/visibility.json`) is checked against this config in the direction the config owns --
+// every served key declared, the closed `consumers` vocabulary in canonical order, `gateway_id`
+// either null or one of that key's own aliases and unique across the map, `cc` implying a
+// non-null `gateway_id`, and the `max-tokens-crosswalk` between each declared `gateway_id`'s
+// `max_output.answer_tokens` and `claude-local.maxOutputTokens` in `router/gateway.config.json`
+// (the ceiling router patch 0010 clamps to). The other direction -- every gateway model id
+// declared -- is `router/model-picker-lineup.mjs --check`'s half of the same gate.
+import { dirname, join } from "node:path";
 import { parseServedAliases } from "../apps/api/src/serving/llamaConfig.ts";
 import { SERVING_VERIFIED_DATE_PATTERN, type ServingAlias } from "../packages/shared/src/serving.ts";
 
 /** `<repo>/llama/config.yaml`, resolved from this file's own location. */
 export const DEFAULT_CONFIG_PATH = join(import.meta.dir, "../../llama/config.yaml");
+
+/** The visibility declaration and the gateway config, resolved RELATIVE TO THE CONFIG so a
+ * fixture run and the real run resolve their own siblings, never each other's. Both are
+ * overridable (`--visibility` / `--gateway`), which is how the fixtures carry their own. */
+export function resolveVisibilityPath(configPath: string): string {
+  return join(dirname(configPath), "../router/visibility.json");
+}
+export function resolveGatewayPath(configPath: string): string {
+  return join(dirname(configPath), "../router/gateway.config.json");
+}
+
+/** `router/visibility.json`'s schema literal, and the closed consumer vocabulary in its one
+ * canonical order. There is no `router` token: "router-only" is the COMPLEMENT, an entry with
+ * `[]` — reachable by id through the gateway, a row in neither consumer. */
+export const VISIBILITY_SCHEMA = "serving-visibility-v1";
+const CONSUMER_VOCABULARY = ["cc", "openwebui"] as const;
+/** The gateway provider whose `maxOutputTokens` map patch 0010's clamp reads. */
+const CLAMP_PROVIDER = "claude-local";
 
 /** The five approved source kinds (`docs/model-capabilities.md`), as the host each is served
  * from -- the only mechanical test available for "is this an approved kind". `huggingface.co`
@@ -327,40 +354,213 @@ function checkRequiredKeys(alias: ServingAlias, findings: RecipeFinding[]): void
   }
 }
 
+interface VisibilityEntry {
+  gateway_id?: unknown;
+  consumers?: unknown;
+}
+
+/** The parsed declaration, or a `problem` string naming why it is unusable. Fail-closed: an
+ * unreadable/malformed declaration is a finding, never "no visibility rules apply" — that
+ * silence is exactly how a declaration could rot unnoticed while both generators read it. */
+function parseVisibility(
+  visibilityText: string | null,
+): { models: Record<string, VisibilityEntry> | null; problem: string | null } {
+  if (visibilityText === null) {
+    return { models: null, problem: "the visibility declaration is missing or unreadable" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(visibilityText);
+  } catch (err) {
+    return { models: null, problem: `the visibility declaration is not valid JSON: ${(err as Error).message}` };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { models: null, problem: "the visibility declaration is not a JSON object" };
+  }
+  const doc = parsed as { schema?: unknown; models?: unknown };
+  if (doc.schema !== VISIBILITY_SCHEMA) {
+    return { models: null, problem: `the visibility declaration carries schema ${JSON.stringify(doc.schema ?? null)}, expected "${VISIBILITY_SCHEMA}"` };
+  }
+  if (doc.models === null || typeof doc.models !== "object" || Array.isArray(doc.models)) {
+    return { models: null, problem: "the visibility declaration has no `models` map" };
+  }
+  return { models: doc.models as Record<string, VisibilityEntry>, problem: null };
+}
+
+/** `claude-local.maxOutputTokens` off `router/gateway.config.json`, or `null` when the file is
+ * missing/malformed or the provider carries no map. `null` makes every crosswalk check report,
+ * which is the fail-closed direction. */
+function parseGatewayCaps(gatewayText: string | null): Record<string, unknown> | null {
+  if (gatewayText === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(gatewayText);
+  } catch {
+    return null;
+  }
+  const providers = (parsed as { providers?: unknown })?.providers;
+  if (!Array.isArray(providers)) return null;
+  const provider = providers.find(
+    (p) => (p as { name?: unknown })?.name === CLAMP_PROVIDER,
+  ) as { maxOutputTokens?: unknown } | undefined;
+  const caps = provider?.maxOutputTokens;
+  if (caps === null || typeof caps !== "object" || Array.isArray(caps)) return null;
+  return caps as Record<string, unknown>;
+}
+
+/** `consumers` must be a subset of the closed vocabulary, deduplicated, in canonical order. */
+function consumersProblem(consumers: unknown): string | null {
+  if (!Array.isArray(consumers)) return "`consumers` is not an array";
+  const unknown = consumers.filter((c) => !CONSUMER_VOCABULARY.includes(c as never));
+  if (unknown.length > 0) {
+    return `\`consumers\` carries ${unknown.map((u) => JSON.stringify(u)).join(", ")} — the closed vocabulary is ${CONSUMER_VOCABULARY.join(", ")}`;
+  }
+  const canonical = CONSUMER_VOCABULARY.filter((c) => consumers.includes(c));
+  if (consumers.length !== canonical.length || canonical.some((c, i) => consumers[i] !== c)) {
+    return `\`consumers\` ${JSON.stringify(consumers)} is duplicated or out of canonical order — expected ${JSON.stringify(canonical)}`;
+  }
+  return null;
+}
+
+/** The visibility rules for ONE served key — EVERY served key, embed/rerank included, unlike
+ * the recipe rules above. At most one finding per key, in the precedence order below, so the
+ * "one line per non-conforming entry" contract holds here too. `claimed` carries the gateway
+ * ids already seen, which is how the uniqueness rule reports the SECOND claimant. */
+function checkVisibilityEntry(
+  alias: ServingAlias,
+  models: Record<string, VisibilityEntry>,
+  caps: Record<string, unknown> | null,
+  claimed: Map<string, string>,
+  findings: RecipeFinding[],
+): void {
+  const modelKey = alias.modelKey;
+  const push = (rule: string, detail: string): void => {
+    findings.push({ modelKey, rule, detail });
+  };
+
+  const entry = models[modelKey];
+  if (entry === undefined) {
+    push("visibility-missing", "no entry in `router/visibility.json` — every served key must be declared there");
+    return;
+  }
+
+  const consumerProblem = consumersProblem(entry.consumers);
+  if (consumerProblem !== null) {
+    push("visibility-vocabulary", consumerProblem);
+    return;
+  }
+  const consumers = entry.consumers as string[];
+
+  const gatewayId = entry.gateway_id;
+  if (gatewayId !== null && typeof gatewayId !== "string") {
+    push("visibility-gateway-id", `\`gateway_id\` ${JSON.stringify(gatewayId ?? null)} is neither null nor a string`);
+    return;
+  }
+  if (typeof gatewayId === "string" && !alias.aliases.includes(gatewayId)) {
+    push("visibility-gateway-id", `\`gateway_id\` "${gatewayId}" is not one of this key's aliases (${alias.aliases.join(", ") || "none"})`);
+    return;
+  }
+  if (gatewayId === null && consumers.includes("cc")) {
+    push("visibility-cc-requires-gateway-id", "`consumers` includes `cc` but `gateway_id` is null — the Claude Code picker can only emit a gateway id");
+    return;
+  }
+  if (typeof gatewayId === "string") {
+    const owner = claimed.get(gatewayId);
+    if (owner !== undefined) {
+      push("visibility-duplicate-gateway-id", `\`gateway_id\` "${gatewayId}" is already claimed by ${owner} — one picker row cannot answer to two declarations`);
+      return;
+    }
+    claimed.set(gatewayId, modelKey);
+
+    // The crosswalk patch 0010's clamp depends on (item 8c): the gateway's declared ceiling for
+    // this id must BE this key's advisory `max_output.answer_tokens`, not merely near it.
+    const declared = alias.capability?.maxOutput?.answerTokens ?? null;
+    const cap = caps === null ? undefined : caps[gatewayId];
+    if (cap === undefined) {
+      push("max-tokens-crosswalk", `\`${CLAMP_PROVIDER}.maxOutputTokens["${gatewayId}"]\` is missing from \`router/gateway.config.json\` — patch 0010's clamp reads that map`);
+    } else if (declared === null) {
+      push("max-tokens-crosswalk", `\`${CLAMP_PROVIDER}.maxOutputTokens["${gatewayId}"]\` is ${String(cap)} but this key declares no \`max_output.answer_tokens\` to crosswalk it against`);
+    } else if (cap !== declared) {
+      push("max-tokens-crosswalk", `\`${CLAMP_PROVIDER}.maxOutputTokens["${gatewayId}"]\` ${String(cap)} ≠ \`max_output.answer_tokens\` ${declared}`);
+    }
+  }
+}
+
 /** Every non-conformance in `configText`, in config order. An empty array means the file
- * conforms. Chat entries only. */
-export function checkServingRecipes(configText: string): RecipeFinding[] {
+ * conforms. The recipe rules cover chat entries only; the visibility rules cover EVERY served
+ * key, embed and rerank included — they are exactly the entries whose `[]` declaration is the
+ * point. */
+export function checkServingRecipes(
+  configText: string,
+  visibilityText: string | null = null,
+  gatewayText: string | null = null,
+): RecipeFinding[] {
   const findings: RecipeFinding[] = [];
+  const { models, problem } = parseVisibility(visibilityText);
+  if (problem !== null) {
+    findings.push({ modelKey: "router/visibility.json", rule: "visibility-unreadable", detail: problem });
+  }
+  const caps = parseGatewayCaps(gatewayText);
+  const claimed = new Map<string, string>();
+
   for (const alias of parseServedAliases(configText)) {
-    if (!isChatEntry(alias)) continue;
-    checkRequiredKeys(alias, findings);
-    checkSamplingDeclared(alias, findings);
-    checkSources(alias, findings);
-    checkProjections(alias, findings);
+    if (isChatEntry(alias)) {
+      checkRequiredKeys(alias, findings);
+      checkSamplingDeclared(alias, findings);
+      checkSources(alias, findings);
+      checkProjections(alias, findings);
+    }
+    if (models !== null) checkVisibilityEntry(alias, models, caps, claimed, findings);
   }
   return findings;
 }
 
-export async function checkServingRecipesFile(path: string): Promise<RecipeFinding[]> {
-  return checkServingRecipes(await Bun.file(path).text());
+/** Reads the config plus its two companions. A companion that cannot be read is passed through
+ * as `null` rather than throwing — the checker turns that into a finding. */
+export async function checkServingRecipesFile(
+  path: string,
+  visibilityPath: string = resolveVisibilityPath(path),
+  gatewayPath: string = resolveGatewayPath(path),
+): Promise<RecipeFinding[]> {
+  const readOrNull = async (file: string): Promise<string | null> => {
+    try {
+      return await Bun.file(file).text();
+    } catch {
+      return null;
+    }
+  };
+  return checkServingRecipes(
+    await Bun.file(path).text(),
+    await readOrNull(visibilityPath),
+    await readOrNull(gatewayPath),
+  );
+}
+
+/** `--<name> <path>` (or `--<name>=<path>`), else `fallback`. */
+export function parsePathArg(argv: string[], name: string, fallback: string): string {
+  const index = argv.indexOf(`--${name}`);
+  if (index >= 0 && argv[index + 1] !== undefined) return argv[index + 1] as string;
+  const inline = argv.find((a) => a.startsWith(`--${name}=`));
+  if (inline !== undefined) return inline.slice(`--${name}=`.length);
+  return fallback;
 }
 
 /** `--config <path>` (or `--config=<path>`), defaulting to the repo's own `llama/config.yaml`. */
 export function parseConfigArg(argv: string[]): string {
-  const index = argv.indexOf("--config");
-  if (index >= 0 && argv[index + 1] !== undefined) return argv[index + 1] as string;
-  const inline = argv.find((a) => a.startsWith("--config="));
-  if (inline !== undefined) return inline.slice("--config=".length);
-  return DEFAULT_CONFIG_PATH;
+  return parsePathArg(argv, "config", DEFAULT_CONFIG_PATH);
 }
 
 if (import.meta.main) {
   const path = parseConfigArg(Bun.argv.slice(2));
-  const findings = await checkServingRecipesFile(path);
+  const findings = await checkServingRecipesFile(
+    path,
+    parsePathArg(Bun.argv.slice(2), "visibility", resolveVisibilityPath(path)),
+    parsePathArg(Bun.argv.slice(2), "gateway", resolveGatewayPath(path)),
+  );
   for (const finding of findings) console.log(formatFinding(finding));
   if (findings.length > 0) {
     console.log(`${findings.length} non-conforming entr${findings.length === 1 ? "y" : "ies"} in ${path}`);
     process.exit(1);
   }
-  console.log(`ok — every served chat entry in ${path} conforms to docs/model-capabilities.md`);
+  console.log(`ok — every served chat entry in ${path} conforms to docs/model-capabilities.md, and every served key is declared in router/visibility.json`);
 }

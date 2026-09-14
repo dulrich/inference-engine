@@ -1,9 +1,9 @@
 # router/Dockerfile — @the-next-ai/ai-gateway (https://github.com/The-NeXT-AI/ai-gateway),
-# built from source at a pinned commit with an eight-patch vendored series. Never `npm install
+# built from source at a pinned commit with a ten-patch vendored series. Never `npm install
 # @the-next-ai/ai-gateway` and never a moving branch/tag — the pin below is a commit SHA.
 #
 # See router/AGENTS.md for the patch rationale and the never-set-ANTHROPIC_API_KEY constraint,
-# and router/patches/000{1,2,3,4,5,6,7,8}-*.patch for the changes themselves: 0001 omits x-api-key
+# and router/patches/00{01,02,03,04,05,06,07,08,09,10}-*.patch for the changes themselves: 0001 omits x-api-key
 # for the passthrough OAuth bearer, 0002 adds the local-leg prefill/idle-gap ping keepalive,
 # 0003 relays upstream error bodies byte-verbatim to Anthropic-protocol clients on the final
 # attempt, 0004 adds the POST /v1/messages/count_tokens route, 0005 is a dependency-only
@@ -13,16 +13,22 @@
 # reasoning intent (thinking / output_config.effort) onto per-model chat_template_kwargs on the
 # openai_chat_completions conversion leg, from the new gateway.config.json `effortKwargs` key,
 # and 0008 is a dependency-only lockfile bump (fastify 5.12.4, within the declared `^5.8.2`, no
-# source change).
+# source change), 0009 makes `xhigh`/`max` distinct effortKwargs levels (0007 folded both onto
+# `high` before lookup, so an xhigh/max config row was unreachable) with an exact-row-else-`high`
+# fallback that leaves every four-row map byte-for-byte unchanged, and 0010 clamps the upstream
+# answer-token budget (`max_tokens`/`max_completion_tokens`) down to a per-model ceiling on the
+# same leg, from the new gateway.config.json `maxOutputTokens` key — downward only, never a
+# raise, never another target.
 # The replace-vs-integrate design spike the stabilization series
 # (plans/router-prefill-keepalive-and-protocol-gaps.md) required before any further semantic
 # patch was run and answered "continue vendoring on this pin" with evidence —
 # docs/tool-calling-gateway/router-telemetry-baseline.md, section "Replace-vs-integrate
 # verdict" — which is what authorises 0006; 0007 is authorised by that section's dated second
 # entry ("Second entry — 2026-09-12, before semantic patch 0007 (effort mapping)"), which
-# re-ran the spike for a semantic conversion patch and again answered continue-vendoring. The
-# next semantic patch after 0007, or the first nontrivial pin-upgrade rebase, re-triggers that
-# spike.
+# re-ran the spike for a semantic conversion patch and again answered continue-vendoring; 0009
+# and 0010 are authorised together by that section's dated THIRD entry ("Third entry —
+# 2026-09-14, before semantic patches 0009 and 0010"). The next semantic patch after 0010, or
+# the first nontrivial pin-upgrade rebase, re-triggers that spike.
 #
 # Deviation from the plan's literal example command (recorded in
 # runs/dispatch/resident-router-wp-1-report.md): `git fetch --depth 1 origin 782cd51` (the short
@@ -83,7 +89,15 @@ COPY patches/0008-fastify-security-bump.patch /tmp/0008-fastify-security-bump.pa
 RUN git apply --check /tmp/0008-fastify-security-bump.patch \
     && git apply /tmp/0008-fastify-security-bump.patch
 
-# The repo's own package-lock.json — measured green 2026-08-25 (145 packages, <1s).
+COPY patches/0009-effort-kwargs-distinct-xhigh-max.patch /tmp/0009-effort-kwargs-distinct-xhigh-max.patch
+RUN git apply --check /tmp/0009-effort-kwargs-distinct-xhigh-max.patch \
+    && git apply /tmp/0009-effort-kwargs-distinct-xhigh-max.patch
+
+COPY patches/0010-max-tokens-clamp-claude-local.patch /tmp/0010-max-tokens-clamp-claude-local.patch
+RUN git apply --check /tmp/0010-max-tokens-clamp-claude-local.patch \
+    && git apply /tmp/0010-max-tokens-clamp-claude-local.patch
+
+# The repo's own package-lock.json — measured green 2026-08-25 (145 packages, <1s); 147 after patch 0008 (fastify 5.12.4, measured 2026-09-13).
 RUN npm ci
 
 # build.js -> esbuild bundle to dist/index.js — measured green 2026-08-25 (dist byte-identical
@@ -103,10 +117,15 @@ RUN npm run build
 # (output_config.effort incl. max/xhigh, thinking disabled, the budget_tokens cut points),
 # the no-op cases (no map, no level, non-chat target, no
 # standardRequest) and the body-keys-win merge, end to end through the Responses target build
-# and through parseProvidersFromRaw — is locked by effort-kwargs.test.ts (21). Baseline at
-# 782cd51 with 0001-0005 applied is 163/163; with 0006 it is 175/175; with 0007 it is 196/196,
-# 0 failing. A non-zero exit here fails the image build.
-RUN npx vitest run src/adapters/builtins/common.test.ts src/gateway/streaming-conversion.test.ts src/gateway/routes.test.ts src/gateway/request-telemetry.test.ts src/adapters/builtins/target/openai-chat-compat/effort-kwargs.test.ts
+# and through parseProvidersFromRaw — is locked by effort-kwargs.test.ts, which 0009 extends to
+# 27 with the distinct xhigh/max levels, the exact-row-else-high fallback and the cases proving
+# no OTHER level ever falls back. The answer-token clamp added by 0010 — clamps above the cap on
+# either budget key, passes through below/equal, never raises, sends the cap when the request
+# carries no budget, leaves an unreadable budget alone, is idempotent, and is a no-op with no
+# map / no entry / a non-chat target — is locked by max-tokens-clamp.test.ts (13). Baseline at
+# 782cd51 with 0001-0005 applied is 163/163; with 0006 it is 175/175; with 0007 it is 196/196;
+# with 0009 and 0010 it is 215/215, 0 failing. A non-zero exit here fails the image build.
+RUN npx vitest run src/adapters/builtins/common.test.ts src/gateway/streaming-conversion.test.ts src/gateway/routes.test.ts src/gateway/request-telemetry.test.ts src/adapters/builtins/target/openai-chat-compat/effort-kwargs.test.ts src/adapters/builtins/target/openai-chat-compat/max-tokens-clamp.test.ts
 
 # esbuild bundles everything except fastify/undici/ws (build.js's `external` list) into
 # dist/index.js, so pruning devDependencies is the only trim the runtime stage needs.
@@ -115,7 +134,7 @@ RUN npm prune --omit=dev
 FROM node:24-slim AS runtime
 
 LABEL org.opencontainers.image.title="inference-engine-router" \
-      org.opencontainers.image.description="@the-next-ai/ai-gateway 1.0.18, source build at 782cd51, eight-patch series: x-api-key passthrough-bearer omission, prefill/idle-gap ping keepalive, upstream error-body passthrough, /v1/messages/count_tokens route, dependency-only lockfile bump (find-my-way/fast-uri/brace-expansion), per-request telemetry jsonl sink, effort -> chat_template_kwargs mapping on the openai_chat_completions leg, dependency-only lockfile bump (fastify 5.12.4)"
+      org.opencontainers.image.description="@the-next-ai/ai-gateway 1.0.18, source build at 782cd51, ten-patch series: x-api-key passthrough-bearer omission, prefill/idle-gap ping keepalive, upstream error-body passthrough, /v1/messages/count_tokens route, dependency-only lockfile bump (find-my-way/fast-uri/brace-expansion), per-request telemetry jsonl sink, effort -> chat_template_kwargs mapping on the openai_chat_completions leg, dependency-only lockfile bump (fastify 5.12.4), distinct xhigh/max effort levels with a high-row fallback, per-model answer-token clamp on the same leg"
 
 WORKDIR /app
 

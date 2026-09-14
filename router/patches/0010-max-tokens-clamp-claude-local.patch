@@ -1,0 +1,469 @@
+diff --git a/src/adapters/builtins/target/openai-chat-compat/max-tokens-clamp.test.ts b/src/adapters/builtins/target/openai-chat-compat/max-tokens-clamp.test.ts
+new file mode 100644
+index 0000000..47e3f92
+--- /dev/null
++++ b/src/adapters/builtins/target/openai-chat-compat/max-tokens-clamp.test.ts
+@@ -0,0 +1,240 @@
++import { describe, expect, it } from 'vitest';
++import { parseProvidersFromRaw } from '../../../../config';
++import type { ProviderConfig, StandardRequest } from '../../../../types';
++import { parseAnthropicMessagesRequest } from '../../source/parsers';
++import { openAIResponsesTargetAdapter } from '../openai-responses';
++import { rewriteOpenAIChatCompatibleRequest } from '../shared';
++import { applyConfiguredMaxOutputTokens } from './max-tokens-clamp';
++
++const MAX_OUTPUT_TOKENS: ProviderConfig['maxOutputTokens'] = {
++  'qwen38-27b-iq3s': 8192
++};
++
++function localProviderConfig(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
++  return {
++    name: 'claude-local',
++    type: 'openai_chat_completions',
++    baseurl: 'http://inference-engine-llama:4806/v1',
++    models: ['qwen38-27b-iq3s', 'qwen36-a3b'],
++    maxOutputTokens: MAX_OUTPUT_TOKENS,
++    ...overrides
++  } as ProviderConfig;
++}
++
++function apply(
++  body: Record<string, unknown>,
++  providerConfig: ProviderConfig | undefined = localProviderConfig(),
++  model = 'qwen38-27b-iq3s'
++): Record<string, unknown> {
++  return applyConfiguredMaxOutputTokens(body, providerConfig, model);
++}
++
++describe('applyConfiguredMaxOutputTokens', () => {
++  it('clamps a request above the declared cap, on either budget key', () => {
++    expect(apply({ model: 'qwen38-27b-iq3s', max_tokens: 32000 }).max_tokens).toBe(8192);
++    expect(
++      apply({ model: 'qwen38-27b-iq3s', max_completion_tokens: 64000 }).max_completion_tokens
++    ).toBe(8192);
++  });
++
++  it('passes a budget below or equal to the cap through byte-untouched, and never raises it', () => {
++    const below = { model: 'qwen38-27b-iq3s', max_tokens: 256 };
++    expect(apply(below)).toBe(below);
++
++    const equal = { model: 'qwen38-27b-iq3s', max_tokens: 8192 };
++    expect(apply(equal)).toBe(equal);
++  });
++
++  it('sends the declared cap when the request carries no budget at all', () => {
++    expect(apply({ model: 'qwen38-27b-iq3s' }).max_tokens).toBe(8192);
++    // An explicitly-undefined key (how the conversion leg spells an absent max_output_tokens)
++    // is absent, not a value.
++    expect(apply({ model: 'qwen38-27b-iq3s', max_tokens: undefined }).max_tokens).toBe(8192);
++  });
++
++  it('leaves a present-but-unreadable budget alone rather than guessing', () => {
++    const body = { model: 'qwen38-27b-iq3s', max_tokens: '32000' };
++    expect(apply(body)).toBe(body);
++    expect(apply(body).max_tokens).toBe('32000');
++  });
++
++  it('leaves every other key on the body untouched', () => {
++    const body = {
++      model: 'qwen38-27b-iq3s',
++      messages: [],
++      temperature: 0,
++      max_tokens: 32000,
++      chat_template_kwargs: { reasoning_effort: 'low' }
++    };
++    const next = apply(body);
++
++    expect(next.model).toBe('qwen38-27b-iq3s');
++    expect(next.messages).toBe(body.messages);
++    expect(next.temperature).toBe(0);
++    expect(next.chat_template_kwargs).toBe(body.chat_template_kwargs);
++    expect(body.max_tokens).toBe(32000);
++  });
++
++  it('is idempotent, so the per-attempt rewrite over an already-clamped body is a no-op', () => {
++    const clamped = apply({ model: 'qwen38-27b-iq3s', max_tokens: 32000 });
++    expect(apply(clamped)).toBe(clamped);
++  });
++
++  it('is a no-op without a map, for a model the map omits, and for a non-chat target', () => {
++    const bare = { model: 'qwen38-27b-iq3s', max_tokens: 32000 };
++    expect(apply(bare, localProviderConfig({ maxOutputTokens: undefined }))).toBe(bare);
++
++    const other = { model: 'qwen36-a3b', max_tokens: 32000 };
++    expect(apply(other, localProviderConfig(), 'qwen36-a3b')).toBe(other);
++
++    const anthropicTarget = localProviderConfig({
++      type: 'anthropic_messages' as ProviderConfig['type']
++    });
++    const hosted = { model: 'qwen38-27b-iq3s', max_tokens: 32000 };
++    expect(apply(hosted, anthropicTarget)).toBe(hosted);
++    expect(applyConfiguredMaxOutputTokens(hosted, undefined, 'qwen38-27b-iq3s')).toBe(hosted);
++  });
++});
++
++describe('rewriteOpenAIChatCompatibleRequest with maxOutputTokens', () => {
++  it('clamps on the conversion leg beside the effort mapping', () => {
++    const rewritten = rewriteOpenAIChatCompatibleRequest(
++      { model: 'qwen38-27b-iq3s', messages: [], max_tokens: 32000 },
++      localProviderConfig(),
++      { standardRequest: { model: 'qwen38-27b-iq3s' } as StandardRequest }
++    ) as Record<string, unknown>;
++
++    expect(rewritten.max_tokens).toBe(8192);
++  });
++
++  it('clamps on the per-attempt call without a standardRequest too, and stays idempotent', () => {
++    const once = rewriteOpenAIChatCompatibleRequest(
++      { model: 'qwen38-27b-iq3s', messages: [], max_tokens: 32000 },
++      localProviderConfig()
++    ) as Record<string, unknown>;
++    expect(once.max_tokens).toBe(8192);
++
++    const twice = rewriteOpenAIChatCompatibleRequest(once, localProviderConfig()) as Record<
++      string,
++      unknown
++    >;
++    expect(twice.max_tokens).toBe(8192);
++  });
++});
++
++describe('maxOutputTokens end to end', () => {
++  it('reaches the upstream body built from an Anthropic-shape request', () => {
++    const parsed = parseAnthropicMessagesRequest({
++      model: 'qwen38-27b-iq3s',
++      max_tokens: 32000,
++      messages: [{ role: 'user', content: 'hello' }]
++    });
++
++    expect(parsed.ok).toBe(true);
++    if (!parsed.ok) {
++      return;
++    }
++
++    const built = openAIResponsesTargetAdapter.buildRequestFromStandard({
++      request: { headers: {} } as never,
++      standardRequest: parsed.value,
++      config: { openaiApiKey: 'sk-test', openaiBaseUrl: 'https://mock.local/v1' } as never,
++      targetProviderConfig: localProviderConfig() as never
++    });
++
++    expect(built.ok).toBe(true);
++    if (!built.ok) {
++      return;
++    }
++
++    const body = built.value.body as Record<string, unknown>;
++    expect(body.max_tokens).toBe(8192);
++    expect(body.model).toBe('qwen38-27b-iq3s');
++  });
++
++  it('leaves the upstream body untouched when the provider has no map', () => {
++    const parsed = parseAnthropicMessagesRequest({
++      model: 'qwen38-27b-iq3s',
++      max_tokens: 32000,
++      messages: [{ role: 'user', content: 'hello' }]
++    });
++
++    expect(parsed.ok).toBe(true);
++    if (!parsed.ok) {
++      return;
++    }
++
++    const built = openAIResponsesTargetAdapter.buildRequestFromStandard({
++      request: { headers: {} } as never,
++      standardRequest: parsed.value,
++      config: { openaiApiKey: 'sk-test', openaiBaseUrl: 'https://mock.local/v1' } as never,
++      targetProviderConfig: localProviderConfig({ maxOutputTokens: undefined }) as never
++    });
++
++    expect(built.ok).toBe(true);
++    if (!built.ok) {
++      return;
++    }
++
++    expect((built.value.body as Record<string, unknown>).max_tokens).toBe(32000);
++  });
++});
++
++describe('parseProvidersFromRaw maxOutputTokens', () => {
++  it('reads the per-model cap off provider config', () => {
++    const [provider] = parseProvidersFromRaw([
++      {
++        name: 'claude-local',
++        type: 'openai_chat_completions',
++        baseurl: 'http://inference-engine-llama:4806/v1',
++        models: ['qwen36-a3b', 'qwen38-27b-iq3s'],
++        maxOutputTokens: { 'qwen38-27b-iq3s': 32000, 'qwen36-a3b': 32000 }
++      }
++    ]);
++
++    expect(provider.maxOutputTokens).toEqual({
++      'qwen38-27b-iq3s': 32000,
++      'qwen36-a3b': 32000
++    });
++  });
++
++  it('drops unknown model keys and non-positive-integer values, and stays undefined when empty', () => {
++    const [provider] = parseProvidersFromRaw([
++      {
++        name: 'claude-local',
++        type: 'openai_chat_completions',
++        models: ['qwen38-27b-iq3s'],
++        maxOutputTokens: {
++          'qwen38-27b-iq3s': 8192,
++          'not-a-model': 4096
++        }
++      }
++    ]);
++    expect(provider.maxOutputTokens).toEqual({ 'qwen38-27b-iq3s': 8192 });
++
++    const [bad] = parseProvidersFromRaw([
++      {
++        name: 'claude-local',
++        type: 'openai_chat_completions',
++        models: ['qwen38-27b-iq3s'],
++        maxOutputTokens: { 'qwen38-27b-iq3s': '8192' }
++      }
++    ]);
++    expect(bad.maxOutputTokens).toBeUndefined();
++
++    const [zero] = parseProvidersFromRaw([
++      {
++        name: 'claude-local',
++        type: 'openai_chat_completions',
++        models: ['qwen38-27b-iq3s'],
++        maxOutputTokens: { 'qwen38-27b-iq3s': 0 }
++      }
++    ]);
++    expect(zero.maxOutputTokens).toBeUndefined();
++
++    const [absent] = parseProvidersFromRaw([
++      { name: 'claude-local', type: 'openai_chat_completions', models: ['qwen38-27b-iq3s'] }
++    ]);
++    expect(absent.maxOutputTokens).toBeUndefined();
++  });
++});
+diff --git a/src/adapters/builtins/target/openai-chat-compat/max-tokens-clamp.ts b/src/adapters/builtins/target/openai-chat-compat/max-tokens-clamp.ts
+new file mode 100644
+index 0000000..60b2e06
+--- /dev/null
++++ b/src/adapters/builtins/target/openai-chat-compat/max-tokens-clamp.ts
+@@ -0,0 +1,107 @@
++import type { ProviderConfig, ProviderMaxOutputTokensConfig } from '../../../../types';
++
++/**
++ * Clamps the upstream request's answer-token budget to a per-model ceiling on
++ * `openai_chat_completions` targets, configured per provider as `maxOutputTokens`.
++ *
++ * Why it exists: Claude Code sends `max_tokens` 32000 by default
++ * (`CLAUDE_CODE_MAX_OUTPUT_TOKENS`, max 64000) and this leg forwards it to llama-server
++ * unclamped, which is how a Qwen3.8-27B interactive session errored on max response tokens
++ * (user decision 2026-09-14). The declared cap is that model's
++ * `metadata.max_output.answer_tokens` in `llama/config.yaml` — the effective cap
++ * `min(publisher recommendation, 32000, context_length)` — crosswalked into
++ * `gateway.config.json` by the `max-tokens-crosswalk` rule of `bun run check:recipes`.
++ *
++ * Invariants (same no-op shape as patch 0007's effort mapping — this can never turn a request
++ * that used to succeed into a failure):
++ *   - only `openai_chat_completions` targets;
++ *   - only models that have a `maxOutputTokens` entry;
++ *   - only DOWNWARD: a budget at or below the cap is byte-untouched, and the cap is never
++ *     raised above what the caller asked for;
++ *   - a budget field that is present but not a readable positive number is left alone rather
++ *     than replaced with a guess;
++ *   - idempotent, so the per-attempt `applyProviderRequestOverrides` pass over an
++ *     already-clamped body is a no-op.
++ */
++
++const MAX_OUTPUT_TOKEN_BODY_KEYS = ['max_tokens', 'max_completion_tokens'] as const;
++
++export function applyConfiguredMaxOutputTokens(
++  body: Record<string, unknown>,
++  targetProviderConfig: ProviderConfig | undefined,
++  model: string | undefined
++): Record<string, unknown> {
++  if (targetProviderConfig?.type !== 'openai_chat_completions') {
++    return body;
++  }
++
++  const cap = readMaxOutputTokensForModel(targetProviderConfig.maxOutputTokens, model);
++  if (cap === undefined) {
++    return body;
++  }
++
++  let nextBody: Record<string, unknown> | undefined;
++  let sawBudgetField = false;
++  for (const key of MAX_OUTPUT_TOKEN_BODY_KEYS) {
++    const declared = readMaxOutputTokensValue(body[key]);
++    if (declared === 'unreadable') {
++      // Present but not a positive finite number: never guessed at, never rewritten.
++      sawBudgetField = true;
++      continue;
++    }
++    if (declared === undefined) {
++      continue;
++    }
++    sawBudgetField = true;
++    if (declared > cap) {
++      nextBody = { ...(nextBody ?? body), [key]: cap };
++    }
++  }
++
++  if (!sawBudgetField) {
++    // No budget on the wire at all: send the declared cap rather than letting the upstream
++    // default run to the context window.
++    nextBody = { ...(nextBody ?? body), max_tokens: cap };
++  }
++
++  return nextBody ?? body;
++}
++
++/** `undefined` for an absent/null field, `'unreadable'` for a present non-positive-number one. */
++function readMaxOutputTokensValue(value: unknown): number | 'unreadable' | undefined {
++  if (value === undefined || value === null) {
++    return undefined;
++  }
++  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
++    return value;
++  }
++  return 'unreadable';
++}
++
++function readMaxOutputTokensForModel(
++  config: ProviderMaxOutputTokensConfig | undefined,
++  model: string | undefined
++): number | undefined {
++  const key = model?.trim();
++  if (!key || !isMaxOutputTokensRecord(config)) {
++    return undefined;
++  }
++
++  const direct = config[key];
++  if (typeof direct === 'number') {
++    return direct;
++  }
++
++  const normalized = key.toLowerCase();
++  for (const [candidate, cap] of Object.entries(config)) {
++    if (candidate.trim().toLowerCase() === normalized && typeof cap === 'number') {
++      return cap;
++    }
++  }
++
++  return undefined;
++}
++
++function isMaxOutputTokensRecord(value: unknown): value is Record<string, unknown> {
++  return typeof value === 'object' && value !== null && !Array.isArray(value);
++}
+diff --git a/src/adapters/builtins/target/shared.ts b/src/adapters/builtins/target/shared.ts
+index 46e5758..5ece325 100644
+--- a/src/adapters/builtins/target/shared.ts
++++ b/src/adapters/builtins/target/shared.ts
+@@ -14,6 +14,7 @@ import { asBoolean, asNumber, asString, extractTextFromPart, isObject } from '..
+ import { OPENAI_RESPONSES_REASONING_FORMAT } from '../reasoning-envelope';
+ import { resolveOpenAIChatProviderThinkingAdapter } from './openai-chat-compat';
+ import { applyConfiguredEffortKwargs } from './openai-chat-compat/effort-kwargs';
++import { applyConfiguredMaxOutputTokens } from './openai-chat-compat/max-tokens-clamp';
+ 
+ interface OpenAIChatCompatibleRewriteOptions {
+   generatedReasoningMessageFields?: boolean;
+@@ -46,6 +47,8 @@ export function rewriteOpenAIChatCompatibleRequest(
+ 
+   nextBody = applyConfiguredEffortKwargs(nextBody, targetProviderConfig, options.standardRequest, model);
+ 
++  nextBody = applyConfiguredMaxOutputTokens(nextBody, targetProviderConfig, model);
++
+   if (shouldStripOpenAIChatThinkingOptions(targetProviderConfig)) {
+     nextBody = omitOpenAIChatThinkingOptionsFields(nextBody);
+   }
+diff --git a/src/config.ts b/src/config.ts
+index 971dcc2..7d3c635 100644
+--- a/src/config.ts
++++ b/src/config.ts
+@@ -159,6 +159,7 @@ interface ProviderJsonConfig {
+   thinkingOptions?: unknown;
+   modelMetadata?: unknown;
+   effortKwargs?: unknown;
++  maxOutputTokens?: unknown;
+   extraHeaders?: unknown;
+   extraBody?: unknown;
+   billing?: unknown;
+@@ -3650,6 +3651,7 @@ function parseProvidersConfig(value: unknown): ProviderConfig[] {
+       ),
+       modelMetadata: parseProviderModelMetadata(item.modelMetadata, models),
+       effortKwargs: parseProviderEffortKwargs(item.effortKwargs, models),
++      maxOutputTokens: parseProviderMaxOutputTokens(item.maxOutputTokens, models),
+       extraHeaders: parseModelScopedHeaders(item.extraHeaders, models),
+       extraBody: parseModelScopedBody(item.extraBody, models),
+       billing: parseModelScopedBilling(item.billing, models),
+@@ -4656,6 +4658,40 @@ function parseProviderEffortKwargs(
+   return Object.keys(parsed).length > 0 ? parsed : undefined;
+ }
+ 
++/**
++ * `maxOutputTokens`: per-model answer-token ceiling (patch 0010). Model keys are validated
++ * against the provider's own `models[]` and values must be positive integers; anything else is
++ * dropped silently, never a load-time throw, and the field stays undefined when nothing
++ * survives — so a malformed entry degrades to "no clamp", never to a wrong clamp.
++ */
++function parseProviderMaxOutputTokens(
++  value: unknown,
++  models: string[]
++): ProviderConfig['maxOutputTokens'] {
++  if (!isPlainObject(value)) {
++    return undefined;
++  }
++
++  const modelNames = new Set(models.map((model) => model.trim().toLowerCase()).filter(Boolean));
++  const parsed: NonNullable<ProviderConfig['maxOutputTokens']> = {};
++  for (const [rawModel, rawCap] of Object.entries(value)) {
++    const model = rawModel.trim();
++    if (
++      !model ||
++      typeof rawCap !== 'number' ||
++      !Number.isInteger(rawCap) ||
++      rawCap <= 0 ||
++      (modelNames.size > 0 && !modelNames.has(model.toLowerCase()))
++    ) {
++      continue;
++    }
++
++    parsed[model] = rawCap;
++  }
++
++  return Object.keys(parsed).length > 0 ? parsed : undefined;
++}
++
+ function parseModelScopedBody(value: unknown, models: string[]): ModelScopedBodyConfig {
+   if (!isPlainObject(value)) {
+     return {
+diff --git a/src/types.ts b/src/types.ts
+index 1a4c930..fea5d06 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -68,6 +68,15 @@ export interface ProviderModelMetadata {
+  */
+ export type ProviderEffortKwargsConfig = Record<string, Record<string, Record<string, unknown>>>;
+ 
++/**
++ * Per-model ceiling for the upstream answer-token budget (`max_tokens` /
++ * `max_completion_tokens`) on `openai_chat_completions` targets, keyed by the provider-side
++ * model id. The value is that model's `metadata.max_output.answer_tokens` in
++ * `llama/config.yaml` — the effective cap min(publisher recommendation, 32000, context) — and
++ * the clamp is downward only (patch 0010).
++ */
++export type ProviderMaxOutputTokensConfig = Record<string, number>;
++
+ export type ProviderHealthStatus = 'healthy' | 'degraded' | 'unknown' | 'down';
+ 
+ export interface ProviderHealthConfig {
+@@ -120,6 +129,7 @@ export interface ProviderConfig {
+   openaiChatThinkingOptions?: 'auto' | 'enabled' | 'disabled';
+   modelMetadata?: Record<string, ProviderModelMetadata>;
+   effortKwargs?: ProviderEffortKwargsConfig;
++  maxOutputTokens?: ProviderMaxOutputTokensConfig;
+   extraHeaders: ModelScopedHeadersConfig;
+   extraBody: ModelScopedBodyConfig;
+   billing: ModelScopedBillingConfig;

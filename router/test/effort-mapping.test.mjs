@@ -20,8 +20,14 @@
 //       max_tokens/stop/tools), so a client `seed` does not reach llama-server — greedy decoding
 //       at temperature 0 is what makes the samples comparable, and the seed below is sent only
 //       so the intent is on the record.
-//   (b) effort high — ACCEPTANCE only, no token gate: `high` maps to the template's `xhigh`,
-//       which is the template default, and was not separable from no-kwargs at n=2 (audit M3).
+//   (b) effort high and effort xhigh — ACCEPTANCE only, no token gate. Since router patch 0009
+//       (plans/bench-dashboard-serving-control.md WP-3) these are DISTINCT levels with distinct
+//       rows in the six-row map: `high` now sends `reasoning_effort: medium` and `xhigh` sends
+//       `reasoning_effort: xhigh` (which `high` sent before WP-3, and which is the template
+//       default — not separable from no-kwargs at n=2, audit M3). Both cells assert acceptance
+//       only: an unmapped or misspelled value makes the Jinja template 500, so a 2xx IS the
+//       assertion. `max` is deliberately not a third cell — it shares xhigh's row, so it would
+//       bill a turn to re-measure the same thing.
 //   (c) thinking:{type:"disabled"} — deterministic, one sample: the response must carry NO
 //       `thinking` content block at all (the map sends `enable_thinking:false`).
 //
@@ -180,13 +186,27 @@ test(`output_config.effort medium outputs at least ${Math.round((MARGIN - 1) * 1
     );
   });
 
-test("output_config.effort high is accepted (maps to the template's xhigh)",
+test("output_config.effort high is accepted (maps to the template's medium since 0009)",
   { timeout: TEST_TIMEOUT_MS }, async () => {
-    // Acceptance only: xhigh is the template default and was not separable at n=2 (audit M3).
-    // An unmapped value would make the Jinja template 500, so a 2xx here is the real assertion.
+    // Acceptance only. An unmapped value would make the Jinja template 500, so a 2xx here is
+    // the real assertion. Patch 0009 gave `high` its own row (`reasoning_effort: medium`); the
+    // token count is logged for the record, not gated, since this cell never had a gate.
     const r = await messages(probeBody({ output_config: { effort: "high" } }));
     const tokens = outputTokens(r, "effort high");
     console.log(`[effort] high   output_tokens=${tokens} stop_reason=${r.json?.stop_reason}`);
+  });
+
+test("output_config.effort xhigh is accepted (its OWN row since patch 0009)",
+  { timeout: TEST_TIMEOUT_MS }, async () => {
+    // Before 0009 the router folded `xhigh` onto `high` before lookup, so an `xhigh` config row
+    // was unreachable and this request was indistinguishable from the `high` one. It now sends
+    // `reasoning_effort: xhigh` from its own row. Acceptance only, for the same reason as the
+    // `high` cell: xhigh is the template default, so it is not separable from no-kwargs by token
+    // count at n=2 (audit M3) — the 2xx is what proves the level reached the template intact,
+    // and the router's upstream-body preview is where the merged kwargs are read off.
+    const r = await messages(probeBody({ output_config: { effort: "xhigh" } }));
+    const tokens = outputTokens(r, "effort xhigh");
+    console.log(`[effort] xhigh  output_tokens=${tokens} stop_reason=${r.json?.stop_reason}`);
   });
 
 test("thinking:{type:\"disabled\"} yields a response with no thinking block",

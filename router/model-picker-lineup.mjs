@@ -1,15 +1,23 @@
 #!/usr/bin/env node
 // Generate Claude Code `modelPicker.options` rows from the router's gateway.config.json.
 //
-// The config is the single source of truth: there is no hand-maintained id list here, only the
-// family/label table below. Every `<provider>/<model>` id in the config becomes one picker row,
-// except the hosted `anthropic` provider (its ids duplicate Claude Code's built-in rows, and the
-// bare id is what Claude Code sends anyway) and any id whose `consumers` tag excludes Claude Code
-// (see CLAUDE_CODE_CONSUMER below). `replaceBuiltInOptions` is never written, so the built-in
-// subscription rows stay first.
+// The config is the single source of truth for the id list: there is no hand-maintained one
+// here, only the family/label table below. Every `<provider>/<model>` id in the config becomes
+// one picker row, except the hosted `anthropic` provider (its ids duplicate Claude Code's
+// built-in rows, and the bare id is what Claude Code sends anyway) and any id Claude Code is not
+// a declared consumer of. `replaceBuiltInOptions` is never written, so the built-in subscription
+// rows stay first.
+//
+// VISIBILITY HAS TWO HOMES, on purpose (plans/bench-dashboard-serving-control.md WP-3). For the
+// `claude-local` provider it comes from `router/visibility.json` — the one declaration the bench
+// dashboard writes and the Open WebUI sync also reads — keyed by `llama/config.yaml` model key,
+// crosswalked to a gateway id. For every OTHER provider it is still the `consumers` tag on the
+// provider in gateway.config.json (see CLAUDE_CODE_CONSUMER below): those ids have no
+// llama/config.yaml key to declare, so the declaration has nothing to say about them.
 //
 // Usage:
-//   model-picker-lineup.mjs [--config <path>] [--home <dir>] [--env-file <path>]
+//   model-picker-lineup.mjs [--config <path>] [--visibility <path>] [--home <dir>]
+//                           [--env-file <path>]
 //                           [--check | --write [--launch-profile] [--canonicalize]]
 //
 // No mode flag prints the rows array as JSON to stdout.
@@ -21,6 +29,7 @@ import { fileURLToPath } from "node:url";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG = path.join(SCRIPT_DIR, "gateway.config.json");
+const DEFAULT_VISIBILITY = path.join(SCRIPT_DIR, "visibility.json");
 const DEFAULT_ENV_FILE = "<code-root>/fleet-tools/.env";
 const GATEWAY_KEY_VAR = "INFERENCE_ROUTER_GATEWAY_KEY";
 const ROUTER_URL = "http://127.0.0.1:4813";
@@ -41,6 +50,11 @@ const EXCLUDED_PROVIDERS = new Set(["anthropic"]);
 const CLAUDE_CODE_CONSUMER = "cc";
 // Provider name -> the word used as the "leg" in a label.
 const LEG_NAMES = { "claude-local": "local" };
+// The one provider whose visibility is declared in visibility.json rather than tagged in the
+// gateway config. Same string the LEG_NAMES table and the label rules already key off.
+const DECLARED_PROVIDER = "claude-local";
+// The declaration schema this generator understands.
+const VISIBILITY_SCHEMA = "serving-visibility-v1";
 // Credential env keys the generator must never write (OAuth stays the credential).
 const FORBIDDEN_ENV_KEYS = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"];
 // Static env keys the generator owns under --launch-profile, alongside the dynamic
@@ -95,6 +109,7 @@ function die(message, code = 2) {
 function parseArgs(argv) {
   const opts = {
     config: DEFAULT_CONFIG,
+    visibility: DEFAULT_VISIBILITY,
     home: os.homedir(),
     envFile: DEFAULT_ENV_FILE,
     mode: "print",
@@ -110,6 +125,7 @@ function parseArgs(argv) {
       return v;
     };
     if (arg === "--config") opts.config = value();
+    else if (arg === "--visibility") opts.visibility = value();
     else if (arg === "--home") opts.home = value();
     else if (arg === "--env-file") opts.envFile = value();
     else if (arg === "--check") opts.mode = "check";
@@ -118,7 +134,7 @@ function parseArgs(argv) {
     else if (arg === "--canonicalize") opts.canonicalize = true;
     else if (arg === "--help" || arg === "-h") {
       process.stdout.write(
-        "usage: model-picker-lineup.mjs [--config <path>] [--home <dir>] [--env-file <path>] [--check | --write [--launch-profile] [--canonicalize]]\n",
+        "usage: model-picker-lineup.mjs [--config <path>] [--visibility <path>] [--home <dir>] [--env-file <path>] [--check | --write [--launch-profile] [--canonicalize]]\n",
       );
       process.exit(0);
     } else die(`unknown argument: ${arg}`);
@@ -178,19 +194,34 @@ function consumersFor(provider, modelId) {
   return null;
 }
 
-function isClaudeCodeModel(provider, modelId) {
+// The declared consumers of one gateway id, from visibility.json: the entry whose `gateway_id`
+// equals it. `null` when no entry claims that id — which for the declared provider is drift, not
+// "every consumer" (--check reports it; buildRows treats it as not-a-row so a stale declaration
+// can never silently add one).
+function declaredConsumersFor(visibility, modelId) {
+  for (const entry of Object.values(visibility?.models ?? {})) {
+    if (entry?.gateway_id === modelId) return Array.isArray(entry.consumers) ? entry.consumers : [];
+  }
+  return null;
+}
+
+function isClaudeCodeModel(provider, modelId, visibility) {
+  if (provider.name === DECLARED_PROVIDER) {
+    const declared = declaredConsumersFor(visibility, modelId);
+    return declared !== null && declared.includes(CLAUDE_CODE_CONSUMER);
+  }
   const tags = consumersFor(provider, modelId);
   return tags === null || tags.includes(CLAUDE_CODE_CONSUMER);
 }
 
-export function buildRows(config) {
+export function buildRows(config, visibility) {
   const rows = [];
   for (const provider of config.providers ?? []) {
     if (!provider || typeof provider.name !== "string") continue;
     if (EXCLUDED_PROVIDERS.has(provider.name)) continue;
     const leg = LEG_NAMES[provider.name] ?? provider.name;
     for (const modelId of provider.models ?? []) {
-      if (!isClaudeCodeModel(provider, modelId)) continue;
+      if (!isClaudeCodeModel(provider, modelId, visibility)) continue;
       const entry = describeFamily(modelId);
       const effort = effortOf(modelId, entry);
       // Codex bare ids carry the proper model name only (user, 2026-09-13): effort is the
@@ -220,6 +251,59 @@ function readConfig(configPath) {
   } catch (err) {
     die(`config ${configPath} is not valid JSON: ${err.message}`);
   }
+}
+
+// Fail-closed: an unreadable or malformed declaration is an error, never an empty map. Silently
+// treating it as empty would drop every local row from the picker and report "in sync".
+function readVisibility(visibilityPath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(visibilityPath, "utf8");
+  } catch {
+    die(`cannot read visibility declaration ${visibilityPath}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    die(`visibility declaration ${visibilityPath} is not valid JSON: ${err.message}`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    die(`visibility declaration ${visibilityPath} is not a JSON object`);
+  }
+  if (parsed.schema !== VISIBILITY_SCHEMA) {
+    die(`visibility declaration ${visibilityPath} carries schema ${JSON.stringify(parsed.schema ?? null)}, expected ${VISIBILITY_SCHEMA}`);
+  }
+  if (parsed.models === null || typeof parsed.models !== "object" || Array.isArray(parsed.models)) {
+    die(`visibility declaration ${visibilityPath} has no \`models\` map`);
+  }
+  return parsed;
+}
+
+// The two files the declaration split can drift between, checked in the direction gateway.config
+// owns: every id the declared provider serves must be declared, and (WP-3 clamp, patch 0010) must
+// carry the answer-token cap the clamp reads. The retired `consumers` key reappearing on that
+// provider is the third mode — the primitive this declaration replaced.
+function configDriftFailure(config, visibility, configPath, visibilityPath) {
+  const provider = (config.providers ?? []).find((p) => p?.name === DECLARED_PROVIDER);
+  if (!provider) return null;
+  if (provider.consumers !== undefined) {
+    return `provider ${DECLARED_PROVIDER} in ${configPath} still carries a \`consumers\` key — visibility for that provider lives in ${visibilityPath} since WP-3; delete the key`;
+  }
+  const undeclared = (provider.models ?? []).filter(
+    (modelId) => declaredConsumersFor(visibility, modelId) === null,
+  );
+  if (undeclared.length > 0) {
+    return `${DECLARED_PROVIDER} model id(s) ${undeclared.join(", ")} have no matching \`gateway_id\` in ${visibilityPath}`;
+  }
+  const caps = provider.maxOutputTokens;
+  const uncapped = (provider.models ?? []).filter(
+    (modelId) => typeof (caps ?? {})[modelId] !== "number",
+  );
+  if (uncapped.length > 0) {
+    return `${DECLARED_PROVIDER} model id(s) ${uncapped.join(", ")} have no \`maxOutputTokens\` entry in ${configPath} — patch 0010's clamp reads that map (value = the key's \`max_output.answer_tokens\`)`;
+  }
+  return null;
 }
 
 function readGatewayKey(envFile) {
@@ -324,7 +408,9 @@ function checkFailure(rows, parsed, launchProfile, gatewayKey, file) {
 
 function main() {
   const opts = parseArgs(process.argv.slice(2));
-  const rows = buildRows(readConfig(opts.config));
+  const config = readConfig(opts.config);
+  const visibility = readVisibility(opts.visibility);
+  const rows = buildRows(config, visibility);
 
   if (opts.mode === "print") {
     process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
@@ -335,6 +421,11 @@ function main() {
   const gatewayKey = opts.launchProfile ? readGatewayKey(opts.envFile) : null;
 
   if (opts.mode === "check") {
+    const drift = configDriftFailure(config, visibility, opts.config, opts.visibility);
+    if (drift) {
+      process.stderr.write(`model-picker-lineup: ${drift}\n`);
+      process.exit(1);
+    }
     const { original, parsed } = readSettings(file);
     if (original === null) {
       process.stderr.write(`model-picker-lineup: ${file} does not exist; ${rows.length} rows generated\n`);

@@ -12,7 +12,9 @@ Run: python3 -m unittest discover -s scripts -p 'test_sync_openwebui_capabilitie
 """
 
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -198,6 +200,188 @@ class PlanChangeSamplingTest(unittest.TestCase):
         self.assertEqual(action, "noop")
         self.assertEqual(diffs, [])
         self.assertEqual(body, {})
+
+
+def _visibility(**models):
+    """A `serving-visibility-v1` document over the given `key=consumers` pairs."""
+    return {
+        "schema": "sync.VISIBILITY_SCHEMA",
+        "models": {k: {"gateway_id": None, "consumers": v} for k, v in models.items()},
+    }
+
+
+def _write_visibility(doc):
+    handle = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+    json.dump(doc, handle)
+    handle.close()
+    return Path(handle.name)
+
+
+class VisibilityDeclarationTest(unittest.TestCase):
+    """WP-3: `is_active` is owned by the sync and driven by `router/visibility.json`."""
+
+    def _doc(self, **models):
+        doc = _visibility(**models)
+        doc["schema"] = sync.VISIBILITY_SCHEMA
+        return doc
+
+    def test_default_path_is_resolved_from_the_script_not_the_cwd(self):
+        path = sync.default_visibility_path()
+        self.assertTrue(path.is_absolute())
+        self.assertEqual(path.parts[-2:], ("router", "visibility.json"))
+        self.assertEqual(path.parent.parent, Path(sync.__file__).resolve().parent.parent)
+
+    def test_desired_is_active_follows_the_declared_consumers(self):
+        models = self._doc(
+            visible=["cc", "openwebui"],
+            owui_only=["openwebui"],
+            cc_only=["cc"],
+            router_only=[],
+        )["models"]
+        self.assertTrue(sync.desired_is_active(models, "visible"))
+        self.assertTrue(sync.desired_is_active(models, "owui_only"))
+        self.assertFalse(sync.desired_is_active(models, "cc_only"))
+        self.assertFalse(sync.desired_is_active(models, "router_only"))
+
+    def test_an_undeclared_router_id_is_an_error_not_a_default(self):
+        models = self._doc(declared=["openwebui"])["models"]
+        with self.assertRaises(sync.SyncError) as ctx:
+            sync.desired_is_active(models, "some-new-key")
+        self.assertIn("no entry in the visibility declaration", str(ctx.exception))
+
+    def test_unknown_consumer_token_is_rejected(self):
+        doc = self._doc(model_a=["openwebui", "slack"])
+        path = _write_visibility(doc)
+        self.addCleanup(path.unlink)
+        with self.assertRaises(sync.SyncError) as ctx:
+            sync.load_visibility(path)
+        self.assertIn("unknown consumer token", str(ctx.exception))
+
+    def test_missing_unparseable_and_wrong_schema_are_all_fail_closed(self):
+        missing = Path(tempfile.gettempdir()) / "definitely-not-a-visibility-file-9e3f.json"
+        with self.assertRaises(sync.SyncError):
+            sync.load_visibility(missing)
+
+        broken = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        broken.write("{not json")
+        broken.close()
+        self.addCleanup(lambda: Path(broken.name).unlink())
+        with self.assertRaises(sync.SyncError) as ctx:
+            sync.load_visibility(Path(broken.name))
+        self.assertIn("not valid JSON", str(ctx.exception))
+
+        doc = self._doc(model_a=["openwebui"])
+        doc["schema"] = "serving-visibility-v2"
+        path = _write_visibility(doc)
+        self.addCleanup(path.unlink)
+        with self.assertRaises(sync.SyncError) as ctx:
+            sync.load_visibility(path)
+        self.assertIn("expected", str(ctx.exception))
+
+    def test_a_conforming_declaration_loads(self):
+        path = _write_visibility(self._doc(model_a=["cc", "openwebui"], model_b=[]))
+        self.addCleanup(path.unlink)
+        models = sync.load_visibility(path)
+        self.assertEqual(sorted(models), ["model_a", "model_b"])
+        self.assertTrue(sync.desired_is_active(models, "model_a"))
+        self.assertFalse(sync.desired_is_active(models, "model_b"))
+
+
+class PlanIsActiveTest(unittest.TestCase):
+    def test_toggle_only_when_the_observed_value_differs(self):
+        self.assertEqual(sync.plan_is_active(True, {"is_active": False}), ("toggle", False))
+        self.assertEqual(sync.plan_is_active(False, {"is_active": True}), ("toggle", True))
+
+    def test_no_call_at_all_when_it_already_matches(self):
+        self.assertEqual(sync.plan_is_active(True, {"is_active": True}), ("noop", True))
+        self.assertEqual(sync.plan_is_active(False, {"is_active": False}), ("noop", False))
+
+    def test_an_absent_row_is_create_with_no_observed_value_to_fabricate(self):
+        self.assertEqual(sync.plan_is_active(False, None), ("create", None))
+        self.assertEqual(sync.plan_is_active(True, None), ("create", None))
+
+
+class _RecordingHttp:
+    """Stands in for `sync._http_json`; records every call and replays scripted responses."""
+
+    def __init__(self, rows_by_call):
+        self.calls = []
+        self.rows_by_call = list(rows_by_call)
+
+    def __call__(self, method, url, *, headers=None, body=None, timeout=None):
+        self.calls.append((method, url, body))
+        if url.endswith("/api/v1/models/base"):
+            return 200, self.rows_by_call.pop(0)
+        return 200, {"ok": True}
+
+
+class ApplyIsActiveTest(unittest.TestCase):
+    """The apply path: create, RE-READ, toggle only if the created row's actual value differs."""
+
+    def _patch(self, http):
+        original = sync._http_json
+        sync._http_json = http
+        self.addCleanup(lambda: setattr(sync, "_http_json", original))
+
+    def test_created_row_is_re_read_and_toggled_only_when_its_default_differs(self):
+        # Open WebUI creates the row active; the declaration wants it inactive.
+        http = _RecordingHttp([[{"id": "model-a", "is_active": True}], [{"id": "model-a", "is_active": False}]])
+        self._patch(http)
+        failures = sync.apply_model(
+            "http://owui", "key", "model-a", "create", {"id": "model-a"}, "create", False
+        )
+        self.assertEqual(failures, 0)
+        urls = [url for _, url, _ in http.calls]
+        self.assertEqual(urls[0], "http://owui/api/v1/models/create")
+        self.assertEqual(urls[1], "http://owui/api/v1/models/base")  # the re-read
+        self.assertIn("/api/v1/models/model/toggle?id=model-a", urls[2])
+        self.assertEqual(urls[3], "http://owui/api/v1/models/base")  # the read-back
+
+    def test_created_row_that_already_matches_is_never_toggled(self):
+        http = _RecordingHttp([[{"id": "model-a", "is_active": False}]])
+        self._patch(http)
+        failures = sync.apply_model(
+            "http://owui", "key", "model-a", "create", {"id": "model-a"}, "create", False
+        )
+        self.assertEqual(failures, 0)
+        self.assertFalse(any("toggle" in url for _, url, _ in http.calls))
+
+    def test_an_in_sync_row_issues_no_call_of_any_kind(self):
+        http = _RecordingHttp([])
+        self._patch(http)
+        failures = sync.apply_model("http://owui", "key", "model-a", "noop", {}, "noop", True)
+        self.assertEqual(failures, 0)
+        self.assertEqual(http.calls, [])
+
+    def test_a_toggle_that_does_not_move_the_flag_is_a_failure_not_a_green_run(self):
+        # Probe by body, never status code: a 200 whose read-back still disagrees fails.
+        http = _RecordingHttp([[{"id": "model-a", "is_active": True}]])
+        self._patch(http)
+        failures = sync.apply_model("http://owui", "key", "model-a", "noop", {}, "toggle", False)
+        self.assertEqual(failures, 1)
+
+
+class MainFailClosedTest(unittest.TestCase):
+    def test_a_broken_declaration_stops_the_run_before_any_http_call(self):
+        http = _RecordingHttp([])
+        original = sync._http_json
+        sync._http_json = http
+        self.addCleanup(lambda: setattr(sync, "_http_json", original))
+
+        missing = Path(tempfile.gettempdir()) / "definitely-not-a-visibility-file-4a71.json"
+        code = sync.main(
+            [
+                "--openwebui-url",
+                "http://owui",
+                "--openwebui-key",
+                "k",
+                "--visibility",
+                str(missing),
+                "--apply",
+            ]
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(http.calls, [], "a fail-closed declaration must make no call at all")
 
 
 if __name__ == "__main__":

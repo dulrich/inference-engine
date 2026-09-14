@@ -16,13 +16,14 @@
         "nemotron-4b",
         "some-future-model-9b"
       ],
-      "consumers": {
-        "qwen38-27b-iq3s": ["cc"],
-        "qwen38-27b-iq3s-off": ["cc"],
-        "qwen38-27b-iq3s-low": ["cc"],
-        "qwen38-27b-iq3s-medium": ["cc"],
-        "qwen38-27b-iq3s-high": ["cc"],
-        "nemotron-4b": ["openwebui"]
+      "maxOutputTokens": {
+        "qwen38-27b-iq3s": 32000,
+        "qwen38-27b-iq3s-off": 32000,
+        "qwen38-27b-iq3s-low": 32000,
+        "qwen38-27b-iq3s-medium": 32000,
+        "qwen38-27b-iq3s-high": 32000,
+        "nemotron-4b": 32000,
+        "some-future-model-9b": 32000
       }
     },
     {

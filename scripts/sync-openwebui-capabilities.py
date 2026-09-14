@@ -25,21 +25,38 @@ WebUI's update route replaces `name`/`meta`/`params` wholesale rather than patch
                                         every other `params` key on the row is human-owned and
                                         round-trips untouched)
 
+It also owns `is_active` for every router-served id (user decision 2026-09-14,
+`plans/bench-dashboard-serving-control.md` WP-3), driven by the visibility declaration
+`router/visibility.json` (`--visibility`, default resolved from this file's own location, never
+from the cwd). `is_active` is desired-true exactly when that model key's declared `consumers`
+include `openwebui`. The route is a TOGGLE, not a setter, so the script compares the desired
+value against the one it already read off `/api/v1/models/base` and posts only on a difference;
+a row it had to create is RE-READ first, because a created row's default is not assumed. Every
+other Open WebUI setting stays admin-owned.
+
 Rows Open WebUI has never seen (no admin has opened/customized that model yet) don't exist in
 its DB at all — this script creates them via `POST .../create` with a minimal body (id, the
 router's display name, the three managed `meta` fields, and `params` seeded with whatever
 allowlisted sampling keys the router model carries — `{}` for a model with no sampling block).
 Existing rows are merge-updated via `POST .../model/update`. A router id with no live
 counterpart (a retired/renamed model key — see the alias-contract discussion in
-`llama/config.yaml`'s header) is reported and left untouched; this script never deletes.
+`llama/config.yaml`'s header) is reported and left untouched; this script never deletes —
+hiding a model is deactivation, not deletion.
 
 Credentials: `OPENWEBUI_URL` and `OPENWEBUI_API_KEY` come from the environment (or the
 `--openwebui-url`/`--openwebui-key` flags) — there is no default and nothing is ever written to
 a file or logged. The router URL is not a credential and defaults to the loopback publish.
 
-Dry-run (the default) prints the intended per-model diff and makes no mutating call. `--apply`
+Dry-run (the default) prints the intended per-model diff and makes no mutating call. For a
+model with NO existing row the dry-run prints `CREATE` plus the INTENDED `is_active` — there is
+no observed value to transition from, so it never prints a fabricated transition. `--apply`
 performs the sync; running `--apply` twice in a row must show an empty diff on the second run
-(the desired state is a pure function of the router's live capability block).
+(the desired state is a pure function of the router's live capability block plus
+`router/visibility.json`).
+
+Fail-closed: a missing, unparseable or unknown-schema declaration, an entry carrying a consumer
+token outside the closed vocabulary, or a router id no entry declares, all stop the run before
+any mutating call.
 """
 
 from __future__ import annotations
@@ -51,9 +68,20 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 DEFAULT_ROUTER_URL = "http://127.0.0.1:4811"
+
+# The visibility declaration (`plans/bench-dashboard-serving-control.md` WP-3). Keyed by
+# `llama/config.yaml` model key — which is also `/v1/models` `id` and the Open WebUI row id, so
+# no crosswalk is needed on this side (`gateway_id` is the Claude Code picker's business).
+VISIBILITY_SCHEMA = "serving-visibility-v1"
+# Closed vocabulary, canonical order. There is deliberately no `router` token: "router-only" is
+# the COMPLEMENT — an entry with `[]` is reachable by id through the gateway and appears in
+# neither the Claude Code picker nor Open WebUI's active set.
+CONSUMER_VOCABULARY = ("cc", "openwebui")
+OPENWEBUI_CONSUMER = "openwebui"
 REQUEST_TIMEOUT_S = 15
 
 # The only `meta.llamaswap.sampling` keys this script ever writes into an Open WebUI model
@@ -73,6 +101,90 @@ SAMPLING_PARAM_KEYS = (
 
 class SyncError(RuntimeError):
     """Raised for any non-recoverable discovery/apply failure; message is safe to print."""
+
+
+def default_visibility_path() -> Path:
+    """`<repo>/router/visibility.json`, resolved from THIS FILE, never from the cwd."""
+    return Path(__file__).resolve().parent.parent / "router" / "visibility.json"
+
+
+def load_visibility(path: Path) -> Dict[str, Dict[str, Any]]:
+    """Return the declaration's `models` map. Fail-closed on every malformed shape.
+
+    Raises SyncError for: a missing or unreadable file, invalid JSON, a schema literal this
+    script does not understand, a non-mapping `models`, an entry that is not a mapping, a
+    `consumers` value that is not a list, and any consumer token outside CONSUMER_VOCABULARY.
+    Treating any of these as "no declaration" would silently deactivate every model, which is
+    why none of them degrades to a default.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SyncError(f"cannot read visibility declaration {path}: {exc}") from exc
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SyncError(f"visibility declaration {path} is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise SyncError(f"visibility declaration {path} is not a JSON object")
+    if parsed.get("schema") != VISIBILITY_SCHEMA:
+        raise SyncError(
+            f"visibility declaration {path} carries schema {parsed.get('schema')!r}, "
+            f"expected {VISIBILITY_SCHEMA!r}"
+        )
+    models = parsed.get("models")
+    if not isinstance(models, dict):
+        raise SyncError(f"visibility declaration {path} has no `models` mapping")
+    for model_key, entry in models.items():
+        if not isinstance(entry, dict):
+            raise SyncError(
+                f"visibility declaration {path}: entry {model_key!r} is not a mapping"
+            )
+        consumers = entry.get("consumers")
+        if not isinstance(consumers, list):
+            raise SyncError(
+                f"visibility declaration {path}: {model_key!r} has no `consumers` list"
+            )
+        unknown = [c for c in consumers if c not in CONSUMER_VOCABULARY]
+        if unknown:
+            raise SyncError(
+                f"visibility declaration {path}: {model_key!r} carries unknown consumer "
+                f"token(s) {', '.join(repr(u) for u in unknown)} -- the closed vocabulary is "
+                f"{', '.join(CONSUMER_VOCABULARY)}"
+            )
+    return models
+
+
+def desired_is_active(visibility_models: Dict[str, Dict[str, Any]], router_id: str) -> bool:
+    """`is_active` this script drives the row to: `openwebui` in its declared consumers.
+
+    An undeclared router id is drift between the declaration and what the router serves, not a
+    default -- guessing here would either hide a model or expose one, so it raises.
+    """
+    entry = visibility_models.get(router_id)
+    if entry is None:
+        raise SyncError(
+            f"router model id {router_id!r} has no entry in the visibility declaration -- "
+            "the declaration must carry every served key (`bun run check:recipes` gates this)"
+        )
+    return OPENWEBUI_CONSUMER in entry["consumers"]
+
+
+def plan_is_active(
+    desired_active: bool, existing: Optional[Dict[str, Any]]
+) -> Tuple[str, Optional[bool]]:
+    """Return (action, observed) for one row's `is_active`.
+
+    action is "create" (no row exists, so there is nothing to transition FROM -- the caller
+    prints the intended value and, on apply, re-reads the created row), "toggle" (a row exists
+    and its observed value differs from the desired one) or "noop" (already correct). The route
+    is a TOGGLE, not a setter, so "already correct" must issue NO call at all: posting a toggle
+    at a row that already matches would flip it to the wrong value.
+    """
+    if existing is None:
+        return "create", None
+    observed = bool(existing.get("is_active"))
+    return ("toggle" if observed != desired_active else "noop"), observed
 
 
 def _http_json(
@@ -300,6 +412,93 @@ def apply_change(
     )
 
 
+def fetch_openwebui_row(
+    openwebui_url: str, api_key: str, model_id: str
+) -> Optional[Dict[str, Any]]:
+    """Re-read one row off `/api/v1/models/base` (the same admin route the walk uses).
+
+    Used after a `create` and after a `toggle`: a created row's `is_active` default is not
+    assumed, and a toggle is verified by reading the value back rather than by trusting a 200
+    (repo-wide rule: probe by response body, never status code).
+    """
+    rows = fetch_openwebui_rows(openwebui_url, api_key)
+    return rows.get(model_id)
+
+
+def toggle_is_active(openwebui_url: str, api_key: str, model_id: str) -> Tuple[int, Any]:
+    """POST `/api/v1/models/model/toggle?id=...` -- a FLIP, never a setter.
+
+    The caller must already have established that the observed value differs from the desired
+    one; issuing this at a row that already matches would move it the wrong way. An empty JSON
+    object is sent as the body so the request carries a Content-Length; the route takes its
+    argument in the query string (the shape `docs/model-capabilities.md` names, confirmed by the
+    user-present reversible probe in WP-3's hold).
+    """
+    quoted = urllib.parse.quote(model_id, safe="")
+    return _http_json(
+        "POST",
+        openwebui_url.rstrip("/") + f"/api/v1/models/model/toggle?id={quoted}",
+        headers={"Authorization": f"Bearer {api_key}"},
+        body={},
+    )
+
+
+def apply_model(
+    openwebui_url: str,
+    api_key: str,
+    router_id: str,
+    action: str,
+    body: Dict[str, Any],
+    active_action: str,
+    wanted_active: bool,
+) -> int:
+    """Perform one model's create/update and, if needed, its `is_active` toggle.
+
+    Returns the number of failures (0 or 1) and prints what it did. Order is load-bearing: the
+    row must exist before it can be toggled, and a row this pass created is RE-READ rather than
+    assumed to have defaulted either way. After a toggle the value is read back and compared --
+    a 200 from a route that did not move the flag is exactly the "healthy service has told you
+    nothing" failure this repo gates against.
+    """
+    if action != "noop":
+        status, resp_body = apply_change(openwebui_url, api_key, action, body)
+        if status not in (200, 201):
+            print(f"    APPLY FAILED status={status} body={resp_body!r}")
+            return 1
+        print(f"    applied (status={status})")
+
+    if action == "create":
+        created = fetch_openwebui_row(openwebui_url, api_key, router_id)
+        if created is None:
+            print("    APPLY FAILED: created row not readable back from /api/v1/models/base")
+            return 1
+        observed = bool(created.get("is_active"))
+        print(f"    is_active on the created row: {observed!r} (re-read, not assumed)")
+        needs_toggle = observed != wanted_active
+    else:
+        needs_toggle = active_action == "toggle"
+
+    if not needs_toggle:
+        return 0
+
+    status, resp_body = toggle_is_active(openwebui_url, api_key, router_id)
+    if status not in (200, 201):
+        print(f"    APPLY FAILED (toggle) status={status} body={resp_body!r}")
+        return 1
+    print(f"    toggled is_active (status={status}) body={resp_body!r}")
+
+    after = fetch_openwebui_row(openwebui_url, api_key, router_id)
+    observed_after = None if after is None else bool(after.get("is_active"))
+    if observed_after != wanted_active:
+        print(
+            f"    APPLY FAILED (toggle): is_active reads back {observed_after!r}, "
+            f"wanted {wanted_active!r}"
+        )
+        return 1
+    print(f"    is_active verified {observed_after!r} on re-read")
+    return 0
+
+
 def parse_args(argv: List[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=(
@@ -326,6 +525,15 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         "--openwebui-key",
         default=os.environ.get("OPENWEBUI_API_KEY"),
         help="Open WebUI admin API key (default: $OPENWEBUI_API_KEY; required, never logged)",
+    )
+    p.add_argument(
+        "--visibility",
+        default=None,
+        metavar="PATH",
+        help=(
+            "visibility declaration path (default: <repo>/router/visibility.json, resolved "
+            "from this script's own location, never from the cwd)"
+        ),
     )
     p.add_argument(
         "--only",
@@ -359,6 +567,18 @@ def main(argv: List[str]) -> int:
         )
         return 2
 
+    visibility_path = (
+        Path(args.visibility) if args.visibility else default_visibility_path()
+    )
+
+    # Fail-closed, and deliberately BEFORE the first HTTP call: a malformed declaration must
+    # stop the run without a single mutating request having been possible.
+    try:
+        visibility_models = load_visibility(visibility_path)
+    except SyncError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
     try:
         router_models = fetch_router_models(args.router_url)
         existing_rows = fetch_openwebui_rows(args.openwebui_url, args.openwebui_key)
@@ -380,10 +600,11 @@ def main(argv: List[str]) -> int:
     print(f"=== sync-openwebui-capabilities: {mode} ===")
     print(f"router:     {args.router_url}")
     print(f"open webui: {args.openwebui_url}")
+    print(f"visibility: {visibility_path}")
     print(f"models:     {len(router_models)}")
     print()
 
-    counts = {"create": 0, "update": 0, "noop": 0}
+    counts = {"create": 0, "update": 0, "toggle": 0, "noop": 0}
     failures = 0
 
     for entry in router_models:
@@ -396,23 +617,46 @@ def main(argv: List[str]) -> int:
 
         desired = compute_desired(entry)
         existing = existing_rows.get(router_id)
+        try:
+            wanted_active = desired_is_active(visibility_models, router_id)
+        except SyncError as exc:
+            # Drift, not a default: this model is skipped entirely, no call of any kind, and
+            # the run ends non-zero.
+            failures += 1
+            print(f"[{router_id}] FAIL: {exc}")
+            print()
+            continue
         action, diffs, body = plan_change(router_id, router_name, desired, existing)
-        counts[action] += 1
+        active_action, observed_active = plan_is_active(wanted_active, existing)
 
-        label = {"create": "CREATE", "update": "UPDATE", "noop": "no-op"}[action]
+        # "no-op" must mean BOTH planes are in sync; a row whose metadata matches but whose
+        # visibility does not is a TOGGLE, not an unchanged row.
+        overall = action if action != "noop" else ("toggle" if active_action == "toggle" else "noop")
+        counts[overall] += 1
+
+        label = {"create": "CREATE", "update": "UPDATE", "toggle": "TOGGLE", "noop": "no-op"}[overall]
         print(f"[{router_id}] {label}")
-        for field, old, new in diffs:
-            print(f"    {field}: {old!r} -> {new!r}")
-        if action == "noop":
+        for field, old_value, new_value in diffs:
+            print(f"    {field}: {old_value!r} -> {new_value!r}")
+        if active_action == "create":
+            # No observed value exists to transition from -- print the INTENT, never a fabricated
+            # `True -> False`.
+            print(f"    is_active: (no row yet) -> {wanted_active!r}")
+        elif active_action == "toggle":
+            print(f"    is_active: {observed_active!r} -> {wanted_active!r}")
+        if overall == "noop":
             print("    (already in sync)")
 
-        if args.apply and action != "noop":
-            status, resp_body = apply_change(args.openwebui_url, args.openwebui_key, action, body)
-            if status not in (200, 201):
-                failures += 1
-                print(f"    APPLY FAILED status={status} body={resp_body!r}")
-            else:
-                print(f"    applied (status={status})")
+        if args.apply:
+            failures += apply_model(
+                args.openwebui_url,
+                args.openwebui_key,
+                router_id,
+                action,
+                body,
+                active_action,
+                wanted_active,
+            )
         print()
 
     stale = sorted(set(existing_rows) - router_ids)
@@ -424,10 +668,11 @@ def main(argv: List[str]) -> int:
 
     print(
         f"summary: {counts['create']} create, {counts['update']} update, "
-        f"{counts['noop']} unchanged, {len(stale)} orphaned row(s) left untouched"
+        f"{counts['toggle']} visibility toggle, {counts['noop']} unchanged, "
+        f"{len(stale)} orphaned row(s) left untouched"
     )
-    if args.apply and failures:
-        print(f"error: {failures} apply call(s) failed -- see APPLY FAILED lines above")
+    if failures:
+        print(f"error: {failures} model(s) failed -- see the FAIL / APPLY FAILED lines above")
         return 1
     return 0
 

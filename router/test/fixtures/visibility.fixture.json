@@ -1,0 +1,13 @@
+{
+  "schema": "serving-visibility-v1",
+  "models": {
+    "Fixture-Qwen-27B-UD-IQ3_S": { "gateway_id": "qwen38-27b-iq3s", "consumers": ["cc", "openwebui"] },
+    "Fixture-Qwen-27B-UD-IQ3_S-reasoning-off": { "gateway_id": "qwen38-27b-iq3s-off", "consumers": ["cc"] },
+    "Fixture-Qwen-27B-UD-IQ3_S-reasoning-low": { "gateway_id": "qwen38-27b-iq3s-low", "consumers": ["cc"] },
+    "Fixture-Qwen-27B-UD-IQ3_S-reasoning-medium": { "gateway_id": "qwen38-27b-iq3s-medium", "consumers": ["cc"] },
+    "Fixture-Qwen-27B-UD-IQ3_S-reasoning-high": { "gateway_id": "qwen38-27b-iq3s-high", "consumers": ["cc"] },
+    "Fixture-Nemotron-4B-UD-Q4_K_XL": { "gateway_id": "nemotron-4b", "consumers": ["openwebui"] },
+    "Fixture-Future-9B": { "gateway_id": "some-future-model-9b", "consumers": ["cc"] },
+    "Fixture-Embed-f16": { "gateway_id": null, "consumers": [] }
+  }
+}

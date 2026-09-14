@@ -1,0 +1,15 @@
+{
+  "host": "0.0.0.0",
+  "port": 4813,
+  "providers": [
+    {
+      "name": "claude-local",
+      "type": "openai_chat_completions",
+      "models": ["fixture-chat", "fixture-moe"],
+      "maxOutputTokens": {
+        "fixture-chat": 32000,
+        "fixture-moe": 8192
+      }
+    }
+  ]
+}

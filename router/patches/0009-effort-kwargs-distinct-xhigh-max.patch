@@ -1,0 +1,242 @@
+diff --git a/src/adapters/builtins/target/openai-chat-compat/effort-kwargs.test.ts b/src/adapters/builtins/target/openai-chat-compat/effort-kwargs.test.ts
+index 070b690..dba3f44 100644
+--- a/src/adapters/builtins/target/openai-chat-compat/effort-kwargs.test.ts
++++ b/src/adapters/builtins/target/openai-chat-compat/effort-kwargs.test.ts
+@@ -15,6 +15,18 @@ const EFFORT_KWARGS: ProviderConfig['effortKwargs'] = {
+   }
+ };
+ 
++/** The total six-row map WP-3 ships in gateway.config.json: `xhigh`/`max` are their own rows. */
++const TOTAL_EFFORT_KWARGS: ProviderConfig['effortKwargs'] = {
++  'qwen38-27b-iq3s': {
++    low: { reasoning_effort: 'low' },
++    medium: { reasoning_effort: 'medium' },
++    high: { reasoning_effort: 'medium' },
++    xhigh: { reasoning_effort: 'xhigh' },
++    max: { reasoning_effort: 'xhigh' },
++    disabled: { enable_thinking: false }
++  }
++};
++
+ function localProviderConfig(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
+   return {
+     name: 'claude-local',
+@@ -51,9 +63,10 @@ describe('deriveEffortKwargsLevel', () => {
+     expect(deriveEffortKwargsLevel(standardRequest({ output_config: { effort: 'high' } }))).toBe('high');
+   });
+ 
+-  it('folds max and xhigh onto high, case- and whitespace-insensitively', () => {
+-    expect(deriveEffortKwargsLevel(standardRequest({ output_config: { effort: 'max' } }))).toBe('high');
+-    expect(deriveEffortKwargsLevel(standardRequest({ output_config: { effort: 'xhigh' } }))).toBe('high');
++  it('derives max and xhigh as their OWN levels, case- and whitespace-insensitively', () => {
++    expect(deriveEffortKwargsLevel(standardRequest({ output_config: { effort: 'max' } }))).toBe('max');
++    expect(deriveEffortKwargsLevel(standardRequest({ output_config: { effort: 'xhigh' } }))).toBe('xhigh');
++    expect(deriveEffortKwargsLevel(standardRequest({ output_config: { effort: ' XHIGH ' } }))).toBe('xhigh');
+     expect(deriveEffortKwargsLevel(standardRequest({ output_config: { effort: ' HIGH ' } }))).toBe('high');
+   });
+ 
+@@ -118,6 +131,71 @@ describe('applyConfiguredEffortKwargs', () => {
+     });
+   });
+ 
++  it('uses the exact xhigh and max rows when the model declares them', () => {
++    const total = localProviderConfig({ effortKwargs: TOTAL_EFFORT_KWARGS });
++
++    expect(
++      apply(standardRequest({ output_config: { effort: 'xhigh' } }), { model: 'qwen38-27b-iq3s' }, total)
++        .chat_template_kwargs
++    ).toEqual({ reasoning_effort: 'xhigh' });
++    expect(
++      apply(standardRequest({ output_config: { effort: 'max' } }), { model: 'qwen38-27b-iq3s' }, total)
++        .chat_template_kwargs
++    ).toEqual({ reasoning_effort: 'xhigh' });
++    // `high` is now its own row and is no longer the row xhigh/max borrow.
++    expect(
++      apply(standardRequest({ output_config: { effort: 'high' } }), { model: 'qwen38-27b-iq3s' }, total)
++        .chat_template_kwargs
++    ).toEqual({ reasoning_effort: 'medium' });
++  });
++
++  it('falls back to the high row for xhigh/max on a map that declares neither', () => {
++    // Byte-for-byte the pre-0009 behaviour of the shipped four-row map: both folded onto `high`.
++    expect(apply(standardRequest({ output_config: { effort: 'xhigh' } })).chat_template_kwargs).toEqual({
++      reasoning_effort: 'xhigh'
++    });
++    expect(apply(standardRequest({ output_config: { effort: 'max' } })).chat_template_kwargs).toEqual({
++      reasoning_effort: 'xhigh'
++    });
++  });
++
++  it('never falls back for a level that is not xhigh/max, so an unmapped level stays a passthrough', () => {
++    const partial = localProviderConfig({
++      effortKwargs: { 'qwen38-27b-iq3s': { high: { reasoning_effort: 'xhigh' } } }
++    });
++
++    for (const effort of ['low', 'medium']) {
++      const body = { model: 'qwen38-27b-iq3s' };
++      expect(apply(standardRequest({ output_config: { effort } }), body, partial)).toBe(body);
++    }
++    const disabledBody = { model: 'qwen38-27b-iq3s' };
++    expect(apply(standardRequest({ thinking: { type: 'disabled' } }), disabledBody, partial)).toBe(
++      disabledBody
++    );
++  });
++
++  it('is still a passthrough for xhigh/max when the map declares no high row either', () => {
++    const lowOnly = localProviderConfig({
++      effortKwargs: { 'qwen38-27b-iq3s': { low: { reasoning_effort: 'low' } } }
++    });
++    const body = { model: 'qwen38-27b-iq3s' };
++
++    expect(apply(standardRequest({ output_config: { effort: 'xhigh' } }), body, lowOnly)).toBe(body);
++    expect(apply(standardRequest({ output_config: { effort: 'max' } }), body, lowOnly)).toBe(body);
++  });
++
++  it('leaves the budget_tokens derivation on high, which is still its ceiling', () => {
++    const total = localProviderConfig({ effortKwargs: TOTAL_EFFORT_KWARGS });
++
++    expect(
++      apply(
++        standardRequest({ thinking: { type: 'enabled', budget_tokens: 32000 } }),
++        { model: 'qwen38-27b-iq3s' },
++        total
++      ).chat_template_kwargs
++    ).toEqual({ reasoning_effort: 'medium' });
++  });
++
+   it('leaves the rest of the body, including the model id, untouched', () => {
+     const body = { model: 'qwen38-27b-iq3s', messages: [], temperature: 0, thinking: { type: 'disabled' } };
+     const next = apply(standardRequest({ thinking: { type: 'disabled' } }), body);
+@@ -336,6 +414,28 @@ describe('parseProvidersFromRaw effortKwargs', () => {
+     expect(body.chat_template_kwargs).toEqual({ reasoning_effort: 'xhigh' });
+   });
+ 
++  it('carries the six-row total map through, xhigh and max included', () => {
++    const [provider] = parseProvidersFromRaw([
++      {
++        name: 'claude-local',
++        type: 'openai_chat_completions',
++        baseurl: 'http://inference-engine-llama:4806/v1',
++        models: ['qwen38-27b-iq3s'],
++        effortKwargs: TOTAL_EFFORT_KWARGS
++      }
++    ]);
++
++    expect(provider.effortKwargs).toEqual(TOTAL_EFFORT_KWARGS);
++    expect(
++      applyConfiguredEffortKwargs(
++        { model: 'qwen38-27b-iq3s' },
++        provider,
++        standardRequest({ output_config: { effort: 'xhigh' } }),
++        'qwen38-27b-iq3s'
++      ).chat_template_kwargs
++    ).toEqual({ reasoning_effort: 'xhigh' });
++  });
++
+   it('drops unknown model keys and non-object levels without throwing, and stays undefined when empty', () => {
+     const [provider] = parseProvidersFromRaw([
+       {
+diff --git a/src/adapters/builtins/target/openai-chat-compat/effort-kwargs.ts b/src/adapters/builtins/target/openai-chat-compat/effort-kwargs.ts
+index fb6ca63..b4b8f4d 100644
+--- a/src/adapters/builtins/target/openai-chat-compat/effort-kwargs.ts
++++ b/src/adapters/builtins/target/openai-chat-compat/effort-kwargs.ts
+@@ -8,7 +8,9 @@ import type { ProviderConfig, ProviderEffortKwargsConfig, StandardRequest } from
+  * Invariants (never a 400, never an unmapped value):
+  *   - only `openai_chat_completions` targets;
+  *   - only models that have an `effortKwargs` map entry;
+- *   - only levels that map entry lists;
++ *   - only levels that map entry lists, with `xhigh`/`max` falling back to the `high` row when
++ *     the model's map does not declare them (patch 0009 — before it, both were folded onto
++ *     `high` before lookup, so a four-row map is unchanged);
+  *   - a no-op without a `standardRequest` (the per-attempt `applyProviderRequestOverrides` call
+  *     runs this same rewrite without one and must not disturb an already-merged object);
+  *   - keys already on the body win, so a caller-supplied kwargs value is never overwritten.
+@@ -16,7 +18,19 @@ import type { ProviderConfig, ProviderEffortKwargsConfig, StandardRequest } from
+  *     `extraBody[model].chat_template_kwargs` also still wins.
+  */
+ 
+-export type EffortKwargsLevel = 'low' | 'medium' | 'high' | 'disabled';
++export type EffortKwargsLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'disabled';
++
++/**
++ * The two levels that fall back to the `high` row when the model's map does not declare them.
++ * This is what keeps a four-row (`low`/`medium`/`high`/`disabled`) config byte-for-byte
++ * identical to its pre-0009 behaviour, where `xhigh`/`max` were folded onto `high` before
++ * lookup: an undeclared `xhigh` still lands on the `high` row. Every other level stays
++ * exact-or-passthrough — an unmapped `low` must never silently become `high`.
++ */
++const EFFORT_KWARGS_HIGH_FALLBACK_LEVELS: ReadonlySet<EffortKwargsLevel> = new Set([
++  'xhigh',
++  'max'
++]);
+ 
+ /** budget_tokens cut points (plan WP-2 / audit E1); 8192 is the unsuffixed entry's backstop. */
+ const EFFORT_KWARGS_BUDGET_LOW_MAX = 2048;
+@@ -42,7 +56,7 @@ export function applyConfiguredEffortKwargs(
+     return body;
+   }
+ 
+-  const kwargs = levels[level];
++  const kwargs = readEffortKwargsForLevel(levels, level);
+   if (!isEffortKwargsRecord(kwargs)) {
+     return body;
+   }
+@@ -108,18 +122,38 @@ function readEffortKwargsForModel(
+   return undefined;
+ }
+ 
++/**
++ * The level's own row when the model declares it; otherwise, for `xhigh`/`max` only, the `high`
++ * row. Anything else (including an undeclared `low`, `medium`, `high` or `disabled`) stays a
++ * passthrough — the Qwen3.8 template 500s on a `reasoning_effort` value it does not know, so an
++ * unmapped level is never a guess.
++ */
++function readEffortKwargsForLevel(
++  levels: Record<string, unknown>,
++  level: EffortKwargsLevel
++): unknown {
++  const exact = levels[level];
++  if (isEffortKwargsRecord(exact)) {
++    return exact;
++  }
++  return EFFORT_KWARGS_HIGH_FALLBACK_LEVELS.has(level) ? levels.high : undefined;
++}
++
+ function normalizeEffortKwargsEffort(value: unknown): EffortKwargsLevel | undefined {
+   if (typeof value !== 'string') {
+     return undefined;
+   }
+ 
+   const normalized = value.trim().toLowerCase();
+-  if (normalized === 'low' || normalized === 'medium' || normalized === 'high') {
++  if (
++    normalized === 'low' ||
++    normalized === 'medium' ||
++    normalized === 'high' ||
++    normalized === 'xhigh' ||
++    normalized === 'max'
++  ) {
+     return normalized;
+   }
+-  if (normalized === 'max' || normalized === 'xhigh') {
+-    return 'high';
+-  }
+   return undefined;
+ }
+ 
+diff --git a/src/types.ts b/src/types.ts
+index 2cf192e..1a4c930 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -62,8 +62,9 @@ export interface ProviderModelMetadata {
+ /**
+  * Per-model reasoning-effort level -> literal `chat_template_kwargs` object to merge into the
+  * upstream body on `openai_chat_completions` targets. Keyed by the provider-side model id, then
+- * by level (`low` | `medium` | `high` | `disabled`); values are template vocabulary, so only
+- * models someone has measured get a map.
++ * by level (`low` | `medium` | `high` | `xhigh` | `max` | `disabled`); values are template
++ * vocabulary, so only models someone has measured get a map. `xhigh`/`max` are distinct levels
++ * since patch 0009 and fall back to the `high` row when a map does not declare them.
+  */
+ export type ProviderEffortKwargsConfig = Record<string, Record<string, Record<string, unknown>>>;
+ 

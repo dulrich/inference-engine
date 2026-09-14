@@ -1,0 +1,15 @@
+{
+  "host": "0.0.0.0",
+  "port": 4813,
+  "providers": [
+    {
+      "name": "claude-local",
+      "type": "openai_chat_completions",
+      "models": ["nc-dup", "nc-crosswalk"],
+      "maxOutputTokens": {
+        "nc-dup": 32000,
+        "nc-crosswalk": 16384
+      }
+    }
+  ]
+}

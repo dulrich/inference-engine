@@ -15,7 +15,7 @@ from-scratch worker can run this with nothing beyond what's already on the host 
 
 ## Files
 
-29 production modules. Several CLI entry points own the run loops and argparse surfaces;
+31 production modules. Several CLI entry points own the run loops and argparse surfaces;
 everything else is a module they compose. The `*_`-prefixed families are the WP-R1..R4 splits of
 `plans/repository-tooling-structural-remediation.md` — each extracted module names its origin and
 its review finding in its own docstring, so `head -3 <module>.py` tells you why it exists.
@@ -75,16 +75,22 @@ its review finding in its own docstring, so `head -3 <module>.py` tells you why 
 - `control_phases.py` — the dispatcher's six phases and its crash recovery.
 - `control_process.py` — process/boot identity reads.
 
+**Serving control** (WP-5 of `plans/bench-dashboard-serving-control.md`) — a SECOND control plane, deliberately separate from the one above: same disciplines, different failure domain, its own crontab line and its own lock, because folding serving applies into the GPU-run pump would put the declaration edit behind the run lock.
+
+- `serving_protocol.py` — the serving plane's on-disk protocol: the `serving-request-v1` / `serving-status-v1` / `serving-visibility-v1` literals, the `srv-` id grammar, the closed consumer vocabulary, and the fail-closed request validator (including the declaration's own `cc` ⇒ non-null `gateway_id` invariant). Pure: no locking, no writes, no subprocesses.
+- `serving_dispatcher.py` — the minutely pass: ingest the `srv-*.json` drop-box, rewrite `router/visibility.json`, re-run the two generators that project it, publish `control/host/serving-status.json`, unlink, prune. See "Serving control" under Scheduling below.
+
 **Other:**
 
 - `sampling_table.py` — the per-model-family recommended "production" sampling table.
 - `gates.sh` — the executable form of this directory's gate list (see `AGENTS.md`).
+- `serving-dispatch.sh` — the serving dispatcher's credential wrapper; the operator's minutely crontab line runs this, never `serving_dispatcher.py` directly.
 - `pyproject.toml` / `uv.lock` — **dev-only** Ruff + Pyright configuration. The runtime stays
   Python-stdlib-only; nothing here is a runtime dependency.
 
 **Data and tests:**
 
-- `tests/` — stdlib `unittest` suite (574 tests) covering all of the above. Run it from the repo
+- `tests/` — stdlib `unittest` suite (649 tests) covering all of the above. Run it from the repo
   root; the summary goes to **stderr**, because the suite prints JSON verification blocks to
   stdout:
   `python3 -m unittest discover -s llama/bakeoff/tests -p 'test_*.py' 2>&1 >/dev/null | tail -8`
@@ -1012,6 +1018,34 @@ crontab on its own. Until WP-6 lands them, the nightly simply never fires; once 
 stays governed by the `armed` marker above (currently absent -- nothing runs until an explicit
 `arm`). The dispatcher line is safe to run while disarmed: with no requests and no live run,
 a pass only refreshes `status.json`.
+
+### Serving control -- the second plane (`serving_dispatcher.py`, `serving-dispatch.sh`)
+
+A separate minutely pass, a separate crontab line, a separate lock (`<state-dir>/serving-dispatch.lock`). It consumes `srv-<UTCcompact>-<16 hex>.json` request files written by the bench dashboard's `POST /api/serving/visibility`, applies them to the repo-owned declaration `router/visibility.json`, and publishes `control/host/serving-status.json` (`serving-status-v1`) every pass -- including passes with no pending request, so the dashboard's visibility chips are authoritative within a minute of install and go `stale` (the same 180 s threshold as the queue plane's own offline banner) if the cron stops.
+
+Why separate rather than a seventh phase of the dispatcher above: the two planes have different failure domains, and folding a serving apply into the GPU-run pump would put the declaration edit behind the run lock.
+
+One pass, in order: **ingest** (`srv-` basename grammar, `O_NOFOLLOW`, an 8 KiB bound, body/basename id agreement, the `serving-request-v1` literal, a declared `model_key`, the closed `cc`/`openwebui` vocabulary, a parseable `requested_at`, and -- the declaration's own invariant -- `cc` only on a key whose `gateway_id` is non-null, rejected with `reason: "cc requires a gateway id"` before anything is written); **apply**, latest request per `model_key` winning by `(requested_at, request_id)` ascending, rewriting only that key's `consumers` (canonically ordered, deduplicated; `gateway_id` untouched) through the same temp-file + `os.replace` discipline as every other durable control file; **publish**; **unlink**; **prune**.
+
+**The generators are the reconciliation loop; the request is only the trigger.** After the declaration is rewritten the pass runs `node <repo>/router/model-picker-lineup.mjs --write` and then `python3 <repo>/scripts/sync-openwebui-capabilities.py --apply` -- both read the declaration and project it (the Claude Code model picker's rows, and Open WebUI's `is_active`). If either exits non-zero the request is recorded `failed` with a reason naming the step and **the declaration edit is kept**: the next pass re-runs both idempotently from the declaration whether or not a new request arrives, which is what makes a failed sync self-healing without a retry queue. The picker is invoked with bare `--write` on purpose -- it re-serialises `settings.json` and replaces only `modelPicker.options`, so an existing `--launch-profile` env block survives untouched, and `--launch-profile` would need fleet-tools's gateway key, which this plane never holds.
+
+A request file is unlinked only **after** its disposition is durable in `serving-status.json`'s `recent[]` (bounded to 20, newest first; `last_request` is `recent[0]`). A crash between the two therefore leaves a request that is re-read and re-applied idempotently, never one that vanished unrecorded.
+
+**The drop-box is shared with the bake-off plane.** `control/requests/` carries both `req-*.json` and `srv-*.json`; each plane ignores the other's basenames at ingest (`control_phases.ingest_pass` matches `req-` only, and this plane matches `srv-` only). The one place they touch: `control_phases.prune_phase` globs `*.json` over that directory and unlinks **anything** older than 30 days, this plane's files included. Terminalization means a serving request lives for at most a minute, so that is unreachable in practice -- but it is real coupling, and a future change to either prune must be made knowing it.
+
+The crontab line runs the wrapper, never the module directly, because `sync-openwebui-capabilities.py --apply` needs `OPENWEBUI_URL` and `OPENWEBUI_API_KEY` -- which have no default by design -- and a cron line has no useful environment. `serving-dispatch.sh` sources them from `~/.config/inference-serving/env` (overridable with `INFERENCE_SERVING_ENV`), verifies that file is mode `0600` and owned by the invoking user (refusing with exit 2 otherwise), and execs the dispatcher, which inherits the environment untouched. Neither the wrapper nor the dispatcher ever echoes, logs, or passes a credential **value** anywhere -- a flag value would be visible in process listings, so the environment is the only path.
+
+```
+# ~/.config/inference-serving/env -- mode 0600, owner-only, outside the repo
+OPENWEBUI_URL=http://192.0.2.100:4840
+OPENWEBUI_API_KEY=<the Open WebUI admin key, same value as fleet-tools/.env>
+```
+
+```cron
+* * * * * llama/bakeoff/serving-dispatch.sh >> ~/.local/state/inference-bakeoff/serving-dispatch.log 2>&1
+```
+
+**Both the env file and the crontab line are installed by the operator, never by an agent** -- the same rule as the two lines above, and the first live end-to-end apply is an operator-present exercise. Until they are installed the plane is simply inert: no status file is published, `GET /api/serving/status` answers `{available: false}`, and the dashboard's chips render disabled with the reason. The dispatcher's own stdout is a one-line JSON pass summary (`{"applied":0,"failed":0,"ignored":0,"pruned":0,"rejected":0}`), which is the whole content of a quiet minute in that log.
 
 ### Manual-window flow
 

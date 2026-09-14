@@ -195,12 +195,13 @@ test("a straggler retry arriving after the turn completed is replayed the outcom
   assert.equal(answered.json.content[0].text, "done");
 
   // The same request again, minutes late in SDK-backoff terms: the turn it belongs to is
-  // over and every id it echoes is answered. It gets that outcome back, charged nothing.
+  // over and every id it echoes is answered. It gets that outcome back, usage and all —
+  // this is the response the client accepts, so it carries the owner turn's occupancy.
   const straggler = await req(h, "/codex-a/v1/messages", { body });
   assert.equal(straggler.status, 200, straggler.text);
   assert.equal(straggler.json.stop_reason, "end_turn");
   assert.equal(straggler.json.content[0].text, "done", "the real outcome, not a re-ask");
-  assert.equal(straggler.json.usage.output_tokens, 0, "the ledger is charged once");
+  assert.deepEqual(straggler.json.usage, answered.json.usage, "the replay re-emits the owner turn's occupancy");
 
   const log = h.log();
   const replayed = log.filter(l => l.kind === "replayed-outcome");
@@ -498,7 +499,7 @@ test("P4: a decorated straggler after the undecorated turn completed is replayed
   const straggler = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ, messages: decorate(hist("a")) }) });
   assert.equal(straggler.status, 200, straggler.text);
   assert.equal(straggler.json.content[0].text, "done", "decoration-only straggler is a replay");
-  assert.equal(straggler.json.usage.output_tokens, 0);
+  assert.deepEqual(straggler.json.usage, answered.json.usage, "the replay carries the owner turn's occupancy");
   assert.equal(h.log().filter(l => l.kind === "replayed-outcome").length, 1);
 
   const changed = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ, messages: decorate(hist("CHANGED")) }) });

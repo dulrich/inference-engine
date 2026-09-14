@@ -62,6 +62,9 @@ export function readConfig(env = process.env) {
     logKeepDays: num(env.SIDECAR_LOG_KEEP_DAYS, 14),
     // SQLite event outbox for the fleet-tools initiative tracker. Unset = writer off.
     outboxPath: env.SIDECAR_OUTBOX_PATH || "",
+    // Backstop for the wire usage clamp when the app-server reports no per-thread window:
+    // the catalog's 272,000 context window at its 95% auto-compact scope limit.
+    contextWindowTokens: num(env.SIDECAR_CONTEXT_WINDOW_TOKENS, 258400),
     // ---- test seams (documented in README; they never weaken an invariant) ----
     appServerCmd: env.SIDECAR_APP_SERVER_CMD || "",     // substitute the fake app-server
     pingMs: num(env.SIDECAR_PING_MS, 15000),            // SSE silence-ping interval
@@ -493,6 +496,35 @@ export const usageOut = u => {
   };
 };
 
+// Backstop on the occupancy figure: no message may claim more context than the model has.
+// A correct `reconcile()` already cannot exceed the window, so this only ever fires on a
+// codex-side figure we do not understand — it is a guard against re-inflating Claude Code's
+// meter, not a correction. Returns null when nothing needs clamping, else the RAW-units
+// figure whose `usageOut` projection has its three input columns scaled down proportionally
+// (integer floor, remainder to the largest columns) to sum to exactly `window`.
+// `output_tokens` is never clamped and no column ever goes negative.
+export function clampUsage(raw, window) {
+  if (!Number.isFinite(window) || window <= 0) return null;
+  const proj = usageOut(raw);
+  const cols = ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"];
+  const sum = cols.reduce((a, k) => a + proj[k], 0);
+  if (sum <= window) return null;
+  const scaled = cols.map(k => Math.floor((proj[k] * window) / sum));
+  let rest = window - scaled.reduce((a, b) => a + b, 0);
+  for (const i of cols.map((_, i) => i).sort((a, b) => proj[cols[b]] - proj[cols[a]])) {
+    if (rest <= 0) break;
+    scaled[i] += 1;
+    rest -= 1;
+  }
+  const [input, cacheRead, cacheWrite] = scaled;
+  return {
+    inputTokens: input + cacheRead + cacheWrite,   // codex counts the cached share INSIDE inputTokens
+    cachedInputTokens: cacheRead,
+    cacheWriteInputTokens: cacheWrite,
+    outputTokens: raw?.outputTokens ?? 0,
+  };
+}
+
 // ----------------------------------------------------------------- sinks ----
 
 function messageSkeleton(model) {
@@ -659,8 +691,8 @@ class Session {
     this.deltaItems = new Set();  // item ids already streamed as deltas
     this.usageLast = null;        // previous call's tokenUsage.last (the lag)
     this.usageTotal = null;       // codex-side cumulative for this thread
+    this.contextWindow = null;    // ThreadTokenUsage.modelContextWindow, when the app-server reports one
     this.outboxKey = null;        // {session_id, agent_id} for the tracker outbox; null = skip
-    this.sent = { inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0 };
     this.sink = null;
     this.owner = null;            // the request currently driving this session (a request token)
     this.ownerGone = false;       // the owner's socket closed but a joiner keeps the turn alive
@@ -781,6 +813,7 @@ class Session {
         if (p.tokenUsage) {
           this.usageLast = p.tokenUsage.last ?? this.usageLast;
           this.usageTotal = p.tokenUsage.total ?? this.usageTotal;
+          this.contextWindow = p.tokenUsage.modelContextWindow ?? this.contextWindow;
         }
         break;
       case "hook/started":
@@ -800,6 +833,7 @@ class Session {
         if (p.tokenUsage) {
           this.usageLast = p.tokenUsage.last ?? this.usageLast;
           this.usageTotal = p.tokenUsage.total ?? this.usageTotal;
+          this.contextWindow = p.tokenUsage.modelContextWindow ?? this.contextWindow;
         }
         if (turn.status === "failed" || turn.error) {
           this.settle({ kind: "error", error: mapUpstreamError(turn.error ?? { message: `turn ${turn.status}` }, "turn failed") });
@@ -814,24 +848,24 @@ class Session {
     }
   }
 
-  // Reconciled usage, in RAW CODEX UNITS: the ledger (`this.sent`) tracks what has already
-  // been reported per raw key, so cumulative reported == the codex-side total after every
-  // message. What leaves on the wire is the Anthropic projection of each delta (`usageOut`),
-  // which subtracts the cached share out of `input_tokens`; the ledger deliberately stays raw
-  // so the codex-side totals remain recoverable (the `http` row carries them as `usageCodex`).
+  // The OCCUPANCY of this turn, in RAW CODEX UNITS: the latest `tokenUsage.last` codex
+  // reported, never a cumulative figure and never a delta of one. Claude Code sums the three
+  // input columns of a message's `usage` as "how full is my context", so anything cumulative
+  // on the wire inflates it without bound — measured 2026-09-14: ten code-mode `wait` pollings
+  // between two client messages re-billed a ~107k cached prompt each time and the old
+  // `sent`-ledger delta reported 1,076,389 for a codex context that never left 109k.
+  // Cumulative spend leaves this process by two other doors only: the outbox `kind: "usage"`
+  // row (`usageTotal`, the tracker's figure) and the `http` row's `usageTotalCodex`.
   reconcile() {
-    const target = this.usageTotal || this.usageLast || ZERO_USAGE;
+    const target = this.usageLast || ZERO_USAGE;
     const out = {};
-    for (const k of Object.keys(ZERO_USAGE)) {
-      out[k] = Math.max(0, (target[k] ?? 0) - (this.sent[k] ?? 0));
-      this.sent[k] = (this.sent[k] ?? 0) + out[k];
-    }
+    for (const k of Object.keys(ZERO_USAGE)) out[k] = Math.max(0, target[k] ?? 0);
     return out;
   }
 
-  // The lagged preview carried by message_start (previous call's tokenUsage.last).
-  // It is a preview only: Anthropic's message_delta finalises the message's usage,
-  // so the preview is never added to the reconciliation ledger.
+  // The lagged preview carried by message_start (previous call's tokenUsage.last) — the same
+  // occupancy quantity as reconcile(), one call behind. It is a preview only: Anthropic's
+  // message_delta finalises the message's usage.
   lagUsage() { return this.usageLast || ZERO_USAGE; }
 
   answerParked(callId, text, success) {
@@ -1333,12 +1367,16 @@ async function handleMessages(ctx, persona, body, req, res) {
     ? new SseSink(res, body.model, cfg.pingMs)
     : new BufferSink(res, body.model);
   // One `http` row per request, same shape on every path (owner, joiner, replay).
-  const logHttp = ({ stopReason, toolCalls, usage, ...extra }) => {
+  // `usage` is what went on the wire (clamped when the clamp fired); `usageRaw`, when given,
+  // is the unclamped codex figure, so `usageCodex` is always the raw per-turn occupancy and
+  // `usageTotalCodex` the thread's cumulative spend — both in raw codex units.
+  const logHttp = ({ stopReason, toolCalls, usage, usageRaw, ...extra }) => {
     ctx.logger.write("http", {
       persona: persona.name, path: `/${persona.name}/v1/messages`, key, reqId, scope, mode, stream: !!body.stream,
       model: parsed.model, effort: eff.effort, effortSource: eff.effortSource, threadId: sess.threadId, stop_reason: stopReason,
       nMessages: msgs.length, nSystemRole: allMsgs.length - msgs.length, nTools: (body.tools || []).length,
-      toolCalls, usage: usageOut(usage), usageCodex: usage, headers: redactHeaders(req.headers), ...extra,
+      toolCalls, usage: usageOut(usage), usageCodex: usageRaw ?? usage, usageTotalCodex: sess.usageTotal ?? null,
+      headers: redactHeaders(req.headers), ...extra,
     });
     // A joiner is a second view of the owner's turn, not a turn of its own: no outbox row.
     if (!extra.joinedTo) outboxTurn(ctx, persona, sess, { model: parsed.model, effort: eff.effort, stopReason });
@@ -1384,8 +1422,9 @@ async function handleMessages(ctx, persona, body, req, res) {
     .map(([i, x, y]) => ({ i, role: x.role, req: x.blocks, owner: y?.blocks ?? null })) : null;
   const superseded = () => new SidecarError(409, "api_error", "superseded by a newer request on this session");
 
-  // A straggler retry of a turn that has already completed: replay its outcome with ZERO
-  // usage — the reconciliation ledger was charged once, when the turn actually ran.
+  // A straggler retry of a turn that has already completed: replay its outcome, usage and
+  // all. Usage is occupancy, not a charge — the response the client actually accepts is this
+  // one, so it must carry the owner turn's occupancy or the client's meter reads zero.
   if (!sess.owner && isStragglerRetry(sess, token)) {
     const lo = sess.lastOutcome;
     ctx.logger.write("replayed-outcome", { persona: persona.name, key, reqId, ownerReqId: lo.reqId, reqDigest: shortDigest(token.digest) });
@@ -1394,8 +1433,8 @@ async function handleMessages(ctx, persona, body, req, res) {
       if (b.type === "text") sink.textDelta(b.text);
       else sink.toolUse(b);
     }
-    sink.finish(lo.stopReason, ZERO_USAGE);
-    logHttp({ stopReason: lo.stopReason, toolCalls: lo.toolCalls, usage: ZERO_USAGE });
+    sink.finish(lo.stopReason, lo.usage);
+    logHttp({ stopReason: lo.stopReason, toolCalls: lo.toolCalls, usage: lo.usage });
     return;
   }
 
@@ -1440,8 +1479,8 @@ async function handleMessages(ctx, persona, body, req, res) {
         });
         return;
       }
-      // Same figures as the owner's row: the ledger is charged once per turn, and a joiner
-      // row is a second view of that one charge, not a second charge.
+      // Same figures as the owner's row: a joiner is a second view of one turn, and the
+      // occupancy of that turn is the same however many connections are watching it.
       logHttp({ stopReason: o.stopReason, toolCalls: o.toolCalls, usage: o.usage, joinedTo: ownerReqId });
     } finally {
       sess.joiners.delete(joiner);
@@ -1595,19 +1634,31 @@ async function handleMessages(ctx, persona, body, req, res) {
       if (out.batch.length > 1) ctx.logger.write("parallel-tool-batch", { persona: persona.name, threadId: sess.threadId, n: out.batch.length });
     }
     sess.turnOpen = stopReason === "tool_use";
-    const usage = sess.reconcile();                     // once per turn, whatever is attached
+    // This turn's occupancy, once per turn, whatever is attached — clamped to the window the
+    // app-server reported for the thread, else to the configured default.
+    const usageRaw = sess.reconcile();
+    const window = sess.contextWindow ?? cfg.contextWindowTokens;
+    const clamped = clampUsage(usageRaw, window);
+    const usage = clamped ?? usageRaw;
+    if (clamped) {
+      ctx.logger.write("usage-clamped", {
+        persona: persona.name, key, threadId: sess.threadId, window,
+        windowSource: sess.contextWindow == null ? "env" : "app-server",
+        raw: usageRaw, clamped: usageOut(clamped),
+      });
+    }
     for (const sk of audience) sk.finish(stopReason, usage);
     // What a straggler retry of this exact request gets replayed, should one still be in a
     // client backoff queue (blocks in emission order: this request's text, then its calls).
     const emitted = sess.turnText.join("");
     sess.lastOutcome = {
-      reqId, digest: token.digest, stopReason, toolCalls,
+      reqId, digest: token.digest, stopReason, toolCalls, usage,
       blocks: [
         ...(emitted ? [{ type: "text", text: emitted }] : []),
         ...(out.kind === "tool_use" ? out.batch.map(c => ({ type: "tool_use", id: c.params.callId, name: c.params.tool, input: c.params.arguments ?? {} })) : []),
       ],
     };
-    logHttp({ stopReason, toolCalls, usage, ...(dedupedToolResults ? { dedupedToolResults } : {}) });
+    logHttp({ stopReason, toolCalls, usage, usageRaw, ...(dedupedToolResults ? { dedupedToolResults } : {}) });
     for (const j of joiners) j.settle({ kind: "done", stopReason, toolCalls, usage });
   } catch (e) {
     if (sess.owner === token) {

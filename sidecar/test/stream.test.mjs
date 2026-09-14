@@ -40,7 +40,7 @@ test("stream:false returns one Messages JSON body", async t => {
   assert.equal(r.json.usage.output_tokens, 7);
 });
 
-test("usage is one call lagged at message_start and reconciled at message_delta", async t => {
+test("usage is one call lagged at message_start and the turn's own occupancy at message_delta", async t => {
   const h = await withSidecar({
     scenario: {
       turns: [
@@ -68,10 +68,12 @@ test("usage is one call lagged at message_start and reconciled at message_delta"
   assert.equal(deltaUsage(second).input_tokens, 50);
   assert.equal(deltaUsage(second).output_tokens, 20);
 
-  // the reconciled session total agrees with the codex-side total
-  const reported = deltaUsage(first).input_tokens + deltaUsage(second).input_tokens;
-  assert.equal(reported, 150);
-  assert.equal(deltaUsage(first).output_tokens + deltaUsage(second).output_tokens, 30);
+  // Each message reports its own turn, never the thread's running sum: the cumulative figure
+  // (150/30 here) leaves only on the http row, as `usageTotalCodex`.
+  const rows = h.log().filter(l => l.kind === "http");
+  assert.equal(rows.at(-1).usageTotalCodex.inputTokens, 150);
+  assert.equal(rows.at(-1).usageTotalCodex.outputTokens, 30);
+  assert.equal(rows.at(-1).usageCodex.inputTokens, 50, "the http row's per-turn figure is the turn's own");
 });
 
 test("the wire usage is the Anthropic projection; the http row keeps the raw codex delta beside it", async t => {

@@ -35,7 +35,7 @@ Errors are Anthropic-shaped `{"type":"error","error":{"type":…,"message":…}}
 
 Streaming emits `message_start`, `content_block_start/delta/stop`, `message_delta`, `message_stop`, plus `event: ping` (`{"type":"ping"}`) after every 15 s of silence, repeating — native anthropic legs are raw byte relays, so the sidecar must keep itself inside Claude Code's 300 s watchdog. `stop_reason` is `tool_use` when tool calls are relayed, otherwise `end_turn`.
 
-Usage is **one call lagged** in `message_start` (the previous call's `tokenUsage.last`, which is all that is known when the message opens) and **reconciled** in the final `message_delta`, so the session total reported to the client always equals the codex-side `tokenUsage.total` — in **raw codex units**; what leaves on the wire is the Anthropic projection of each reconciled delta (`input_tokens` is the *uncached* prompt share, clamped at 0), with the raw delta kept beside it on the `http` log row as `usageCodex`. See `docs/tool-calling-gateway/codex-sidecar.md` "Usage reconciliation, restated".
+Usage on the wire is **this turn's context occupancy, never cumulative spend** (2026-09-14): the final `message_delta` carries the latest `tokenUsage.last` codex reported for the turn, and `message_start` carries the same quantity one call lagged (the previous call's `last` is all that is known when the message opens, so a session's first message reports `0`). What leaves is the Anthropic projection (`input_tokens` is the *uncached* prompt share, clamped at 0), backstopped by a clamp: if the three input columns would sum above the thread's window — `modelContextWindow` when the app-server reports one, else `SIDECAR_CONTEXT_WINDOW_TOKENS` (default 258,400) — they are scaled down proportionally to sum to exactly the window, `output_tokens` untouched, and a `usage-clamped` row is logged. **Cumulative spend leaves by two other doors only:** the outbox `kind: "usage"` row and the `http` log row's `usageTotalCodex` (`usageCodex` beside it is the raw per-turn figure). See `docs/tool-calling-gateway/codex-sidecar.md` "Usage reconciliation, restated".
 
 ## Model ids
 
@@ -79,6 +79,7 @@ Spike-09 fixture task through the router at `:4813`, six metered `claude -p` run
 | `SIDECAR_LOG_KEEP_DAYS` | `14` | Log retention; pruned at startup and at each UTC day rollover. |
 | `SIDECAR_STATE_DIR` | `~/.local/state/codex-sidecar` | State root (holds `empty-cwd/`). |
 | `SIDECAR_OUTBOX_PATH` | *(unset)* | SQLite event outbox for the fleet-tools initiative tracker; unset = off. |
+| `SIDECAR_CONTEXT_WINDOW_TOKENS` | `258400` | Fallback window for the wire-usage clamp (catalog 272,000 at the 95% auto-compact scope limit). Used only when the app-server reports no `modelContextWindow` for the thread. |
 
 `ANTHROPIC_API_KEY` is never read, set or forwarded. The execution-boundary item filter and the pinned `features.*` flags have no environment override by design.
 

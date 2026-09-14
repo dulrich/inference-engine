@@ -43,6 +43,40 @@ counterpart (a retired/renamed model key — see the alias-contract discussion i
 `llama/config.yaml`'s header) is reported and left untouched; this script never deletes —
 hiding a model is deactivation, not deletion.
 
+Three further concerns joined this script in `plans/owui-effort-rows-and-arming.md` WP-2, all
+driven by repo-owned declarations and all subject to the same "own a named field, round-trip
+everything else" rule:
+
+  * **Arming.** Every row this script drives to `is_active: true` (base row or derived row) gets
+    `meta.toolIds ⊇ arm_tool_ids` and `meta.defaultFeatureIds ⊇ arm_feature_ids` from
+    `scripts/openwebui-policy.json` (`--policy`, default resolved from this file's location),
+    minus that policy's `retire_tool_ids`/`retire_feature_ids`. The merge is append-only against
+    what the row already carries, so a human-added extra id survives. A row driven INACTIVE gets
+    no arming change at all — its lists round-trip untouched.
+  * **Derived effort rows.** For every router model whose `router/visibility.json` `gateway_id`
+    has an `effortKwargs` entry in `router/gateway.config.json` (`--gateway-config`), this script
+    owns one Open WebUI row per reasoning level, id `<model key>--effort-<level>`, name
+    `<router display name> · <level>`, `base_model_id` = the model key, `params` = the base's
+    sampling keys plus `reasoning_effort: <level>`, `meta` = the same three managed fields as the
+    base plus arming. The levels are the DISTINCT `reasoning_effort` values in that entry plus
+    `none`, in the canonical order `none, low, medium, high, xhigh`; a gateway id with no entry
+    gets no derived rows. `params.reasoning_effort` is sync-owned on DERIVED rows only — on a
+    base row it stays human-owned and is never read or written.
+  * **Retirement.** An Open WebUI row that matches no current router model key and is not a
+    currently derivable derived id is a retirement CANDIDATE only if this script provably owns
+    it: it carries the `meta.llamaswap` marker, or its id has the `--effort-` derived shape, or
+    it is listed in the policy's `retire_legacy_ids`. An active candidate is retired (`RETIRE` —
+    `is_active: false` via the toggle route, verified by re-read); an already-inactive one is
+    just reported. Any other unmatched row is printed as `UNMANAGED` and never touched: an
+    admin's or another connection's row is not this script's to deactivate. Retirement is
+    computed against the UNFILTERED router listing even under `--only`, and `--only` never
+    retires anything.
+
+Row enumeration needs both admin routes: `GET /api/v1/models/base` returns only rows with
+`base_model_id: null` (derived rows are invisible there) and `GET /api/v1/models/export` returns
+every workspace row (those WITH a `base_model_id`), including inactive ones. The complete row set
+is their union; a single row is re-read via `GET /api/v1/models/model?id=<id>`.
+
 Credentials: `OPENWEBUI_URL` and `OPENWEBUI_API_KEY` come from the environment (or the
 `--openwebui-url`/`--openwebui-key` flags) — there is no default and nothing is ever written to
 a file or logged. The router URL is not a credential and defaults to the loopback publish.
@@ -54,9 +88,9 @@ performs the sync; running `--apply` twice in a row must show an empty diff on t
 (the desired state is a pure function of the router's live capability block plus
 `router/visibility.json`).
 
-Fail-closed: a missing, unparseable or unknown-schema declaration, an entry carrying a consumer
-token outside the closed vocabulary, or a router id no entry declares, all stop the run before
-any mutating call.
+Fail-closed: a missing, unparseable or unknown-schema declaration (visibility OR policy), a
+malformed gateway config, an entry carrying a consumer token outside the closed vocabulary, or a
+router id no entry declares, all stop the run before any mutating call.
 """
 
 from __future__ import annotations
@@ -97,6 +131,30 @@ SAMPLING_PARAM_KEYS = (
     "presence_penalty",
     "repetition_penalty",
 )
+
+# The arming/retirement policy (`plans/owui-effort-rows-and-arming.md` WP-2). It lives beside
+# this script, NOT under `router/` (whose gate set is the gateway's), and every field is a list
+# of strings -- the loader below rejects anything else rather than degrading to a default, since
+# a silently-empty `arm_tool_ids` would un-arm every row on the next apply.
+POLICY_SCHEMA = "openwebui-policy-v1"
+POLICY_LIST_FIELDS = (
+    "arm_tool_ids",
+    "arm_feature_ids",
+    "retire_tool_ids",
+    "retire_feature_ids",
+    "retire_legacy_ids",
+)
+
+# Canonical print/creation order for the derived effort rows. The ladder's CONTENT comes from
+# `router/gateway.config.json`'s `effortKwargs` (nothing is forked here); this tuple only fixes
+# the order, so the picker reads low-to-high instead of dict-insertion order. `none` is always
+# present for a model that has a ladder at all -- it is the one level with a measured, binary
+# effect (WP-1: 0 reasoning chars), so it is never conditional on the table listing it.
+EFFORT_LEVEL_ORDER = ("none", "low", "medium", "high", "xhigh")
+# Stored-identifier shape, append-only under the alias contract (`llama/config.yaml` header).
+DERIVED_ID_MARKER = "--effort-"
+# U+00B7 MIDDLE DOT with a space either side -- a display-name separator, never an id separator.
+DERIVED_NAME_SEPARATOR = " · "
 
 
 class SyncError(RuntimeError):
@@ -153,6 +211,160 @@ def load_visibility(path: Path) -> Dict[str, Dict[str, Any]]:
                 f"{', '.join(CONSUMER_VOCABULARY)}"
             )
     return models
+
+
+def default_policy_path() -> Path:
+    """`<repo>/scripts/openwebui-policy.json`, resolved from THIS FILE, never from the cwd."""
+    return Path(__file__).resolve().parent / "openwebui-policy.json"
+
+
+def load_policy(path: Path) -> Dict[str, List[str]]:
+    """Return the arming/retirement policy. Fail-closed on every malformed shape.
+
+    Raises SyncError for: a missing or unreadable file, invalid JSON, a non-object document, a
+    schema literal this script does not understand, any of the five list fields missing or not a
+    list of strings, and any unknown top-level key. None of these degrades to a default: an
+    empty-by-accident `arm_tool_ids` would silently un-arm every active row, and an
+    empty-by-accident `retire_legacy_ids` would silently leave a dead row live -- both are
+    exactly the "healthy run that did the wrong thing" failure this repo gates against.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SyncError(f"cannot read Open WebUI policy {path}: {exc}") from exc
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SyncError(f"Open WebUI policy {path} is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise SyncError(f"Open WebUI policy {path} is not a JSON object")
+    if parsed.get("schema") != POLICY_SCHEMA:
+        raise SyncError(
+            f"Open WebUI policy {path} carries schema {parsed.get('schema')!r}, "
+            f"expected {POLICY_SCHEMA!r}"
+        )
+    unknown_keys = sorted(set(parsed) - {"schema"} - set(POLICY_LIST_FIELDS))
+    if unknown_keys:
+        raise SyncError(
+            f"Open WebUI policy {path} carries unknown top-level key(s) "
+            f"{', '.join(repr(k) for k in unknown_keys)} -- the known fields are "
+            f"{', '.join(POLICY_LIST_FIELDS)}"
+        )
+    policy: Dict[str, List[str]] = {}
+    for field in POLICY_LIST_FIELDS:
+        value = parsed.get(field)
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise SyncError(
+                f"Open WebUI policy {path}: {field!r} must be a list of strings, got {value!r}"
+            )
+        policy[field] = list(value)
+    return policy
+
+
+def default_gateway_config_path() -> Path:
+    """`<repo>/router/gateway.config.json`, resolved from THIS FILE, never from the cwd."""
+    return Path(__file__).resolve().parent.parent / "router" / "gateway.config.json"
+
+
+def load_effort_levels(path: Path) -> Dict[str, List[str]]:
+    """Return {gateway id: [effort level, ...]} derived from the gateway's `effortKwargs`.
+
+    The ladder is NOT re-declared for Open WebUI: it is read off the table the Claude Code leg
+    already uses, keyed by gateway id, by walking every provider object for an `effortKwargs`
+    mapping (the provider index is not hardcoded). A level's Open WebUI value is the
+    `reasoning_effort` string that entry maps to -- so `high -> {reasoning_effort: medium}` and
+    `max -> {reasoning_effort: xhigh}` collapse onto `medium`/`xhigh` rather than forking two
+    more rows, and an entry carrying only `enable_thinking` contributes nothing (its effect is
+    `none`, which is always present anyway).
+
+    A file with no `effortKwargs` anywhere yields `{}` -- that means "no derived rows anywhere",
+    which is a valid state, not an error. Unreadable or invalid JSON IS an error.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SyncError(f"cannot read gateway config {path}: {exc}") from exc
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SyncError(f"gateway config {path} is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise SyncError(f"gateway config {path} is not a JSON object")
+
+    levels: Dict[str, List[str]] = {}
+    providers = parsed.get("providers")
+    for provider in providers if isinstance(providers, list) else []:
+        if not isinstance(provider, dict):
+            continue
+        table = provider.get("effortKwargs")
+        if not isinstance(table, dict):
+            continue
+        for gateway_id, by_level in table.items():
+            if not isinstance(by_level, dict):
+                continue
+            seen: List[str] = []
+            for kwargs in by_level.values():
+                if not isinstance(kwargs, dict):
+                    continue
+                value = kwargs.get("reasoning_effort")
+                if isinstance(value, str) and value not in seen:
+                    seen.append(value)
+            present = set(seen) | {"none"}
+            ordered = [level for level in EFFORT_LEVEL_ORDER if level in present]
+            ordered += [level for level in seen if level not in EFFORT_LEVEL_ORDER]
+            levels[gateway_id] = ordered
+    return levels
+
+
+def derived_row_id(model_key: str, level: str) -> str:
+    """The stored Open WebUI id for one derived effort row (append-only: never re-spell this)."""
+    return f"{model_key}{DERIVED_ID_MARKER}{level}"
+
+
+def derived_row_name(router_name: str, level: str) -> str:
+    """The picker display name for one derived effort row: `<router display name> · <level>`."""
+    return f"{router_name}{DERIVED_NAME_SEPARATOR}{level}"
+
+
+def gateway_id_for(visibility_models: Dict[str, Dict[str, Any]], router_id: str) -> Optional[str]:
+    """The declared `gateway_id` for a model key, or None (including for an undeclared key).
+
+    Unlike `desired_is_active`, this never raises: it is called while enumerating the ladder for
+    the UNFILTERED router listing, where an undeclared key is reported (and failed) by the
+    per-model walk, not here.
+    """
+    entry = visibility_models.get(router_id)
+    if not isinstance(entry, dict):
+        return None
+    gateway_id = entry.get("gateway_id")
+    return gateway_id if isinstance(gateway_id, str) else None
+
+
+def effort_levels_for(
+    visibility_models: Dict[str, Dict[str, Any]],
+    effort_levels: Dict[str, List[str]],
+    router_id: str,
+) -> List[str]:
+    """The effort levels this model key gets derived rows for ([] when it has no ladder)."""
+    gateway_id = gateway_id_for(visibility_models, router_id)
+    if gateway_id is None:
+        return []
+    return list(effort_levels.get(gateway_id, []))
+
+
+def merge_arming(existing: Any, arm_ids: List[str], retire_ids: List[str]) -> List[str]:
+    """Append-only merge of one arming list: existing order first, then the policy's additions.
+
+    Anything a human added to the row survives (this is a merge, not an overwrite); anything the
+    policy retires is filtered out even if it was already there. A non-list existing value (a
+    row an admin left in a shape Open WebUI no longer writes) is treated as absent rather than
+    crashing the run.
+    """
+    merged = [item for item in existing if isinstance(item, str)] if isinstance(existing, list) else []
+    for item in arm_ids:
+        if item not in merged:
+            merged.append(item)
+    return [item for item in merged if item not in retire_ids]
 
 
 def desired_is_active(visibility_models: Dict[str, Dict[str, Any]], router_id: str) -> bool:
@@ -236,23 +448,34 @@ def fetch_router_models(router_url: str) -> List[Dict[str, Any]]:
 
 
 def fetch_openwebui_rows(openwebui_url: str, api_key: str) -> Dict[str, Dict[str, Any]]:
-    """GET <openwebui>/api/v1/models/base (admin-only), keyed by id.
+    """Every Open WebUI workspace row, keyed by id: `/api/v1/models/base` ∪ `/api/v1/models/export`.
 
-    A row only exists here once an admin has created/customized it in Open WebUI at least once;
-    a router id absent from this map has never been touched and needs a `create`, not an
-    `update`.
+    Both admin routes are needed and neither is a superset of the other (live-verified
+    2026-09-14): `/base` returns ONLY rows with `base_model_id: null`, so the derived effort rows
+    are invisible there, while `/export` returns only the rows that HAVE a `base_model_id` (the
+    derived ones), including inactive ones. Using `/base` alone would make the sync re-CREATE
+    every derived row on every pass -- a silently non-idempotent run against a route that does
+    not error on a duplicate id.
+
+    A row only exists here once an admin (or this script) has created/customized that model at
+    least once; an id absent from this map needs a `create`, not an `update`.
     """
-    status, body = _http_json(
-        "GET",
-        openwebui_url.rstrip("/") + "/api/v1/models/base",
-        headers={"Authorization": f"Bearer {api_key}"},
-    )
-    if status != 200 or not isinstance(body, list):
-        raise SyncError(
-            f"Open WebUI base-model discovery failed: GET {openwebui_url}/api/v1/models/base "
-            f"returned status={status} body={body!r}"
+    rows: Dict[str, Dict[str, Any]] = {}
+    for route in ("/api/v1/models/base", "/api/v1/models/export"):
+        status, body = _http_json(
+            "GET",
+            openwebui_url.rstrip("/") + route,
+            headers={"Authorization": f"Bearer {api_key}"},
         )
-    return {row["id"]: row for row in body}
+        if status != 200 or not isinstance(body, list):
+            raise SyncError(
+                f"Open WebUI model discovery failed: GET {openwebui_url}{route} "
+                f"returned status={status} body={body!r}"
+            )
+        for row in body:
+            if isinstance(row, dict) and isinstance(row.get("id"), str):
+                rows[row["id"]] = row
+    return rows
 
 
 def build_description(entry: Dict[str, Any]) -> str:
@@ -314,35 +537,67 @@ def plan_change(
     router_name: str,
     desired: Dict[str, Any],
     existing: Optional[Dict[str, Any]],
+    *,
+    policy: Optional[Dict[str, List[str]]] = None,
+    arm: bool = False,
+    base_model_id: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> Tuple[str, List[Tuple[str, Any, Any]], Dict[str, Any]]:
-    """Return (action, field_diffs, request_body) for one model.
+    """Return (action, field_diffs, request_body) for one model row (base or derived).
 
     action is "create", "update", or "noop". field_diffs is a list of (field, old, new) for
     only the managed sub-fields that differ: the three `meta` fields, plus one entry per
-    allowlisted sampling key (`params.<key>`) whose value changed. request_body is the full
-    JSON body to send to Open WebUI's create/update route if applying (unmodified fields
-    round-tripped verbatim from `existing`, including every non-allowlisted `params` key).
+    allowlisted sampling key (`params.<key>`) whose value changed, plus (when this is a derived
+    row) `params.reasoning_effort`, plus (when `arm` is set) `meta.toolIds` and
+    `meta.defaultFeatureIds`. request_body is the full JSON body to send to Open WebUI's
+    create/update route if applying (unmodified fields round-tripped verbatim from `existing`,
+    including every non-allowlisted `params` key).
+
+    `arm` is the caller's answer to "is this row being driven ACTIVE?" -- a row driven inactive
+    gets no arming change, because arming a row nobody can select is noise, and un-arming one is
+    not this script's call either. `reasoning_effort` is set for derived rows ONLY: on a base row
+    that key stays human-owned and is never read or written, so passing None here is not "leave
+    the default", it is "this key does not exist for this row".
     """
     sampling_params: Dict[str, Any] = desired["sampling_params"]
+    arm_tools = policy["arm_tool_ids"] if (policy and arm) else None
+    arm_features = policy["arm_feature_ids"] if (policy and arm) else None
 
     if existing is None:
+        meta: Dict[str, Any] = {
+            "description": desired["description"],
+            "capabilities": {"vision": desired["vision"]},
+            "llamaswap": {"context_length": desired["context_length"]},
+        }
+        params = dict(sampling_params)
+        if reasoning_effort is not None:
+            params["reasoning_effort"] = reasoning_effort
         body = {
             "id": router_id,
             "name": router_name,
-            "meta": {
-                "description": desired["description"],
-                "capabilities": {"vision": desired["vision"]},
-                "llamaswap": {"context_length": desired["context_length"]},
-            },
-            "params": dict(sampling_params),
+            "meta": meta,
+            "params": params,
         }
+        if base_model_id is not None:
+            body["base_model_id"] = base_model_id
         diffs = [
             ("meta.capabilities.vision", None, desired["vision"]),
             ("meta.description", None, desired["description"]),
             ("meta.llamaswap.context_length", None, desired["context_length"]),
         ]
-        for key, value in sampling_params.items():
+        for key, value in params.items():
             diffs.append((f"params.{key}", None, value))
+        if policy is not None and arm_tools is not None and arm_features is not None:
+            tool_ids = merge_arming(None, arm_tools, policy["retire_tool_ids"])
+            feature_ids = merge_arming(None, arm_features, policy["retire_feature_ids"])
+            # An empty result means "the policy arms nothing" -- write no key at all rather
+            # than seeding a row with an empty list Open WebUI would then persist.
+            if tool_ids:
+                meta["toolIds"] = tool_ids
+                diffs.append(("meta.toolIds", None, tool_ids))
+            if feature_ids:
+                meta["defaultFeatureIds"] = feature_ids
+                diffs.append(("meta.defaultFeatureIds", None, feature_ids))
         return "create", diffs, body
 
     # Round-trip every existing field; only touch the three `meta` fields and the allowlisted
@@ -366,10 +621,33 @@ def plan_change(
         )
     # Per-key merge: only keys present in the router's sampling block are compared/written;
     # every other existing `params` key (human-owned) is never inspected or touched.
-    for key, value in sampling_params.items():
+    owned_params: Dict[str, Any] = dict(sampling_params)
+    if reasoning_effort is not None:
+        # Derived rows only. On a base row this key is invisible to the sync.
+        owned_params["reasoning_effort"] = reasoning_effort
+    for key, value in owned_params.items():
         old_value = params.get(key)
         if old_value != value:
             diffs.append((f"params.{key}", old_value, value))
+
+    # Arming: append-only merge, and only on a row being driven active.
+    new_tool_ids: Optional[List[str]] = None
+    new_feature_ids: Optional[List[str]] = None
+    if policy is not None and arm_tools is not None and arm_features is not None:
+        old_tool_ids = meta.get("toolIds")
+        merged_tools = merge_arming(old_tool_ids, arm_tools, policy["retire_tool_ids"])
+        if merged_tools != old_tool_ids and (merged_tools or isinstance(old_tool_ids, list)):
+            new_tool_ids = merged_tools
+            diffs.append(("meta.toolIds", old_tool_ids, merged_tools))
+        old_feature_ids = meta.get("defaultFeatureIds")
+        merged_features = merge_arming(
+            old_feature_ids, arm_features, policy["retire_feature_ids"]
+        )
+        if merged_features != old_feature_ids and (
+            merged_features or isinstance(old_feature_ids, list)
+        ):
+            new_feature_ids = merged_features
+            diffs.append(("meta.defaultFeatureIds", old_feature_ids, merged_features))
 
     if not diffs:
         return "noop", diffs, {}
@@ -379,7 +657,11 @@ def plan_change(
     meta["description"] = desired["description"]
     llamaswap["context_length"] = desired["context_length"]
     meta["llamaswap"] = llamaswap
-    params.update(sampling_params)
+    if new_tool_ids is not None:
+        meta["toolIds"] = new_tool_ids
+    if new_feature_ids is not None:
+        meta["defaultFeatureIds"] = new_feature_ids
+    params.update(owned_params)
 
     body = {
         "id": existing["id"],
@@ -387,8 +669,13 @@ def plan_change(
         "meta": meta,
         "params": params,
     }
-    if existing.get("base_model_id") is not None:
-        body["base_model_id"] = existing["base_model_id"]
+    # Round-trip the stored `base_model_id`; fall back to the one the caller planned, so a
+    # derived row can never be updated into a base row (the update route replaces wholesale).
+    stored_base = existing.get("base_model_id")
+    if stored_base is None:
+        stored_base = base_model_id
+    if stored_base is not None:
+        body["base_model_id"] = stored_base
     if existing.get("access_grants") is not None:
         body["access_grants"] = existing["access_grants"]
     return "update", diffs, body
@@ -415,14 +702,24 @@ def apply_change(
 def fetch_openwebui_row(
     openwebui_url: str, api_key: str, model_id: str
 ) -> Optional[Dict[str, Any]]:
-    """Re-read one row off `/api/v1/models/base` (the same admin route the walk uses).
+    """Re-read ONE row via `GET /api/v1/models/model?id=<id>` (works for base and derived rows).
 
     Used after a `create` and after a `toggle`: a created row's `is_active` default is not
     assumed, and a toggle is verified by reading the value back rather than by trusting a 200
-    (repo-wide rule: probe by response body, never status code).
+    (repo-wide rule: probe by response body, never status code). Returns None when the route
+    answers anything other than 200-with-an-object (404 for an id that does not exist, 401 for a
+    key that cannot see it) -- the caller reads None as "not readable back", which is a failure
+    after a create, never a silent success.
     """
-    rows = fetch_openwebui_rows(openwebui_url, api_key)
-    return rows.get(model_id)
+    quoted = urllib.parse.quote(model_id, safe="")
+    status, body = _http_json(
+        "GET",
+        openwebui_url.rstrip("/") + f"/api/v1/models/model?id={quoted}",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    if status != 200 or not isinstance(body, dict):
+        return None
+    return body
 
 
 def toggle_is_active(openwebui_url: str, api_key: str, model_id: str) -> Tuple[int, Any]:
@@ -470,7 +767,7 @@ def apply_model(
     if action == "create":
         created = fetch_openwebui_row(openwebui_url, api_key, router_id)
         if created is None:
-            print("    APPLY FAILED: created row not readable back from /api/v1/models/base")
+            print("    APPLY FAILED: created row not readable back from /api/v1/models/model")
             return 1
         observed = bool(created.get("is_active"))
         print(f"    is_active on the created row: {observed!r} (re-read, not assumed)")
@@ -496,6 +793,117 @@ def apply_model(
         )
         return 1
     print(f"    is_active verified {observed_after!r} on re-read")
+    return 0
+
+
+def process_row(
+    args: argparse.Namespace,
+    row_id: str,
+    row_name: str,
+    desired: Dict[str, Any],
+    existing: Optional[Dict[str, Any]],
+    wanted_active: bool,
+    policy: Dict[str, List[str]],
+    *,
+    label_create: str = "CREATE",
+    base_model_id: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+) -> Tuple[str, int]:
+    """Plan, print and (under `--apply`) perform one row. Returns (overall action, failures).
+
+    Base rows and derived effort rows go through exactly this path -- same diff vocabulary, same
+    "create, RE-READ, toggle only on an observed difference" ordering -- so a derived row can
+    never drift onto a second, subtly different apply implementation. The only per-kind inputs
+    are the create label, `base_model_id` and `reasoning_effort`.
+    """
+    action, diffs, body = plan_change(
+        row_id,
+        row_name,
+        desired,
+        existing,
+        policy=policy,
+        arm=wanted_active,
+        base_model_id=base_model_id,
+        reasoning_effort=reasoning_effort,
+    )
+    active_action, observed_active = plan_is_active(wanted_active, existing)
+
+    # "no-op" must mean BOTH planes are in sync; a row whose metadata matches but whose
+    # visibility does not is a TOGGLE, not an unchanged row.
+    overall = action if action != "noop" else ("toggle" if active_action == "toggle" else "noop")
+
+    label = {
+        "create": label_create,
+        "update": "UPDATE",
+        "toggle": "TOGGLE",
+        "noop": "no-op",
+    }[overall]
+    print(f"[{row_id}] {label}")
+    for field, old_value, new_value in diffs:
+        print(f"    {field}: {old_value!r} -> {new_value!r}")
+    if active_action == "create":
+        # No observed value exists to transition from -- print the INTENT, never a fabricated
+        # `True -> False`.
+        print(f"    is_active: (no row yet) -> {wanted_active!r}")
+    elif active_action == "toggle":
+        print(f"    is_active: {observed_active!r} -> {wanted_active!r}")
+    if overall == "noop":
+        print("    (already in sync)")
+
+    failures = 0
+    if args.apply:
+        failures = apply_model(
+            args.openwebui_url,
+            args.openwebui_key,
+            row_id,
+            action,
+            body,
+            active_action,
+            wanted_active,
+        )
+    print()
+    return overall, failures
+
+
+def is_retirement_candidate(
+    row_id: str, row: Dict[str, Any], retire_legacy_ids: List[str]
+) -> bool:
+    """Does this script provably OWN this unmatched row, i.e. may it deactivate it?
+
+    Three proofs, any one of which is enough: the row carries the `meta.llamaswap` marker this
+    script writes on every create/update; its id has the derived `--effort-` shape only this
+    script mints; or it is named in the policy's `retire_legacy_ids` (the escape hatch for a row
+    a RETIRED writer created without the marker). Everything else is somebody else's row and is
+    reported as UNMANAGED instead -- deactivating an admin's or another connection's model
+    because the router does not serve it is exactly the over-reach this predicate exists to
+    prevent.
+    """
+    if row_id in retire_legacy_ids:
+        return True
+    if DERIVED_ID_MARKER in row_id:
+        return True
+    return isinstance(row.get("meta"), dict) and "llamaswap" in row["meta"]
+
+
+def retire_row(openwebui_url: str, api_key: str, row_id: str) -> int:
+    """Drive one orphaned row to `is_active: false` via the toggle route. Returns failures.
+
+    Only ever called for a row observed ACTIVE (the route is a flip, so calling it on an already
+    inactive row would REVIVE the orphan), and the result is read back rather than trusted from
+    the status code. This never deletes: hiding a model is deactivation.
+    """
+    status, resp_body = toggle_is_active(openwebui_url, api_key, row_id)
+    if status not in (200, 201):
+        print(f"    APPLY FAILED (retire) status={status} body={resp_body!r}")
+        return 1
+    after = fetch_openwebui_row(openwebui_url, api_key, row_id)
+    observed_after = None if after is None else bool(after.get("is_active"))
+    if observed_after is not False:
+        print(
+            f"    APPLY FAILED (retire): is_active reads back {observed_after!r}, wanted False"
+        )
+        return 1
+    print("    retired: is_active verified False on re-read")
     return 0
 
 
@@ -536,6 +944,24 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--policy",
+        default=None,
+        metavar="PATH",
+        help=(
+            "arming/retirement policy path (default: <repo>/scripts/openwebui-policy.json, "
+            "resolved from this script's own location, never from the cwd)"
+        ),
+    )
+    p.add_argument(
+        "--gateway-config",
+        default=None,
+        metavar="PATH",
+        help=(
+            "gateway config carrying the `effortKwargs` ladder (default: "
+            "<repo>/router/gateway.config.json, resolved from this script's own location)"
+        ),
+    )
+    p.add_argument(
         "--only",
         action="append",
         default=None,
@@ -570,11 +996,17 @@ def main(argv: List[str]) -> int:
     visibility_path = (
         Path(args.visibility) if args.visibility else default_visibility_path()
     )
+    policy_path = Path(args.policy) if args.policy else default_policy_path()
+    gateway_config_path = (
+        Path(args.gateway_config) if args.gateway_config else default_gateway_config_path()
+    )
 
-    # Fail-closed, and deliberately BEFORE the first HTTP call: a malformed declaration must
-    # stop the run without a single mutating request having been possible.
+    # Fail-closed, and deliberately BEFORE the first HTTP call: a malformed declaration, policy
+    # or gateway config must stop the run without a single mutating request having been possible.
     try:
         visibility_models = load_visibility(visibility_path)
+        policy = load_policy(policy_path)
+        effort_levels = load_effort_levels(gateway_config_path)
     except SyncError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -586,6 +1018,19 @@ def main(argv: List[str]) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    # Every id this sync manages -- base keys plus derivable effort ids -- computed against the
+    # UNFILTERED router listing and the full ladder, BEFORE `--only` narrows the walk. Computing
+    # it after the filter would make every other model's rows look like orphans, which is how a
+    # `--only` run could retire half the workspace.
+    managed_ids = set()
+    for entry in router_models:
+        key = entry.get("id")
+        if not isinstance(key, str):
+            continue
+        managed_ids.add(key)
+        for level in effort_levels_for(visibility_models, effort_levels, key):
+            managed_ids.add(derived_row_id(key, level))
+
     if args.only:
         wanted = set(args.only)
         router_models = [m for m in router_models if m["id"] in wanted]
@@ -594,17 +1039,18 @@ def main(argv: List[str]) -> int:
             print(f"warning: --only {mid} not found in router /v1/models", file=sys.stderr)
 
     router_models = sorted(router_models, key=lambda m: m["id"])
-    router_ids = {m["id"] for m in router_models}
 
     mode = "APPLY" if args.apply else "DRY-RUN"
     print(f"=== sync-openwebui-capabilities: {mode} ===")
     print(f"router:     {args.router_url}")
     print(f"open webui: {args.openwebui_url}")
     print(f"visibility: {visibility_path}")
+    print(f"policy:     {policy_path}")
+    print(f"gateway:    {gateway_config_path}")
     print(f"models:     {len(router_models)}")
     print()
 
-    counts = {"create": 0, "update": 0, "toggle": 0, "noop": 0}
+    counts = {"create": 0, "derive": 0, "update": 0, "toggle": 0, "noop": 0}
     failures = 0
 
     for entry in router_models:
@@ -626,50 +1072,73 @@ def main(argv: List[str]) -> int:
             print(f"[{router_id}] FAIL: {exc}")
             print()
             continue
-        action, diffs, body = plan_change(router_id, router_name, desired, existing)
-        active_action, observed_active = plan_is_active(wanted_active, existing)
 
-        # "no-op" must mean BOTH planes are in sync; a row whose metadata matches but whose
-        # visibility does not is a TOGGLE, not an unchanged row.
-        overall = action if action != "noop" else ("toggle" if active_action == "toggle" else "noop")
+        overall, row_failures = process_row(
+            args, router_id, router_name, desired, existing, wanted_active, policy
+        )
         counts[overall] += 1
+        failures += row_failures
 
-        label = {"create": "CREATE", "update": "UPDATE", "toggle": "TOGGLE", "noop": "no-op"}[overall]
-        print(f"[{router_id}] {label}")
-        for field, old_value, new_value in diffs:
-            print(f"    {field}: {old_value!r} -> {new_value!r}")
-        if active_action == "create":
-            # No observed value exists to transition from -- print the INTENT, never a fabricated
-            # `True -> False`.
-            print(f"    is_active: (no row yet) -> {wanted_active!r}")
-        elif active_action == "toggle":
-            print(f"    is_active: {observed_active!r} -> {wanted_active!r}")
-        if overall == "noop":
-            print("    (already in sync)")
-
-        if args.apply:
-            failures += apply_model(
-                args.openwebui_url,
-                args.openwebui_key,
-                router_id,
-                action,
-                body,
-                active_action,
+        # Derived effort rows ride the base's desired visibility: a base the declaration hides
+        # takes its whole effort ladder with it (a visible `· xhigh` row pointing at a hidden
+        # base is a picker entry for a model the operator just turned off).
+        for level in effort_levels_for(visibility_models, effort_levels, router_id):
+            row_id = derived_row_id(router_id, level)
+            overall, row_failures = process_row(
+                args,
+                row_id,
+                derived_row_name(router_name, level),
+                desired,
+                existing_rows.get(row_id),
                 wanted_active,
+                policy,
+                label_create="DERIVE",
+                base_model_id=router_id,
+                reasoning_effort=level,
             )
-        print()
+            counts["derive" if overall == "create" else overall] += 1
+            failures += row_failures
 
-    stale = sorted(set(existing_rows) - router_ids)
-    if stale:
-        print("Open WebUI rows with no current router match (left untouched, never deleted):")
-        for row_id in stale:
-            print(f"    {row_id}")
+    # Retirement. `unmatched` is every Open WebUI row this sync does not currently manage; only
+    # the subset it provably owns may be deactivated, and only when it is currently active (the
+    # route is a flip -- toggling an already-inactive orphan would revive it).
+    unmatched = sorted(set(existing_rows) - managed_ids)
+    retire_active: List[str] = []
+    retire_already_inactive: List[str] = []
+    unmanaged: List[str] = []
+    for row_id in unmatched:
+        row = existing_rows[row_id]
+        if not is_retirement_candidate(row_id, row, policy["retire_legacy_ids"]):
+            unmanaged.append(row_id)
+        elif bool(row.get("is_active")):
+            retire_active.append(row_id)
+        else:
+            retire_already_inactive.append(row_id)
+
+    if unmatched:
+        print("Open WebUI rows with no current router match (never deleted -- deactivated only):")
+        # `--only` narrows the WALK, so it must not act on anything outside it: the would-be
+        # retirements are printed and skipped.
+        skipped = "  (skipped: --only)" if args.only else ""
+        for row_id in retire_active:
+            print(f"    RETIRE {row_id}{skipped}")
+        for row_id in retire_already_inactive:
+            print(f"    retired (already inactive) {row_id}")
+        for row_id in unmanaged:
+            print(f"    UNMANAGED {row_id}")
         print()
+        if args.apply and not args.only:
+            for row_id in retire_active:
+                print(f"[{row_id}] RETIRE")
+                print("    is_active: True -> False")
+                failures += retire_row(args.openwebui_url, args.openwebui_key, row_id)
+                print()
 
     print(
-        f"summary: {counts['create']} create, {counts['update']} update, "
-        f"{counts['toggle']} visibility toggle, {counts['noop']} unchanged, "
-        f"{len(stale)} orphaned row(s) left untouched"
+        f"summary: {counts['create']} create, {counts['derive']} derive, "
+        f"{counts['update']} update, {counts['toggle']} visibility toggle, "
+        f"{counts['noop']} unchanged, {len(retire_active)} retire, "
+        f"{len(unmanaged)} unmanaged"
     )
     if failures:
         print(f"error: {failures} model(s) failed -- see the FAIL / APPLY FAILED lines above")

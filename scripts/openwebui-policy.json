@@ -1,0 +1,16 @@
+{
+  "schema": "openwebui-policy-v1",
+  "arm_tool_ids": [
+    "server:web_fetch",
+    "server:web_search",
+    "server:kagi_search"
+  ],
+  "arm_feature_ids": [
+    "code_interpreter"
+  ],
+  "retire_tool_ids": [],
+  "retire_feature_ids": [],
+  "retire_legacy_ids": [
+    "gemma-4-12B-it-Q4_K_M"
+  ]
+}

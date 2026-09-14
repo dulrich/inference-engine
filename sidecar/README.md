@@ -29,7 +29,7 @@ All routes are authenticated with `authorization: Bearer <SIDECAR_KEY>` **or** `
 | `POST /<persona>/v1/messages` | Anthropic Messages, streaming and `stream:false`. `max_tokens` is accepted and ignored. |
 | `POST /<persona>/v1/messages/count_tokens` | `ceil(totalChars / 4)` estimate, always 200. Claude Code never calls it in practice. |
 | `HEAD\|GET /<persona>/api/hello` | 200 `{}` (Claude Code's pre-flight). |
-| `GET /healthz` | `{status, personas:{<persona>:{alive,degraded}}, degraded}`; **503** when any persona is degraded. |
+| `GET /healthz` | `{status, personas:{<persona>:{alive,degraded}}, binds:{expected,bound,missing}, degraded}`; **503** when any persona is degraded **or any expected bind is missing** (`binds.missing` non-empty) — a sidecar the router cannot reach must not read `ok`. |
 
 Errors are Anthropic-shaped `{"type":"error","error":{"type":…,"message":…}}`: 400 `invalid_request_error` (bad JSON, unknown model id, image blocks), 401 `authentication_error` (bad key, upstream auth failure), 404 `not_found_error` (unknown persona or path), 413 (body over 32 MiB), 429 `rate_limit_error` (+ `retry-after` when derivable from `resetsAt`), 502 `api_error`, 503 (degraded persona). In streaming mode an error *after* `message_start` is sent as an `event: error` frame and the stream ends; before it, as an HTTP status.
 
@@ -70,7 +70,9 @@ Spike-09 fixture task through the router at `:4813`, six metered `claude -p` run
 | --- | --- | --- |
 | `SIDECAR_KEY` | *(required)* | Shared bridge key. Startup fails without it. Never logged. |
 | `SIDECAR_PORT` | `4877` | Loopback listen port. |
-| `SIDECAR_BIND_EXTRA` | `172.17.0.1` | Second bind (the docker0 gateway, so the router container can reach it). Empty string skips it. |
+| `SIDECAR_BIND_EXTRA` | `172.17.0.1` | Second bind (the docker0 gateway, so the router container can reach it). Empty string skips it. At boot docker0 may not exist yet (`docker.service` started 3.6 s after this unit on 2026-09-14 and the bind failed `EADDRNOTAVAIL`; a user unit cannot order after a system unit, and `network.target` does not exist in the user manager) — so a failed extra bind is retried in the background and `/healthz` reports `degraded` until it lands. |
+| `SIDECAR_BIND_RETRY_MS` | `500` | First retry delay for the extra bind; doubles per attempt to a 5 s cap. |
+| `SIDECAR_BIND_RETRY_BUDGET_MS` | `60000` | Total wall-clock the extra-bind retry may spend before giving up (`bind-extra-failed`); health stays `degraded` after a give-up. |
 | `SIDECAR_PERSONAS` | `codex-a,codex-b` | Personas to serve; each is spawned as `<persona> app-server`. |
 | `SIDECAR_CWD` | *(unset)* | Fallback working directory when the request carries no environment block. |
 | `SIDECAR_LOG_DIR` | `~/.local/state/codex-sidecar/logs` | JSONL log directory (`0700`, files `0600`). |
@@ -94,7 +96,7 @@ These exist only so the suite can run without a real codex binary and without wa
 
 ## Logs
 
-One JSONL file per UTC day, `codex-sidecar-YYYY-MM-DD.jsonl`, mode `0600` inside a `0700` directory. Bearer and `x-api-key` headers are redacted to `<redacted>`. Line kinds worth grepping: `listen`, `child-started`, `child-exit`, `initialized`, `config-verified`, `config-unverified`, `security-event`, `rate-limited`, `weak-session-key`, `rewind`, `title-local`, `parallel-tool-batch`, `effort-changed`, `http-start`, `superseded-request`, `joined-request` (a duplicate request attached to the in-flight turn — a duplicate is one whose SHA-256 digest over model id, effort, system text, tools and all messages matches the owner's, never merely the same shape — computed on the *undecorated* body: `cache_control` keys and harness `text` blocks trailing a `tool_result` are not identity (phase 4, 2026-09-14); `reqDigest` is that digest's first 12 hex chars), `replayed-outcome` (a straggler retry answered from the last completed outcome), `http` (per request; `usage` is the Anthropic projection, `usageCodex` the raw codex delta beside it, and `joinedTo` names the owning request on a joiner's row), `http-error`.
+One JSONL file per UTC day, `codex-sidecar-YYYY-MM-DD.jsonl`, mode `0600` inside a `0700` directory. Bearer and `x-api-key` headers are redacted to `<redacted>`. Line kinds worth grepping: `listen` (`binds` = what is bound now, `expected` = what must be), `bind-extra-retrying` / `bind-extra-recovered` / `bind-extra-failed` (the docker0 bind race — one line at first failure, one on success, or one on give-up), `child-started`, `child-exit`, `initialized`, `config-verified`, `config-unverified`, `security-event`, `rate-limited`, `weak-session-key`, `rewind`, `title-local`, `parallel-tool-batch`, `effort-changed`, `http-start`, `superseded-request`, `joined-request` (a duplicate request attached to the in-flight turn — a duplicate is one whose SHA-256 digest over model id, effort, system text, tools and all messages matches the owner's, never merely the same shape — computed on the *undecorated* body: `cache_control` keys and harness `text` blocks trailing a `tool_result` are not identity (phase 4, 2026-09-14); `reqDigest` is that digest's first 12 hex chars), `replayed-outcome` (a straggler retry answered from the last completed outcome), `http` (per request; `usage` is the Anthropic projection, `usageCodex` the raw codex delta beside it, and `joinedTo` names the owning request on a joiner's row), `http-error`.
 
 ## Running it by hand
 
@@ -148,7 +150,7 @@ systemctl --user enable --now codex-sidecar
 sidecar/status.sh
 ```
 
-`status.sh` prints `systemctl --user status codex-sidecar` (tolerating a not-installed unit), then an authenticated `GET /healthz` with the key read from the env file — status code and body, never the key. It exits non-zero on 503 (a degraded persona) or a refused connection.
+`status.sh` prints `systemctl --user status codex-sidecar` (tolerating a not-installed unit), then an authenticated `GET /healthz` on **every** expected bind — loopback and `SIDECAR_BIND_EXTRA` (read from the env file; default `172.17.0.1`, empty skips it) — status code and body, never the key. It asserts on the body (`"status":"ok"`), and exits non-zero on a 503 (a degraded persona or a missing bind), a non-`ok` body, or a refused connection on any bind. Probing loopback alone was blind to the docker0 bind race by construction.
 
 **Rotate the key:**
 

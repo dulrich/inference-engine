@@ -1,6 +1,9 @@
 [Unit]
 Description=codex app-server sidecar (Anthropic Messages front end for codex personas)
-After=network.target
+# No After= line on purpose. `network.target` is LoadState=not-found in the systemd *user*
+# manager (it orders against nothing), and a user unit cannot order after a system unit such
+# as docker.service. The docker0 bind race is handled in-process instead: the sidecar retries
+# the extra bind and reports /healthz degraded until it lands. Do not re-add an ordering line.
 
 [Service]
 Type=simple

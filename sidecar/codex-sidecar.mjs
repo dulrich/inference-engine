@@ -68,6 +68,11 @@ export function readConfig(env = process.env) {
     batchMs: num(env.SIDECAR_BATCH_MS, 200),            // parallel tool-call batching window
     turnTimeoutMs: num(env.SIDECAR_TURN_TIMEOUT_MS, 300000),
     backoffMs: num(env.SIDECAR_BACKOFF_MS, 1000),       // child restart backoff floor
+    // Extra-bind retry (the docker0 gateway does not exist until docker.service has started;
+    // measured 3.6 s after this unit at boot). Interval is the first backoff step, doubling
+    // to 5 s; budget is the total wall-clock before giving up. Both are test seams.
+    bindRetryMs: num(env.SIDECAR_BIND_RETRY_MS, 500),
+    bindRetryBudgetMs: num(env.SIDECAR_BIND_RETRY_BUDGET_MS, 60000),
     env,
   };
 }
@@ -1668,7 +1673,14 @@ function healthBody(ctx) {
     personas[p.name] = { alive: p.alive, degraded: p.degraded };
     if (p.degraded) degraded = true;
   }
-  return { status: degraded ? "degraded" : "ok", version: VERSION, personas, degraded };
+  // A bind shortfall is a lost capability (the router container reaches us only through
+  // the docker0 bind), so it degrades health exactly like a degraded persona would. The
+  // lists are exposed so the verdict is checkable rather than asserted.
+  const expected = ctx.binds?.expected ?? [];
+  const bound = ctx.binds?.bound ?? [];
+  const missing = expected.filter(b => !bound.includes(b));
+  if (missing.length) degraded = true;
+  return { status: degraded ? "degraded" : "ok", version: VERSION, personas, binds: { expected, bound, missing }, degraded };
 }
 
 function makeHandler(ctx) {
@@ -1757,23 +1769,66 @@ export async function startSidecar(env = process.env) {
   const primary = http.createServer(handler);
   const port = await listen(primary, "127.0.0.1", config.port);
   servers.push(primary);
+  const bindOf = s => `${s.address().address}:${s.address().port}`;
+  // Truth about which binds are up lives here and feeds /healthz (bind-aware health).
+  const binds = { expected: [bindOf(primary)], bound: [bindOf(primary)] };
+  ctx.binds = binds;
 
+  // The extra bind (docker0 gateway) can legitimately fail at boot: a user unit cannot
+  // order after the system docker.service, and until docker creates docker0 the address
+  // does not exist (EADDRNOTAVAIL). The first attempt is inline so the happy path is
+  // unchanged; a failure starts a bounded background retry while /healthz reports
+  // degraded, so the shortfall is never silent. The primary loopback bind stays fail-fast.
+  let bindRetryTimer = null;
   if (config.bindExtra) {
-    const extra = http.createServer(handler);
-    try {
+    const target = `${config.bindExtra}:${port}`;
+    binds.expected.push(target);
+    const tryExtra = async () => {
+      const extra = http.createServer(handler);
       await listen(extra, config.bindExtra, port);
       servers.push(extra);
-    } catch (e) {
-      logger.write("bind-extra-failed", { host: config.bindExtra, port, err: String(e?.message || e) });
+      binds.bound.push(bindOf(extra));
+    };
+    try {
+      await tryExtra();
+    } catch (first) {
+      const startedAt = Date.now();
+      let attempts = 1;
+      let delay = Math.max(1, config.bindRetryMs);
+      logger.write("bind-extra-retrying", {
+        host: config.bindExtra, port, err: String(first?.message || first), budgetMs: config.bindRetryBudgetMs,
+      });
+      const schedule = () => {
+        bindRetryTimer = setTimeout(async () => {
+          bindRetryTimer = null;
+          attempts += 1;
+          try {
+            await tryExtra();
+            logger.write("bind-extra-recovered", { host: config.bindExtra, port, attempts, elapsedMs: Date.now() - startedAt });
+          } catch (e) {
+            if (Date.now() - startedAt + delay > config.bindRetryBudgetMs) {
+              logger.write("bind-extra-failed", {
+                host: config.bindExtra, port, attempts, elapsedMs: Date.now() - startedAt, err: String(e?.message || e),
+              });
+              return;
+            }
+            delay = Math.min(delay * 2, 5000);
+            schedule();
+          }
+        }, delay);
+        bindRetryTimer.unref?.();
+      };
+      schedule();
     }
   }
 
   logger.write("listen", {
-    port, binds: servers.map(s => `${s.address().address}:${s.address().port}`),
+    port, binds: binds.bound, expected: binds.expected,
     personas: [...ctx.personas.keys()], logDir: config.logDir, keepDays: config.logKeepDays,
   });
 
   const close = async () => {
+    if (bindRetryTimer) { clearTimeout(bindRetryTimer); bindRetryTimer = null; }
     for (const p of ctx.personas.values()) p.stop();
     await Promise.all(servers.map(s => new Promise(resolve => {
       s.close(resolve);

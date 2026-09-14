@@ -1332,7 +1332,19 @@ async function handleMessages(ctx, persona, body, req, res) {
       tools: shortDigest(requestDigest({ tools: body.tools ?? [] })),
       messages: shortDigest(requestDigest({ messages: msgs })),
     },
+    // Per-message structural summary (never content): digest, role, and per block its type,
+    // sorted key list and text length — enough to say WHERE two shape-identical sends differ.
+    msgShape: msgs.map(m => ({
+      d: shortDigest(requestDigest({ messages: [m] })), role: m.role,
+      blocks: (Array.isArray(m.content) ? m.content : [{ type: "text", text: String(m.content ?? "") }]).map(b => ({
+        type: b.type, keys: Object.keys(b).sort().join(","),
+        len: typeof b.text === "string" ? b.text.length : typeof b.content === "string" ? b.content.length : Array.isArray(b.content) ? b.content.length : null,
+      })),
+    })),
   };
+  // The indices at which two per-message summaries differ, with both sides' block summaries.
+  const msgDiff = (a, b) => (a && b) ? a.map((m, i) => [i, m, b[i]]).filter(([, x, y]) => !y || x.d !== y.d).slice(0, 4)
+    .map(([i, x, y]) => ({ i, role: x.role, req: x.blocks, owner: y?.blocks ?? null })) : null;
   const superseded = () => new SidecarError(409, "api_error", "superseded by a newer request on this session");
 
   // A straggler retry of a turn that has already completed: replay its outcome with ZERO
@@ -1403,7 +1415,7 @@ async function handleMessages(ctx, persona, body, req, res) {
 
   if (sess.owner) {
     const oldOwner = sess.owner;
-    ctx.logger.write("superseded-request", { persona: persona.name, key, reqId, supersededReqId: oldOwner.reqId, mode, nMessages: msgs.length, ownerNMessages: oldOwner.nMessages, reqDigest: shortDigest(token.digest), ownerDigest: shortDigest(oldOwner.digest), parts: token.parts, ownerParts: oldOwner.parts });
+    ctx.logger.write("superseded-request", { persona: persona.name, key, reqId, supersededReqId: oldOwner.reqId, mode, nMessages: msgs.length, ownerNMessages: oldOwner.nMessages, reqDigest: shortDigest(token.digest), ownerDigest: shortDigest(oldOwner.digest), parts: token.parts, ownerParts: oldOwner.parts, msgDiff: msgDiff(token.msgShape, oldOwner.msgShape) });
     // A superseded owner takes its joiners with it (audit defect B3). They joined *that*
     // request; they are no audience for this one, and leaving them attached would deliver
     // this request's text and outcome to a connection that never asked for it.

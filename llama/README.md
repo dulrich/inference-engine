@@ -229,6 +229,16 @@ script is **bake-off-window aware**: a live run window `docker stop`s the router
 whole window, so the check test-and-releases the window's own `cron.lock` first and SKIPs
 (exit 0, no alarm) while it's held — an intentionally-stopped router is not an outage.
 
+**Alerting (2026-09-14):** nothing reads the log, so every run also writes a timestamped JSON
+artifact — `$HOME/.local/state/inference-engine/deep-health-check.json` (override with
+`DEEP_HEALTH_ARTIFACT_PATH`), atomically replaced, `status` ∈ `pass|fail|skip|fatal` with
+`observed_at`, `attempts` and `detail`. Command Center (fleet-tools) bind-mounts that
+directory read-only and renders the verdict as a pill on the `inference-engine-router` service
+card; a missing, malformed, or stale artifact (older than `DEEP_HEALTH_STALE_MS`, default
+150 min = 2.5× the hourly cadence) renders non-healthy rather than retaining the last PASS —
+so a dead cron is visible too. SKIP is written on purpose: a multi-hour bake-off window keeps
+the timestamp fresh instead of reading as stale.
+
 ## The llvmpipe trap
 
 This is the failure mode `entrypoint.sh`'s GPU assertion exists for, and it is worth

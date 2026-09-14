@@ -28,13 +28,17 @@
 # --model exists primarily so the negative case (a deliberately bogus alias) can be exercised
 # without editing this file — see the gate that requires an observed FAILURE, not just a pass.
 #
-# Scheduling: NOT currently installed anywhere (no cron entry, no systemd timer, no compose
-# sidecar) — scheduling is deferred by design; this script is complete and useful run by hand,
-# which is its only invocation path today. Until it is scheduled, the outage-detection gap this
-# script exists to close is still open: nothing runs it unless a human does. See
-# llama/README.md's "Deep health check" section. When it is wired up, the recommended line is:
+# Scheduling: INSTALLED 2026-08-24 in the user crontab (see llama/README.md "Deep health check"):
 #
 #   19 * * * * mkdir -p $HOME/.local/state/inference-engine && llama/deep-health-check.sh >>$HOME/.local/state/inference-engine/deep-health-check.log 2>&1
+#
+# Alerting: the log above is human-readable and nothing reads it. So every exit path — PASS,
+# FAIL, SKIP and FATAL — also writes a machine-readable, timestamped artifact (atomic rename) at
+# DEEP_HEALTH_ARTIFACT_PATH (default $HOME/.local/state/inference-engine/deep-health-check.json).
+# Command Center (fleet-tools) reads it and renders a verdict on the `inference-engine-router`
+# service card; an artifact older than its staleness bound, missing, or malformed renders
+# non-healthy there, so a dead cron cannot leave a stale PASS on screen. SKIP is written too, on
+# purpose: a multi-hour bake-off window must keep the timestamp fresh or it would read as stale.
 #
 # Logs under $HOME/.local/state, NOT /var/log: this is a user crontab, /var/log is root-owned
 # here, and a redirection into an unwritable directory fails before the script is ever exec'd —
@@ -49,6 +53,8 @@ set -u
 
 URL="http://127.0.0.1:4811"
 MODEL="bge-small"
+ARTIFACT="${DEEP_HEALTH_ARTIFACT_PATH:-${HOME}/.local/state/inference-engine/deep-health-check.json}"
+ATTEMPTS=0
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -67,14 +73,38 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 
+note() { echo "[deep-health-check] $*"; }
+
+# Minimal JSON string escaping (backslash, quote, control chars) — jq may be the very thing
+# that is missing when the FATAL path runs, so the artifact writer must not depend on it.
+json_str() {
+	printf '%s' "$1" | LC_ALL=C sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' -e 's/\r/\\r/g' | tr '\n' ' '
+}
+
+# write_artifact STATUS DETAIL — always best-effort: an unwritable artifact must never change
+# the exit code of the check itself (the log line and exit status remain the primary record).
+write_artifact() {
+	local status="$1" detail="$2" dir tmp
+	dir=$(dirname "$ARTIFACT")
+	mkdir -p "$dir" 2>/dev/null || { note "WARN: cannot create $dir; artifact not written" >&2; return 0; }
+	tmp=$(mktemp "$dir/.deep-health-check.XXXXXX" 2>/dev/null) || { note "WARN: cannot create temp file in $dir; artifact not written" >&2; return 0; }
+	if printf '{"schema":1,"observed_at":"%s","status":"%s","url":"%s","model":"%s","attempts":%d,"detail":"%s"}\n' \
+		"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$status" "$(json_str "$URL")" "$(json_str "$MODEL")" "$ATTEMPTS" "$(json_str "$detail")" >"$tmp" \
+		&& chmod 0644 "$tmp" && mv -f "$tmp" "$ARTIFACT"; then
+		return 0
+	fi
+	rm -f "$tmp"
+	note "WARN: artifact write to $ARTIFACT failed" >&2
+	return 0
+}
+
 for bin in curl jq; do
 	if ! command -v "$bin" >/dev/null 2>&1; then
 		echo "[deep-health-check] FATAL: '$bin' is required but not on PATH." >&2
+		write_artifact fatal "'$bin' is required but not on PATH"
 		exit 2
 	fi
 done
-
-note() { echo "[deep-health-check] $*"; }
 
 # Bakeoff-window guard: a live bake-off run window `docker stop`s the router container for the
 # whole window (batch.py's GPU maintenance window -- scratch servers run in a sibling container),
@@ -90,6 +120,7 @@ BAKEOFF_CRON_LOCK="${BAKEOFF_CRON_LOCK:-${HOME}/.local/state/inference-bakeoff/c
 if [ -e "${BAKEOFF_CRON_LOCK}" ] && command -v flock >/dev/null 2>&1 \
 	&& ! flock -n "${BAKEOFF_CRON_LOCK}" true 2>/dev/null; then
 	note "SKIP: bake-off run window live (cron.lock held) -- router is intentionally stopped for the window"
+	write_artifact skip "bake-off run window live (cron.lock held); router intentionally stopped"
 	exit 0
 fi
 
@@ -131,9 +162,11 @@ probe_once() {
 note "probing POST $URL/v1/embeddings (model=$MODEL), asserting exactly 384 finite numbers in data[0].embedding ..."
 note "generous timeout (${MAX_TIME}s): a genuine cold spawn loads a GGUF from disk and can take tens of seconds; llama-swap holds the request until the child is healthy."
 
+ATTEMPTS=1
 if probe_once >/dev/null; then
 	note "PASS on first attempt"
 	echo "[deep-health-check] PASS: $URL served a $MODEL embedding with 384 finite numbers."
+	write_artifact pass "384 finite numbers on first attempt"
 	exit 0
 fi
 
@@ -147,11 +180,14 @@ fi
 note "first attempt failed — retrying once (the chat group's exclusive:true eviction can legitimately kill one in-flight probe) ..."
 sleep 5
 
+ATTEMPTS=2
 if probe_once >/dev/null; then
 	note "PASS on retry"
 	echo "[deep-health-check] PASS: $URL served a $MODEL embedding with 384 finite numbers (after one retry)."
+	write_artifact pass "384 finite numbers after one retry"
 	exit 0
 fi
 
 echo "[deep-health-check] FAIL: $URL did not serve a well-formed $MODEL embedding after 2 attempts." >&2
+write_artifact fail "no well-formed $MODEL embedding after 2 attempts"
 exit 1

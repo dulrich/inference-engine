@@ -332,7 +332,7 @@ models:
         top_p: 0.95
       max_output:
         reasoning_budget: -1
-        answer_tokens: 32768
+        answer_tokens: 32000
       sources:
         "sampling.temperature": {url: "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16", verified: "2026-09-14"}
         "sampling.top_p": {url: "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16", verified: "2026-09-14"}
@@ -340,7 +340,7 @@ models:
         "sampling.min_p": {url: "none", reason: "card silent; the unsloth guide's only --min-p is in its 30B-A3B example, not this 4B"}
         "sampling.presence_penalty": {url: "none", reason: "card and unsloth guide silent; no vLLM or SGLang recipe page exists for Nemotron 3"}
         "sampling.repetition_penalty": {url: "none", reason: "card and unsloth guide silent; no vLLM or SGLang recipe page exists for Nemotron 3"}
-        "max_output.answer_tokens": {url: "https://docs.unsloth.ai/models/nemotron-3", verified: "2026-09-14"}
+        "max_output.answer_tokens": {url: "https://unsloth.ai/docs/models/nemotron-3", verified: "2026-09-14"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-UD-Q4_K_XL.gguf
@@ -390,7 +390,7 @@ models:
         top_k: 20
       max_output:
         reasoning_budget: -1
-        answer_tokens: -1
+        answer_tokens: 32000
       sources:
         "sampling.temperature": {url: "https://huggingface.co/inclusionAI/Ling-3.0-tiny", verified: "2026-09-14"}
         "sampling.top_p": {url: "https://huggingface.co/inclusionAI/Ling-3.0-tiny", verified: "2026-09-14"}
@@ -398,7 +398,7 @@ models:
         "sampling.min_p": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
         "sampling.presence_penalty": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
         "sampling.repetition_penalty": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
-        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this family; -1 records the served behaviour (no -n/--n-predict flag is served, so the llama-server default, unrestricted), never a recommendation"}
+        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this family; 32000 is the Claude Code default max_tokens ceiling alone (CLAUDE_CODE_MAX_OUTPUT_TOKENS, docs/model-capabilities.md answer_tokens rule), not a publisher value"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q4_K_XL.gguf
@@ -428,7 +428,7 @@ models:
         top_k: 20
       max_output:
         reasoning_budget: -1
-        answer_tokens: -1
+        answer_tokens: 32000
       sources:
         "sampling.temperature": {url: "https://huggingface.co/inclusionAI/Ling-3.0-tiny", verified: "2026-09-14"}
         "sampling.top_p": {url: "https://huggingface.co/inclusionAI/Ling-3.0-tiny", verified: "2026-09-14"}
@@ -436,7 +436,7 @@ models:
         "sampling.min_p": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
         "sampling.presence_penalty": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
         "sampling.repetition_penalty": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
-        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this family; -1 records the served behaviour (no -n/--n-predict flag is served, so the llama-server default, unrestricted), never a recommendation"}
+        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this family; 32000 is the Claude Code default max_tokens ceiling alone (CLAUDE_CODE_MAX_OUTPUT_TOKENS, docs/model-capabilities.md answer_tokens rule), not a publisher value"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q6_K_XL.gguf
@@ -466,7 +466,7 @@ models:
         top_k: 20
       max_output:
         reasoning_budget: -1
-        answer_tokens: -1
+        answer_tokens: 32000
       sources:
         "sampling.temperature": {url: "https://huggingface.co/inclusionAI/Ling-3.0-tiny", verified: "2026-09-14"}
         "sampling.top_p": {url: "https://huggingface.co/inclusionAI/Ling-3.0-tiny", verified: "2026-09-14"}
@@ -474,7 +474,7 @@ models:
         "sampling.min_p": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
         "sampling.presence_penalty": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
         "sampling.repetition_penalty": {url: "none", reason: "card states only temperature/top_p/top_k; no vLLM or SGLang recipe page exists for Ling 3.0 Tiny"}
-        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this family; -1 records the served behaviour (no -n/--n-predict flag is served, so the llama-server default, unrestricted), never a recommendation"}
+        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this family; 32000 is the Claude Code default max_tokens ceiling alone (CLAUDE_CODE_MAX_OUTPUT_TOKENS, docs/model-capabilities.md answer_tokens rule), not a publisher value"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q8_0.gguf
@@ -518,7 +518,7 @@ models:
         top_k: 64
       max_output:
         reasoning_budget: -1
-        answer_tokens: -1
+        answer_tokens: 32000
       sources:
         "sampling.temperature": {url: "https://huggingface.co/google/gemma-4-12B-it", verified: "2026-09-14"}
         "sampling.top_p": {url: "https://huggingface.co/google/gemma-4-12B-it", verified: "2026-09-14"}
@@ -526,7 +526,7 @@ models:
         "sampling.min_p": {url: "none", reason: "the card's Best Practices state only temperature/top_p/top_k; the unsloth gemma-4-12B-it-qat GGUF card, the unsloth Gemma 4 guide and the vLLM Gemma 4 recipe all state none"}
         "sampling.presence_penalty": {url: "none", reason: "the card's Best Practices state only temperature/top_p/top_k; the unsloth gemma-4-12B-it-qat GGUF card, the unsloth Gemma 4 guide and the vLLM Gemma 4 recipe all state none"}
         "sampling.repetition_penalty": {url: "none", reason: "the card's Best Practices state only temperature/top_p/top_k; the unsloth gemma-4-12B-it-qat GGUF card, the unsloth Gemma 4 guide and the vLLM Gemma 4 recipe all state none"}
-        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this family; -1 records the served behaviour (no -n/--n-predict flag is served, so the llama-server default, unrestricted), never a recommendation"}
+        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this family; 32000 is the Claude Code default max_tokens ceiling alone (CLAUDE_CODE_MAX_OUTPUT_TOKENS, docs/model-capabilities.md answer_tokens rule), not a publisher value"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf
@@ -595,7 +595,7 @@ models:
         repetition_penalty: 1.0
       max_output:
         reasoning_budget: -1
-        answer_tokens: 32768
+        answer_tokens: 32000
       sources:
         "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.6-35B-A3B", verified: "2026-09-14"}
         "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.6-35B-A3B", verified: "2026-09-14"}
@@ -683,7 +683,7 @@ models:
         top_k: 64
       max_output:
         reasoning_budget: -1
-        answer_tokens: -1
+        answer_tokens: 32000
       sources:
         "sampling.temperature": {url: "https://huggingface.co/google/gemma-4-26B-A4B-it", verified: "2026-09-14"}
         "sampling.top_p": {url: "https://huggingface.co/google/gemma-4-26B-A4B-it", verified: "2026-09-14"}
@@ -691,7 +691,7 @@ models:
         "sampling.min_p": {url: "none", reason: "the card's Best Practices state only temperature/top_p/top_k; the unsloth gemma-4-26B-A4B-it-qat GGUF card, the unsloth Gemma 4 guide and the vLLM Gemma 4 recipe all state none"}
         "sampling.presence_penalty": {url: "none", reason: "the card's Best Practices state only temperature/top_p/top_k; the unsloth gemma-4-26B-A4B-it-qat GGUF card, the unsloth Gemma 4 guide and the vLLM Gemma 4 recipe all state none"}
         "sampling.repetition_penalty": {url: "none", reason: "the card's Best Practices state only temperature/top_p/top_k; the unsloth gemma-4-26B-A4B-it-qat GGUF card, the unsloth Gemma 4 guide and the vLLM Gemma 4 recipe all state none"}
-        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this family; -1 records the served behaviour (no -n/--n-predict flag is served, so the llama-server default, unrestricted), never a recommendation"}
+        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this family; 32000 is the Claude Code default max_tokens ceiling alone (CLAUDE_CODE_MAX_OUTPUT_TOKENS, docs/model-capabilities.md answer_tokens rule), not a publisher value"}
     cmd: |
       ${llama_server_chat_common}
       -m /models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf
@@ -754,7 +754,7 @@ models:
         repetition_penalty: 1.0
       max_output:
         reasoning_budget: -1
-        answer_tokens: 131072
+        answer_tokens: 32000
       sources:
         "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
         "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
@@ -841,7 +841,7 @@ models:
         repetition_penalty: 1.0
       max_output:
         reasoning_budget: 8192
-        answer_tokens: 131072
+        answer_tokens: 32000
       sources:
         "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
         "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
@@ -909,7 +909,7 @@ models:
         repetition_penalty: 1.0
       max_output:
         reasoning_budget: -1
-        answer_tokens: 131072
+        answer_tokens: 32000
       sources:
         "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
         "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
@@ -1016,7 +1016,7 @@ models:
         repetition_penalty: 1.0
       max_output:
         reasoning_budget: -1
-        answer_tokens: 131072
+        answer_tokens: 32000
       sources:
         "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
         "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
@@ -1063,7 +1063,7 @@ models:
         repetition_penalty: 1.0
       max_output:
         reasoning_budget: 1024
-        answer_tokens: 131072
+        answer_tokens: 32000
       sources:
         "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
         "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
@@ -1111,7 +1111,7 @@ models:
         repetition_penalty: 1.0
       max_output:
         reasoning_budget: 4096
-        answer_tokens: 131072
+        answer_tokens: 32000
       sources:
         "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
         "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
@@ -1159,7 +1159,7 @@ models:
         repetition_penalty: 1.0
       max_output:
         reasoning_budget: -1
-        answer_tokens: 131072
+        answer_tokens: 32000
       sources:
         "sampling.temperature": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}
         "sampling.top_p": {url: "https://huggingface.co/Qwen/Qwen3.8-27B", verified: "2026-09-14"}

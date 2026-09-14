@@ -39,7 +39,7 @@ models:
         min_p: 0.0
       max_output:
         reasoning_budget: -1
-        answer_tokens: 32768
+        answer_tokens: 32000
       sources:
         "sampling.temperature": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
         "sampling.top_p": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }

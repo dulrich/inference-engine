@@ -161,7 +161,7 @@ describe("readServingConfig", () => {
       presencePenalty: null,
       repetitionPenalty: null,
     });
-    expect(chat?.capability?.maxOutput).toEqual({ reasoningBudget: -1, answerTokens: 32768 });
+    expect(chat?.capability?.maxOutput).toEqual({ reasoningBudget: -1, answerTokens: 32000 });
     expect(chat?.capability?.sources?.["sampling.temperature"]).toEqual({
       url: "https://huggingface.co/fixturelab/Fixture-Chat-12B",
       verified: "2026-09-13",

@@ -8,8 +8,8 @@ import {
 } from "../../../../scripts/check-serving-recipes.ts";
 
 // The recipe-conformance gate (WP-1, `plans/bench-dashboard-serving-control.md`), exercised
-// against fixtures only — never against the real `llama/config.yaml`, which does NOT conform
-// until the recipe audit (WP-2) lands and whose failure count is therefore not a test fact.
+// against fixtures only — never against the real `llama/config.yaml`, whose contents are a
+// serving fact, not a test fact (the real file is gated by `bun run check:recipes` itself).
 // The gate lives in `dashboard/scripts/` and is imported by relative path here, the same way
 // `src/router/slotsPoller.test.ts` imports the host-side poller: one definition, one test.
 const FIXTURES = join(import.meta.dir, "../../fixtures/serving");
@@ -33,6 +33,7 @@ describe("check-serving-recipes", () => {
       ["context-mismatch-chat", "projection"],
       ["kv-claim-chat", "projection"],
       ["budget-claim-chat", "projection"],
+      ["answer-cap-chat", "answer-cap"],
       ["bad-reasoning-chat", "vocabulary"],
     ]);
     expect(formatFinding(findings[4] as (typeof findings)[number])).toBe(

@@ -37,7 +37,15 @@ const APPROVED_SOURCE_HOSTS = new Map<string, string>([
   ["docs.vllm.ai", "vLLM recipe"],
   ["docs.sglang.ai", "SGLang recipe"],
   ["docs.unsloth.ai", "unsloth serving guide"],
+  ["unsloth.ai", "unsloth serving guide (unsloth.ai/docs, where docs.unsloth.ai 301s since 2026-09)"],
 ]);
+
+/** Claude Code's default request `max_tokens` (`CLAUDE_CODE_MAX_OUTPUT_TOKENS`, default 32,000 —
+ * https://code.claude.com/docs/en/env-vars). The router forwards it to llama-server unclamped, so
+ * `max_output.answer_tokens` is the *effective* cap a consumer may send: min(publisher
+ * recommendation, this ceiling, served context). User decision 2026-09-14, after a Qwen3.8-27B
+ * interactive session errored on max response tokens. */
+export const CLAUDE_CODE_DEFAULT_MAX_OUTPUT_TOKENS = 32000;
 
 /** The six sampling keys the Open WebUI sync allowlists, in dotted-path spelling. */
 const SAMPLING_KEYS = [
@@ -208,6 +216,20 @@ function checkProjections(alias: ServingAlias, findings: RecipeFinding[]): void 
   }
   if (cap.serving.reasoningBudget === null && hasFlag(alias, "--reasoning-budget")) {
     push("projection", `\`cmd:\` carries \`--reasoning-budget ${budgetFlag}\` but \`serving.reasoning_budget\` is absent`);
+  }
+
+  // `max_output.answer_tokens` is advisory in provenance but bounded in value: a positive int no
+  // larger than Claude Code's default request ceiling and no larger than the served context --
+  // a cap a consumer cannot actually send is not advice.
+  const answer = cap.maxOutput?.answerTokens ?? null;
+  if (answer !== null) {
+    if (!Number.isInteger(answer) || answer < 1) {
+      push("answer-cap", `\`max_output.answer_tokens\` ${answer} is not a positive integer (a gap is recorded in \`sources\`, never as -1 or 0 here)`);
+    } else if (answer > CLAUDE_CODE_DEFAULT_MAX_OUTPUT_TOKENS) {
+      push("answer-cap", `\`max_output.answer_tokens\` ${answer} > ${CLAUDE_CODE_DEFAULT_MAX_OUTPUT_TOKENS} (Claude Code's default max_tokens ceiling)`);
+    } else if (cap.contextLength !== null && answer > cap.contextLength) {
+      push("answer-cap", `\`max_output.answer_tokens\` ${answer} > \`context_length\` ${cap.contextLength}`);
+    }
   }
 
   // The three remaining optional `serving.*` keys: present iff the flag is present, equal when

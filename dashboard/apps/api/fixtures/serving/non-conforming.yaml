@@ -41,7 +41,7 @@ models:
         min_p: 0.0
       max_output:
         reasoning_budget: -1
-        answer_tokens: 32768
+        answer_tokens: 32000
       sources:
         "sampling.temperature": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
         "sampling.top_p": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
@@ -80,7 +80,7 @@ models:
         min_p: 0.0
       max_output:
         reasoning_budget: -1
-        answer_tokens: 32768
+        answer_tokens: 32000
       sources:
         "sampling.temperature": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
         "sampling.top_p": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
@@ -118,7 +118,7 @@ models:
         top_k: 20
       max_output:
         reasoning_budget: -1
-        answer_tokens: 32768
+        answer_tokens: 32000
       sources:
         "sampling.temperature": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
         "sampling.top_p": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
@@ -157,7 +157,7 @@ models:
         min_p: 0.0
       max_output:
         reasoning_budget: -1
-        answer_tokens: 32768
+        answer_tokens: 32000
       sources:
         "sampling.temperature": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13T00:00:00Z" }
         "sampling.top_p": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
@@ -196,7 +196,7 @@ models:
         min_p: 0.0
       max_output:
         reasoning_budget: -1
-        answer_tokens: 32768
+        answer_tokens: 32000
       sources:
         "sampling.temperature": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
         "sampling.top_p": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
@@ -235,7 +235,7 @@ models:
         min_p: 0.0
       max_output:
         reasoning_budget: -1
-        answer_tokens: 32768
+        answer_tokens: 32000
       sources:
         "sampling.temperature": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
         "sampling.top_p": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
@@ -274,7 +274,46 @@ models:
         min_p: 0.0
       max_output:
         reasoning_budget: 512
-        answer_tokens: 32768
+        answer_tokens: 32000
+      sources:
+        "sampling.temperature": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
+        "sampling.top_p": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
+        "sampling.top_k": { url: "https://docs.vllm.ai/projects/recipes/en/latest/FixtureLab/Fixture-Chat-12B.html", verified: "2026-09-13" }
+        "sampling.min_p": { url: "https://huggingface.co/unsloth/Fixture-Chat-12B-GGUF", verified: "2026-09-13" }
+        "sampling.presence_penalty": { url: "none", reason: "the card is silent on this value" }
+        "sampling.repetition_penalty": { url: "none", reason: "the card is silent on this value" }
+        "max_output.answer_tokens": { url: "https://docs.vllm.ai/projects/recipes/en/latest/FixtureLab/Fixture-Chat-12B.html", verified: "2026-09-13" }
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/unsloth/Fixture-Chat-12B-GGUF/Fixture-Chat-12B-UD-Q4_K_XL.gguf
+      -c 131072
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
+  answer-cap-chat:
+    name: "max_output.answer_tokens above the Claude Code ceiling"
+    aliases:
+      - nc-answer-cap
+    metadata:
+      context_length: 131072
+      input_modalities: ["text"]
+      output_modalities: ["text"]
+      tool_calling: true
+      reasoning: "request-controllable"
+      serving:
+        quant: "UD-Q4_K_XL"
+        kv_cache_type: "f16"
+        flash_attention: false
+        mtp: false
+      sampling:
+        temperature: 0.6
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+      max_output:
+        reasoning_budget: -1
+        answer_tokens: 131072
       sources:
         "sampling.temperature": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
         "sampling.top_p": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
@@ -313,7 +352,7 @@ models:
         min_p: 0.0
       max_output:
         reasoning_budget: -1
-        answer_tokens: 32768
+        answer_tokens: 32000
       sources:
         "sampling.temperature": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }
         "sampling.top_p": { url: "https://huggingface.co/fixturelab/Fixture-Chat-12B", verified: "2026-09-13" }

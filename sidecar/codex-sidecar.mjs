@@ -1181,6 +1181,43 @@ export function verifyInstructionSources(sources) {
   return null;
 }
 
+// `unified_exec` is pinned true by the model catalog's `shell_type` and reads back `true`
+// however we declare it (WP-1 measurement, 2026-09-14) — exempt, so a flag we cannot move
+// does not fail every thread closed.
+export const FEATURE_VERIFY_EXEMPT = new Set(["unified_exec"]);
+
+// The declared `config.features` block is honoured per thread but never echoed by
+// `thread/start`, so it is read back from the app-server's own flag oracle
+// (`experimentalFeature/list`) and compared. A declared key the oracle does not report is
+// *unknown*, not a mismatch — an older or newer binary may simply not carry that flag.
+function featureReadings(declared, reported) {
+  const decl = declared && typeof declared === "object" ? declared : {};
+  const byName = new Map();
+  for (const e of (Array.isArray(reported) ? reported : [])) {
+    if (e && typeof e.name === "string" && !byName.has(e.name)) byName.set(e.name, e);
+  }
+  const features = {};
+  const unknownFeatures = [];
+  const mismatches = [];
+  for (const [name, wantRaw] of Object.entries(decl)) {
+    if (FEATURE_VERIFY_EXEMPT.has(name)) continue;
+    const entry = byName.get(name);
+    if (entry === undefined) { unknownFeatures.push(name); continue; }
+    const got = entry.enabled === true;
+    const want = wantRaw === true;
+    features[name] = got;
+    if (got !== want) mismatches.push({ name, want, got, entry });
+  }
+  return { features, unknownFeatures, mismatches };
+}
+
+// null when the thread's effective flags match what we declared, else the problem string.
+export function verifyFeatures(declared, reported) {
+  const { mismatches } = featureReadings(declared, reported);
+  if (!mismatches.length) return null;
+  return `features not honoured: ${mismatches.map(m => `${m.name}=${m.got} (declared ${m.want})`).join(", ")}`;
+}
+
 // ------------------------------------------------------------ HTTP layer ----
 
 function sendJson(res, status, obj, headers = {}) {
@@ -1565,11 +1602,40 @@ async function handleMessages(ctx, persona, body, req, res) {
         persona.dropSession(sess);
         throw new SidecarError(502, "api_error", `thread config not honoured: ${problem}`);
       }
+
+      // (e) feature-drift check — the declared posture read back from the app-server's own
+      // per-thread flag oracle. WP-1 (2026-09-14) measured that these flags do NOT remove the
+      // collab tools or code mode in codex-cli 0.154.0, so this detects *config* drift only;
+      // `tripBoundary` stays the runtime enforcement line. Bounded by `turnTimeoutMs` like
+      // every other rpc, and an oracle that errors fails the thread closed, never open.
+      let reportedFeatures = [];
+      let oracleError = null;
+      try {
+        const listed = await persona.rpc("experimentalFeature/list", { threadId: sess.threadId, limit: 500 }, cfg.turnTimeoutMs);
+        reportedFeatures = Array.isArray(listed?.data) ? listed.data : [];
+      } catch (e) {
+        oracleError = e?.message ? String(e.message) : String(e);
+      }
+      const readings = featureReadings(THREAD_CONFIG.features, reportedFeatures);
+      const featureProblem = oracleError
+        ? `feature oracle unavailable: ${oracleError}`
+        : verifyFeatures(THREAD_CONFIG.features, reportedFeatures);
+      if (featureProblem) {
+        ctx.logger.write("config-unverified", {
+          persona: persona.name, threadId: sess.threadId, stage: "thread/start", problem: featureProblem,
+          instructionSources: started?.instructionSources ?? null, features: readings.mismatches.map(m => m.entry),
+        });
+        persona.dropSession(sess);
+        throw new SidecarError(502, "api_error", `thread config not honoured: ${featureProblem}`);
+      }
+      stillMine();
       ctx.logger.write("config-verified", {
         persona: persona.name, threadId: sess.threadId, key, scope, cwd, model: parsed.model,
         effort: eff.effort, effortSource: eff.effortSource,
         instructionSources: started?.instructionSources ?? [], nTools: params.dynamicTools.length,
         preambleChars: PREAMBLE.length, systemChars: systemText.length, interleavedSystemChars: interleavedText.length,
+        features: readings.features, unknownFeatures: readings.unknownFeatures,
+        multiAgentMode: started?.multiAgentMode ?? null,
       });
     }
 

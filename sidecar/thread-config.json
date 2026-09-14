@@ -19,6 +19,7 @@
     "memories": false,
     "shell_snapshot": false,
     "guardian_approval": false,
-    "workspace_dependencies": false
+    "workspace_dependencies": false,
+    "standalone_web_search": false
   }
 }

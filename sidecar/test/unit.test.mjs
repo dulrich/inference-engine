@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   parseModelId, isTitleRequest, titleEnvelope, extractCwd, conversational, sessionKeyOf, countTokensEstimate,
-  verifyInstructionSources, mapUpstreamError, retryAfterSeconds, rateLimitExhaustion, presentedKey,
+  verifyInstructionSources, verifyFeatures, mapUpstreamError, retryAfterSeconds, rateLimitExhaustion, presentedKey,
   toDynamicTools, Logger, usageOut,
 } from "../codex-sidecar.mjs";
 
@@ -94,6 +94,17 @@ test("upstream errors, rate-limit windows and instruction sources map as the sch
   assert.equal(verifyInstructionSources(["/home/u/.codex-a/AGENTS.md"]), null);
   assert.match(verifyInstructionSources(["/a/AGENTS.md", "/b/AGENTS.md"]), /at most/);
   assert.match(verifyInstructionSources(["/repo/README.md"]), /unexpected instruction source/);
+
+  // the per-thread flag oracle: honoured / drifted / exempt / not reported at all
+  const declaredFeatures = { multi_agent: false, hooks: false, unified_exec: false };
+  const reported = (over = {}) => Object.entries({ multi_agent: false, hooks: false, unified_exec: true, ...over })
+    .map(([name, enabled]) => ({ name, enabled, stage: "stable", defaultEnabled: true }));
+  assert.equal(verifyFeatures(declaredFeatures, reported()), null, "honoured, with unified_exec exempt");
+  assert.match(verifyFeatures(declaredFeatures, reported({ multi_agent: true })),
+    /^features not honoured: multi_agent=true \(declared false\)$/);
+  assert.match(verifyFeatures(declaredFeatures, reported({ multi_agent: true, hooks: true })), /hooks=true \(declared false\)/);
+  assert.equal(verifyFeatures(declaredFeatures, []), null, "a flag the binary does not report is unknown, not a mismatch");
+  assert.equal(verifyFeatures(declaredFeatures, undefined), null);
 
   assert.equal(presentedKey({ authorization: "Bearer sekret" }), "sekret");
   assert.equal(presentedKey({ "x-api-key": "sekret" }), "sekret");

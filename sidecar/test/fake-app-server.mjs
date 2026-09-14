@@ -13,7 +13,13 @@
 //     "turns":       [ [action..] | {"error":{code,message}} , ... ],   // consumed in order
 //     "defaultTurn": [action..]                                        // when `turns` runs out
 //     "neverRespond": ["turn/start", ..]   // methods the server accepts and never answers
+//     "features":    [ {name, enabled, ..}, .. ] | { "error": {code,message} }
 //   }
+// `experimentalFeature/list` (the per-thread flag oracle) answers, by default, with the
+// `config.features` block the last `thread/start` declared, echoed back as honoured:
+// `{name, enabled: <declared>, stage: "stable", defaultEnabled: true}` per key. A `features`
+// array in the scenario replaces that list entirely (drift cases); `{"error": {...}}` makes
+// the method reply a JSON-RPC error (unavailable-oracle case).
 // Actions:
 //   {"delay": ms}                         pause
 //   {"text": "..."}                       item/agentMessage/delta
@@ -34,7 +40,7 @@ if (!argv[0]) process.exit(0);
 const scenario = JSON.parse(fs.readFileSync(argv[0], "utf8"));
 const tracePath = argv[1] || null;
 
-const state = { threads: 0, turns: 0, items: 0, rpcId: 1000, toolResponses: 0, thread: null, turn: null, interrupted: false };
+const state = { threads: 0, turns: 0, items: 0, rpcId: 1000, toolResponses: 0, thread: null, turn: null, interrupted: false, threadConfig: null };
 
 const trace = (kind, obj) => {
   if (!tracePath) return;
@@ -125,6 +131,7 @@ async function onMessage(m) {
     const ts = scenario.threadStart || {};
     state.threads += 1;
     state.thread = `thread_${state.threads}`;
+    state.threadConfig = m.params?.config ?? null;
     if (ts.before) await play(ts.before);
     if (ts.error) { replyError(m.id, ts.error); return; }
     reply(m.id, {
@@ -154,6 +161,17 @@ async function onMessage(m) {
     if (script && !Array.isArray(script) && script.error) { replyError(m.id, script.error); return; }
     reply(m.id, { turn: { id: state.turn, items: [], status: "inProgress" } });
     play(Array.isArray(script) ? script : script.actions || []);
+    return;
+  }
+
+  if (m.method === "experimentalFeature/list") {
+    const fx = scenario.features;
+    if (fx && !Array.isArray(fx) && fx.error) { replyError(m.id, fx.error); return; }
+    const declared = state.threadConfig?.features ?? {};
+    const data = Array.isArray(fx)
+      ? fx
+      : Object.entries(declared).map(([name, enabled]) => ({ name, enabled: enabled === true, stage: "stable", defaultEnabled: true }));
+    reply(m.id, { data, nextCursor: null });
     return;
   }
 

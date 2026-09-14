@@ -4,6 +4,12 @@
 # the router container uses). Probing loopback alone was blind to the boot-time docker0
 # bind race by construction: that bind always works. Asserts on the body (`"status":"ok"`),
 # never on the status code alone. Never prints SIDECAR_KEY. Exits non-zero when unhealthy.
+#
+# Then one fixture turn as an install-time POSTURE probe (WP-3, 2026-09-14): the declared
+# feature block cannot remove codex's collab tools or code mode in codex-cli 0.154.0, so the
+# posture is *probed*, not assumed — the response must carry a `stop_reason` and must contain
+# no collabAgentToolCall / webSearch / commandExecution, and the turn's `config-verified` row
+# must exist, whose `features` readings are printed. Body assertions only, never status codes.
 set -euo pipefail
 
 INSTALL_HOME="${SIDECAR_INSTALL_HOME:-$HOME}"
@@ -63,5 +69,71 @@ for host in $hosts; do
     rc=1
   fi
 done
+
+# ---------------------------------------------------------------- posture probe ----
+
+printf '\n== posture probe (one fixture turn) ==\n'
+probe_file="$(mktemp)"
+trap 'rm -f -- "$body_file" "$probe_file"' EXIT
+
+if ! command -v jq >/dev/null 2>&1; then
+  printf 'posture probe skipped: jq not found\n' >&2
+  exit 1
+fi
+
+# A fresh session id per run, so the probe's own log rows are findable among live traffic.
+probe_sid="$(cat /proc/sys/kernel/random/uuid)"
+probe_body="$(jq -nc --arg sid "$probe_sid" '{
+  model: "gpt-5.6-luna",
+  max_tokens: 64,
+  stream: false,
+  system: [{ type: "text", text: "You are a posture probe. Answer in one word." }],
+  messages: [{ role: "user", content: "Reply with the single word ok." }],
+  metadata: { user_id: ({ device_id: "status-probe", account_uuid: "status-probe", session_id: $sid } | tojson) }
+}')"
+
+curl -sS -o "$probe_file" \
+  -H "authorization: Bearer ${key}" -H 'content-type: application/json' \
+  --data-binary "$probe_body" \
+  "http://127.0.0.1:${PORT}/codex-b/v1/messages" >/dev/null || true
+
+if ! jq -e '.stop_reason != null' -- "$probe_file" >/dev/null 2>&1; then
+  printf 'posture probe: no stop_reason in the response body (the turn did not complete)\n' >&2
+  head -c 400 -- "$probe_file" >&2 || true
+  printf '\n' >&2
+  exit 1
+fi
+printf 'stop_reason: %s\n' "$(jq -r '.stop_reason' -- "$probe_file")"
+
+if grep -qE 'collabAgentToolCall|webSearch|commandExecution' -- "$probe_file"; then
+  printf 'posture probe: an out-of-band surface appeared in the response body\n' >&2
+  exit 1
+fi
+printf 'no collabAgentToolCall / webSearch / commandExecution in the body\n'
+
+# The declared posture as the app-server read it back, from this turn's own config-verified row.
+log_dir="${SIDECAR_LOG_DIR:-$INSTALL_HOME/.local/state/codex-sidecar/logs}"
+log_file="$log_dir/codex-sidecar-$(date -u +%F).jsonl"
+if [ ! -f "$log_file" ]; then
+  printf 'posture probe: no log file at %s\n' "$log_file" >&2
+  exit 1
+fi
+
+tail_rows="$(tail -n 400 -- "$log_file" || true)"
+thread_id="$(printf '%s\n' "$tail_rows" | jq -rs --arg sid "$probe_sid" \
+  '[.[] | select(.kind == "http" and .key == $sid)] | last | .threadId // empty' 2>/dev/null || true)"
+if [ -z "$thread_id" ]; then
+  printf 'posture probe: no http log row for this probe session in %s\n' "$log_file" >&2
+  exit 1
+fi
+
+features="$(printf '%s\n' "$tail_rows" | jq -cs --arg tid "$thread_id" \
+  '[.[] | select(.kind == "config-verified" and .threadId == $tid)] | last | .features // empty' 2>/dev/null || true)"
+if [ -z "$features" ]; then
+  printf 'posture probe: no config-verified row carrying features for thread %s\n' "$thread_id" >&2
+  exit 1
+fi
+printf 'thread:   %s\n' "$thread_id"
+printf 'features: %s\n' "$features"
 
 exit "$rc"

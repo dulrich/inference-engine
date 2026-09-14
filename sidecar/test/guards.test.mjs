@@ -42,6 +42,75 @@ test("a hook firing during thread/start fails the thread closed", async t => {
   assert.ok(h.log().some(l => l.kind === "config-unverified"));
 });
 
+test("a feature flag the thread declared false but the app-server reports true fails the thread closed", async t => {
+  const h = await withSidecar({
+    scenario: {
+      threadStart: { instructionSources: ["/home/u/.codex-a/AGENTS.md"] },
+      features: [
+        { name: "multi_agent", enabled: true, stage: "stable", defaultEnabled: true },
+        { name: "hooks", enabled: false, stage: "stable", defaultEnabled: false },
+      ],
+      defaultTurn: SIMPLE_TURN,
+    },
+  });
+  t.after(() => h.close());
+
+  const r = await req(h, "/codex-a/v1/messages", { body: msgBody({}) });
+  assert.equal(r.status, 502);
+  assert.equal(r.json.error.type, "api_error");
+  assert.match(r.json.error.message, /thread config not honoured: features not honoured/);
+  assert.match(r.json.error.message, /multi_agent=true \(declared false\)/);
+
+  const line = h.log().find(l => l.kind === "config-unverified");
+  assert.ok(line, "the drift is logged on the fail-closed path");
+  assert.equal(line.stage, "thread/start");
+  assert.match(line.problem, /multi_agent=true \(declared false\)/);
+  assert.equal(line.features[0].name, "multi_agent", "the mismatching oracle entries ride the row");
+  assert.equal(sentTo(h.trace(), "turn/start").length, 0, "no turn runs on a drifted thread");
+});
+
+test("an unavailable feature oracle fails the thread closed", async t => {
+  const h = await withSidecar({
+    scenario: {
+      threadStart: { instructionSources: ["/home/u/.codex-a/AGENTS.md"] },
+      features: { error: { code: -32601, message: "method not found" } },
+      defaultTurn: SIMPLE_TURN,
+    },
+  });
+  t.after(() => h.close());
+
+  const r = await req(h, "/codex-a/v1/messages", { body: msgBody({}) });
+  assert.equal(r.status, 502);
+  assert.match(r.json.error.message, /thread config not honoured: feature oracle unavailable/);
+
+  const line = h.log().find(l => l.kind === "config-unverified");
+  assert.ok(line, "an unreadable oracle is logged, not swallowed");
+  assert.equal(line.stage, "thread/start");
+  assert.match(line.problem, /^feature oracle unavailable/);
+  assert.equal(sentTo(h.trace(), "turn/start").length, 0, "no turn runs on an unverifiable thread");
+});
+
+test("a honoured feature set is recorded on config-verified", async t => {
+  const h = await withSidecar({
+    scenario: {
+      threadStart: { instructionSources: ["/home/u/.codex-a/AGENTS.md"] },
+      defaultTurn: SIMPLE_TURN,
+    },
+  });
+  t.after(() => h.close());
+
+  const r = await req(h, "/codex-a/v1/messages", { body: msgBody({}) });
+  assert.equal(r.status, 200, r.text);
+
+  const line = h.log().find(l => l.kind === "config-verified");
+  assert.ok(line, "the honoured readings are recorded");
+  assert.equal(line.features.multi_agent, false);
+  assert.equal(line.features.standalone_web_search, false);
+  assert.ok(Array.isArray(line.unknownFeatures), "declared keys the oracle never reported are counted, not fatal");
+  assert.equal(line.features.unified_exec, undefined, "the catalog-pinned flag is exempt from the compare");
+  assert.equal(line.multiAgentMode, null, "the fake reports no multiAgentMode");
+});
+
 test("an out-of-band commandExecution item trips the runtime execution boundary", async t => {
   const h = await withSidecar({
     scenario: {

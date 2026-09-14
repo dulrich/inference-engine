@@ -428,3 +428,80 @@ test("B3: a superseded owner takes its joiner with it — the joiner errors and 
   assert.equal(errs.filter(e => e.reqId === joined[0].ownerReqId).length, 1, "and the owner has its own row");
   assert.equal(sentTo(h.trace(), "turn/start").length, 1, "no fresh turn/start on the blocked thread");
 });
+
+// Phase 4 (2026-09-14, measured with `msgDiff` on a live audit): the client sends the same
+// turn twice ~15 ms apart in two DECORATIONS — with/without `cache_control` on the last
+// `tool_use`, with/without a harness-injected trailing `text` block after the last
+// `tool_result`. Byte-identity made them supersede each other in a ping-pong (53/53, 0 joins)
+// and every long turn lost its head. Decoration is not identity; changed payload still is.
+const decorate = hist => {
+  const out = hist.map(m => ({ ...m, content: Array.isArray(m.content) ? m.content.map(b => ({ ...b })) : m.content }));
+  const asst = out.find(m => m.role === "assistant");
+  const tu = asst.content.find(b => b.type === "tool_use");
+  tu.cache_control = { type: "ephemeral" };
+  out[out.length - 1].content.push({ type: "text", text: "<system-reminder>harness decoration</system-reminder>" });
+  return out;
+};
+
+test("P4: the decorated send (cache_control + trailing text after the tool_result) JOINS the undecorated in-flight owner — no 409, msgDiff still names the decoration", async t => {
+  const { h, hist } = await slowInFlight(t);
+
+  const older = req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ, messages: hist("a") }) });
+  await sleep(400);
+  const newer = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ, messages: decorate(hist("a")) }) });
+  const a = await older;
+
+  assert.equal(a.status, 200, a.text);
+  assert.equal(newer.status, 200, newer.text);
+  assert.equal(a.json.content[0].text, "done");
+  assert.equal(newer.json.content[0].text, "done");
+
+  const log = h.log();
+  assert.equal(log.filter(l => l.kind === "superseded-request").length, 0, "decoration must not supersede");
+  assert.equal(log.filter(l => l.kind === "http-error").length, 0);
+  assert.equal(log.filter(l => l.kind === "joined-request").length, 1, "decoration joins");
+  assert.equal(sentTo(h.trace(), "turn/start").length, 1);
+});
+
+test("P4: the reverse order — undecorated send joins the decorated owner", async t => {
+  const { h, hist } = await slowInFlight(t);
+
+  const older = req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ, messages: decorate(hist("a")) }) });
+  await sleep(400);
+  const newer = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ, messages: hist("a") }) });
+  const a = await older;
+
+  assert.equal(a.status, 200, a.text);
+  assert.equal(newer.status, 200, newer.text);
+  const log = h.log();
+  assert.equal(log.filter(l => l.kind === "superseded-request").length, 0);
+  assert.equal(log.filter(l => l.kind === "joined-request").length, 1);
+});
+
+test("P4: a decorated straggler after the undecorated turn completed is replayed; a decorated send with a CHANGED tool_result still runs a real turn", async t => {
+  const h = await withSidecar({
+    scenario: {
+      turns: [[call("c1", "Read", { path: "a" }), { awaitToolResults: 1 }, { text: "done" }, { complete: {} }]],
+      defaultTurn: [{ text: "second" }, { complete: {} }],
+    },
+  });
+  t.after(() => h.close());
+  const first = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ }) });
+  const hist = result => [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: first.json.content },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "c1", content: result }] },
+  ];
+  const answered = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ, messages: hist("a") }) });
+  assert.equal(answered.json.content[0].text, "done");
+
+  const straggler = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ, messages: decorate(hist("a")) }) });
+  assert.equal(straggler.status, 200, straggler.text);
+  assert.equal(straggler.json.content[0].text, "done", "decoration-only straggler is a replay");
+  assert.equal(straggler.json.usage.output_tokens, 0);
+  assert.equal(h.log().filter(l => l.kind === "replayed-outcome").length, 1);
+
+  const changed = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ, messages: decorate(hist("CHANGED")) }) });
+  assert.equal(changed.json.content[0].text, "second", "a changed tool_result payload is a new turn even when decorated");
+  assert.equal(h.log().filter(l => l.kind === "replayed-outcome").length, 1, "no second replay");
+});

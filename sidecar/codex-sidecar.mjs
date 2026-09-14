@@ -1186,8 +1186,40 @@ const canon = v => Array.isArray(v)
   : (v && typeof v === "object")
     ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canon(v[k])]))
     : v;
-const requestDigest = ({ model, effort, system, tools, messages }) => crypto.createHash("sha256")
-  .update(JSON.stringify(canon({ model, effort, system, tools, messages })))
+//
+// Phase 4 (measured 2026-09-14 via `msgDiff`): the client issues the SAME turn twice within
+// ~15 ms in two decorations — one send carries `cache_control` on the last `tool_use` block
+// and a harness-injected trailing `text` block after the last `tool_result` (a system
+// reminder), the other carries neither. Byte-identity called them different, so they
+// superseded each other in a perfect ping-pong (53/53 on one audit; 0 joins) and the head of
+// every long turn's text was lost. Identity therefore digests the *undecorated* request:
+// `cache_control` is dropped everywhere (a caching hint, never model input the turn depends
+// on) and `text` blocks that FOLLOW a `tool_result` in a user message are dropped (harness
+// decoration beside the result, not the result). A changed `tool_result` payload, a changed
+// user prompt, a changed model/effort/system/tool list still supersede (B1/B2 hold).
+const undecorateBlock = b => {
+  if (!b || typeof b !== "object" || !("cache_control" in b)) return b;
+  const { cache_control: _cc, ...rest } = b;
+  return rest;
+};
+const undecorateMessage = m => {
+  if (!m || !Array.isArray(m.content)) return m;
+  let afterResult = false;
+  const content = [];
+  for (const b of m.content) {
+    if (m.role === "user" && afterResult && b?.type === "text") continue;
+    if (b?.type === "tool_result") afterResult = true;
+    content.push(undecorateBlock(b));
+  }
+  return { ...m, content };
+};
+const undecorate = ({ model, effort, system, tools, messages }) => ({
+  model, effort, system,
+  tools: Array.isArray(tools) ? tools.map(undecorateBlock) : tools,
+  messages: Array.isArray(messages) ? messages.map(undecorateMessage) : messages,
+});
+const requestDigest = fields => crypto.createHash("sha256")
+  .update(JSON.stringify(canon(undecorate(fields))))
   .digest("hex");
 const shortDigest = d => (d ? d.slice(0, 12) : null);
 
@@ -1330,12 +1362,12 @@ async function handleMessages(ctx, persona, body, req, res) {
       effort: shortDigest(requestDigest({ effort: eff.effort })),
       system: shortDigest(requestDigest({ system: systemText })),
       tools: shortDigest(requestDigest({ tools: body.tools ?? [] })),
-      messages: shortDigest(requestDigest({ messages: msgs })),
+      messages: shortDigest(requestDigest({ messages: msgs })),  // canonical (undecorated) — equal here means the raw shapes below differ only by decoration
     },
     // Per-message structural summary (never content): digest, role, and per block its type,
     // sorted key list and text length — enough to say WHERE two shape-identical sends differ.
     msgShape: msgs.map(m => ({
-      d: shortDigest(requestDigest({ messages: [m] })), role: m.role,
+      d: crypto.createHash("sha256").update(JSON.stringify(canon(m))).digest("hex").slice(0, 12), role: m.role,   // RAW, so decoration-only differences still show in msgDiff
       blocks: (Array.isArray(m.content) ? m.content : [{ type: "text", text: String(m.content ?? "") }]).map(b => ({
         type: b.type, keys: Object.keys(b).sort().join(","),
         len: typeof b.text === "string" ? b.text.length : typeof b.content === "string" ? b.content.length : Array.isArray(b.content) ? b.content.length : null,

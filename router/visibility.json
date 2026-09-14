@@ -31,9 +31,7 @@
     },
     "Ling-3.0-tiny-Q8_0": {
       "gateway_id": null,
-      "consumers": [
-        "openwebui"
-      ]
+      "consumers": []
     },
     "gemma-4-12B-it-qat-UD-Q4_K_XL": {
       "gateway_id": null,

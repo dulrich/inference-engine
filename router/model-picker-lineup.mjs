@@ -63,9 +63,17 @@ const FORBIDDEN_ENV_KEYS = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"];
 // instead of deferring (~10k tokens of assembly per session). CLAUDE_CODE_DISABLE_TERMINAL_TITLE
 // suppresses the background terminal-title model call, which behind a custom base URL is not
 // guaranteed to honour the haiku alias (anthropics/claude-code#92050, closed as not planned).
+// CLAUDE_CODE_MAX_CONTEXT_TOKENS declares the window for gateway model ids Claude Code does not
+// recognise (every `codex-*/...` row): without it the harness assumes 200,000 and trips its
+// "Context limit reached" gate near 178k while the codex thread could hold far more. 258,400 is the
+// sidecar's own clamp (`SIDECAR_CONTEXT_WINDOW_TOKENS`, 95 % of the 272,000 window every model in
+// both persona catalogs declares — measured 2026-09-14), so the meter and the wire agree on one
+// ceiling. The env is global, so the local leg's smaller windows (120k–131k `-c`) are over-declared
+// too — they already were at the 200k default; llama's own length error remains their backstop.
 const LAUNCH_PROFILE_ENV = {
   ENABLE_TOOL_SEARCH: "true",
   CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",
+  CLAUDE_CODE_MAX_CONTEXT_TOKENS: "258400",
 };
 
 // Family/label table. `prefix` families may carry an effort suffix (`-low|-medium|-high`, plus

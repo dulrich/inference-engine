@@ -373,6 +373,7 @@ test("--launch-profile adds the tool-search and title keys when the input lacks 
   const env = JSON.parse(fs.readFileSync(settings, "utf8")).env;
   assert.equal(env.ENABLE_TOOL_SEARCH, "true");
   assert.equal(env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE, "1");
+  assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "258400", "the codex-leg window is declared (sidecar clamp)");
   assert.equal(env.FOO, "bar");
   run([...FIXTURE_ARGS, "--home", dir, "--env-file", envFile, "--check", "--launch-profile"]);
 });
@@ -385,16 +386,18 @@ test("regenerating over an input that already carries both keys is a byte-for-by
       ANTHROPIC_CUSTOM_HEADERS: `x-gateway-key: ${DUMMY_KEY}`,
       ENABLE_TOOL_SEARCH: "true",
       CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: "258400",
     },
   };
   fs.writeFileSync(settings, `${JSON.stringify(before, null, 2)}\n`);
   run([...FIXTURE_ARGS, "--home", dir, "--env-file", envFile, "--write", "--launch-profile"]);
   const first = fs.readFileSync(settings, "utf8");
   const env = JSON.parse(first).env;
-  // No duplication: the four generated keys, in their original order, and nothing added.
+  // No duplication: the five generated keys, in their original order, and nothing added.
   assert.deepEqual(Object.keys(env), Object.keys(before.env));
   assert.equal(env.ENABLE_TOOL_SEARCH, "true");
   assert.equal(env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE, "1");
+  assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "258400");
 
   run([...FIXTURE_ARGS, "--home", dir, "--env-file", envFile, "--write", "--launch-profile"]);
   assert.equal(fs.readFileSync(settings, "utf8"), first, "second --write must produce zero diff");

@@ -93,10 +93,16 @@ const FAMILIES = [
   { kind: "prefix", id: "gpt-5.6-luna", family: "GPT-5.6 Luna", defaultEffort: "low" },
   { kind: "prefix", id: "gpt-5.6-sol", family: "GPT-5.6 Sol", defaultEffort: "medium" },
   { kind: "prefix", id: "gpt-6-astra", family: "GPT-6 Astra", defaultEffort: "medium" },
+  // glm-5.2:free and glm-5.3 were RETIRED from serving 2026-09-14 (user decision) — see the
+  // TOMBSTONE in router/AGENTS.md. Their label rows stay: this table is a label lookup, not the
+  // alias registry, the fixture suite still exercises both ids, and keeping them here records the
+  // reserved names in the one file that enumerates model families. The NAMES are reserved forever
+  // under the append-only contract — never re-point either string at different weights.
   { kind: "exact", id: "z-ai/glm-5.2:free", family: "GLM 5.2 free" },
   { kind: "exact", id: "z-ai/glm-5.3", family: "GLM 5.3" },
   // Exact, not prefix: a prefix rule on `z-ai/glm-5.3` would swallow this id's label.
   { kind: "exact", id: "z-ai/glm-5.3-flash", family: "GLM 5.3 Flash" },
+  { kind: "exact", id: "qwen/qwen3.8-flash", family: "Qwen3.8 Flash" },
   { kind: "exact", id: "qwen36-a3b", family: "Qwen3.6 A3B" },
   // Local-leg effort ids (WP-2): on this leg the id suffix IS the effort selector, because the
   // router's Anthropic->OpenAI conversion leg forwards no per-request effort field of any shape

@@ -62,7 +62,10 @@ its review finding in its own docstring, so `head -3 <module>.py` tells you why 
 
 **Fit math and server lifecycle** (WP-R3, extracted from `sweep.py`):
 
-- `gguf_fit.py` — pure GGUF geometry, KV-cache byte math, VRAM budgets, the fit pre-filter.
+- `gguf_fit.py` — VRAM budget profiles, cell geometry/weight resolution, the fit pre-filter, and the re-export facade for the three modules below (WP-R3 of `plans/post-audit-architecture-and-reconciliation-remediation.md` split them out; every name still resolves off `gguf_fit`).
+- `gguf_reader.py` — the GGUF binary format: header/metadata parsing, the tensor-info directory, ggml block sizes, split-shard discovery. The family's base module (imports no sibling).
+- `gguf_placement.py` — tensor classification and CPU/GPU/lazy placement derivation from `-ngl`/`-ncmoe`/`-cmoe`/`-ot`/`-lm`/`--tensor-read-lazy`.
+- `gguf_cache.py` — attention/indexer geometry and KV-cache bytes/token, including the SWA and MLA caveats.
 - `scratch_lifecycle.py` — scratch-server spawn/bridge-IP discovery/health-poll/startup
   verification/teardown. Health is judged **by response body, never status code**.
 

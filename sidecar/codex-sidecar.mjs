@@ -596,9 +596,17 @@ class SseSink {
     this.started = false;
     this.done = false;
     this.timer = null;
+    this.preStart = [];
   }
   #raw(text) {
     if (this.done || this.res.writableEnded || this.res.destroyed) return false;
+    // Nothing may reach the socket before `start()` has written the headers. The app-server
+    // routinely puts the `turn/start` response and the turn's first `item/agentMessage/delta`
+    // in one stdout chunk; the frame loop dispatches both synchronously, so the delta reaches
+    // this sink before the awaiting handler's continuation calls `start()`. A raw write there
+    // sends implicit headers, `start()`'s `writeHead` then throws ERR_HTTP_HEADERS_SENT, and
+    // the turn dies as an `event: error` with no `message_start` and no armed ping timer.
+    if (!this.started) { this.preStart.push(text); return true; }
     try { this.res.write(text); } catch { this.abort(); return false; }
     return true;
   }
@@ -626,6 +634,9 @@ class SseSink {
       connection: "keep-alive",
     });
     this.#write("message_start", { type: "message_start", message: { ...this.msg, usage: usageOut(usage) } });
+    const early = this.preStart.splice(0);   // frames that raced ahead of the headers, in order
+    for (const text of early) if (!this.#raw(text)) return;
+    if (early.length) this.#arm();
   }
   textDelta(t) {
     if (!t || this.done) return;

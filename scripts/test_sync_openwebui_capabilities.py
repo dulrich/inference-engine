@@ -5,7 +5,10 @@ fixtures only.
 
 The module under test has a hyphenated filename (matching this repo's script-invocation
 convention: `python3 scripts/sync-openwebui-capabilities.py ...`), so it is not importable via
-a normal `import` statement; it is loaded here via `importlib.util` from its file path.
+a normal `import` statement; it is loaded here via `importlib.util` from its file path. The
+script puts its own directory on `sys.path` before importing `openwebui_sync`, so that loader
+works unchanged; the HTTP transport now lives on `sync.client`, which is where every fixture
+below patches it (one patch covers the whole HTTP surface -- nothing can reach a socket).
 
 Run: python3 -m unittest discover -s scripts -p 'test_sync_openwebui_capabilities.py' -v
 (equivalently: cd scripts && python3 -m unittest test_sync_openwebui_capabilities -v)
@@ -305,7 +308,7 @@ class PlanIsActiveTest(unittest.TestCase):
 
 
 class _RecordingHttp:
-    """Stands in for `sync._http_json`; records every call and replays scripted responses.
+    """Stands in for `sync.client._http_json`; records every call and replays scripted responses.
 
     Row enumeration is two routes now (`/base` ∪ `/export`) and the single-row re-read is a
     third (`/api/v1/models/model?id=`), so this fixture routes on all three. `rows_by_call` is
@@ -341,9 +344,9 @@ class ApplyIsActiveTest(unittest.TestCase):
     """The apply path: create, RE-READ, toggle only if the created row's actual value differs."""
 
     def _patch(self, http):
-        original = sync._http_json
-        sync._http_json = http
-        self.addCleanup(lambda: setattr(sync, "_http_json", original))
+        original = sync.client._http_json
+        sync.client._http_json = http
+        self.addCleanup(lambda: setattr(sync.client, "_http_json", original))
 
     def test_created_row_is_re_read_and_toggled_only_when_its_default_differs(self):
         # Open WebUI creates the row active; the declaration wants it inactive.
@@ -388,9 +391,9 @@ class ApplyIsActiveTest(unittest.TestCase):
 class MainFailClosedTest(unittest.TestCase):
     def test_a_broken_declaration_stops_the_run_before_any_http_call(self):
         http = _RecordingHttp([])
-        original = sync._http_json
-        sync._http_json = http
-        self.addCleanup(lambda: setattr(sync, "_http_json", original))
+        original = sync.client._http_json
+        sync.client._http_json = http
+        self.addCleanup(lambda: setattr(sync.client, "_http_json", original))
 
         missing = Path(tempfile.gettempdir()) / "definitely-not-a-visibility-file-4a71.json"
         code = sync.main(
@@ -518,9 +521,9 @@ class _MainHarness(unittest.TestCase):
     """Shared plumbing for the `main()`-level WP-2 tests. No socket is ever opened."""
 
     def _patch(self, http):
-        original = sync._http_json
-        sync._http_json = http
-        self.addCleanup(lambda: setattr(sync, "_http_json", original))
+        original = sync.client._http_json
+        sync.client._http_json = http
+        self.addCleanup(lambda: setattr(sync.client, "_http_json", original))
 
     def _run(self, fake, visibility, *, policy=None, gateway=None, extra=()):
         self._patch(fake)
@@ -799,9 +802,9 @@ class RowEnumerationTest(unittest.TestCase):
                 {"id": "model-a--effort-low", "base_model_id": "model-a", "is_active": True},
             ]
         )
-        original = sync._http_json
-        sync._http_json = fake
-        self.addCleanup(lambda: setattr(sync, "_http_json", original))
+        original = sync.client._http_json
+        sync.client._http_json = fake
+        self.addCleanup(lambda: setattr(sync.client, "_http_json", original))
         rows = sync.fetch_openwebui_rows("http://owui", "k")
         self.assertEqual(sorted(rows), ["model-a", "model-a--effort-low"])
         self.assertEqual(
@@ -985,6 +988,285 @@ class RetirementAndDerivedRunTest(_MainHarness):
         self.assertNotIn("toolIds", fake.rows["model-a--effort-low"]["meta"])
         # The derived row the base still needs exists, held inactive rather than absent.
         self.assertFalse(fake.rows["model-a--effort-none"]["is_active"])
+
+
+# ---------------------------------------------------------------------------
+# WP-R2 characterization: the decision matrix, managed-field round-trip, `--only`,
+# dry-run vs apply selection and the fail-closed load paths, pinned BEFORE the
+# plan/apply layers were split out of the script. Fixtures only, no socket.
+# ---------------------------------------------------------------------------
+
+
+class PlanDecisionMatrixTest(unittest.TestCase):
+    """Table-driven: (existing row, desired visibility) -> (plan_change action, is_active action)."""
+
+    def _base_existing(self, desired, **overrides):
+        row = {
+            "id": "model-a",
+            "name": "Model A",
+            "is_active": True,
+            "meta": {
+                "description": desired["description"],
+                "capabilities": {"vision": False},
+                "llamaswap": {"context_length": desired["context_length"]},
+            },
+            "params": {"temperature": 1.0},
+        }
+        row.update(overrides)
+        return row
+
+    def test_the_create_update_toggle_noop_matrix(self):
+        desired = sync.compute_desired(_router_entry(sampling={"temperature": 1.0}))
+        in_sync = self._base_existing(desired)
+        stale_desc = self._base_existing(desired)
+        stale_desc["meta"] = dict(stale_desc["meta"], description="stale")
+        stale_vision = self._base_existing(desired)
+        stale_vision["meta"] = dict(stale_vision["meta"], capabilities={"vision": True})
+        stale_ctx = self._base_existing(desired)
+        stale_ctx["meta"] = dict(stale_ctx["meta"], llamaswap={"context_length": 4096})
+        stale_sampling = self._base_existing(desired, params={"temperature": 0.1})
+        hidden = self._base_existing(desired)
+
+        cases = (
+            ("absent row is a create", None, True, "create", "create"),
+            ("everything matches", in_sync, True, "noop", "noop"),
+            ("stale description", stale_desc, True, "update", "noop"),
+            ("stale vision", stale_vision, True, "update", "noop"),
+            ("stale context length", stale_ctx, True, "update", "noop"),
+            ("stale sampling key", stale_sampling, True, "update", "noop"),
+            ("metadata in sync, visibility not", hidden, False, "noop", "toggle"),
+        )
+        for label, existing, wanted_active, want_action, want_active_action in cases:
+            with self.subTest(case=label):
+                action, _, _ = sync.plan_change("model-a", "Model A", desired, existing)
+                self.assertEqual(action, want_action)
+                active_action, _ = sync.plan_is_active(wanted_active, existing)
+                self.assertEqual(active_action, want_active_action)
+
+    def test_an_unchanged_row_plans_an_empty_body(self):
+        desired = sync.compute_desired(_router_entry(sampling={"temperature": 1.0}))
+        self.assertEqual(
+            sync.plan_change("model-a", "Model A", desired, self._base_existing(desired)),
+            ("noop", [], {}),
+        )
+
+
+class ManagedFieldRoundTripTest(unittest.TestCase):
+    """Everything this script does not own round-trips byte-for-byte on an update body."""
+
+    def test_unowned_meta_params_and_grants_survive_an_update(self):
+        desired = sync.compute_desired(_router_entry(sampling={"temperature": 1.0}))
+        existing = {
+            "id": "model-a",
+            "name": "A Human Renamed This",
+            "base_model_id": None,
+            "access_grants": [{"group_id": "g1"}],
+            "meta": {
+                "description": "stale",
+                "capabilities": {"vision": False, "citations": True},
+                "llamaswap": {"context_length": 4096, "note": "hand-added"},
+                "profile_image_url": "/static/x.png",
+                "tags": [{"name": "local"}],
+            },
+            "params": {"temperature": 0.1, "seed": 42, "stop": ["</s>"]},
+        }
+        action, _, body = sync.plan_change("model-a", "Model A", desired, existing)
+        self.assertEqual(action, "update")
+        self.assertEqual(body["name"], "A Human Renamed This")
+        self.assertEqual(body["access_grants"], [{"group_id": "g1"}])
+        self.assertEqual(body["meta"]["capabilities"]["citations"], True)
+        self.assertEqual(body["meta"]["llamaswap"]["note"], "hand-added")
+        self.assertEqual(body["meta"]["profile_image_url"], "/static/x.png")
+        self.assertEqual(body["meta"]["tags"], [{"name": "local"}])
+        self.assertEqual(body["params"]["seed"], 42)
+        self.assertEqual(body["params"]["stop"], ["</s>"])
+        # ...and the owned fields did move.
+        self.assertEqual(body["meta"]["description"], desired["description"])
+        self.assertEqual(body["params"]["temperature"], 1.0)
+
+    def test_a_derived_row_is_never_updated_into_a_base_row(self):
+        desired = sync.compute_desired(_router_entry())
+        existing = {
+            "id": "model-a--effort-low",
+            "name": "Model A · low",
+            "base_model_id": "model-a",
+            "meta": {"description": "stale"},
+            "params": {},
+        }
+        _, _, body = sync.plan_change(
+            "model-a--effort-low",
+            "Model A · low",
+            desired,
+            existing,
+            base_model_id="model-a",
+            reasoning_effort="low",
+        )
+        self.assertEqual(body["base_model_id"], "model-a")
+
+
+class RetirementPredicateTest(unittest.TestCase):
+    def test_ownership_proofs_and_the_unmanaged_default(self):
+        cases = (
+            ("llamaswap marker", "x", {"meta": {"llamaswap": {}}}, [], True),
+            ("derived id shape", "x--effort-low", {"meta": {}}, [], True),
+            ("named in retire_legacy_ids", "legacy", {"meta": {}}, ["legacy"], True),
+            ("somebody else's row", "x", {"meta": {"description": "hand"}}, [], False),
+            ("no meta at all", "x", {}, [], False),
+            ("non-dict meta", "x", {"meta": "broken"}, [], False),
+        )
+        for label, row_id, row, legacy, expected in cases:
+            with self.subTest(case=label):
+                self.assertEqual(sync.is_retirement_candidate(row_id, row, legacy), expected)
+
+
+class DescriptionCompositionTest(unittest.TestCase):
+    def test_the_description_is_a_pure_function_of_the_serving_facts(self):
+        entry = _router_entry(sampling={"temperature": 1.0})
+        self.assertEqual(sync.build_description(entry), sync.build_description(entry))
+        ls = entry["meta"]["llamaswap"]
+        ls["serving"].update({"flash_attention": True, "mtp": True, "moe_cpu_offload_layers": 12, "ubatch": 512})
+        ls["input_modalities"] = ["text", "image"]
+        ls["output_modalities"] = ["text", "audio"]
+        text = sync.build_description(entry)
+        for fragment in (
+            "flash-attention",
+            "MTP speculative decoding",
+            "12 MoE layers offloaded to CPU",
+            "-ub 512",
+            "vision (image input)",
+            "output: text/audio",
+            "context: 131072 tokens",
+        ):
+            self.assertIn(fragment, text)
+
+    def test_a_model_with_no_serving_block_still_describes(self):
+        entry = {"id": "embed-a", "meta": {"llamaswap": {"context_length": 512}}}
+        text = sync.build_description(entry)
+        self.assertIn("unknown quant", text)
+        self.assertIn("f16 KV cache", text)
+        self.assertIn("Tool calling: no", text)
+
+
+class DerivedIdentifierShapeTest(unittest.TestCase):
+    def test_the_stored_id_and_display_name_shapes_are_append_only(self):
+        self.assertEqual(sync.derived_row_id("model-a", "low"), "model-a--effort-low")
+        self.assertEqual(sync.derived_row_name("Model A", "low"), "Model A \u00b7 low")
+        self.assertEqual(sync.EFFORT_LEVEL_ORDER, ("none", "low", "medium", "high", "xhigh"))
+
+
+class CliSelectionTest(_MainHarness):
+    """`main()`'s coordination: credential guards, dry-run selection, `--only`, skips, drift."""
+
+    ROUTER = [
+        _router_entry(router_id="model-a", name="Model A", sampling={"temperature": 1.0}),
+        _router_entry(router_id="model-b", name="Model B"),
+    ]
+    VISIBILITY = _vis_doc({"model-a": (["openwebui"], None), "model-b": (["openwebui"], None)})
+
+    def test_missing_credentials_exit_2_before_any_call(self):
+        fake = _FakeOpenWebUI()
+        self._patch(fake)
+        buffer = io.StringIO()
+        with contextlib.redirect_stderr(buffer):
+            self.assertEqual(sync.main(["--openwebui-key", "k"]), 2)
+            self.assertEqual(sync.main(["--openwebui-url", "http://owui"]), 2)
+        self.assertEqual(fake.calls, [])
+        self.assertIn("base URL not set", buffer.getvalue())
+        self.assertIn("API key not set", buffer.getvalue())
+
+    def test_the_default_run_is_a_dry_run_that_mutates_nothing(self):
+        fake = _FakeOpenWebUI(router_models=self.ROUTER)
+        code, out = self._run(fake, self.VISIBILITY)
+        self.assertEqual(code, 0, out)
+        self.assertIn("=== sync-openwebui-capabilities: DRY-RUN ===", out)
+        self.assertIn("CREATE", out)
+        self.assertIn("is_active: (no row yet) -> True", out)
+        self.assertEqual(fake.rows, {})
+        self.assertEqual(
+            [method for method, _, _ in fake.calls], ["GET", "GET", "GET"]
+        )
+
+    def test_only_narrows_the_walk_and_warns_about_an_unknown_id(self):
+        fake = _FakeOpenWebUI(router_models=self.ROUTER)
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            code, out = self._run(fake, self.VISIBILITY, extra=["--only", "model-a", "--only", "nope"])
+        self.assertEqual(code, 0, out)
+        self.assertIn("models:     1", out)
+        self.assertIn("[model-a]", out)
+        self.assertNotIn("[model-b]", out)
+        self.assertIn("--only nope not found in router /v1/models", errors.getvalue())
+
+    def test_a_non_model_llamaswap_type_is_skipped_entirely(self):
+        entry = _router_entry(router_id="draft-a", name="Draft A")
+        entry["meta"]["llamaswap"]["type"] = "draft"
+        fake = _FakeOpenWebUI(router_models=[entry])
+        code, out = self._run(
+            fake, _vis_doc({"draft-a": (["openwebui"], None)}), extra=["--apply"]
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn("skip: meta.llamaswap.type='draft', not a model", out)
+        self.assertEqual(fake.rows, {})
+
+    def test_an_undeclared_router_id_fails_the_run_without_touching_that_row(self):
+        fake = _FakeOpenWebUI(router_models=self.ROUTER)
+        code, out = self._run(
+            fake, _vis_doc({"model-a": (["openwebui"], None)}), extra=["--apply"]
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("[model-b] FAIL:", out)
+        self.assertNotIn("model-b", str(fake.rows.keys()))
+        self.assertFalse(any("model-b" in url for _, url, _ in fake.calls))
+
+
+class FailClosedLoadPathTest(_MainHarness):
+    """A malformed policy or gateway config stops the run before the first HTTP call."""
+
+    def _run_with(self, **docs):
+        fake = _FakeOpenWebUI()
+        self._patch(fake)
+        paths = {
+            name: _write_json_once(self, doc)
+            for name, doc in docs.items()
+        }
+        errors = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(errors):
+            code = sync.main(
+                [
+                    "--openwebui-url",
+                    "http://owui",
+                    "--openwebui-key",
+                    "k",
+                    "--visibility",
+                    str(paths["visibility"]),
+                    "--policy",
+                    str(paths["policy"]),
+                    "--gateway-config",
+                    str(paths["gateway"]),
+                    "--apply",
+                ]
+            )
+        return code, errors.getvalue(), fake
+
+    def test_a_malformed_policy_stops_the_run_before_any_http_call(self):
+        code, errors, fake = self._run_with(
+            visibility=_vis_doc({"model-a": (["openwebui"], None)}),
+            policy=_policy(arm_tool_ids="not-a-list"),
+            gateway=_gateway(),
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("must be a list of strings", errors)
+        self.assertEqual(fake.calls, [])
+
+    def test_a_malformed_gateway_config_stops_the_run_before_any_http_call(self):
+        code, errors, fake = self._run_with(
+            visibility=_vis_doc({"model-a": (["openwebui"], None)}),
+            policy=_policy(),
+            gateway=["not", "an", "object"],
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("not a JSON object", errors)
+        self.assertEqual(fake.calls, [])
 
 
 if __name__ == "__main__":

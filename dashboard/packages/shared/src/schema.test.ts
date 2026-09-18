@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ServingRequest, ServingStatusFile, ServingVisibilityRequest } from "./index.ts";
+import type { ServingRequest, ServingStatusFile, ServingVisibilityDeclaration, ServingVisibilityRequest } from "./index.ts";
 import {
   CaptureEnvelopeSchema,
   CaptureRecordSchema,
@@ -13,11 +13,14 @@ import {
   RouterSlotsRecordSchema,
   RouterSlotsResponseSchema,
   RouterTelemetryResponseSchema,
+  SERVING_CONSUMER_ORDER,
   SERVING_STATUS_STALE_MS,
+  SERVING_VISIBILITY_SCHEMA_V1,
   ServingRequestSchema,
   ServingResponseSchema,
   ServingStatusResponseSchema,
   ServingTimingRowSchema,
+  ServingVisibilityDeclarationSchema,
   ServingVisibilityRequestSchema,
   TrialRowSchema,
 } from "./index.ts";
@@ -737,6 +740,53 @@ describe("ServingVisibilityRequestSchema / ServingRequestSchema (WP-4, serving c
     expect(() => ServingRequestSchema.parse({ ...valid, request_id: "req-20260913T115900Z-00000000000000a1" })).toThrow();
     expect(() => ServingRequestSchema.parse({ ...valid, model_key: "" })).toThrow();
     expect(() => ServingRequestSchema.parse({ ...valid, consumers: ["cc", "ollama"] })).toThrow();
+  });
+});
+
+// F4 (boundary-type-contracts): `router/visibility.json`'s own schema literal and full
+// declaration shape, single-sourced here so `dashboard/scripts/
+// servingVisibilityConformance.ts` parses with this schema and imports `SERVING_CONSUMER_ORDER`
+// rather than redeclaring either (the finding). `SERVING_VISIBILITY_SCHEMA_V1` is distinct
+// from `SERVING_REQUEST_SCHEMA_V1`/`SERVING_STATUS_SCHEMA_V1` above — this is the on-disk
+// declaration FILE, not the request/status control-plane pair.
+describe("ServingVisibilityDeclarationSchema (WP-R5, F4 boundary-type-contracts)", () => {
+  test("the schema literal and canonical consumer order are single-sourced", () => {
+    expect(SERVING_VISIBILITY_SCHEMA_V1).toBe("serving-visibility-v1");
+    expect(SERVING_CONSUMER_ORDER).toEqual(["cc", "openwebui"]);
+  });
+
+  test("round-trips a realistic declaration, in and out of canonical order", () => {
+    const valid: ServingVisibilityDeclaration = {
+      schema: "serving-visibility-v1",
+      models: {
+        "Qwen3.8-27B-UD-IQ3_S": { gateway_id: "qwen38-27b-iq3s", consumers: ["cc", "openwebui"] },
+        "bge-m3-f16": { gateway_id: null, consumers: [] },
+        // Zod's array-of-enum accepts any order — canonical-order/dedup is a business rule the
+        // checker enforces with `SERVING_CONSUMER_ORDER` after this parse succeeds, not a shape
+        // fact. This is intentional (see the schema's own doc comment): folding it in here
+        // would turn one out-of-order entry into a whole-document parse failure that hides
+        // every other entry's diagnostics.
+        "openwebui-only-out-of-order": { gateway_id: null, consumers: ["openwebui", "cc"] },
+      },
+    };
+    expect(ServingVisibilityDeclarationSchema.parse(valid)).toEqual(valid);
+  });
+
+  test("rejects a wrong schema literal, a non-object document, and an entry with a bad shape", () => {
+    expect(() => ServingVisibilityDeclarationSchema.parse({ schema: "serving-visibility-v2", models: {} })).toThrow();
+    expect(() => ServingVisibilityDeclarationSchema.parse([])).toThrow();
+    expect(() =>
+      ServingVisibilityDeclarationSchema.parse({
+        schema: "serving-visibility-v1",
+        models: { "bad-consumer": { gateway_id: null, consumers: ["ollama"] } },
+      }),
+    ).toThrow();
+    expect(() =>
+      ServingVisibilityDeclarationSchema.parse({
+        schema: "serving-visibility-v1",
+        models: { "bad-gateway-id": { gateway_id: 123, consumers: [] } },
+      }),
+    ).toThrow();
   });
 });
 

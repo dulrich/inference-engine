@@ -3,11 +3,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { verifyInstructionSources, verifyFeatures } from "../thread-config.mjs";
 import {
-  parseModelId, isTitleRequest, titleEnvelope, extractCwd, conversational, sessionKeyOf, countTokensEstimate,
-  verifyInstructionSources, verifyFeatures, wireModelId, mapUpstreamError, retryAfterSeconds, rateLimitExhaustion, presentedKey,
-  toDynamicTools, Logger, usageOut,
-} from "../codex-sidecar.mjs";
+  parseModelId, isTitleRequest, titleEnvelope, extractCwd, conversational, sessionKeyOf,
+  countTokensEstimate, presentedKey, toDynamicTools, usageOut,
+} from "../protocol.mjs";
+import { wireModelId } from "../sinks.mjs";
+import { mapUpstreamError, retryAfterSeconds, rateLimitExhaustion } from "../errors.mjs";
+import { Logger } from "../logging.mjs";
 
 const TITLE_SYSTEM = "You are naming a coding session so the user can pick it out of a long list of sessions.";
 

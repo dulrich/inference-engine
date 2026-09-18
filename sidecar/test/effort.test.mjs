@@ -12,7 +12,7 @@
 // the unit test IS its gate.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseModelId, resolveEffort } from "../codex-sidecar.mjs";
+import { parseModelId, resolveEffort } from "../protocol.mjs";
 
 const resolve = (id, body = {}) => resolveEffort(parseModelId(id), body);
 

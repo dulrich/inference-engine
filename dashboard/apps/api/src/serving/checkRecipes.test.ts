@@ -103,6 +103,79 @@ describe("check-serving-recipes", () => {
     }
   });
 
+  // WP-R5 regression guard. The F4 rewrite parses the declaration with a shared Zod schema; if
+  // that parse validates the whole `models` map at once, ONE entry with an off-vocabulary
+  // `consumers` token fails the document and every other entry's diagnostic vanishes behind a
+  // single `visibility-unreadable` — the gate goes quiet about five real defects at exactly the
+  // moment the vocabulary is being migrated. Entry-level facts must report per entry.
+  test("an off-vocabulary consumers token reports on its own key and does not blind the rest", async () => {
+    const configText = await Bun.file(join(FIXTURES, "non-conforming.yaml")).text();
+    const gatewayText = await Bun.file(join(FIXTURES, "non-conforming-gateway.json")).text();
+    const declaration = JSON.parse(
+      await Bun.file(join(FIXTURES, "non-conforming-visibility.json")).text(),
+    ) as { models: Record<string, { consumers: unknown }> };
+    (declaration.models["bad-consumers-chat"] as { consumers: unknown }).consumers = ["crucible"];
+
+    const findings = checkServingRecipes(configText, JSON.stringify(declaration), gatewayText);
+    expect(findings.some((f) => f.rule === "visibility-unreadable")).toBe(false);
+    expect(findings.filter((f) => f.rule.startsWith("visibility-") || f.rule === "max-tokens-crosswalk").map((f) => [f.modelKey, f.rule])).toEqual([
+      ["undeclared-chat", "visibility-missing"],
+      ["bad-consumers-chat", "visibility-vocabulary"],
+      ["alien-gateway-id-chat", "visibility-gateway-id"],
+      ["cc-null-gateway-chat", "visibility-cc-requires-gateway-id"],
+      ["dup-second-chat", "visibility-duplicate-gateway-id"],
+      ["crosswalk-chat", "max-tokens-crosswalk"],
+    ]);
+    expect(formatFinding(findings.find((f) => f.modelKey === "bad-consumers-chat") as (typeof findings)[number])).toBe(
+      'bad-consumers-chat: visibility-vocabulary — `consumers` carries "crucible" — the closed vocabulary is cc, openwebui',
+    );
+  });
+
+  // A wrong-TYPED entry is likewise one entry's problem, not the document's.
+  test("a wrong-typed gateway_id reports on its own key", async () => {
+    const configText = await Bun.file(join(FIXTURES, "conforming.yaml")).text();
+    const gatewayText = await Bun.file(join(FIXTURES, "conforming-gateway.json")).text();
+    const declaration = JSON.parse(
+      await Bun.file(join(FIXTURES, "conforming-visibility.json")).text(),
+    ) as { models: Record<string, { gateway_id: unknown }> };
+    const key = Object.keys(declaration.models)[0] as string;
+    (declaration.models[key] as { gateway_id: unknown }).gateway_id = 42;
+
+    const findings = checkServingRecipes(configText, JSON.stringify(declaration), gatewayText);
+    expect(findings.some((f) => f.rule === "visibility-unreadable")).toBe(false);
+    expect(findings.map((f) => [f.modelKey, f.rule])).toContainEqual([key, "visibility-gateway-id"]);
+  });
+
+  // The documented output contract after the F7 split: the two checkers run independently over
+  // the whole alias list, so findings are GROUPED BY CHECKER (all recipe findings, then all
+  // visibility ones), each group in config order. The committed fixture cannot tell this apart
+  // from the pre-split interleaving — its keys happen to be contiguous by category — so this
+  // pins the contract with a key that violates BOTH policies at once.
+  test("findings are grouped by checker, not interleaved per alias", async () => {
+    const configText = await Bun.file(join(FIXTURES, "non-conforming.yaml")).text();
+    const gatewayText = await Bun.file(join(FIXTURES, "non-conforming-gateway.json")).text();
+    // `missing-mtp-chat` is the FIRST key and a recipe violator; drop it from the declaration so
+    // it violates the visibility policy too. Interleaved output would put its two findings
+    // adjacent; grouped output puts them at opposite ends.
+    const declaration = JSON.parse(
+      await Bun.file(join(FIXTURES, "non-conforming-visibility.json")).text(),
+    ) as { models: Record<string, unknown> };
+    delete declaration.models["missing-mtp-chat"];
+
+    const findings = checkServingRecipes(configText, JSON.stringify(declaration), gatewayText);
+    const own = findings.map((f, i) => [i, f.modelKey, f.rule] as const).filter((r) => r[1] === "missing-mtp-chat");
+    expect(own.map((r) => r[2])).toEqual(["missing-key", "visibility-missing"]);
+    expect(own[0]?.[0]).toBe(0);
+    // Not adjacent: every recipe finding precedes every visibility finding.
+    expect(own[1]?.[0]).toBeGreaterThan(1);
+    const isVisibility = (f: (typeof findings)[number]): boolean =>
+      f.rule.startsWith("visibility-") || f.rule === "max-tokens-crosswalk";
+    const recipeIndices = findings.map((f, i) => (isVisibility(f) ? -1 : i)).filter((i) => i >= 0);
+    const lastRecipe = Math.max(...recipeIndices);
+    const firstVisibility = findings.findIndex(isVisibility);
+    expect(lastRecipe).toBeLessThan(firstVisibility);
+  });
+
   // The crosswalk is the seam patch 0010's clamp depends on: an id the gateway does not cap at
   // all is as much a defect as one it caps at the wrong number.
   test("a gateway config with no maxOutputTokens map fails the crosswalk for every declared id", async () => {

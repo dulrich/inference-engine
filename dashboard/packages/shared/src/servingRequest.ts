@@ -116,6 +116,45 @@ export type ServingVisibilityEntry = z.infer<typeof ServingVisibilityEntrySchema
 export const ServingVisibilityMapSchema = z.record(z.string(), ServingVisibilityEntrySchema);
 export type ServingVisibilityMap = z.infer<typeof ServingVisibilityMapSchema>;
 
+/** `router/visibility.json`'s own schema literal — single-sourced here, alongside
+ * `SERVING_REQUEST_SCHEMA_V1`/`SERVING_STATUS_SCHEMA_V1` above, so the on-disk declaration the
+ * host dispatcher writes, this package's own status-file republication, and the conformance
+ * gate that checks it (`dashboard/scripts/check-serving-recipes.ts`) agree on one string.
+ * Distinct plane from the two schemas above: those are the serving-control request/status
+ * pair; this is the declaration FILE itself. */
+export const SERVING_VISIBILITY_SCHEMA_V1 = "serving-visibility-v1";
+
+/** The full `router/visibility.json` document — the schema literal plus its `models` map
+ * (`ServingVisibilityMapSchema`, the same shape the status file republishes above). This is
+ * the one shape the visibility conformance gate parses against, replacing that gate's own
+ * hand-written duck-typed reader and its separately declared consumer vocabulary (review
+ * finding F4 — boundary-type-contracts): a vocabulary/order change can no longer make the gate
+ * and this package disagree while both typecheck, because there is exactly one declaration of
+ * each. Per-entry canonical-order/duplicate-gateway-id and the cross-file max-tokens crosswalk
+ * stay the gate's own business rules — they need alias-list and gateway-config context this
+ * schema doesn't have. This strict form is for readers that want the whole document or nothing;
+ * the GATE parses `ServingVisibilityEnvelopeSchema` below and applies `ServingVisibilityEntrySchema`
+ * per entry, so one malformed entry cannot hide every other entry's diagnostics. */
+export const ServingVisibilityDeclarationSchema = z.object({
+  schema: z.literal(SERVING_VISIBILITY_SCHEMA_V1),
+  models: ServingVisibilityMapSchema,
+});
+export type ServingVisibilityDeclaration = z.infer<typeof ServingVisibilityDeclarationSchema>;
+
+/** The same envelope with its entries left UNVALIDATED — the shape a per-entry diagnostic tool
+ * parses against. Derived from the declaration schema above (never a second hand-written
+ * envelope), so the schema literal and the key set stay single-sourced: only the `models` value
+ * type is relaxed. `dashboard/scripts/servingVisibilityConformance.ts` uses this, then applies
+ * `ServingVisibilityEntrySchema` to each entry itself, because a conformance GATE must report
+ * every non-conforming entry — validating the whole map in one parse would let one entry with
+ * an off-vocabulary `consumers` token collapse every other entry's diagnostic into a single
+ * whole-document failure, which is the one outcome that gate exists to prevent. Readers that
+ * want the document or nothing (the API's status republication) use the strict schema above. */
+export const ServingVisibilityEnvelopeSchema = ServingVisibilityDeclarationSchema.extend({
+  models: z.record(z.string(), z.unknown()),
+});
+export type ServingVisibilityEnvelope = z.infer<typeof ServingVisibilityEnvelopeSchema>;
+
 /** A request's terminal disposition. There are no in-flight states on this plane: the
  * dispatcher records a disposition and THEN unlinks the request file, so every id that
  * appears here is finished. `applied` = the declaration was rewritten; `rejected` = refused

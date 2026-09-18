@@ -118,9 +118,9 @@ from typing import Dict, List
 
 # Import safety (both entry paths, deliberately): when this file is RUN, `scripts/` is already
 # `sys.path[0]`; when it is importlib-loaded from an absolute path (its hyphenated filename
-# makes a normal `import` impossible, so `scripts/test_sync_openwebui_capabilities.py` loads it
+# makes a normal `import` impossible, so each `scripts/test_sync_*.py` module loads it
 # that way), it is not on the path at all. Putting its own directory on `sys.path` here makes
-# the package resolvable from both, with no loader change in the test and no dependence on cwd.
+# the package resolvable from both, with no loader change in the tests and no dependence on cwd.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from openwebui_sync import client, planner, runner  # noqa: E402
@@ -166,8 +166,8 @@ from openwebui_sync.planner import (  # noqa: E402
 )
 
 
-# The names this file re-exports are a stable surface: `scripts/test_sync_openwebui_capabilities.py`
-# reaches them through the importlib-loaded module, and an operator reading the entry script
+# The names this file re-exports are a stable surface: the `scripts/test_sync_*.py` modules
+# reach them through the importlib-loaded module, and an operator reading the entry script
 # should see the whole vocabulary in one place. They are imports, not wrappers -- the owner
 # module above is the single definition site for each.
 __all__ = [

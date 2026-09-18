@@ -53,6 +53,7 @@ OTHER_GATEWAY_KEY = "Qwen3.6-35B-A3B-UD-Q4_K_XL"
 
 RID_A = "srv-20260913T115900Z-00000000000000a1"
 RID_B = "srv-20260913T115930Z-00000000000000a2"
+RID_C = "srv-20260913T115945Z-00000000000000a3"
 
 
 class _Recorder:
@@ -65,6 +66,31 @@ class _Recorder:
     def __call__(self, argv) -> int:
         self.calls.append(list(argv))
         return self.code
+
+
+class _WriteCounter:
+    def __init__(self) -> None:
+        self.count = 0
+
+
+@contextlib.contextmanager
+def _count_writes(path):
+    """Counts atomic writes of ONE path -- the declaration -- while delegating to the real writer,
+    so "one transaction" is asserted as one `os.replace` of `visibility.json` rather than inferred
+    from the file's final contents (N sequential writes leave the same bytes as one)."""
+    counter = _WriteCounter()
+    real = sd.atomic_write_json
+
+    def _counting(target, payload):
+        if Path(target) == Path(path):
+            counter.count += 1
+        return real(target, payload)
+
+    sd.atomic_write_json = _counting
+    try:
+        yield counter
+    finally:
+        sd.atomic_write_json = real
 
 
 def _declaration() -> dict:
@@ -313,7 +339,9 @@ class TestApply(_TmpCase):
         _, counts, picker, sync = _run(self.paths, self.visibility)
         self.assertEqual(counts["rejected"], 1)
         self.assertEqual(self.visibility.read_bytes(), before)
-        self.assertEqual((picker.calls, sync.calls), ([], []))
+        # A rejection-only pass is still a VALID pass, so it still reconciles exactly once --
+        # from a declaration the rejection did not touch.
+        self.assertEqual((len(picker.calls), len(sync.calls)), (1, 1))
         self.assertEqual(_status(self.paths)["recent"][0], {
             "request_id": RID_A, "state": "rejected",
             "reason": "cc requires a gateway id", "applied_at": NOW_ISO,
@@ -334,15 +362,65 @@ class TestApply(_TmpCase):
         for request_id in (RID_A, RID_B):
             self.assertFalse((self.paths.requests_dir / f"{request_id}.json").exists())
 
-    def test_two_models_in_one_pass_each_get_their_own_reconciliation(self):
+    def test_two_models_in_one_pass_share_one_declaration_write_and_one_projector_pair(self):
+        """Two DISTINCT model keys in one pass are one transaction, not two: both changes land in
+        a single atomic write of the declaration, and the pair that projects it runs once. Each
+        generator already reconciles the whole declaration, so a second run would be redundant
+        serial whole-world work rather than extra safety."""
         _write_request(self.paths, RID_A, GATEWAY_KEY, ["cc"], "2026-09-13T11:59:00.480Z")
         _write_request(self.paths, RID_B, OTHER_GATEWAY_KEY, [], "2026-09-13T11:59:30.117Z")
-        _, counts, picker, sync = _run(self.paths, self.visibility)
-        self.assertEqual(counts["applied"], 2)
+        with _count_writes(self.visibility) as writes:
+            code, counts, picker, sync = _run(self.paths, self.visibility)
+        self.assertEqual((code, counts["applied"]), (0, 2))
         models = self._declared()["models"]
         self.assertEqual(models[GATEWAY_KEY]["consumers"], ["cc"])
         self.assertEqual(models[OTHER_GATEWAY_KEY]["consumers"], [])
-        self.assertEqual((len(picker.calls), len(sync.calls)), (2, 2))
+        self.assertEqual(writes.count, 1)
+        self.assertEqual((len(picker.calls), len(sync.calls)), (1, 1))
+        recent = _status(self.paths)["recent"]
+        self.assertEqual([r["request_id"] for r in recent], [RID_B, RID_A])
+        self.assertTrue(all(r["state"] == "applied" for r in recent))
+
+    def test_a_batch_whose_entries_are_already_current_writes_nothing_and_still_reconciles(self):
+        """The declaration write is the cheap half; the projection is the reconciliation loop. An
+        already-current request rewrites no bytes and still gets its one picker/sync pair."""
+        current = self._declared()["models"][GATEWAY_KEY]["consumers"]
+        before = self.visibility.read_bytes()
+        _write_request(self.paths, RID_A, GATEWAY_KEY, current, "2026-09-13T11:59:00.480Z")
+        with _count_writes(self.visibility) as writes:
+            _, counts, picker, sync = _run(self.paths, self.visibility)
+        self.assertEqual(counts["applied"], 1)
+        self.assertEqual(writes.count, 0)
+        self.assertEqual(self.visibility.read_bytes(), before)
+        self.assertEqual((len(picker.calls), len(sync.calls)), (1, 1))
+
+    def test_one_projection_failure_dispositions_every_request_the_batch_represents(self):
+        """There is ONE projection result per pass, so there is one outcome to hand out: both
+        winners AND the request one of them superseded are recorded `failed` with the same reason.
+        No per-model side effect is invented to give them distinct ones."""
+        _write_request(self.paths, RID_A, GATEWAY_KEY, ["cc"], "2026-09-13T11:59:00.480Z")
+        _write_request(self.paths, RID_B, OTHER_GATEWAY_KEY, [], "2026-09-13T11:59:30.117Z")
+        _write_request(self.paths, RID_C, GATEWAY_KEY, [], "2026-09-13T11:59:45.900Z")
+        stderr = io.StringIO()
+        code, counts, picker, sync = _run(
+            self.paths, self.visibility, sync=_Recorder(2), stderr=stderr,
+        )
+        self.assertEqual(code, sd.EXIT_RECONCILIATION_FAILED)
+        self.assertEqual((counts["failed"], counts["applied"]), (3, 0))
+        self.assertEqual((len(picker.calls), len(sync.calls)), (1, 1))
+        recent = _status(self.paths)["recent"]
+        self.assertEqual([r["request_id"] for r in recent], [RID_C, RID_B, RID_A])
+        for record in recent:
+            self.assertEqual(record["state"], "failed")
+            self.assertEqual(record["reason"], "sync-openwebui-capabilities.py exited 2")
+        # Every edit is KEPT -- including the superseded key's winning value -- and every request
+        # file is terminal, which is exactly why the self-heal must not need a new request.
+        models = self._declared()["models"]
+        self.assertEqual(models[GATEWAY_KEY]["consumers"], [])
+        self.assertEqual(models[OTHER_GATEWAY_KEY]["consumers"], [])
+        for request_id in (RID_A, RID_B, RID_C):
+            self.assertFalse((self.paths.requests_dir / f"{request_id}.json").exists())
+        self.assertIn("the declaration edit is KEPT", stderr.getvalue())
 
     def test_a_picker_failure_names_the_step_keeps_the_edit_and_skips_the_sync(self):
         _write_request(self.paths, RID_A, GATEWAY_KEY, ["cc"], "2026-09-13T11:59:00.480Z")
@@ -371,14 +449,28 @@ class TestApply(_TmpCase):
         self.assertEqual(len(picker.calls), 1)
 
     def test_a_failed_pass_self_heals_on_the_next_one_without_a_new_request(self):
-        """The generators are the reconciliation loop; the request is only the trigger."""
+        """The generators are the reconciliation loop; the request is only the trigger -- so the
+        NEXT pass re-runs them from the kept declaration edit with NO new request at all. This is
+        the module contract's own promise, and it is why this plane needs no retry queue: the
+        second pass below is EMPTY, and it must still reconcile exactly once."""
         _write_request(self.paths, RID_A, GATEWAY_KEY, ["cc"], "2026-09-13T11:59:00.480Z")
-        _run(self.paths, self.visibility, sync=_Recorder(2))
-        _write_request(self.paths, RID_B, GATEWAY_KEY, ["cc"], "2026-09-13T11:59:30.117Z")
-        _, counts, _, sync = _run(self.paths, self.visibility, now=NOW + timedelta(minutes=1))
-        self.assertEqual(counts["applied"], 1)
-        self.assertEqual(len(sync.calls), 1)
+        first_code, counts, _, _ = _run(self.paths, self.visibility, sync=_Recorder(2))
+        self.assertEqual(counts["failed"], 1)
+        # The edit is KEPT and the request is terminal: nothing durable remains to retry from.
         self.assertEqual(self._declared()["models"][GATEWAY_KEY]["consumers"], ["cc"])
+        self.assertFalse((self.paths.requests_dir / f"{RID_A}.json").exists())
+
+        # No second request is written. The empty pass is the self-heal.
+        code, counts, picker, sync = _run(
+            self.paths, self.visibility, now=NOW + timedelta(minutes=1),
+        )
+        self.assertEqual((len(picker.calls), len(sync.calls)), (1, 1))
+        self.assertEqual(
+            counts, {"applied": 0, "failed": 0, "ignored": 0, "pruned": 0, "rejected": 0},
+        )
+        self.assertEqual(self._declared()["models"][GATEWAY_KEY]["consumers"], ["cc"])
+        self.assertEqual(first_code, sd.EXIT_RECONCILIATION_FAILED)
+        self.assertEqual(code, 0)
 
     def test_an_unreadable_declaration_aborts_the_pass_and_publishes_nothing(self):
         self.visibility.write_text("{ not json", encoding="utf-8")
@@ -402,7 +494,8 @@ class TestPublish(_TmpCase):
         self.assertEqual(first["generated_at"], NOW_ISO)
         self.assertEqual(first["visibility"], _declaration()["models"])
         self.assertIsNone(first["last_request"])
-        self.assertEqual((picker.calls, sync.calls), ([], []))
+        # And it reconciles: one picker run, one sync run, with no request at all.
+        self.assertEqual((len(picker.calls), len(sync.calls)), (1, 1))
         _run(self.paths, self.visibility, now=NOW + timedelta(minutes=1))
         self.assertEqual(_status(self.paths)["generated_at"], "2026-09-13T12:01:00Z")
 
@@ -538,7 +631,15 @@ class TestRepoRootResolution(unittest.TestCase):
 
 class TestWrapper(unittest.TestCase):
     """The wrapper's credential handling, exercised in a tempdir HOME -- the real
-    `~/.config/inference-serving/env` is never read and the real state dir is never written."""
+    `~/.config/inference-serving/env` is never read and the real state dir is never written.
+
+    These are the only cases that reach the REAL `run_subprocess`, because `--repo-root` points at
+    the tempdir: a pass now reconciles unconditionally, and the tempdir has no generators to run.
+    That resolves to `EXIT_RECONCILIATION_FAILED` either way -- `node` reports a missing module,
+    or `run_subprocess` catches the `OSError` of a `node` that is not on PATH at all and returns
+    127 -- so these assert exit 3 deterministically, without depending on the host toolchain, and
+    never the wrapper's own exit 2 (which would mean the credential file was refused). Nothing
+    real is projected: the picker and the sync script do not exist under the tempdir root."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -574,17 +675,22 @@ class TestWrapper(unittest.TestCase):
             env_file_mode=0o600,
             body=f"OPENWEBUI_URL=http://127.0.0.1:4813\nOPENWEBUI_API_KEY={secret}\n",
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(result.returncode, sd.EXIT_RECONCILIATION_FAILED, result.stderr)
         self.assertNotIn(secret, result.stdout)
         self.assertNotIn(secret, result.stderr)
+        # The pass ran to completion despite the absent generators: it published and summarised.
         self.assertEqual(json.loads(result.stdout.strip()), {
             "applied": 0, "failed": 0, "ignored": 0, "pruned": 0, "rejected": 0,
         })
         self.assertTrue(sd.serving_status_path(self.paths).exists())
 
-    def test_an_absent_env_file_is_not_an_error(self):
+    def test_an_absent_env_file_is_not_itself_an_error(self):
+        """No env file is a legal install state (the plane is simply unconfigured), so the wrapper
+        must NOT refuse with its own exit 2 -- it execs the dispatcher, which runs a full pass."""
         result = self._run_wrapper(env_file_mode=None)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(result.returncode, sd.EXIT_RECONCILIATION_FAILED, result.stderr)
         self.assertTrue(sd.serving_status_path(self.paths).exists())
 
 

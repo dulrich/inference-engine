@@ -10,13 +10,29 @@ MIRRORS `control_dispatcher.py` rather than extending it: a separate module and 
 crontab line, because the two planes have different failure domains and folding serving applies
 into the GPU-run pump would put the declaration edit behind the run lock.
 
-**The generators are the reconciliation loop; the request is only the trigger.** A pass rewrites
-the declaration and then re-runs `router/model-picker-lineup.mjs --write` and
-`scripts/sync-openwebui-capabilities.py --apply`, which read the declaration and project it into
-`~/.claude/settings.json` and Open WebUI's `is_active`. If either exits non-zero the request is
-`failed` and **the declaration edit is KEPT** -- it is the declaration, not a side effect -- so
-the next pass re-runs both idempotently from it, with or without a new request. That is what
-makes a failed sync self-healing without a retry queue.
+**The generators are the reconciliation loop; the request is only the trigger.** A pass folds
+every winning request into ONE in-memory declaration, publishes that declaration at most once,
+and then runs `router/model-picker-lineup.mjs --write` and
+`scripts/sync-openwebui-capabilities.py --apply` EXACTLY ONCE, which read the declaration and
+project it into `~/.claude/settings.json` and Open WebUI's `is_active`. Each generator already
+reconciles the whole declaration, so running them per request would be redundant serial
+whole-world work, not extra safety.
+
+**One reconciliation per valid pass, including an empty one.** The pair runs whenever the
+declaration is readable -- with a burst of requests, with a single one, with only rejections, and
+with no request at all. That is what the paragraph above actually promises: if a projection exits
+non-zero the requests in that batch are `failed` and **the declaration edit is KEPT** -- it is the
+declaration, not a side effect -- so the NEXT pass re-runs both idempotently from it *without* a
+new request, which is what makes a failed sync self-healing with no retry queue. A per-request
+projection could not do that: a failed request is terminal and its file is unlinked, so nothing
+durable would remain to retry from (measured in `reviews/2026-09-14-tn-code-review.md` F2).
+
+**The three exit codes.** `0` a reconciled pass; `1` the declaration is missing or unreadable --
+nothing applied, nothing published; `EXIT_RECONCILIATION_FAILED` (3) the declaration was read and
+`serving-status.json` was published, but a generator exited non-zero. 3 is the ONLY signal an
+EMPTY failing pass has (there is no request to carry a `failed` record), so it is spelled
+explicitly rather than folded into the counts; the wrapper's own `2` means the credential file was
+refused before this module ever ran, so the two spaces do not collide.
 
 **Every filesystem path this module writes** (`control_store.Paths` owns the state-dir half):
 
@@ -97,6 +113,8 @@ from serving_protocol import (
 )
 
 __all__ = [
+    "EXIT_DECLARATION_UNREADABLE",
+    "EXIT_RECONCILIATION_FAILED",
     "MODULE_DIR",
     "PICKER_BASENAME",
     "REPO_ROOT",
@@ -126,6 +144,12 @@ SERVING_LOCK_BASENAME = "serving-dispatch.lock"
 
 PICKER_BASENAME = "model-picker-lineup.mjs"
 SYNC_BASENAME = "sync-openwebui-capabilities.py"
+
+# Pass exit codes. 0 is a reconciled pass; the two below are the only non-zero ones this module
+# produces, and they are distinct because they mean opposite things to an operator reading the
+# cron log: nothing happened at all, versus the declaration is current but its projection is not.
+EXIT_DECLARATION_UNREADABLE = 1
+EXIT_RECONCILIATION_FAILED = 3
 
 
 # -------------------------------------------------------------------------------------------
@@ -163,7 +187,15 @@ def run_subprocess(argv: Sequence[str]) -> int:
     """The real default behind both generator seams -- the suite ALWAYS injects a fake and never
     runs a generator. The environment is passed through untouched (that is how the sync leg gets
     `OPENWEBUI_URL`/`OPENWEBUI_API_KEY` from the wrapper), and nothing about it is ever printed."""
-    completed = subprocess.run(list(argv), check=False)
+    try:
+        completed = subprocess.run(list(argv), check=False)
+    except OSError as exc:
+        # An unlaunchable generator (no `node` on cron's PATH, a moved script) is a FAILED
+        # reconciliation, not a crashed pass: the pass must still publish its status file and
+        # report the failure through the ordinary exit, or the chips go `stale` for an
+        # environment problem. 127 is the shell's own "command not found".
+        sys.stderr.write(f"serving_dispatcher: could not run {argv[0]} ({exc})\n")
+        return 127
     return completed.returncode
 
 
@@ -211,25 +243,39 @@ def _ingest(
     return pending, rejections, ignored
 
 
-def _apply_request(
+def _stage_declaration(
     declaration: Dict[str, Any],
     visibility_path: Path,
-    request: ServingRequest,
+    winners: Dict[str, ServingRequest],
+) -> bool:
+    """Fold EVERY winning request of the pass into the one in-memory declaration and publish it
+    with a SINGLE atomic write -- `True` when anything was written. Only the targeted keys'
+    `consumers` change: every `gateway_id` is untouched, every other key is untouched, and key
+    order survives (`json.load` preserves insertion order and `atomic_write_json` writes
+    `sort_keys=False`). A batch whose entries are all already current writes nothing at all; the
+    generators still run afterwards, because they -- not the write -- are the reconciliation
+    loop."""
+    changed = False
+    for request in winners.values():
+        entry = declaration["models"][request.model_key]
+        wanted = list(request.consumers)
+        if entry.get("consumers") != wanted:
+            entry["consumers"] = wanted
+            changed = True
+    if changed:
+        atomic_write_json(visibility_path, declaration)
+    return changed
+
+
+def _reconcile(
     repo_root: Path,
     run_picker: Callable[[Sequence[str]], int],
     run_sync: Callable[[Sequence[str]], int],
 ) -> Tuple[str, Optional[str]]:
-    """Declaration rewrite, then picker, then sync -- `(state, reason)`. Only the target key's
-    `consumers` changes: `gateway_id` is untouched, every other key is untouched, and key order
-    survives (`json.load` preserves insertion order and `atomic_write_json` writes
-    `sort_keys=False`). An already-current entry is not rewritten at all, but the generators still
-    run: they are the reconciliation loop. A non-zero generator exit short-circuits the rest of
-    the apply and names the step that failed; the edit is KEPT either way."""
-    entry = declaration["models"][request.model_key]
-    wanted = list(request.consumers)
-    if entry.get("consumers") != wanted:
-        entry["consumers"] = wanted
-        atomic_write_json(visibility_path, declaration)
+    """The pass's ONE projection -- picker, then sync, then `(state, reason)`. Called exactly once
+    per valid pass regardless of how many requests it carried (including zero). A non-zero exit
+    short-circuits the rest and names the step that failed; the declaration edit is KEPT either
+    way, which is what the next pass re-runs from."""
     code = run_picker(picker_argv(repo_root))
     if code != 0:
         return "failed", f"{PICKER_BASENAME} exited {code}"
@@ -285,21 +331,35 @@ def execute_pass(
     repo_root: Optional[Path] = None,
     unlink_fn: Optional[Callable[[Path], None]] = None,
 ) -> Tuple[int, Dict[str, int]]:
-    """One serving pass -- `(exit_code, counts)`; `dispatch_pass` is the printing wrapper.
+    """One serving pass, as ONE reconciliation transaction -- `(exit_code, counts)`;
+    `dispatch_pass` is the printing wrapper.
 
     Phase order, and why it is this order:
 
-    1. **read the declaration.** A missing/invalid one aborts the pass with exit 1 and publishes
-       NOTHING: an empty `visibility` map would tell the dashboard every model has no consumers,
-       which is wrong rather than merely absent. A status file that stops advancing goes `stale`
-       at the API's 180 s threshold and disables the chips -- the fail-closed outcome.
+    1. **read the declaration.** A missing/invalid one aborts the pass with
+       `EXIT_DECLARATION_UNREADABLE` and publishes NOTHING: an empty `visibility` map would tell
+       the dashboard every model has no consumers, which is wrong rather than merely absent. A
+       status file that stops advancing goes `stale` at the API's 180 s threshold and disables the
+       chips -- the fail-closed outcome. This is the ONLY phase that can skip the projection.
     2. **ingest** (sorted, fail-closed).
-    3. **apply**, latest-per-`model_key` wins; superseded requests are dispositioned `applied`
-       against the winning state and only the winner's `consumers` is written.
-    4. **publish** `serving-status.json` atomically, EVERY pass including passes with no pending
+    3. **stage**, latest-per-`model_key` wins; every winner is folded into the one in-memory
+       declaration and that declaration is written at most once.
+    4. **reconcile** -- one picker run and one sync run, ALWAYS, even on a pass that ingested
+       nothing. The generators reconcile the whole declaration, so one pair is sufficient for a
+       burst and necessary for an empty pass: it is the self-heal the module contract promises.
+    5. **disposition**, from that one projection result. Every request the batch represents --
+       winners and the superseded requests they stand for -- takes the SAME `applied`/`failed`
+       state and reason, because there is one projection per pass and no per-model side effect to
+       distinguish them by. Rejected requests never reach the projection and keep their own
+       reason.
+    6. **publish** `serving-status.json` atomically, EVERY pass including passes with no pending
        request, so the chips are authoritative within a minute of install.
-    5. **unlink** the dispositioned request files -- after the publish, never before.
-    6. **prune** surviving `srv-*.json` older than 30 days.
+    7. **unlink** the dispositioned request files -- after the publish, never before.
+    8. **prune** surviving `srv-*.json` older than 30 days.
+
+    A failed projection on a pass with NO request has no `recent[]` record to carry it (there is
+    no request to disposition): its whole signal is `EXIT_RECONCILIATION_FAILED` plus the stderr
+    line below, which is why the pass has a distinct exit code at all.
     """
     now_fn = now_fn or (lambda: datetime.now(timezone.utc))
     picker = run_picker or run_subprocess
@@ -316,7 +376,7 @@ def execute_pass(
             f"serving_dispatcher: {visibility_path} is missing or is not a {SCHEMA_VISIBILITY} "
             "declaration -- nothing applied, nothing published\n",
         )
-        return 1, counts
+        return EXIT_DECLARATION_UNREADABLE, counts
 
     paths.requests_dir.mkdir(parents=True, exist_ok=True)
     paths.host_dir.mkdir(parents=True, exist_ok=True)
@@ -325,21 +385,22 @@ def execute_pass(
 
     records: List[Dict[str, Any]] = []
     dispositioned: List[str] = []
-    for request_id, reason in rejections:
-        records.append(make_record(request_id, "rejected", reason, now))
+    for request_id, rejection_reason in rejections:
+        records.append(make_record(request_id, "rejected", rejection_reason, now))
         dispositioned.append(request_id)
         counts["rejected"] += 1
 
+    # Latest request per `model_key` wins (`pending` is ascending, so the last one seen for a key
+    # is the winner); a superseded request is represented by that winner, never applied separately.
     winners: Dict[str, ServingRequest] = {request.model_key: request for request in pending}
+    _stage_declaration(declaration, visibility_path, winners)
+    state, reason = _reconcile(root, picker, sync)
+    if state == "failed":
+        sys.stderr.write(
+            f"serving_dispatcher: {reason} -- the declaration edit is KEPT; the next pass "
+            "re-runs both generators from it, with or without a new request\n",
+        )
     for request in pending:
-        if winners[request.model_key] is not request:
-            # Superseded within this pass: dispositioned `applied` against the winning state,
-            # which is the state the declaration now carries for that model.
-            records.append(make_record(request.request_id, "applied", None, now))
-            dispositioned.append(request.request_id)
-            counts["applied"] += 1
-            continue
-        state, reason = _apply_request(declaration, visibility_path, request, root, picker, sync)
         records.append(make_record(request.request_id, state, reason, now))
         dispositioned.append(request.request_id)
         counts[state] += 1
@@ -357,7 +418,7 @@ def execute_pass(
             )
 
     counts["pruned"] = _prune(paths, now, unlink)
-    return 0, counts
+    return (EXIT_RECONCILIATION_FAILED if state == "failed" else 0), counts
 
 
 def dispatch_pass(

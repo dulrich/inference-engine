@@ -7,63 +7,13 @@
 // whole execution-affecting body, and that a joiner belongs to the owner it joined.
 import test from "node:test";
 import assert from "node:assert/strict";
-import http from "node:http";
-import { withSidecar, req, msgBody, sentTo, parseSse } from "./helpers.mjs";
+import {
+  withSidecar, req, msgBody, sentTo,
+  rawStream, firstByte, sleep, sseEvents as eventsOf, sseText as textOf,
+} from "./helpers.mjs";
 
 const READ = [{ name: "Read", description: "read", input_schema: { type: "object" } }];
 const call = (callId, tool, args) => ({ request: "item/tool/call", params: { callId, tool, arguments: args } });
-
-// A raw http.request so the test can time the response *headers* against the first
-// body chunk — `fetch` hides that boundary, and the boundary is the whole question
-// for the "client saw no byte for N seconds" hypothesis.
-function rawStream(h, pathname, body) {
-  const payload = JSON.stringify(body);
-  const t0 = Date.now();
-  const marks = { status: null, headersMs: null, firstChunkMs: null, endMs: null, text: "" };
-  let settle;
-  const done = new Promise(r => {
-    settle = () => { if (marks.endMs === null) marks.endMs = Date.now() - t0; r(marks); };
-  });
-  const request = http.request({
-    host: "127.0.0.1", port: h.port, path: pathname, method: "POST",
-    agent: false,                                  // no keep-alive pool to hold the loop open
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${h.key}`,
-      "content-length": Buffer.byteLength(payload),
-    },
-  }, res => {
-    marks.status = res.statusCode;
-    marks.headersMs = Date.now() - t0;
-    res.setEncoding("utf8");
-    res.on("data", c => {
-      if (marks.firstChunkMs === null) marks.firstChunkMs = Date.now() - t0;
-      marks.text += c;
-    });
-    res.on("end", settle);
-  });
-  // `destroy()` on an in-flight request emits neither `end` nor, reliably, `error` —
-  // `close` is the only event that always fires, so the abort path settles there.
-  request.on("error", settle);
-  request.on("close", settle);
-  request.end(payload);
-  return { marks, done, abort: () => request.destroy() };
-}
-
-const eventsOf = marks => parseSse(marks.text);
-const textOf = marks => eventsOf(marks)
-  .filter(e => e.data?.delta?.type === "text_delta").map(e => e.data.delta.text).join("");
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-// Wait for the response's first body byte (never silently forever — a hang here would
-// itself be the finding, so it fails loudly instead).
-async function firstByte(stream, timeoutMs = 3000) {
-  const t0 = Date.now();
-  while (stream.marks.firstChunkMs === null) {
-    if (Date.now() - t0 > timeoutMs) throw new Error("no first byte within 3 s");
-    await sleep(10);
-  }
-}
 
 // The live 2026-09-13 04:00Z storm rides entirely on `tool-result` mode (191 of the 194
 // http-starts in the window, and 89/89 supersedes), so the repro submits a tool_result

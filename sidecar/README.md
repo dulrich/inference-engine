@@ -21,6 +21,27 @@ Claude Code ──► router :4813 ──► codex-sidecar :4877 ──► codex
 - **The declared feature posture is read back and verified too** (2026-09-14). After those checks, `thread/start` reads `experimentalFeature/list {threadId}` — the app-server's per-thread flag oracle — and any declared key the thread reports with the other value fails the thread closed the same way (`features not honoured: multi_agent=true (declared false)`); so does an oracle that errors (`feature oracle unavailable: …`), never a warning. `unified_exec` is exempt (catalog-pinned true), and a key this binary does not report at all is counted on `unknownFeatures` rather than treated as drift. `config-verified` carries `features`, `unknownFeatures` and `multiAgentMode`. This verifies *config*: WP-1 measured that on codex-cli 0.154.0 these flags do not remove the collab tools or code mode, so the runtime item-type filter above stays the enforcement line and `status.sh` probes the posture at install time.
 - **The astra fix is a pinned preamble** (`preamble.txt`, 306 chars) prepended to `baseInstructions` ahead of the client's system text. Not a knob.
 
+## Modules
+
+`codex-sidecar.mjs` is the composition root and the stable entry path (`install.sh` resolves it by name; the systemd unit is generated against it). It reads the config, builds `ctx`, constructs one `Persona` per configured name, binds the servers and owns shutdown — it holds no request logic. Everything else is a focused owner beside it, all `node:*`-only:
+
+| Module | Owns |
+| --- | --- |
+| `config.mjs` | The pinned inputs (`preamble.txt`, `thread-config.json`, the in-band item-type allowlist) and the environment reading, plus the thread's cwd resolution. |
+| `errors.mjs` | `SidecarError` and the upstream `CodexErrorInfo` / `TurnError` / rate-limit-snapshot mapping onto Anthropic error shapes. |
+| `logging.mjs` | The day-rolled JSONL log, its retention prune, and the header-redaction rule. |
+| `protocol.mjs` | The Anthropic wire boundary as pure functions: model/effort identity, message and system-prompt reading, the session key, the title signature, the codex → Anthropic usage projection and its window clamp. |
+| `sinks.mjs` | The two response transports (`BufferSink`, `SseSink`) and the one-shot JSON/error writers. Nothing else writes to a client socket. |
+| `session.mjs` | One codex thread's state — thread/turn ids, parked calls, delivered ids, joiners, replayable last outcome, token figures — and the outcome protocol (`waitOutcome` / `settle` / `drain`) the request path awaits. |
+| `persona.mjs` | The app-server child: spawn, the newline-framed JSON-RPC codec, pending requests, the thread bus, rate-limit posture, the `tripBoundary` security response, and backoff restart. |
+| `thread-config.mjs` | Whether the thread the app-server actually started is the one declared: the instruction-source trim and the declared-vs-reported feature comparison. |
+| `request.mjs` | Phase 1–2 of the request path, all pure: `normalizeRequest`, `resolveIdentity`, `requestToken` (the digest that is a request's identity) and `dispositionOf` — the single decision site returning `replay`, `join` or `drive`. |
+| `turn.mjs` | Phase 3: `startThread` (with its fail-closed verification), `deliverToolResults`, `startTurn`. |
+| `messages.mjs` | `POST /<persona>/v1/messages` as the explicit sequence normalization → session disposition → turn execution → outcome emission. |
+| `outbox-events.mjs` | The tracker rows one completed turn produces (`turn.completed`, `child.spawned`, `usage`, `rate_limit`). |
+| `http.mjs` | Auth, the closed route table, body reading and the bind-aware `/healthz` payload. |
+| `outbox.mjs` | The SQLite event-outbox writer itself. |
+
 ## Routes
 
 All routes are authenticated with `authorization: Bearer <SIDECAR_KEY>` **or** `x-api-key: <SIDECAR_KEY>` — including `/healthz` and `/api/hello`. The shared key, not the bind address, is the authorization boundary for bridge peers. The key is never logged. Routes match on the path only, so `?beta=true` is tolerated.

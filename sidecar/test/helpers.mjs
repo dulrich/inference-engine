@@ -2,6 +2,7 @@
 // Every sidecar started here binds an ephemeral port on loopback only
 // (SIDECAR_PORT=0, SIDECAR_BIND_EXTRA empty) and keeps all state under a temp dir.
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -160,3 +161,56 @@ export const waitFor = async (fn, timeoutMs = 4000) => {
     await new Promise(r => setTimeout(r, 20));
   }
 };
+
+export const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// A raw http.request so a test can time the response *headers* against the first body
+// chunk (`fetch` hides that boundary) and can destroy a live connection mid-stream.
+// Shared by every test that needs a connection it can abort while a turn is running.
+export function rawStream(h, pathname, body) {
+  const payload = JSON.stringify(body);
+  const t0 = Date.now();
+  const marks = { status: null, headersMs: null, firstChunkMs: null, endMs: null, text: "" };
+  let settle;
+  const done = new Promise(r => {
+    settle = () => { if (marks.endMs === null) marks.endMs = Date.now() - t0; r(marks); };
+  });
+  const request = http.request({
+    host: "127.0.0.1", port: h.port, path: pathname, method: "POST",
+    agent: false,                                  // no keep-alive pool to hold the loop open
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${h.key}`,
+      "content-length": Buffer.byteLength(payload),
+    },
+  }, res => {
+    marks.status = res.statusCode;
+    marks.headersMs = Date.now() - t0;
+    res.setEncoding("utf8");
+    res.on("data", c => {
+      if (marks.firstChunkMs === null) marks.firstChunkMs = Date.now() - t0;
+      marks.text += c;
+    });
+    res.on("end", settle);
+  });
+  // `destroy()` on an in-flight request emits neither `end` nor, reliably, `error` —
+  // `close` is the only event that always fires, so the abort path settles there.
+  request.on("error", settle);
+  request.on("close", settle);
+  request.end(payload);
+  return { marks, done, abort: () => request.destroy() };
+}
+
+export const sseEvents = marks => parseSse(marks.text);
+export const sseText = marks => sseEvents(marks)
+  .filter(e => e.data?.delta?.type === "text_delta").map(e => e.data.delta.text).join("");
+
+// Wait for the response's first body byte (never silently forever — a hang here would
+// itself be the finding, so it fails loudly instead).
+export async function firstByte(stream, timeoutMs = 3000) {
+  const t0 = Date.now();
+  while (stream.marks.firstChunkMs === null) {
+    if (Date.now() - t0 > timeoutMs) throw new Error("no first byte within 3 s");
+    await sleep(10);
+  }
+}

@@ -93,7 +93,7 @@ its review finding in its own docstring, so `head -3 <module>.py` tells you why 
 
 **Data and tests:**
 
-- `tests/` — stdlib `unittest` suite (649 tests) covering all of the above. Run it from the repo
+- `tests/` — stdlib `unittest` suite covering all of the above (`gates.sh` is the executable census). Run it from the repo
   root; the summary goes to **stderr**, because the suite prints JSON verification blocks to
   stdout:
   `python3 -m unittest discover -s llama/bakeoff/tests -p 'test_*.py' 2>&1 >/dev/null | tail -8`

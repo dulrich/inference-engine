@@ -13,8 +13,12 @@ F8).** This file had grown to 1,265 lines holding three unrelated concerns. They
 three focused modules, and this file is the spec/CLI composition layer plus the stable public
 facade every consumer already imports:
 
-  - `gguf_fit.py` -- pure GGUF header/metadata reading, attention geometry, KV-cache byte math,
-    VRAM budget profiles, and `classify_fit`. No Docker, no clock, no subprocess.
+  - `gguf_fit.py` -- VRAM budget profiles, cell geometry/weight resolution, and `classify_fit`,
+    plus the re-export facade for `gguf_reader.py` (GGUF header/metadata reading),
+    `gguf_placement.py` (tensor placement), and `gguf_cache.py` (attention geometry, KV-cache
+    byte math) -- split out by WP-R3 of
+    `plans/post-audit-architecture-and-reconciliation-remediation.md`; every name still resolves
+    off `gguf_fit`. No Docker, no clock, no subprocess.
   - `cell_spec.py` -- the plain-dict cell normal form: `normalize_cell`, the frozen-by-contract
     `compute_cell_id`, and `build_command`.
   - `scratch_lifecycle.py` -- the process layer: spawn/bridge-IP/health-poll/teardown, per-cell

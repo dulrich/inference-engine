@@ -23,6 +23,12 @@ test("effort lives in the model-id suffix", () => {
   assert.deepEqual(parseModelId("gpt-6-astra-low"), { model: "gpt-6-astra", effort: "low", effortSource: "suffix" });
   assert.deepEqual(parseModelId("gpt-5.6-luna-high"), { model: "gpt-5.6-luna", effort: "high", effortSource: "suffix" });
   assert.deepEqual(parseModelId("gpt-5.6-sol-low"), { model: "gpt-5.6-sol", effort: "low", effortSource: "suffix" });
+  // WP-1 (model-slug-audit-gpt6-opus55): gpt-6-sol/gpt-6-luna are new families, distinct keys
+  // from gpt-5.6-sol/gpt-5.6-luna and gpt-6-astra — no prefix collision, exact-key lookup only.
+  assert.deepEqual(parseModelId("gpt-6-sol"), { model: "gpt-6-sol", effort: "medium", effortSource: "default" });
+  assert.deepEqual(parseModelId("gpt-6-luna"), { model: "gpt-6-luna", effort: "low", effortSource: "default" });
+  assert.deepEqual(parseModelId("gpt-6-sol-low"), { model: "gpt-6-sol", effort: "low", effortSource: "suffix" });
+  assert.deepEqual(parseModelId("gpt-6-luna-high"), { model: "gpt-6-luna", effort: "high", effortSource: "suffix" });
   // the gateway may or may not strip the provider segment
   assert.deepEqual(parseModelId("codex-a/gpt-5.6-luna-medium"), { model: "gpt-5.6-luna", effort: "medium", effortSource: "suffix" });
   // unknown suffix and unknown family are rejected (the caller answers 400)

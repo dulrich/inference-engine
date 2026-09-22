@@ -65,8 +65,8 @@ Usage on the wire is **this turn's context occupancy, never cumulative spend** (
 
 | id | model | effort |
 | --- | --- | --- |
-| `gpt-5.6-luna` | luna | low (family default — only when the request carries no `output_config.effort`) |
-| `gpt-5.6-sol`, `gpt-6-astra` | sol / astra | medium (family default — only when the request carries no `output_config.effort`) |
+| `gpt-5.6-luna`, `gpt-6-luna` | luna | low (family default — only when the request carries no `output_config.effort`) |
+| `gpt-5.6-sol`, `gpt-6-astra`, `gpt-6-sol` | sol / astra | medium (family default — only when the request carries no `output_config.effort`) |
 | `…-low`, `…-medium`, `…-high` | as named | as named (an explicit suffix wins over the request) |
 
 **Effort precedence**, per turn, highest first: the id suffix (`effortSource: "suffix"`) → the request's `output_config.effort` (`low`/`medium`/`high` onto themselves, `max`/`xhigh` → `high`; `"request"`) → `thinking:{"type":"disabled"}` → `low`, the app-server's floor (`"request"`) → the family default (`"default"`). An unrecognised value or an absent field falls to the default and is never a 400. The resolved value rides on every `turn/start` and applies to that turn only; a change mid-thread is logged as `effort-changed` and costs one prefix-cache miss. Full rule and the measurement: `../docs/tool-calling-gateway/codex-sidecar.md` "Effort precedence".

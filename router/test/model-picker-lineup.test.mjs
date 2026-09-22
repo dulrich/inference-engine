@@ -87,9 +87,9 @@ test("renders one row per Claude-Code-visible non-anthropic id, with the documen
   }
 });
 
-test("the real config yields 10 Claude-Code rows: every effort id out, the openwebui ids out", () => {
+test("the real config yields 14 Claude-Code rows: every effort id out, the openwebui ids out", () => {
   const rows = JSON.parse(run(["--config", REAL_CONFIG, "--visibility", REAL_VISIBILITY]).stdout);
-  assert.equal(rows.length, 10);
+  assert.equal(rows.length, 14);
   assert.equal(rows.filter((r) => r.model.startsWith("anthropic/")).length, 0);
   const models = rows.map((r) => r.model);
   // The exact lineup: two local rows, the one cc-tagged OpenRouter id, then one bare codex id per
@@ -102,9 +102,13 @@ test("the real config yields 10 Claude-Code rows: every effort id out, the openw
     "codex-a/gpt-5.6-luna",
     "codex-a/gpt-5.6-sol",
     "codex-a/gpt-6-astra",
+    "codex-a/gpt-6-sol",
+    "codex-a/gpt-6-luna",
     "codex-b/gpt-5.6-luna",
     "codex-b/gpt-5.6-sol",
     "codex-b/gpt-6-astra",
+    "codex-b/gpt-6-sol",
+    "codex-b/gpt-6-luna",
   ]);
   // Reasoning effort on the local leg is a request field since router patch 0007
   // (plans/router-effort-mapping-claude-local.md): the harness's own effort control maps onto
@@ -148,6 +152,10 @@ test("the real config yields 10 Claude-Code rows: every effort id out, the openw
     "gpt-5.6-sol-high",
     "gpt-6-astra-low",
     "gpt-6-astra-high",
+    "gpt-6-sol-low",
+    "gpt-6-sol-high",
+    "gpt-6-luna-medium",
+    "gpt-6-luna-high",
   ];
   for (const persona of CODEX_PERSONAS) {
     const provider = config.providers.find((p) => p.name === persona);
@@ -157,7 +165,7 @@ test("the real config yields 10 Claude-Code rows: every effort id out, the openw
       // the explicit-effort escape hatch that outranks the request field.
       assert.ok(provider.models.includes(id), `${persona}/${id} must stay resolvable in models[]`);
     }
-    for (const bare of ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra"]) {
+    for (const bare of ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]) {
       const row = rows.find((r) => r.model === `${persona}/${bare}`);
       assert.ok(row, `${persona}/${bare} must be a picker row`);
       assert.match(row.description, /effort via the harness/);

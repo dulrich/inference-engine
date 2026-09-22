@@ -127,7 +127,7 @@ for id in anthropic/claude-sonnet-5 anthropic/claude-opus-5 anthropic/claude-opu
 	fi
 done
 models_codex_ok=1
-for id in codex-a/gpt-5.6-luna codex-a/gpt-5.6-sol codex-a/gpt-6-astra codex-b/gpt-5.6-luna codex-b/gpt-5.6-sol codex-b/gpt-6-astra; do
+for id in codex-a/gpt-5.6-luna codex-a/gpt-5.6-sol codex-a/gpt-6-astra codex-a/gpt-6-sol codex-a/gpt-6-luna codex-b/gpt-5.6-luna codex-b/gpt-5.6-sol codex-b/gpt-6-astra codex-b/gpt-6-sol codex-b/gpt-6-luna; do
 	if ! echo "$model_ids" | grep -qx "$id"; then
 		models_codex_ok=0
 	fi

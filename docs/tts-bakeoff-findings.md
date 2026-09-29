@@ -69,7 +69,7 @@ Higgs is the only candidate with inline categorical emotion tags, and that match
 
 ## Licence obligations
 
-- **Higgs TTS 3: non-commercial.** Its Creator Use Grant **requires an audible or prominent "Boson AI's Higgs Audio" credit** on every published audiobook. audio-gen's assembler must add it (an intro/outro credit line or cover metadata, whichever the grant accepts).
+- **Higgs TTS 3:** the non-commercial restriction covers hosting the model as a service. Creator content is free, including monetized content, under the licence's **Creator Use Grant**, which names podcasts, videos and social posts; per the user's reading (2026-09-29), audiobooks are creator content. The only requirement is a credit to Boson AI's Higgs Audio, **either in the audio or prominently in the accompanying text** (e.g. the description or show notes). Suggested credit: "This audio was created with Boson AI's Higgs Audio — https://www.boson.ai/higgs-audio". audio-gen should emit it as book-description/metadata text, with an optional spoken credit. The fleet's loopback-only TTS tier is personal infrastructure, not a hosted service; exposing it to third parties would need a licence re-check.
 - Chatterbox: MIT, no obligation.
 - MOSS-VoiceGenerator (voice design): check its model licence before any publication; this spike did not audit it.
 

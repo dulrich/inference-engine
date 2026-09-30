@@ -28,6 +28,10 @@ test("effort lives in the model-id suffix", () => {
   assert.deepEqual(parseModelId("gpt-6-sol"), { model: "gpt-6-sol", effort: "medium", effortSource: "default" });
   assert.deepEqual(parseModelId("gpt-6-luna"), { model: "gpt-6-luna", effort: "low", effortSource: "default" });
   assert.deepEqual(parseModelId("gpt-6-sol-low"), { model: "gpt-6-sol", effort: "low", effortSource: "suffix" });
+  // gpt-6.1-sol-migration WP-1: the dot in the version must survive suffix parsing.
+  assert.deepEqual(parseModelId("gpt-6.1-sol"), { model: "gpt-6.1-sol", effort: "medium", effortSource: "default" });
+  assert.deepEqual(parseModelId("gpt-6.1-sol-low"), { model: "gpt-6.1-sol", effort: "low", effortSource: "suffix" });
+  assert.deepEqual(parseModelId("codex-b/gpt-6.1-sol-high"), { model: "gpt-6.1-sol", effort: "high", effortSource: "suffix" });
   assert.deepEqual(parseModelId("gpt-6-luna-high"), { model: "gpt-6-luna", effort: "high", effortSource: "suffix" });
   // the gateway may or may not strip the provider segment
   assert.deepEqual(parseModelId("codex-a/gpt-5.6-luna-medium"), { model: "gpt-5.6-luna", effort: "medium", effortSource: "suffix" });

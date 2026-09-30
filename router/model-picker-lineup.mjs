@@ -94,6 +94,7 @@ const FAMILIES = [
   { kind: "prefix", id: "gpt-5.6-sol", family: "GPT-5.6 Sol", defaultEffort: "medium" },
   { kind: "prefix", id: "gpt-6-astra", family: "GPT-6 Astra", defaultEffort: "medium" },
   { kind: "prefix", id: "gpt-6-sol", family: "GPT-6 Sol", defaultEffort: "medium" },
+  { kind: "prefix", id: "gpt-6.1-sol", family: "GPT-6.1 Sol", defaultEffort: "medium" },
   { kind: "prefix", id: "gpt-6-luna", family: "GPT-6 Luna", defaultEffort: "low" },
   // glm-5.2:free and glm-5.3 were RETIRED from serving 2026-09-14 (user decision) — see the
   // TOMBSTONE in router/AGENTS.md. Their label rows stay: this table is a label lookup, not the

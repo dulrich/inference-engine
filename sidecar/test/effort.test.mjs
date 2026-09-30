@@ -47,6 +47,7 @@ test("a bare id with no effort field keeps today's family default", () => {
   assert.deepEqual(resolve("gpt-6-astra", {}), { effort: "medium", effortSource: "default" });
   // WP-1: gpt-6-sol/gpt-6-luna families, defaults medium/low matching their 5.6 predecessors.
   assert.deepEqual(resolve("gpt-6-sol", {}), { effort: "medium", effortSource: "default" });
+  assert.deepEqual(resolve("gpt-6.1-sol", {}), { effort: "medium", effortSource: "default" });
   assert.deepEqual(resolve("gpt-6-luna", {}), { effort: "low", effortSource: "default" });
   // what the harness actually sends today alongside output_config (measured 2026-09-13)
   assert.deepEqual(resolve("gpt-5.6-sol", { thinking: { type: "adaptive", display: "omitted" } }),

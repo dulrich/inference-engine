@@ -12,7 +12,7 @@ import crypto from "node:crypto";
 import { PREAMBLE } from "./config.mjs";
 
 
-export const MODEL_FAMILIES = { "gpt-5.6-luna": "low", "gpt-5.6-sol": "medium", "gpt-6-astra": "medium", "gpt-6-sol": "medium", "gpt-6-luna": "low" };
+export const MODEL_FAMILIES = { "gpt-5.6-luna": "low", "gpt-5.6-sol": "medium", "gpt-6-astra": "medium", "gpt-6-sol": "medium", "gpt-6.1-sol": "medium", "gpt-6-luna": "low" };
 // The harness's `output_config.effort` vocabulary folded onto the app-server's low|medium|high.
 export const EFFORT_LEVELS = { low: "low", medium: "medium", high: "high", max: "high", xhigh: "high" };
 const TITLE_PHRASE = "You are naming a coding session so the user can pick it out of a long list of sessions";

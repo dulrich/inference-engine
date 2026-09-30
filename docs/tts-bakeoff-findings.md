@@ -86,3 +86,12 @@ Higgs is the only candidate with inline categorical emotion tags, and that match
 
 1. The inference-engine TTS tier plan: Higgs serving, the backend decision above, the swap-group/VRAM design, loudness normalisation, and a co-residency measurement.
 2. The audio-gen director/bible/IR follow-on: map the director's emotion vocabulary onto Higgs's closed tag set, and add the Higgs credit to assembly.
+
+## Serving (addendum, 2026-09-29)
+
+The tier from `plans/tts-tier.md` now serves this decision: `inference-engine-tts` on loopback `:4814`, run only inside `tts/tier/window.sh` render windows that stop llama and always restore it. Numbers and traps are in `tts/tier/README.md` "Measured".
+
+- **Containerized ROCm works:** torch 2.11.0+rocm7.2 wheels inside a python:3.12-slim image run real gfx1201 kernels with no `HSA_OVERRIDE_GFX_VERSION`.
+- **First live window:** exit 0 in 102 s end to end, llama smoke green after restore. The card high-water was 13010 MiB (MOSS design), consistent with the table above.
+- **Speed:** the single short Higgs render measured RTF ≈ 5.0 synthesis-only, against a bake-off median of 2.3. Treat it as one first-call sample, and re-measure on the first real chapter before sizing book windows. An engine swap costs 13–20 s inside the request, so batch by engine.
+- **The "Backend conflict" design input above is superseded:** ROCm on gfx1201 is a supported backend (root `AGENTS.md`, user decision 2026-09-29).

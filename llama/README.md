@@ -1,7 +1,7 @@
 # crucible-inference — llama.cpp on Vulkan + llama-swap
 
-One always-on GPU inference router serving Crucible's embedding and reranking backends (and,
-eventually, chat models) from a single container on **127.0.0.1:4811** (host publish; the
+One always-on GPU inference router serving the fleet's embedding, reranking, chat and vision
+models from a single container on **127.0.0.1:4811** (host publish; the
 container listens on :4806 internally — the transitional 4806 host publish was retired
 2026-07-27).
 

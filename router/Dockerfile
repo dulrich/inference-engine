@@ -1,9 +1,9 @@
 # router/Dockerfile — @the-next-ai/ai-gateway (https://github.com/The-NeXT-AI/ai-gateway),
-# built from source at a pinned commit with a ten-patch vendored series. Never `npm install
+# built from source at a pinned commit with an eleven-patch vendored series. Never `npm install
 # @the-next-ai/ai-gateway` and never a moving branch/tag — the pin below is a commit SHA.
 #
 # See router/AGENTS.md for the patch rationale and the never-set-ANTHROPIC_API_KEY constraint,
-# and router/patches/00{01,02,03,04,05,06,07,08,09,10}-*.patch for the changes themselves: 0001 omits x-api-key
+# and router/patches/00{01,02,03,04,05,06,07,08,09,10,11}-*.patch for the changes themselves: 0001 omits x-api-key
 # for the passthrough OAuth bearer, 0002 adds the local-leg prefill/idle-gap ping keepalive,
 # 0003 relays upstream error bodies byte-verbatim to Anthropic-protocol clients on the final
 # attempt, 0004 adds the POST /v1/messages/count_tokens route, 0005 is a dependency-only
@@ -18,7 +18,8 @@
 # fallback that leaves every four-row map byte-for-byte unchanged, and 0010 clamps the upstream
 # answer-token budget (`max_tokens`/`max_completion_tokens`) down to a per-model ceiling on the
 # same leg, from the new gateway.config.json `maxOutputTokens` key — downward only, never a
-# raise, never another target.
+# raise, never another target, and 0011 is a dependency-only lockfile bump (fast-uri 3.1.8,
+# undici 6.29.0 — within their declared ranges, no source change).
 # The replace-vs-integrate design spike the stabilization series
 # (plans/router-prefill-keepalive-and-protocol-gaps.md) required before any further semantic
 # patch was run and answered "continue vendoring on this pin" with evidence —
@@ -97,7 +98,11 @@ COPY patches/0010-max-tokens-clamp-claude-local.patch /tmp/0010-max-tokens-clamp
 RUN git apply --check /tmp/0010-max-tokens-clamp-claude-local.patch \
     && git apply /tmp/0010-max-tokens-clamp-claude-local.patch
 
-# The repo's own package-lock.json — measured green 2026-08-25 (145 packages, <1s); 147 after patch 0008 (fastify 5.12.4, measured 2026-09-13).
+COPY patches/0011-fast-uri-undici-security-bump.patch /tmp/0011-fast-uri-undici-security-bump.patch
+RUN git apply --check /tmp/0011-fast-uri-undici-security-bump.patch \
+    && git apply /tmp/0011-fast-uri-undici-security-bump.patch
+
+# The repo's own package-lock.json — measured green 2026-08-25 (145 packages, <1s); 147 after patch 0008 (fastify 5.12.4, measured 2026-09-13); still 147 after 0011 (measured 2026-09-29).
 RUN npm ci
 
 # build.js -> esbuild bundle to dist/index.js — measured green 2026-08-25 (dist byte-identical
@@ -134,7 +139,12 @@ RUN npm prune --omit=dev
 FROM node:24-slim AS runtime
 
 LABEL org.opencontainers.image.title="inference-engine-router" \
-      org.opencontainers.image.description="@the-next-ai/ai-gateway 1.0.18, source build at 782cd51, ten-patch series: x-api-key passthrough-bearer omission, prefill/idle-gap ping keepalive, upstream error-body passthrough, /v1/messages/count_tokens route, dependency-only lockfile bump (find-my-way/fast-uri/brace-expansion), per-request telemetry jsonl sink, effort -> chat_template_kwargs mapping on the openai_chat_completions leg, dependency-only lockfile bump (fastify 5.12.4), distinct xhigh/max effort levels with a high-row fallback, per-model answer-token clamp on the same leg"
+      org.opencontainers.image.description="@the-next-ai/ai-gateway 1.0.18, source build at 782cd51, eleven-patch series: x-api-key passthrough-bearer omission, prefill/idle-gap ping keepalive, upstream error-body passthrough, /v1/messages/count_tokens route, dependency-only lockfile bump (find-my-way/fast-uri/brace-expansion), per-request telemetry jsonl sink, effort -> chat_template_kwargs mapping on the openai_chat_completions leg, dependency-only lockfile bump (fastify 5.12.4), distinct xhigh/max effort levels with a high-row fallback, per-model answer-token clamp on the same leg, dependency-only lockfile bump (fast-uri/undici)"
+
+# OS security fixes the base tag has not been republished with yet (tzdata 2026c / DLA-4792-1 was
+# the first, 2026-09-29: the freshly pulled node:24-slim still shipped 2026b) — the onnx image's
+# apt-get upgrade pattern. Only effective under the security controller's `--pull --no-cache`.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

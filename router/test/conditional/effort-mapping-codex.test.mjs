@@ -10,7 +10,7 @@
 //
 // METERED — this is why the flag exists. Each run bills two real turns against the operator's
 // Codex subscription (the cheapest family, `gpt-5.6-luna`, two ~64-token answers). A test that
-// silently spends the user's money on every `node --test router/test/*.test.mjs` is worse than
+// silently spends the user's money on every commit-suite run is worse than
 // no test, and a test that silently SKIPS itself is worse than none either. So without
 // CODEX_METERED=1 the file registers exactly one test and that test FAILS, loudly, naming the
 // flag — never `skip`, never green-by-absence. `smoke-router.sh` guards its one metered codex
@@ -30,6 +30,12 @@
 // `weak-session-key`). So the join is: mint one fresh uuid per run, put it in
 // `metadata.user_id.session_id`, and match the rows whose `key` is that uuid. The prompt also
 // carries a `probe-<Date.now()>` nonce so the two turns are identifiable by eye in the log.
+//
+// CONDITIONAL — lives in router/test/conditional/, outside the per-commit
+// `node --test router/test/*.test.mjs` glob. Trigger surface (router/AGENTS.md "Gates" trigger
+// table): `sidecar/` effort/request handling; codex providers in router/gateway.config.json; any
+// router patch; this file. Run with CODEX_METERED=1; a triggered run without it is reported as
+// not run, naming CODEX_METERED.
 //
 // Auth. The gateway key comes from $GATEWAY_KEY or $ROUTER_ENV_FILE (default
 // <code-root>/fleet-tools/.env) and is never printed.

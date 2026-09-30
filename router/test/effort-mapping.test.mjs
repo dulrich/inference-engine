@@ -1,77 +1,76 @@
-// effort-mapping.test.mjs — black-box gate for patch 0007: the client's reasoning intent
-// (Anthropic `output_config.effort` / `thinking`) reaching the local leg's template as
-// `chat_template_kwargs` (router/AGENTS.md, "The patches", 0007;
-// plans/router-effort-mapping-claude-local.md WP-2).
+// effort-mapping.test.mjs — black-box, render-level gate for patch 0007 (+ 0009): the client's
+// reasoning intent (Anthropic `output_config.effort` / `thinking`) reaching the local leg's
+// template as `chat_template_kwargs` (router/AGENTS.md, "The patches", 0007 and 0009;
+// plans/router-gate-consolidation.md WP-1 rewrote it from a live generation ladder).
 //
-// BLACK BOX, like tool-search-conformance.test.mjs: the gateway's source lives only inside the
-// Docker build checkout, so nothing here imports it — every assertion is made over HTTP against
-// a running gateway. When that gateway is unreachable the tests FAIL; they never skip. A gate
-// that quietly disappears when its target is down is not a gate.
+// BLACK BOX: the gateway's source lives only inside the Docker build checkout, so nothing here
+// imports it — every assertion is made over HTTP against a running gateway and the llama-server
+// upstream it fronts. When either is unreachable the tests FAIL; they never skip. A gate that
+// quietly disappears when its target is down is not a gate.
 //
-// What is asserted, and why it is shaped this way:
-//   (a) effort low vs medium — a TOKEN-COUNT gate, median of N>=2 samples each, medium's median
-//       at least MARGIN above low's. The plan's audit (M4) asked for N>=5 because its own n=2
-//       ranges overlapped — but those were sampled at non-zero temperature; at temperature 0
-//       every sample of a level is byte-identical (measured 2026-09-12: 5/5 identical per level),
-//       so N=2 already proves determinism and N=5 only multiplies GPU minutes (~25 min per run
-//       with this prompt). Amended to N>=2 at WP-2 review (user decision 2026-09-12);
-//       EFFORT_SAMPLES raises it. Sampling is pinned with temperature 0: the conversion
-//       leg builds the upstream body from a field whitelist (model/messages/temperature/top_p/
-//       max_tokens/stop/tools), so a client `seed` does not reach llama-server — greedy decoding
-//       at temperature 0 is what makes the samples comparable, and the seed below is sent only
-//       so the intent is on the record.
-//   (b) effort high and effort xhigh — ACCEPTANCE only, no token gate. Since router patch 0009
-//       (plans/bench-dashboard-serving-control.md WP-3) these are DISTINCT levels with distinct
-//       rows in the six-row map: `high` now sends `reasoning_effort: medium` and `xhigh` sends
-//       `reasoning_effort: xhigh` (which `high` sent before WP-3, and which is the template
-//       default — not separable from no-kwargs at n=2, audit M3). Both cells assert acceptance
-//       only: an unmapped or misspelled value makes the Jinja template 500, so a 2xx IS the
-//       assertion. `max` is deliberately not a third cell — it shares xhigh's row, so it would
-//       bill a turn to re-measure the same thing.
-//   (c) thinking:{type:"disabled"} — deterministic, one sample: the response must carry NO
-//       `thinking` content block at all (the map sends `enable_thinking:false`).
+// The oracle. Every probe is ONE pinned short body (`system:"Be brief."`, user `"Say hi."`,
+// `max_tokens:1`), so nothing generates beyond one token and the whole file runs in seconds.
+// The Qwen3.8 chat template renders a different prompt per `chat_template_kwargs`, so the
+// PROMPT TOKEN COUNT is a fingerprint of which kwargs reached the template. For each row the
+// router's occupancy (`input_tokens + cache_read_input_tokens + cache_creation_input_tokens`,
+// absent columns = 0 — the usage-projection contract in
+// docs/tool-calling-gateway/codex-sidecar.md "Usage reconciliation, restated") must EQUAL the
+// upstream-direct `prompt_tokens` for the kwargs that row is expected to deliver. Both legs are
+// measured in the same run; no count is hardcoded.
 //
-// The prompt is deliberately SHORT with a short system prompt, so the router's info-level
-// upstream-body preview (truncated at 32 KiB) shows the merged `chat_template_kwargs` for the
-// evidence grep in the WP report. The plan's Context measured "a reasoning-heavy prompt" whose
-// text was never recorded verbatim, so the puzzle below is this test's own pin — absolute token
-// counts are therefore not comparable with the plan's, only the low-vs-medium direction is.
+// Coverage (the six-row `effortKwargs` map of router/gateway.config.json plus the no-op):
+//   - low, medium, high (→ medium since 0009), xhigh, max (→ xhigh), thinking disabled
+//     (→ enable_thinking:false): router occupancy == upstream prompt_tokens for the expected kwargs.
+//   - an unknown effort value: the router forwards nothing (no-op invariant), so occupancy ==
+//     upstream with NO kwargs — and the upstream-direct negative control proves forwarding it
+//     would have mattered: llama 500s with `Jinja Exception: Unexpected reasoning effort`.
+//   - upstream low / medium / absent are pairwise distinct, so the oracle can tell those rows apart.
+//   - the contract table below equals the config's effortKwargs row (config drift is a red).
+// Limit: xhigh (and max → xhigh) is the template DEFAULT, so it renders identically to absent
+// kwargs — this oracle cannot tell a delivered xhigh from a dropped one. Forwarding identity for
+// those two rows is owned by the build-stage `effort-kwargs.test.ts` vitest cases (audit M2).
+// Whether the model actually FOLLOWS the ladder (medium thinks longer than low) is the live
+// generation gate conditional/effort-ladder.test.mjs, run per router/AGENTS.md's trigger table.
 //
 // Auth. The gateway key comes from $GATEWAY_KEY or $ROUTER_ENV_FILE (default
-// <code-root>/fleet-tools/.env) and is never printed.
+// <code-root>/fleet-tools/.env) and is never printed. The upstream needs no key.
 //
 // Env: ROUTER_BASE_URL (default http://127.0.0.1:4813), ROUTER_ENV_FILE, GATEWAY_KEY,
-//      EFFORT_SAMPLES (default 2, floor 2).
+//      LLAMA_UPSTREAM_URL (default http://127.0.0.1:4811 — the host port of the llama container),
+//      EFFORT_UPSTREAM_MODEL (default: the single model keyed in claude-local's effortKwargs).
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
 const BASE_URL = (process.env.ROUTER_BASE_URL || "http://127.0.0.1:4813").replace(/\/$/, "");
+const UPSTREAM_URL = (process.env.LLAMA_UPSTREAM_URL || "http://127.0.0.1:4811").replace(/\/$/, "");
 const ENV_FILE = process.env.ROUTER_ENV_FILE || "<code-root>/fleet-tools/.env";
-const SAMPLES = Math.max(2, Number(process.env.EFFORT_SAMPLES || 2));
-const MARGIN = 1.15;                 // medium median must exceed low median by >= 15%
-const MODEL = "claude-local/qwen38-27b-iq3s";
+const CONFIG_FILE = new URL("../gateway.config.json", import.meta.url);
 // The engine's anthropic-type legs want *some* client bearer to build passthrough headers; the
 // provider's own apikey replaces it before the upstream (smoke-router.sh checks 7 and 8).
 const DUMMY_BEARER = "effort-mapping-dummy-client-bearer";
-const REQUEST_TIMEOUT_MS = 300000;
-const TEST_TIMEOUT_MS = 1800000;
+const REQUEST_TIMEOUT_MS = 120000;
 
-const SYSTEM = "You are a careful reasoner. Give the final answer in at most three sentences.";
-// The prompt must SATURATE reasoning, not merely be "hard": measured 2026-09-12 against this
-// patch on :4819, the low->medium token direction is prompt-dependent on this template. A
-// classic riddle the model has memorised, a divisor count and a friction problem all came out
-// medium < low (594/557, 3229/1673, 1378/890 output_tokens); only a constraint puzzle whose
-// deduction the model must actually walk separates the levels (2965 low vs 7919 medium,
-// both end_turn at max_tokens 12000). Hence this prompt and this ceiling — changing either
-// invalidates the margin below. See the WP-2 report for the full table.
-const PROMPT =
-  "Four friends — Ada, Ben, Cleo and Dan — each own one pet (cat, dog, fish, bird) and one car "
-  + "colour (red, blue, green, white). Ada does not own the cat or the red car. The dog owner "
-  + "drives blue. Ben drives green and does not own the fish. Cleo owns the bird or the fish, and "
-  + "does not drive white. Dan does not own the dog. Work out every pairing and say why it is "
-  + "forced.";
+const SYSTEM = "Be brief.";
+const USER = "Say hi.";
+
+// The contract: what each client intent must deliver to the template.
+const EXPECTED = {
+  low: { reasoning_effort: "low" },
+  medium: { reasoning_effort: "medium" },
+  high: { reasoning_effort: "medium" },
+  xhigh: { reasoning_effort: "xhigh" },
+  max: { reasoning_effort: "xhigh" },
+  disabled: { enable_thinking: false },
+};
+const BOGUS = "bogus-effort-level";
+
+const CONFIG = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+const LOCAL = CONFIG.providers.find((p) => p.name === "claude-local");
+const EFFORT_MODELS = Object.keys(LOCAL?.effortKwargs ?? {});
+const UPSTREAM_MODEL = process.env.EFFORT_UPSTREAM_MODEL || EFFORT_MODELS[0];
+const ROUTER_MODEL = `claude-local/${UPSTREAM_MODEL}`;
 
 function gatewayKey() {
   if (process.env.GATEWAY_KEY) return process.env.GATEWAY_KEY;
@@ -91,33 +90,23 @@ function gatewayKey() {
 
 const KEY = gatewayKey();
 
-async function messages(body, { timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+async function post(url, headers, body, what) {
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  const timer = setTimeout(() => ac.abort(), REQUEST_TIMEOUT_MS);
   let res;
   try {
-    res = await fetch(`${BASE_URL}/v1/messages`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-gateway-key": KEY,
-        "anthropic-version": "2023-06-01",
-        authorization: `Bearer ${DUMMY_BEARER}`,
-      },
-      body: JSON.stringify(body),
-      signal: ac.signal,
-    });
+    res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: ac.signal });
   } catch (err) {
-    assert.fail(`gateway at ${BASE_URL} is unreachable (POST /v1/messages): ${err.name}: ${err.message}. `
-      + "This test is a black-box gate against the router and fails rather than skips when it is down. "
-      + "Start it, or point ROUTER_BASE_URL elsewhere.");
+    assert.fail(`${what} at ${url} is unreachable: ${err.name}: ${err.message}. `
+      + "This test is a black-box gate and fails rather than skips when its target is down. "
+      + "Start it, or point ROUTER_BASE_URL / LLAMA_UPSTREAM_URL elsewhere.");
   } finally {
     clearTimeout(timer);
   }
   const text = await res.text();
   let json = null;
   try { json = JSON.parse(text); } catch { /* not json */ }
-  return { status: res.status, text, json, hint: upstreamHint(text) };
+  return { status: res.status, text, json };
 }
 
 // A leg whose upstream is simply absent (the llama container stopped) returns a generic 502;
@@ -130,96 +119,94 @@ function upstreamHint(text) {
     + "This is an environment red, not a mapping red.";
 }
 
-function probeBody(extra) {
-  return {
-    model: MODEL,
-    max_tokens: 12000,          // must not truncate: a clipped medium sample hides the margin
+function upstreamCall(kwargs) {
+  return post(`${UPSTREAM_URL}/v1/chat/completions`, { "content-type": "application/json" }, {
+    model: UPSTREAM_MODEL,
+    max_tokens: 1,
     temperature: 0,
-    seed: 20260912,                  // intent on the record; the conversion leg's whitelist drops it
-    system: SYSTEM,
-    messages: [{ role: "user", content: PROMPT }],
-    ...extra,
-  };
+    messages: [{ role: "system", content: SYSTEM }, { role: "user", content: USER }],
+    ...(kwargs ? { chat_template_kwargs: kwargs } : {}),
+  }, "llama upstream");
 }
 
-function outputTokens(r, label) {
-  assert.ok(r.status >= 200 && r.status < 300, `${label}: expected 2xx, got ${r.status}: ${r.text.slice(0, 400)}${r.hint}`);
-  const tokens = r.json?.usage?.output_tokens;
-  assert.equal(typeof tokens, "number", `${label}: response carried no usage.output_tokens: ${r.text.slice(0, 400)}`);
-  return tokens;
-}
-
-function median(values) {
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = sorted.length >> 1;
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
-async function sampleEffort(effort) {
-  const samples = [];
-  for (let i = 0; i < SAMPLES; i += 1) {
-    const r = await messages(probeBody({ output_config: { effort } }));
-    samples.push(outputTokens(r, `effort ${effort} sample ${i + 1}`));
+const upstreamMemo = new Map();
+async function upstreamPromptTokens(kwargs) {
+  const k = JSON.stringify(kwargs ?? null);
+  if (!upstreamMemo.has(k)) {
+    const r = await upstreamCall(kwargs);
+    assert.equal(r.status, 200, `upstream ${k}: expected 200, got ${r.status}: ${r.text.slice(0, 400)}`);
+    const n = r.json?.usage?.prompt_tokens;
+    assert.equal(typeof n, "number", `upstream ${k}: no usage.prompt_tokens: ${r.text.slice(0, 400)}`);
+    upstreamMemo.set(k, n);
   }
-  return samples;
+  return upstreamMemo.get(k);
 }
 
-test(`output_config.effort medium outputs at least ${Math.round((MARGIN - 1) * 100)}% more tokens than low`,
-  { timeout: TEST_TIMEOUT_MS }, async () => {
-    // Sequential, never parallel: this shares one GPU with the rest of the fleet.
-    const low = await sampleEffort("low");
-    const medium = await sampleEffort("medium");
-    const lowMedian = median(low);
-    const mediumMedian = median(medium);
+async function routerOccupancy(extra, label) {
+  const r = await post(`${BASE_URL}/v1/messages`, {
+    "content-type": "application/json",
+    "x-gateway-key": KEY,
+    "anthropic-version": "2023-06-01",
+    authorization: `Bearer ${DUMMY_BEARER}`,
+  }, {
+    model: ROUTER_MODEL,
+    max_tokens: 1,
+    temperature: 0,
+    system: SYSTEM,
+    messages: [{ role: "user", content: USER }],
+    ...extra,
+  }, "gateway");
+  assert.ok(r.status >= 200 && r.status < 300,
+    `${label}: router expected 2xx, got ${r.status}: ${r.text.slice(0, 400)}${upstreamHint(r.text)}`);
+  const u = r.json?.usage;
+  assert.equal(typeof u?.input_tokens, "number", `${label}: router response carried no usage.input_tokens: ${r.text.slice(0, 400)}`);
+  return u.input_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+}
 
-    console.log(`[effort] low    samples=${JSON.stringify(low)} median=${lowMedian}`);
-    console.log(`[effort] medium samples=${JSON.stringify(medium)} median=${mediumMedian}`);
-    console.log(`[effort] ratio=${(mediumMedian / lowMedian).toFixed(3)} (gate >= ${MARGIN})`);
+test("config: claude-local's effortKwargs row equals the contract table", () => {
+  assert.ok(UPSTREAM_MODEL, `router/gateway.config.json claude-local carries no effortKwargs model (got ${JSON.stringify(EFFORT_MODELS)})`);
+  assert.deepEqual(LOCAL.effortKwargs[UPSTREAM_MODEL], EXPECTED,
+    `gateway.config.json effortKwargs.${UPSTREAM_MODEL} drifted from this test's contract table`);
+});
 
-    assert.ok(lowMedian > 0, `low median output_tokens was ${lowMedian}`);
-    assert.ok(
-      mediumMedian >= lowMedian * MARGIN,
-      `medium median output_tokens (${mediumMedian}) is not >= ${MARGIN}x low median (${lowMedian}); `
-      + `low=${JSON.stringify(low)} medium=${JSON.stringify(medium)}. Either the mapping is not reaching `
-      + "the template, or the template's vocabulary changed (check the router's upstream-body preview "
-      + "for chat_template_kwargs).",
-    );
+test("upstream control: an unknown reasoning_effort is a 500 Jinja exception at llama", async () => {
+  const r = await upstreamCall({ reasoning_effort: BOGUS });
+  assert.equal(r.status, 500, `upstream bogus effort: expected 500, got ${r.status}: ${r.text.slice(0, 400)}`);
+  assert.match(r.text, /Jinja Exception: Unexpected reasoning effort/,
+    `upstream bogus effort: 500 body lacks the Jinja exception: ${r.text.slice(0, 400)}`);
+});
+
+test("upstream control: low, medium and absent kwargs render pairwise-distinct prompts", async () => {
+  const low = await upstreamPromptTokens(EXPECTED.low);
+  const medium = await upstreamPromptTokens(EXPECTED.medium);
+  const absent = await upstreamPromptTokens(undefined);
+  console.log(`[effort] upstream prompt_tokens low=${low} medium=${medium} absent=${absent}`);
+  assert.equal(new Set([low, medium, absent]).size, 3,
+    `upstream low/medium/absent are not pairwise distinct (${low}/${medium}/${absent}); the render oracle cannot separate them`);
+});
+
+for (const level of ["low", "medium", "high", "xhigh", "max"]) {
+  test(`output_config.effort ${level} delivers ${JSON.stringify(EXPECTED[level])}`, async () => {
+    const want = await upstreamPromptTokens(EXPECTED[level]);
+    const got = await routerOccupancy({ output_config: { effort: level } }, `effort ${level}`);
+    console.log(`[effort] ${level}: router occupancy=${got} upstream=${want}`);
+    assert.equal(got, want, `effort ${level}: router occupancy ${got} != upstream prompt_tokens ${want} for `
+      + `${JSON.stringify(EXPECTED[level])} — the mapping is not delivering that row's kwargs to the template.`);
   });
+}
 
-test("output_config.effort high is accepted (maps to the template's medium since 0009)",
-  { timeout: TEST_TIMEOUT_MS }, async () => {
-    // Acceptance only. An unmapped value would make the Jinja template 500, so a 2xx here is
-    // the real assertion. Patch 0009 gave `high` its own row (`reasoning_effort: medium`); the
-    // token count is logged for the record, not gated, since this cell never had a gate.
-    const r = await messages(probeBody({ output_config: { effort: "high" } }));
-    const tokens = outputTokens(r, "effort high");
-    console.log(`[effort] high   output_tokens=${tokens} stop_reason=${r.json?.stop_reason}`);
-  });
+test(`thinking:{type:"disabled"} delivers ${JSON.stringify(EXPECTED.disabled)}`, async () => {
+  const want = await upstreamPromptTokens(EXPECTED.disabled);
+  const got = await routerOccupancy({ thinking: { type: "disabled" } }, "thinking disabled");
+  console.log(`[effort] disabled: router occupancy=${got} upstream=${want}`);
+  assert.equal(got, want, `thinking disabled: router occupancy ${got} != upstream prompt_tokens ${want} `
+    + "for enable_thinking:false.");
+});
 
-test("output_config.effort xhigh is accepted (its OWN row since patch 0009)",
-  { timeout: TEST_TIMEOUT_MS }, async () => {
-    // Before 0009 the router folded `xhigh` onto `high` before lookup, so an `xhigh` config row
-    // was unreachable and this request was indistinguishable from the `high` one. It now sends
-    // `reasoning_effort: xhigh` from its own row. Acceptance only, for the same reason as the
-    // `high` cell: xhigh is the template default, so it is not separable from no-kwargs by token
-    // count at n=2 (audit M3) — the 2xx is what proves the level reached the template intact,
-    // and the router's upstream-body preview is where the merged kwargs are read off.
-    const r = await messages(probeBody({ output_config: { effort: "xhigh" } }));
-    const tokens = outputTokens(r, "effort xhigh");
-    console.log(`[effort] xhigh  output_tokens=${tokens} stop_reason=${r.json?.stop_reason}`);
-  });
-
-test("thinking:{type:\"disabled\"} yields a response with no thinking block",
-  { timeout: TEST_TIMEOUT_MS }, async () => {
-    const r = await messages(probeBody({ thinking: { type: "disabled" } }));
-    assert.ok(r.status >= 200 && r.status < 300, `thinking disabled: expected 2xx, got ${r.status}: ${r.text.slice(0, 400)}${r.hint}`);
-    const blocks = Array.isArray(r.json?.content) ? r.json.content : [];
-    const kinds = blocks.map((b) => b?.type);
-    console.log(`[effort] disabled blocks=${JSON.stringify(kinds)} output_tokens=${r.json?.usage?.output_tokens}`);
-    assert.ok(blocks.length > 0, `thinking disabled: response carried no content blocks: ${r.text.slice(0, 400)}`);
-    assert.ok(
-      !kinds.includes("thinking"),
-      `thinking disabled: response still carried a thinking block (${JSON.stringify(kinds)}); `
-      + "enable_thinking:false did not reach the template.",
-    );
-  });
+test("an unknown output_config.effort is a no-op (renders as absent kwargs, never a 500)", async () => {
+  const want = await upstreamPromptTokens(undefined);
+  const got = await routerOccupancy({ output_config: { effort: BOGUS } }, "effort bogus");
+  console.log(`[effort] bogus: router occupancy=${got} upstream(absent)=${want}`);
+  assert.equal(got, want, `bogus effort: router occupancy ${got} != upstream absent-kwargs prompt_tokens ${want}; `
+    + "the router forwarded something for an unmapped level.");
+});

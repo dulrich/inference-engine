@@ -64,7 +64,12 @@ RUN pip install --no-cache-dir \
       "onnxruntime==${ONNXRUNTIME_VERSION}" \
       "numpy==${NUMPY_VERSION}" \
       "tokenizers==${TOKENIZERS_VERSION}" \
-      "PyYAML==${PYYAML_VERSION}"
+      "PyYAML==${PYYAML_VERSION}" \
+ && python -m pip uninstall -y pip
+
+# pip is build-time only (nothing at runtime installs packages) and the base image's bundled copy
+# was the image's sole scan finding (pip 25.0.1, 5 MEDIUM + 1 LOW, 2026-09-29) — removed after
+# use, like router/Dockerfile's npm, so a stale bundled pip can never be a finding again.
 
 WORKDIR /app
 COPY server /app/server

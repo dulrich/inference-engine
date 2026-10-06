@@ -4,6 +4,7 @@ Local model-serving fleet for `<code-root>` consumers. All services are loopback
 
 - **`inference-engine-llama`** (`llama/`) — llama-swap router over llama.cpp/Vulkan on the GPU. Embeddings, reranking, chat, vision. Port **4811** (the transitional 4806 publish was retired 2026-07-27). See `llama/README.md` for the build, the model/alias table, and the smoke test.
 - **`inference-engine-onnx`** (`onnx/`) — always-resident CPU sidecar serving the `fastino/gliner2-family` entity/classification models that llama.cpp cannot. Port **4812**.
+- **`inference-engine-decide`** (no source dir; compose block in fleet-tools `compose.fleet.yml`) — always-on CPU llama-server running the lev decision model for `POST /v1/systemone`, reached only through the router's `local-decide` provider. Port **4815** (loopback).
 - **`inference-engine-router`** (`router/`) — resident mixed local/subscription Anthropic-protocol gateway (`@the-next-ai/ai-gateway`, pinned source build + vendored patch series): `claude-local/*` → the llama tier, subscription Claude passthrough, OpenRouter legs, and the codex providers. Port **4813**.
 - **`codex-sidecar`** (`sidecar/`) — Anthropic-Messages front end over `codex app-server`, one child per codex persona; a `systemd --user` service (not a container) behind the router. Port **4877**.
 - **`inference-engine-tts`** (`tts/tier/`) — GPU TTS tier (Higgs TTS 3 4B render + MOSS-VoiceGenerator design, ROCm). Port **4814**, compose `manual` profile, run only inside `tts/tier/window.sh` render windows.

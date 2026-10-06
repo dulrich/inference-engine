@@ -44,6 +44,9 @@
 #      input_tokens 0 with the prompt in cache_read_input_tokens.)
 #   9. POST /v1/messages/count_tokens via codex-a/gpt-5.6-luna returns an integer
 #      input_tokens (unmetered — the sidecar answers locally with a chars/4 estimate).
+#  10. (SMOKE_SYSTEMONE=1 only, metered: one OpenRouter decision call) POST /v1/systemone via
+#      openrouter-decide/typesafe/jev-1.13 with a synthetic state returns
+#      answers.wait.choice in {blocked, offer, none} (patch 0013). Default off.
 #
 # Exits non-zero on any check failure. Requires: curl, jq.
 set -u
@@ -287,6 +290,23 @@ if [ -n "$codex_ct_value" ]; then
 	pass "/v1/messages/count_tokens (codex-a/gpt-5.6-luna) returned integer input_tokens=$codex_ct_value"
 else
 	bad "/v1/messages/count_tokens (codex-a/gpt-5.6-luna) did not return an integer input_tokens. Response: $codex_ct_json"
+fi
+
+# ── 10. systemone decision route, metered (SMOKE_SYSTEMONE=1 only) ─────────────────────────
+if [ "${SMOKE_SYSTEMONE:-0}" = "1" ]; then
+	note "SMOKE_SYSTEMONE=1: running one /v1/systemone call (openrouter-decide/typesafe/jev-1.13; bills OpenRouter)."
+	so_json=$(curl -s --max-time 60 -X POST "$BASE_URL/v1/systemone" \
+		-H 'Content-Type: application/json' \
+		-H "x-gateway-key: $GATEWAY_KEY" \
+		-d '{"model":"openrouter-decide/typesafe/jev-1.13","state":"Assistant final message: I have finished the refactor. Should I also delete the old module, yes or no?","questions":{"wait":{"type":"choice","instructions":"Is the assistant blocked waiting on the user, offering optional follow-up, or not waiting?","criteria":{"blocked":"The assistant needs an answer or decision before it can continue.","offer":"The assistant offers optional further work but is done.","none":"The assistant is not waiting on the user."}}}}') || so_json=""
+	so_choice=$(echo "$so_json" | jq -r '.answers.wait.choice | select(. == "blocked" or . == "offer" or . == "none")' 2>/dev/null)
+	if [ -n "$so_choice" ]; then
+		pass "/v1/systemone (openrouter-decide/typesafe/jev-1.13) returned answers.wait.choice=$so_choice"
+	else
+		bad "/v1/systemone (openrouter-decide/typesafe/jev-1.13) did not return answers.wait.choice in {blocked,offer,none}. Response: $so_json"
+	fi
+else
+	note "SMOKE_SYSTEMONE not set: SKIPPING the metered /v1/systemone probe (one OpenRouter decision call)."
 fi
 
 echo

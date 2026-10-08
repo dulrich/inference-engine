@@ -115,7 +115,7 @@ test("the owner's connection dying with a joiner attached promotes the joiner: f
 
   // The session survived: the next request continues the thread instead of starting one.
   const next = await req(h, "/codex-a/v1/messages", {
-    body: msgBody({ tools: READ, messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "early late" }, { role: "user", content: "more" }] }),
+    body: msgBody({ tools: READ, messages: [...body.messages, { role: "assistant", content: "early late" }, { role: "user", content: "more" }] }),
   });
   assert.equal(next.status, 200, next.text);
   assert.equal(sentTo(h.trace(), "thread/start").length, 1, "the session was not dropped");

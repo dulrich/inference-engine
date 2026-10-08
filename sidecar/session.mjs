@@ -28,6 +28,7 @@ export class Session {
     this.batch = [];              // tool calls collected inside the batching window
     this.batchTimer = null;
     this.msgCount = 0;
+    this.hist = [];               // undecorated per-message digests of the last accepted request
     this.deltaItems = new Set();  // item ids already streamed as deltas
     this.usageLast = null;        // previous call's tokenUsage.last (the lag)
     this.usageTotal = null;       // codex-side cumulative for this thread

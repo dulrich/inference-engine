@@ -21,7 +21,7 @@ import { wireModelId, messageSkeleton, sendJson, BufferSink, SseSink } from "./s
 import { Session } from "./session.mjs";
 import { outboxKeyOf, outboxTurn } from "./outbox-events.mjs";
 import {
-  normalizeRequest, resolveIdentity, requestToken, dispositionOf, shortDigest, msgDiff,
+  normalizeRequest, resolveIdentity, requestToken, dispositionOf, shortDigest, msgDiff, messageDigests,
 } from "./request.mjs";
 import { startThread, deliverToolResults, startTurn } from "./turn.mjs";
 
@@ -37,10 +37,16 @@ export async function handleMessages(ctx, persona, body, req, res) {
   const ident = resolveIdentity(norm);
   if (ident.weak) ctx.logger.write("weak-session-key", { persona: persona.name, key: ident.key, reason: "metadata.user_id carried no session_id" });
 
+  // (ii) local fork answer — a subagent's non-streaming strict-prefix side query (D3). A pure
+  // read: it never touches any session, so an in-flight owner is neither interrupted nor 409'd.
+  const digests = messageDigests(norm.msgs);
+  const forkOf = findForkTarget(persona, norm, ident, digests);
+  if (forkOf) return answerForkLocally(ctx, persona, norm, ident, forkOf, res);
+
   await persona.ensure();
 
   // 2. session disposition
-  const { sess, mode } = disposeSession(ctx, persona, norm, ident);
+  const { sess, mode } = disposeSession(ctx, persona, norm, ident, digests);
   const reqId = crypto.randomUUID().slice(0, 8);
   ctx.logger.write("http-start", { persona: persona.name, key: ident.key, reqId, mode, stream: norm.stream, nMessages: norm.msgs.length });
 
@@ -65,8 +71,20 @@ export async function handleMessages(ctx, persona, body, req, res) {
 // opened the session's thread would make the real task a continuation of "name this session"
 // (WP-4 G1). Written straight to `res` — it predates any session, so it has no sink.
 function answerTitleLocally(ctx, persona, norm, res) {
-  const { body, msgs } = norm;
-  ctx.logger.write("title-local", { persona: persona.name, stream: norm.stream, envelope: titleEnvelope(msgs) });
+  ctx.logger.write("title-local", { persona: persona.name, stream: norm.stream, envelope: titleEnvelope(norm.msgs) });
+  writeLocalText(persona, norm.body, "Session", res);
+}
+
+// A subagent's fork (D3): a non-streaming request whose messages are a strict undecorated
+// prefix of a live session's history. The feature that sends it is unidentified and its reply
+// is a placeholder, so it costs zero codex tokens and never touches the session it forks.
+const FORK_TEXT = "(side query answered locally by codex-sidecar; no model call was made)";
+function answerForkLocally(ctx, persona, norm, ident, sess, res) {
+  ctx.logger.write("fork-local", { persona: persona.name, key: ident.key, forkOf: sess.key, n: norm.msgs.length, seen: sess.hist.length });
+  writeLocalText(persona, norm.body, FORK_TEXT, res);
+}
+
+function writeLocalText(persona, body, text, res) {
   const usage = { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 };
   if (body.stream) {
     const msg = { ...messageSkeleton(wireModelId(persona.name, body.model)), usage };
@@ -74,7 +92,7 @@ function answerTitleLocally(ctx, persona, norm, res) {
     const w = (t, o) => res.write(`event: ${t}\ndata: ${JSON.stringify(o)}\n\n`);
     w("message_start", { type: "message_start", message: msg });
     w("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
-    w("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Session" } });
+    w("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } });
     w("content_block_stop", { type: "content_block_stop", index: 0 });
     w("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage });
     w("message_stop", { type: "message_stop" });
@@ -83,7 +101,7 @@ function answerTitleLocally(ctx, persona, norm, res) {
   }
   sendJson(res, 200, {
     ...messageSkeleton(wireModelId(persona.name, body.model)),
-    content: [{ type: "text", text: "Session" }],
+    content: [{ type: "text", text }],
     stop_reason: "end_turn",
     usage,
   });
@@ -94,27 +112,34 @@ function answerTitleLocally(ctx, persona, norm, res) {
 // Which session this request belongs to, and in what MODE it arrives. The mode is read from
 // session state, never from the body, and it is the input both the turn-execution phase and
 // the duplicate pre-check share.
-function disposeSession(ctx, persona, norm, ident) {
+function disposeSession(ctx, persona, norm, ident, digests) {
   const { key, weak } = ident;
   const { msgs, toolResults } = norm;
   let sess = persona.sessions.get(key);
+  if (!sess) sess = adoptRekeyed(ctx, persona, norm, ident, digests);
   let mode;
+  const cls = sess ? classifyAgainst(sess, digests, norm, ident) : null;
   if (!sess) {
     sess = new Session(persona, key);
     persona.sessions.set(key, sess);
     mode = "new-thread";
+  } else if (cls.kind === "diverged") {
+    // A genuine rewind, a mismatched prefix, or growth other than +1/+2 (D5): the thread did not
+    // see this conversation, so `next-turn` would silently skip input. Start a rehydrated one.
+    ctx.logger.write("rewind", {
+      persona: persona.name, key, seen: sess.msgCount, now: msgs.length, threadId: sess.threadId,
+      ...(cls.at !== undefined ? { at: cls.at } : {}), ...(cls.step !== undefined ? { step: cls.step } : {}),
+    });
+    persona.interrupt(sess, "rewind");
+    persona.dropSession(sess);          // the abandoned thread is simply dropped (WP-1 settles its owner)
+    sess = new Session(persona, key);
+    persona.sessions.set(key, sess);
+    mode = "new-thread-after-rewind";
   } else if (toolResults.length && (sess.parked.size
       || (sess.turnOpen && toolResults.some(tr => sess.delivered.has(tr.tool_use_id))))) {
     // Defect E1: an echo of an id we handed out belongs to the turn that is still open,
     // even if nothing is parked any more — never `turn/start` onto a blocked turn.
     mode = "tool-result";
-  } else if (msgs.length < sess.msgCount) {
-    ctx.logger.write("rewind", { persona: persona.name, key, seen: sess.msgCount, now: msgs.length, threadId: sess.threadId });
-    persona.interrupt(sess, "rewind");
-    persona.dropSession(sess);          // the abandoned thread is simply dropped
-    sess = new Session(persona, key);
-    persona.sessions.set(key, sess);
-    mode = "new-thread-after-rewind";
   } else {
     if (sess.parked.size) {
       ctx.logger.write("dropped-tool-calls", { persona: persona.name, key, n: sess.parked.size });
@@ -123,8 +148,82 @@ function disposeSession(ctx, persona, norm, ident) {
     mode = "next-turn";
   }
   sess.msgCount = msgs.length;
+  sess.hist = digests;
   sess.outboxKey = outboxKeyOf(key, weak);
   return { sess, mode };
+}
+
+// ---------------------------------------------------- history classification ----
+
+// How an arriving request relates to the history `sess` last accepted (m = hist.length,
+// n = request length). Pure read.
+//   fork      — subagent, non-streaming, n < m, and the request is a strict prefix of hist
+//   continues — hist[0..m-2] matches and either n == m (only the final message may differ:
+//               supersede / join / replay cells) or n == m+2 with hist[m-1] matched (the
+//               thread's own reply plus one user message — the only growth ever measured), or
+//               n == m+1 with hist[m-1] matched (full prior history plus one message, rev 3)
+//   diverged  — anything else; `at` is the first differing index, `step` the growth size
+export function classifyAgainst(sess, digests, norm, ident) {
+  const hist = sess.hist;
+  const m = hist.length;
+  const n = digests.length;
+  const firstDiff = upto => {
+    for (let i = 0; i < upto; i++) if (digests[i] !== hist[i]) return i;
+    return -1;
+  };
+  if (n < m) {
+    const at = firstDiff(n);
+    if (at < 0 && ident.scope === "subagent" && norm.stream === false) return { kind: "fork" };
+    return at < 0 ? { kind: "diverged", step: n - m } : { kind: "diverged", at };
+  }
+  const at = firstDiff(Math.max(0, m - 1));
+  if (at >= 0) return { kind: "diverged", at };
+  if (n === m) return { kind: "continues" };
+  if ((n === m + 2 || n === m + 1) && (m === 0 || digests[m - 1] === hist[m - 1])) return { kind: "continues" };
+  if (m > 0 && digests[m - 1] !== hist[m - 1]) return { kind: "diverged", at: m - 1 };
+  return { kind: "diverged", step: n - m };
+}
+
+// Same-persona sessions a `session_id`-bearing subagent key could have been re-keyed from:
+// another key with the same `:<disc>` suffix (D1). Read-only.
+function rekeyCandidates(persona, ident) {
+  if (ident.scope !== "subagent" || ident.weak) return [];
+  const i = ident.key.indexOf(":");
+  if (i < 0) return [];
+  const suffix = ident.key.slice(i);
+  return [...persona.sessions.values()].filter(s => s.key !== ident.key && !s.closed
+    && s.key.indexOf(":") >= 0 && s.key.slice(s.key.indexOf(":")) === suffix);
+}
+
+// The session a request is a fork of — the keyed one, or (on a key miss) a re-key candidate.
+// A fork is answered locally and never adopts.
+function findForkTarget(persona, norm, ident, digests) {
+  if (ident.scope !== "subagent" || norm.stream !== false) return null;
+  const own = persona.sessions.get(ident.key);
+  const pool = own ? [own] : rekeyCandidates(persona, ident);
+  return pool.find(s => classifyAgainst(s, digests, norm, ident).kind === "fork") ?? null;
+}
+
+// Key miss: adopt a same-discriminator session only on lineage proof — the request continues
+// its history AND echoes ≥1 tool_use id that session minted (`delivered`, never cleared). A
+// same-prompt agent under another session_id holds no such id, so it gets its own thread.
+function adoptRekeyed(ctx, persona, norm, ident, digests) {
+  const ids = new Set();
+  for (const m of norm.msgs) {
+    if (m?.role !== "assistant" || !Array.isArray(m.content)) continue;
+    for (const b of m.content) if (b?.type === "tool_use" && b.id) ids.add(b.id);
+  }
+  if (!ids.size) return null;
+  const sess = rekeyCandidates(persona, ident).find(s =>
+    classifyAgainst(s, digests, norm, ident).kind === "continues" && [...ids].some(id => s.delivered.has(id)));
+  if (!sess) return null;
+  const from = sess.key;
+  persona.sessions.delete(from);
+  persona.sessions.set(ident.key, sess);
+  sess.key = ident.key;
+  sess.outboxKey = outboxKeyOf(ident.key, ident.weak);
+  ctx.logger.write("session-rekeyed", { persona: persona.name, from, to: ident.key, threadId: sess.threadId });
+  return sess;
 }
 
 // One `http` row per request, same shape on every path (owner, joiner, replay).

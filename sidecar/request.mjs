@@ -70,6 +70,12 @@ const undecorate = ({ model, effort, system, tools, messages }) => ({
 export const requestDigest = fields => crypto.createHash("sha256")
   .update(JSON.stringify(canon(undecorate(fields))))
   .digest("hex");
+// Per-message digests of the undecorated conversation, the history a session records and an
+// arriving request is classified against (fork / continues / diverged, messages.mjs). Same
+// canonicalizer as `requestDigest` — never a second one.
+export const messageDigests = msgs => (Array.isArray(msgs) ? msgs : []).map(m => crypto.createHash("sha256")
+  .update(JSON.stringify(canon(undecorateMessage(m)) ?? null))
+  .digest("hex"));
 export const shortDigest = d => (d ? d.slice(0, 12) : null);
 
 const isDuplicateRequest = (owner, token) => !!owner

@@ -348,3 +348,126 @@ test("matrix: a rewind that closes a session settles its mid-turn owner promptly
   assert.ok(elapsed < 2000, `owner settled in ${elapsed} ms`);
   assert.equal(kinds(h.log(), "rewind").length, 1);
 });
+
+// ------------------------------------------- HISTORY classification (WP-3) --
+
+const BILL = "x-anthropic-billing-header: cc_version=2.1.270.1d1; cc_entrypoint=sdk-cli; cc_is_subagent=true;";
+const SUB_SYS = [{ type: "text", text: BILL }, { type: "text", text: "You are an adversarial plan auditor." }];
+const subBody = (messages, opts = {}) => msgBody({ tools: READ, system: SUB_SYS, messages, ...opts });
+
+// A subagent that has run one tool turn to completion: hist = [user, assistant(tool_use c1), tool_result].
+async function subagentToolTurn(t, { tail = [{ text: "done" }, { complete: {} }], defaultTurn = [{ text: "more" }, { complete: {} }] } = {}) {
+  const h = await withSidecar({ scenario: { turns: [[call("c1", "Read", { path: "a" }), { awaitToolResults: 1 }, ...tail]], defaultTurn } });
+  t.after(() => h.close());
+  const m1 = [{ role: "user", content: "audit this plan" }];
+  const first = await req(h, "/codex-a/v1/messages", { body: subBody(m1) });
+  assert.equal(first.json.stop_reason, "tool_use");
+  const m3 = [...m1, { role: "assistant", content: first.json.content },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "c1", content: "a" }] }];
+  return { h, m1, m3 };
+}
+
+test("matrix: FORK while an owner is mid-turn is answered locally — the owner completes, no 409, no interrupt", async t => {
+  const { h, m1, m3 } = await subagentToolTurn(t, { tail: [{ delay: 1200 }, { text: "done" }, { complete: {} }] });
+  const owner = req(h, "/codex-a/v1/messages", { body: subBody(m3) });
+  await sleep(300);
+  const fork = await req(h, "/codex-a/v1/messages", { body: subBody(m1) });
+  assert.equal(fork.status, 200, fork.text);
+  assert.equal(fork.json.usage.output_tokens, 0);
+  const o = await owner;
+  assert.equal(o.status, 200, o.text);
+  assert.equal(o.json.content[0].text, "done");
+  const log = h.log();
+  assert.equal(kinds(log, "fork-local").length, 1);
+  for (const k of ["turn-interrupt", "superseded-request", "rewind"]) assert.equal(kinds(log, k).length, 0, k);
+});
+
+test("matrix: FORK while idle leaves the session untouched — the next request continues the same thread", async t => {
+  const { h, m1, m3 } = await subagentToolTurn(t);
+  const r = await req(h, "/codex-a/v1/messages", { body: subBody(m3) });
+  assert.equal(r.status, 200);
+  const fork = await req(h, "/codex-a/v1/messages", { body: subBody(m1) });
+  assert.equal(fork.status, 200);
+  const m5 = [...m3, { role: "assistant", content: r.json.content }, { role: "user", content: "next" }];
+  const next = await req(h, "/codex-a/v1/messages", { body: subBody(m5) });
+  assert.equal(next.status, 200, next.text);
+  const modes = kinds(h.log(), "http-start").map(l => l.mode);
+  assert.deepEqual(modes, ["new-thread", "tool-result", "next-turn"]);
+  assert.equal(kinds(h.log(), "fork-local").length, 1);
+  assert.equal(sentTo(h.trace(), "thread/start").length, 1);
+});
+
+test("matrix: RE-KEY — a session_id change echoing a delivered tool id adopts the thread", async t => {
+  const { h, m3 } = await subagentToolTurn(t);
+  const r = await req(h, "/codex-a/v1/messages", { body: subBody(m3) });
+  assert.equal(r.status, 200);
+  const m5 = [...m3, { role: "assistant", content: r.json.content }, { role: "user", content: "next" }];
+  const next = await req(h, "/codex-a/v1/messages", { body: subBody(m5, { sessionId: "99999999-2222-3333-4444-555555555555" }) });
+  assert.equal(next.status, 200, next.text);
+  const rk = kinds(h.log(), "session-rekeyed");
+  assert.equal(rk.length, 1);
+  assert.ok(rk[0].to.startsWith("99999999-"));
+  assert.equal(kinds(h.log(), "http-start").at(-1).mode, "next-turn");
+  assert.equal(sentTo(h.trace(), "thread/start").length, 1, "same thread");
+});
+
+test("matrix: RE-KEY needs lineage — a same-prompt agent under another session_id gets its own thread", async t => {
+  const { h, m1 } = await subagentToolTurn(t);
+  const other = await req(h, "/codex-a/v1/messages", { body: subBody(m1, { sessionId: "99999999-2222-3333-4444-555555555555" }) });
+  assert.equal(other.status, 200, other.text);
+  assert.equal(kinds(h.log(), "session-rekeyed").length, 0);
+  assert.equal(sentTo(h.trace(), "thread/start").length, 2);
+  assert.equal(kinds(h.log(), "http-start").at(-1).mode, "new-thread");
+});
+
+test("matrix: a FORK arriving on a key miss is answered locally and nothing is re-keyed", async t => {
+  const { h, m1, m3 } = await subagentToolTurn(t);
+  const r = await req(h, "/codex-a/v1/messages", { body: subBody(m3) });
+  assert.equal(r.status, 200);
+  const fork = await req(h, "/codex-a/v1/messages", { body: subBody(m1, { sessionId: "99999999-2222-3333-4444-555555555555" }) });
+  assert.equal(fork.status, 200);
+  assert.equal(kinds(h.log(), "fork-local").length, 1);
+  assert.equal(kinds(h.log(), "session-rekeyed").length, 0);
+  assert.equal(sentTo(h.trace(), "thread/start").length, 1);
+});
+
+test("matrix: D5 — +4 growth and a mismatched prefix each start a rehydrated thread, not next-turn", async t => {
+  const h = await withSidecar({ scenario: { defaultTurn: [{ text: "one" }, { complete: {} }] } });
+  t.after(() => h.close());
+  const m1 = [{ role: "user", content: "hi" }];
+  await req(h, "/codex-a/v1/messages", { body: msgBody({ messages: m1 }) });
+  const m5 = [...m1, { role: "assistant", content: "one" }, { role: "user", content: "a" }, { role: "assistant", content: "x" }, { role: "user", content: "b" }];
+  await req(h, "/codex-a/v1/messages", { body: msgBody({ messages: m5 }) });
+  const bad = [m5[0], { role: "assistant", content: "EDITED" }, ...m5.slice(2), { role: "assistant", content: "one" }, { role: "user", content: "c" }];
+  await req(h, "/codex-a/v1/messages", { body: msgBody({ messages: bad }) });
+  const modes = kinds(h.log(), "http-start").map(l => l.mode);
+  assert.deepEqual(modes, ["new-thread", "new-thread-after-rewind", "new-thread-after-rewind"]);
+  const rw = kinds(h.log(), "rewind");
+  assert.equal(rw[0].step, 4);
+  assert.equal(rw[1].at, 1);
+  assert.equal(kinds(h.log(), "rehydrated").length, 2);
+});
+
+test("matrix: a shorter STREAMING subagent request is a rewind, not a fork", async t => {
+  const { h, m1, m3 } = await subagentToolTurn(t);
+  const r = await req(h, "/codex-a/v1/messages", { body: subBody(m3) });
+  assert.equal(r.status, 200);
+  const s = rawStream(h, "/codex-a/v1/messages", subBody(m1, { stream: true }));
+  const marks = await s.done;
+  assert.equal(marks.status, 200);
+  assert.equal(kinds(h.log(), "fork-local").length, 0);
+  assert.equal(kinds(h.log(), "rewind").length, 1);
+  assert.equal(kinds(h.log(), "http-start").at(-1).mode, "new-thread-after-rewind");
+});
+
+test("matrix: +1 growth over the full prior history while idle continues on the same thread", async t => {
+  const h = await withSidecar({ scenario: { defaultTurn: [{ text: "one" }, { complete: {} }] } });
+  t.after(() => h.close());
+  const m2 = [{ role: "user", content: "hi" }, { role: "assistant", content: "one" }];
+  await req(h, "/codex-a/v1/messages", { body: msgBody({ messages: m2.slice(0, 1) }) });
+  await req(h, "/codex-a/v1/messages", { body: msgBody({ messages: [...m2, { role: "user", content: "a" }] }) });
+  await req(h, "/codex-a/v1/messages", { body: msgBody({ messages: [...m2, { role: "user", content: "a" }, { role: "user", content: "b" }] }) });
+  assert.deepEqual(kinds(h.log(), "http-start").map(l => l.mode), ["new-thread", "next-turn", "next-turn"]);
+  assert.equal(kinds(h.log(), "rewind").length, 0);
+  assert.equal(sentTo(h.trace(), "thread/start").length, 1);
+});

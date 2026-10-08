@@ -190,11 +190,42 @@ export function dispositionOf(sess, token) {
 
 // ------------------------------------------------------------- turn input ----
 
-// The text one turn carries: on a new thread the whole user-side conversation, otherwise the
-// last message (falling back to its tool_result payloads when the thread was dropped under it).
+// True when a new thread is opening mid-conversation: the client's transcript already holds
+// assistant turns the fresh codex thread has never seen, so they must be rendered into its input.
+export const rendersTranscript = (mode, msgs) => mode.startsWith("new-thread")
+  && msgs.some(m => m?.role === "assistant");
+
+const renderBlock = b => {
+  if (!b || typeof b !== "object") return "";
+  if (b.type === "text") return typeof b.text === "string" ? b.text : "";
+  if (b.type === "tool_use") return `[tool_use ${b.name ?? "?"} id=${b.id ?? "?"}] ${JSON.stringify(b.input ?? {})}`;
+  if (b.type === "tool_result") {
+    const body = typeof b.content === "string" ? b.content : textOf(b.content);
+    return `[tool_result id=${b.tool_use_id ?? "?"}${b.is_error ? " is_error" : ""}]\n${body}`;
+  }
+  return "";   // thinking / redacted_thinking are omitted; images are rejected upstream
+};
+
+// The whole conversation, in order, role-labeled, never truncated: an over-window transcript
+// surfaces as the app-server's own error rather than a silent clip.
+export function renderTranscript(msgs) {
+  const prior = msgs.slice(0, -1).map(m => {
+    const body = blocksOf(m.content).map(renderBlock).filter(Boolean).join("\n");
+    return `### ${m.role}\n${body}`;
+  });
+  const final = blocksOf(msgs.at(-1)?.content).map(renderBlock).filter(Boolean).join("\n");
+  return "<prior-conversation>\nThis thread was (re)started mid-conversation. The transcript so far:\n\n"
+    + prior.join("\n\n") + "\n</prior-conversation>\n\n" + final;
+}
+
+// The text one turn carries: on a new thread the whole user-side conversation (or, mid-
+// conversation, the rendered transcript), otherwise the last message (falling back to its
+// tool_result payloads when the thread was dropped under it).
 export function turnInputText(mode, msgs, last, lastBlocks) {
   let text;
-  if (mode.startsWith("new-thread")) {
+  if (rendersTranscript(mode, msgs)) {
+    text = renderTranscript(msgs);
+  } else if (mode.startsWith("new-thread")) {
     text = msgs.filter(m => m.role === "user").map(m => textOf(m.content)).filter(Boolean).join("\n\n");
   } else {
     text = textOf(last?.content);

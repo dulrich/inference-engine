@@ -17,7 +17,7 @@ import { THREAD_CONFIG, PREAMBLE, resolveCwd } from "./config.mjs";
 import { SidecarError } from "./errors.mjs";
 import { baseInstructionsOf, toDynamicTools, textOf } from "./protocol.mjs";
 import { verifyInstructionSources, verifyFeatures, featureReadings } from "./thread-config.mjs";
-import { turnInputText } from "./request.mjs";
+import { turnInputText, rendersTranscript } from "./request.mjs";
 
 export async function startThread(rc, stillMine) {
   const { ctx, persona, sess, norm, ident, cfg } = rc;
@@ -107,6 +107,9 @@ export function deliverToolResults(rc) {
 export async function startTurn(rc, stillMine) {
   const { ctx, persona, sess, norm, ident, mode, cfg } = rc;
   const text = turnInputText(mode, norm.msgs, norm.last, norm.lastBlocks);
+  if (rendersTranscript(mode, norm.msgs)) {
+    ctx.logger.write("rehydrated", { persona: persona.name, key: ident.key, reqId: rc.reqId, nMessages: norm.msgs.length, chars: text.length });
+  }
   const turnParams = { threadId: sess.threadId, input: [{ type: "text", text }], effort: ident.eff.effort };
   if (sess.model && ident.parsed.model !== sess.model) { turnParams.model = ident.parsed.model; sess.model = ident.parsed.model; }
   // A mid-thread effort change is legal and costs exactly one prefix-cache miss on the

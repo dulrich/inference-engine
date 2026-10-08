@@ -353,3 +353,51 @@ test("a figure above the context window is clamped proportionally and logged", a
   assert.deepEqual(http[0].usageCodex, { inputTokens: 5000, cachedInputTokens: 4000, cacheWriteInputTokens: 0, outputTokens: 77 },
     "the http row keeps the raw figure, not the clamped one");
 });
+
+test("a mid-conversation new thread is seeded with the rendered transcript", async t => {
+  const h = await withSidecar({ scenario });
+  t.after(() => h.close());
+
+  const r = await req(h, "/codex-a/v1/messages", {
+    body: msgBody({
+      sessionId: "cccccccc-0000-0000-0000-000000000003",
+      messages: [
+        { role: "user", content: "read the config" },
+        { role: "assistant", content: [{ type: "text", text: "Reading it now." }, { type: "tool_use", id: "tu_1", name: "Read", input: { file_path: "/etc/app.conf" } }] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "tu_1", content: "port=4877" }] },
+        { role: "assistant", content: "The port is 4877." },
+        { role: "user", content: "now change it" },
+      ],
+    }),
+  });
+  assert.equal(r.status, 200, r.text);
+
+  const [turn] = sentTo(h.trace(), "turn/start");
+  const text = turn.params.input[0].text;
+  assert.ok(text.includes("Reading it now."), "assistant text is carried");
+  assert.ok(text.includes("[tool_use Read id=tu_1]"), "the tool name is carried");
+  assert.ok(text.includes("port=4877"), "the tool_result payload is carried");
+  assert.ok(text.includes("The port is 4877."));
+  assert.ok(text.endsWith("</prior-conversation>\n\nnow change it"), "the final message is the turn's input");
+
+  const row = h.log().find(l => l.kind === "rehydrated");
+  assert.ok(row, "a rehydrated row is logged");
+  assert.equal(row.nMessages, 5);
+  assert.equal(row.chars, text.length);
+});
+
+test("a first-turn conversation's input is byte-identical to the user-only rendering", async t => {
+  const h = await withSidecar({ scenario });
+  t.after(() => h.close());
+
+  const r = await req(h, "/codex-a/v1/messages", {
+    body: msgBody({
+      sessionId: "dddddddd-0000-0000-0000-000000000004",
+      messages: [{ role: "user", content: [{ type: "text", text: "first" }, { type: "text", text: "second" }] }],
+    }),
+  });
+  assert.equal(r.status, 200, r.text);
+  const [turn] = sentTo(h.trace(), "turn/start");
+  assert.equal(turn.params.input[0].text, "first\nsecond");
+  assert.equal(h.log().filter(l => l.kind === "rehydrated").length, 0);
+});

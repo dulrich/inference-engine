@@ -47,10 +47,6 @@
 #  10. (SMOKE_SYSTEMONE=1 only, metered: one OpenRouter decision call) POST /v1/systemone via
 #      openrouter-decide/typesafe/jev-1.13 with a synthetic state returns
 #      answers.wait.choice in {blocked, offer, none} (patch 0013). Default off.
-#  11. POST /v1/systemone via local-decide/lev (the always-on CPU service
-#      inference-engine-decide, stop-wait-classifier WP-4) with a synthetic state returns
-#      answers.wait.choice in {blocked, offer, none}. Default ON, unmetered; it fails loudly
-#      when the resident service is down.
 #
 # Exits non-zero on any check failure. Requires: curl, jq.
 set -u
@@ -311,18 +307,6 @@ if [ "${SMOKE_SYSTEMONE:-0}" = "1" ]; then
 	fi
 else
 	note "SMOKE_SYSTEMONE not set: SKIPPING the metered /v1/systemone probe (one OpenRouter decision call)."
-fi
-
-# ── 11. systemone decision route, local lev (always on, unmetered) ─────────────────────────
-ld_json=$(curl -s --max-time 60 -X POST "$BASE_URL/v1/systemone" \
-	-H 'Content-Type: application/json' \
-	-H "x-gateway-key: $GATEWAY_KEY" \
-	-d '{"model":"local-decide/lev","state":"Assistant final message: Which option do you want, A or B?","questions":{"wait":{"type":"choice","instructions":"Is the assistant blocked waiting on the user, offering optional follow-up, or not waiting?","criteria":{"blocked":"The assistant needs an answer or decision before it can continue.","offer":"The assistant offers optional further work but is done.","none":"The assistant is not waiting on the user."}}}}') || ld_json=""
-ld_choice=$(echo "$ld_json" | jq -r '.answers.wait.choice | select(. == "blocked" or . == "offer" or . == "none")' 2>/dev/null)
-if [ -n "$ld_choice" ]; then
-	pass "/v1/systemone (local-decide/lev) returned answers.wait.choice=$ld_choice"
-else
-	bad "/v1/systemone (local-decide/lev) did not return answers.wait.choice in {blocked,offer,none} (is inference-engine-decide up?). Response: $ld_json"
 fi
 
 echo

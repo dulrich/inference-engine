@@ -236,7 +236,11 @@ export class Session {
     if (this.closed) return;
     this.closed = true;
     this.abandonParked(reason || "aborted");
-    if (this.timeoutTimer) clearTimeout(this.timeoutTimer);
+    // A request parked in waitOutcome must not outlive its session (it would hang until the
+    // turn timeout): settle it with a retryable 409 through the resolver, which also clears
+    // the timer, so any later settle stays a no-op.
+    this.resolveOutcome?.({ kind: "error", error: new SidecarError(409, "api_error", `session closed: ${reason || "aborted"}`) });
+    if (this.timeoutTimer) { clearTimeout(this.timeoutTimer); this.timeoutTimer = null; }
     if (this.threadId) this.persona.bus.delete(this.threadId);
   }
 }

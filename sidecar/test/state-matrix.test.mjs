@@ -313,3 +313,38 @@ test("matrix: an SSE turn whose first delta races the turn/start reply still ope
   assert.ok(events.includes("message_stop"), events.join(","));
   assert.equal(sseText(marks), "alpha beta", "no delta is lost to the pre-header queue");
 });
+
+// ------------------------------------------------------ CLOSE settles owner --
+
+test("matrix: a rewind that closes a session settles its mid-turn owner promptly with a retryable 409", async t => {
+  // WP-1 (D4): close() used to disarm the timer and leave the owner parked in waitOutcome
+  // until the turn timeout. The rewind branch closes the session under a live owner.
+  const h = await withSidecar({
+    scenario: {
+      turns: [
+        [{ text: "warm" }, { complete: {} }],
+        [call("c1", "Read", { path: "a" }), { awaitToolResults: 1 }, { delay: 5000 }, { text: "done" }, { complete: {} }],
+      ],
+      defaultTurn: [{ text: "fresh" }, { complete: {} }],
+    },
+  });
+  t.after(() => h.close());
+  const m1 = [{ role: "user", content: "hi" }];
+  const r1 = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ, messages: m1 }) });
+  assert.equal(r1.status, 200);
+  const m3 = [...m1, { role: "assistant", content: r1.json.content }, { role: "user", content: "read a" }];
+  const r2 = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ, messages: m3 }) });
+  assert.equal(r2.json.stop_reason, "tool_use");
+  const m5 = [...m3, { role: "assistant", content: r2.json.content },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "c1", content: "x" }] }];
+  const t0 = Date.now();
+  const owner = req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ, messages: m5 }) });
+  await sleep(300);
+  const rewound = await req(h, "/codex-a/v1/messages", { body: msgBody({ tools: READ, messages: [{ role: "user", content: "start over" }] }) });
+  const o = await owner;
+  const elapsed = Date.now() - t0;
+  assert.equal(rewound.status, 200);
+  assert.equal(o.status, 409);
+  assert.ok(elapsed < 2000, `owner settled in ${elapsed} ms`);
+  assert.equal(kinds(h.log(), "rewind").length, 1);
+});

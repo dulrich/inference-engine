@@ -32,6 +32,15 @@
 #                                         on purpose.
 #   gliner2-pii       (prospective)       eval-harness / news-ingestion PII sprints — append the
 #                                         row here when the first consumer lands.
+#   hsc-turn-state    fleet-tools     `scripts/wait-classifier-hook.mjs` (POST /v1/classify);
+#                                         the alias is stored as the outbox `turn.classified`
+#                                         event's `classifier` field.
+#
+# ── Runtime types ─────────────────────────────────────────────────────────────────────────────
+#
+# `type: gliner2` (the default when omitted) is served by POST /v1/extract; `type: seqcls` is an
+# `hsc-seqcls/1` sequence-classifier bundle (model.onnx + tokenizer.json + manifest.json) served
+# by POST /v1/classify. Either route answers a model of the other type with a 400.
 #
 # ── Adding a family member is a config append plus a weights fetch. No code. ───────────────────
 #
@@ -75,3 +84,10 @@ models:
       different counting layer (count_lstm) from gliner2-base — configured at launch precisely
       because serving both proves the registry generalises across the family, not just across
       one checkpoint's twins.
+
+  hsc-turn-state:
+    type: seqcls
+    name: "hsc turn-state classifier (mmbert-small run 3, v5 labels)"
+    source_model: eval-harness/hook_state_classifier run-3 mmbert-small
+    path: /models/local/hsc-mmbert-small-run3-onnx
+    preload: true

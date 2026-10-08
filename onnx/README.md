@@ -20,6 +20,7 @@ one is a **config append plus a weights fetch — no code**.
 | `server/` | The service. `app.py` (routes), `registry.py` (aliases + residency), `runtime.py` (the torch-free GLiNER2 inference path). |
 | `tools/export_gliner2.py` | Host-side ONNX exporter **with a torch-parity gate**. Never shipped in the image. |
 | `smoke-extract.sh` | Host-run smoke test. Shape assertions, body probes, one negative check. |
+| `smoke-classify.sh` | Host-run smoke for `POST /v1/classify` (seqcls models): shape assertions plus wrong-type 400 on both routes. |
 
 ## API
 
@@ -106,6 +107,18 @@ Two deliberate asymmetries, both pinned by tests in `tests/test_schema.py`:
   is always fine — a schema just needs at least one of the two.
 - `"relations": []` stays a silently-ignored no-op rather than a `400`, since an empty list
   requests nothing. A *non-empty* `relations` is rejected.
+
+### `POST /v1/classify`
+
+For `type: seqcls` models only (an `hsc-seqcls/1` bundle; see `AGENTS.md`).
+
+```jsonc
+{"model": "hsc-turn-state", "texts": ["..."]}          // 1..32 strings; a bare string is a 400
+// -> {"model": "hsc-turn-state", "results": [{"label": "...", "confidence": 0.97,
+//                                             "probabilities": {"<label>": p, ...}}]}
+```
+
+Errors as for `/v1/extract` (`missing_model`, `unknown_model`, `bad_texts`, `model_unavailable`), plus `classify_failed` (500). A model of the wrong type on either route is `400 wrong_model_type`, naming the model's type.
 
 ### `GET /health`
 

@@ -1,4 +1,4 @@
-"""`inference-engine-onnx` — the loopback HTTP surface over the GLiNER2-family ONNX runtime.
+"""`inference-engine-onnx` — the loopback HTTP surface over the sidecar's ONNX runtimes.
 
 Stdlib `ThreadingHTTPServer` on purpose. The dependency list is the security and reproducibility
 story of this image (onnxruntime + numpy + tokenizers + PyYAML and nothing else), and a web
@@ -11,6 +11,11 @@ Routes
   GET  /v1/models   the registry, as served
   POST /v1/extract  {"model": alias, "texts": [...], "schema": {...}, "threshold": 0.5}
                     -> {"model": alias, "results": [<gliner2-native result per text>]}
+  POST /v1/classify {"model": alias, "texts": [1..32 strings]}           (seqcls models only)
+                    -> {"model": alias, "results": [{"label", "confidence", "probabilities"}]}
+
+Each alias has a `type` (`gliner2` | `seqcls`, see `registry.py`); a model of the wrong type
+on either POST route is a 400 `wrong_model_type` naming its type.
 
 Error discipline (this is a contract, not a preference)
 -------------------------------------------------------
@@ -39,6 +44,7 @@ from typing import Any
 
 from .registry import ModelRegistry, UnknownModelError
 from .runtime import PreparedSchema, SchemaError
+from .schema import RequestError, check_model_type, compile_classify_texts
 
 DEFAULT_CONFIG = "/app/models.yaml"
 DEFAULT_HOST = "0.0.0.0"  # container-internal; the loopback bind is the compose publish
@@ -162,14 +168,16 @@ class ExtractHandler(BaseHTTPRequestHandler):
             self._send(200, {
                 "service": "inference-engine-onnx",
                 "models": self.registry.aliases,
-                "routes": ["GET /health", "GET /v1/models", "POST /v1/extract"],
+                "routes": [
+                    "GET /health", "GET /v1/models", "POST /v1/extract", "POST /v1/classify",
+                ],
             })
         else:
             self._error(404, "not_found", f"no such route: GET {path}")
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib hook name
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
-        if path != "/v1/extract":
+        if path not in ("/v1/extract", "/v1/classify"):
             self._error(404, "not_found", f"no such route: POST {path}")
             return
 
@@ -189,6 +197,15 @@ class ExtractHandler(BaseHTTPRequestHandler):
             self._error(404, "unknown_model",
                         f"unknown model alias '{alias}'",
                         available=self.registry.aliases)
+            return
+        try:
+            check_model_type(path, alias, self.registry.get(alias).type)
+        except RequestError as exc:
+            self._error(400, exc.code, str(exc))
+            return
+
+        if path == "/v1/classify":
+            self._classify(alias, payload)
             return
 
         texts = payload.get("texts")
@@ -249,6 +266,29 @@ class ExtractHandler(BaseHTTPRequestHandler):
         elapsed = time.time() - started
         _log(f"extract model={alias} texts={len(texts)} in {elapsed:.2f}s "
              f"({elapsed / len(texts):.3f}s/text)")
+        self._send(200, {"model": alias, "results": results})
+
+    def _classify(self, alias: str, payload: dict[str, Any]) -> None:
+        try:
+            texts = compile_classify_texts(payload.get("texts"))
+        except RequestError as exc:
+            self._error(400, exc.code, str(exc))
+            return
+        started = time.time()
+        try:
+            runtime = self.registry.runtime_for(alias)
+        except Exception as exc:
+            self._error(503, "model_unavailable",
+                        f"model '{alias}' could not be loaded: {type(exc).__name__}: {exc}")
+            return
+        try:
+            results = runtime.classify(texts)
+        except Exception as exc:  # a genuine server fault — 5xx is correct here
+            _log("classify failed:", traceback.format_exc())
+            self._error(500, "classify_failed", f"{type(exc).__name__}: {exc}")
+            return
+        elapsed = time.time() - started
+        _log(f"classify model={alias} texts={len(texts)} in {elapsed:.2f}s")
         self._send(200, {"model": alias, "results": results})
 
 

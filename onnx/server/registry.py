@@ -19,6 +19,11 @@ from typing import Any
 import yaml
 
 from .runtime import Gliner2OnnxRuntime
+from .runtime_seqcls import SeqClsOnnxRuntime
+
+# Runtime families. `gliner2` is the default so pre-existing entries need no `type:` key.
+RUNTIME_TYPES: dict[str, type] = {"gliner2": Gliner2OnnxRuntime, "seqcls": SeqClsOnnxRuntime}
+DEFAULT_TYPE = "gliner2"
 
 
 class RegistryError(RuntimeError):
@@ -79,9 +84,10 @@ class ModelEntry:
     path: Path
     preload: bool = True
     notes: str = ""
+    type: str = DEFAULT_TYPE
 
     # Runtime state
-    runtime: Gliner2OnnxRuntime | None = None
+    runtime: Gliner2OnnxRuntime | SeqClsOnnxRuntime | None = None
     load_seconds: float | None = None
     loaded_at: float | None = None
     load_error: str | None = None
@@ -91,7 +97,9 @@ class ModelEntry:
     def loaded(self) -> bool:
         return self.runtime is not None
 
-    def ensure_loaded(self, *, intra_op_threads: int | None = None) -> Gliner2OnnxRuntime:
+    def ensure_loaded(
+        self, *, intra_op_threads: int | None = None
+    ) -> Gliner2OnnxRuntime | SeqClsOnnxRuntime:
         """Load on first use if it was not preloaded. Resident forever after.
 
         Nothing here is ever unloaded. The GPU tier next door unloads on a ttl because VRAM is
@@ -103,7 +111,7 @@ class ModelEntry:
                 return self.runtime
             started = time.time()
             try:
-                runtime = Gliner2OnnxRuntime(self.path, intra_op_threads=intra_op_threads)
+                runtime = RUNTIME_TYPES[self.type](self.path, intra_op_threads=intra_op_threads)
             except Exception as exc:  # surfaced through /health, not swallowed
                 self.load_error = f"{type(exc).__name__}: {exc}"
                 raise
@@ -116,6 +124,7 @@ class ModelEntry:
     def status(self) -> dict[str, Any]:
         info: dict[str, Any] = {
             "loaded": self.loaded,
+            "type": self.type,
             "name": self.name,
             "source_model": self.source_model,
             "path": str(self.path),
@@ -125,7 +134,11 @@ class ModelEntry:
             info["load_seconds"] = self.load_seconds
         if self.load_error:
             info["error"] = self.load_error
-        if self.runtime is not None:
+        if isinstance(self.runtime, SeqClsOnnxRuntime):
+            info["format"] = self.runtime.format
+            info["labels"] = list(self.runtime.labels)
+            info["max_len"] = self.runtime.max_len
+        elif self.runtime is not None:
             manifest = self.runtime.manifest
             info["max_width"] = manifest.get("max_width")
             info["hidden_size"] = manifest.get("hidden_size")
@@ -165,6 +178,12 @@ class ModelRegistry:
             if not isinstance(cfg, dict):
                 raise RegistryError(f"{config_path}: model '{alias}' must be a mapping")
             model_path = _require_str(config_path, alias, cfg, "path", required=True)
+            model_type = _require_str(config_path, alias, cfg, "type", default=DEFAULT_TYPE)
+            if model_type not in RUNTIME_TYPES:
+                raise RegistryError(
+                    f"{config_path}: model '{alias}': 'type' must be one of "
+                    f"{', '.join(RUNTIME_TYPES)}, got {model_type!r}"
+                )
             entries[alias] = ModelEntry(
                 alias=alias,
                 name=_require_str(config_path, alias, cfg, "name", default=alias),
@@ -172,6 +191,7 @@ class ModelRegistry:
                 path=Path(model_path),
                 preload=_require_bool(config_path, alias, cfg, "preload", default=True),
                 notes=_require_str(config_path, alias, cfg, "notes", default=""),
+                type=model_type,
             )
         return cls(entries, intra_op_threads=intra_op_threads)
 
@@ -209,7 +229,7 @@ class ModelRegistry:
                 # aliases are still serveable, and /health reports this one as not loaded.
                 log(f"[registry] {entry.alias}: FAILED to load: {exc}")
 
-    def runtime_for(self, alias: str) -> Gliner2OnnxRuntime:
+    def runtime_for(self, alias: str) -> Gliner2OnnxRuntime | SeqClsOnnxRuntime:
         return self.get(alias).ensure_loaded(intra_op_threads=self._intra_op_threads)
 
     def status(self) -> dict[str, Any]:

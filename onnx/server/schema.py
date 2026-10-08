@@ -298,3 +298,51 @@ def struct_tokens(spec: Spec) -> list[str]:
         tokens.extend([spec.child_token, field])
     tokens.extend([")", ")"])
     return tokens
+
+
+# ── /v1/classify and route/type dispatch ───────────────────────────────────────────────────────
+
+MAX_CLASSIFY_TEXTS = 32
+
+# Which runtime family each model-taking route serves. A model of another type is a client
+# error (400 naming the model's type), never a 5xx and never a silent cross-family call.
+ROUTE_MODEL_TYPE = {"/v1/extract": "gliner2", "/v1/classify": "seqcls"}
+
+
+class RequestError(ValueError):
+    """A request the boundary rejects with a 400. `code` is the wire `error.code`."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def check_model_type(route: str, alias: str, model_type: str) -> None:
+    """Raise `RequestError("wrong_model_type")` when `alias` is not served by `route`."""
+    expected = ROUTE_MODEL_TYPE[route]
+    if model_type != expected:
+        raise RequestError(
+            "wrong_model_type",
+            f"model '{alias}' is type '{model_type}'; {route} serves only '{expected}' models",
+        )
+
+
+def compile_classify_texts(raw: object) -> list[str]:
+    """`texts` for /v1/classify: an array of 1..MAX_CLASSIFY_TEXTS strings.
+
+    Unlike /v1/extract (which wraps a bare string for back-compat), a bare string is a 400
+    here: the route is new, so there is no legacy caller to keep, and one response shape per
+    request shape keeps `results[i]` unambiguously aligned with `texts[i]`.
+    """
+    if not isinstance(raw, list) or not raw:
+        raise RequestError("bad_texts", "'texts' must be a non-empty array of strings")
+    if len(raw) > MAX_CLASSIFY_TEXTS:
+        raise RequestError(
+            "bad_texts", f"'texts' has {len(raw)} items; at most {MAX_CLASSIFY_TEXTS} per request"
+        )
+    for index, text in enumerate(raw):
+        if not isinstance(text, str):
+            raise RequestError(
+                "bad_texts", f"texts[{index}] must be a string, got {_typename(text)}"
+            )
+    return list(raw)

@@ -60,16 +60,19 @@ ARG NUMPY_VERSION=2.5.1
 ARG TOKENIZERS_VERSION=0.22.2
 ARG PYYAML_VERSION=6.0.3
 
-RUN pip install --no-cache-dir \
+RUN --mount=from=ghcr.io/astral-sh/uv:0.13.0,source=/uv,target=/usr/local/bin/uv \
+    uv pip install --system --no-cache \
       "onnxruntime==${ONNXRUNTIME_VERSION}" \
       "numpy==${NUMPY_VERSION}" \
       "tokenizers==${TOKENIZERS_VERSION}" \
       "PyYAML==${PYYAML_VERSION}" \
- && python -m pip uninstall -y pip
+ && uv pip uninstall --system pip
 
-# pip is build-time only (nothing at runtime installs packages) and the base image's bundled copy
-# was the image's sole scan finding (pip 25.0.1, 5 MEDIUM + 1 LOW, 2026-09-29) — removed after
-# use, like router/Dockerfile's npm, so a stale bundled pip can never be a finding again.
+# The wheels install with uv (same pin as tts/tier/Dockerfile), bind-mounted from its image for
+# this one RUN only, so the uv binary never lands in a layer. Nothing at runtime installs
+# packages, so the base image's bundled pip is dead weight — and was the image's sole scan finding
+# (pip 25.0.1, 5 MEDIUM + 1 LOW, 2026-09-29). uv removes it without ever running it, like
+# router/Dockerfile's npm, so the final image carries neither pip nor uv.
 
 WORKDIR /app
 COPY server /app/server

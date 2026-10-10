@@ -15,8 +15,18 @@ export const PERSONAS = ["codex-a", "codex-b"];
 // A scenario whose single turn streams two deltas and completes.
 export const SIMPLE_TURN = [{ text: "hello " }, { text: "world" }, { complete: {} }];
 
+// Safety net: a test that never reaches close() (an early assertion failure, or a test
+// that simply doesn't call it) would otherwise leave its temp dir behind.
+const tempDirs = new Set();
+process.on("exit", () => {
+  for (const dir of tempDirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
+
 export async function withSidecar({ scenario = {}, perPersona = null, env = {}, personas = PERSONAS } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-sidecar-test-"));
+  tempDirs.add(dir);
   for (const p of personas) {
     fs.writeFileSync(path.join(dir, `${p}.json`), JSON.stringify(perPersona?.[p] ?? scenario));
   }

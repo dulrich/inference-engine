@@ -105,7 +105,9 @@ RUN cmake -B build \
 # findings in `fleet-tools/data/security-scan/inference-engine.images.json` are CVEs fixed
 # somewhere between go1.25.9 and go1.26.6/1.27.0-rc.3 — i.e. closed by any newer toolchain, with
 # zero code or config change, since llama-swap's own module carries no `toolchain` directive that
-# would override it. Building here under `golang:1.26.7-trixie` closes all 20.
+# would override it. Building here under `golang:1.26.7-trixie` closed all 20; by 2026-10-09 the
+# go1.26.7 stdlib had picked up 13 new CVEs (fixed in go1.26.9/1.27.2), so the stage now builds
+# under `golang:1.27.2-trixie`. A toolchain bump is image-only — the tag below is unchanged.
 #
 # Pinned to v243 specifically, not upstream's current v251: measured, the `v243..v251` diff
 # touches `config-schema.json` and `internal/config/load.go`/`matrix.go` — real config-parsing
@@ -121,7 +123,7 @@ RUN cmake -B build \
 # fleet never calls llama-swap's own web UI (nothing in README.md/AGENTS.md/config.yaml
 # references it; the fleet has its own bench dashboard on :4810), so building without it is a
 # lower-complexity substitute for the release binary, not a functionality cut.
-FROM golang:1.26.7-trixie AS swap
+FROM golang:1.27.2-trixie AS swap
 
 ARG LLAMA_SWAP_TAG=v243
 # Full commit SHA the v243 tag points at (a commit object, not an annotated tag), resolved
@@ -129,8 +131,9 @@ ARG LLAMA_SWAP_TAG=v243
 # "Upgrading llama-swap" in README.md for how to resolve the next one.
 ARG LLAMA_SWAP_COMMIT=4c50064e3d7ff44834cf1b12ab529befa79f22d6
 
-# git and ca-certificates already ship in golang:1.26.7-trixie (verified via `docker run
-# golang:1.26.7-trixie sh -c 'which git; git --version'` before writing this stage) — no
+# git and ca-certificates already ship in golang:1.27.2-trixie (verified via `docker run
+# golang:1.26.7-trixie sh -c 'which git; git --version'` when this stage was written, and by
+# the 2026-10-09 golang:1.27.2-trixie build succeeding) — no
 # apt-get install needed here, unlike router/Dockerfile's node:24-slim build stage.
 WORKDIR /src
 # Full SHA fetch, never the tag or an abbreviation: GitHub's fetch-by-commit protocol

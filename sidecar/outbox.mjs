@@ -64,8 +64,10 @@ export function openOutbox(path, { busyTimeoutMs = 250 } = {}) {
   if (fresh) {
     try { chmodSync(path, 0o600); } catch { /* still works for the reader */ }
   }
-  db.exec("PRAGMA journal_mode = DELETE");
+  // busy_timeout FIRST: journal_mode takes a lock and fails instantly under writer
+  // contention otherwise (fleet-tools 362d12f8, measured 2026-10-10).
   db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.trunc(Number(busyTimeoutMs) || 0))}`);
+  db.exec("PRAGMA journal_mode = DELETE");
   db.exec(SCHEMA_SQL);
   const row = db.prepare("PRAGMA user_version").get();
   if (Number(row?.user_version ?? 0) === 0) db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);

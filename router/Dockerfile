@@ -1,9 +1,9 @@
 # router/Dockerfile — @the-next-ai/ai-gateway (https://github.com/The-NeXT-AI/ai-gateway),
-# built from source at a pinned commit with a thirteen-patch vendored series. Never `npm install
+# built from source at a pinned commit with a fourteen-patch vendored series. Never `npm install
 # @the-next-ai/ai-gateway` and never a moving branch/tag — the pin below is a commit SHA.
 #
 # See router/AGENTS.md for the patch rationale and the never-set-ANTHROPIC_API_KEY constraint,
-# and router/patches/00{01,02,03,04,05,06,07,08,09,10,11,12,13}-*.patch for the changes themselves: 0001 omits x-api-key
+# and router/patches/00{01,02,03,04,05,06,07,08,09,10,11,12,13,14}-*.patch for the changes themselves: 0001 omits x-api-key
 # for the passthrough OAuth bearer, 0002 adds the local-leg prefill/idle-gap ping keepalive,
 # 0003 relays upstream error bodies byte-verbatim to Anthropic-protocol clients on the final
 # attempt, 0004 adds the POST /v1/messages/count_tokens route, 0005 is a dependency-only
@@ -19,10 +19,11 @@
 # answer-token budget (`max_tokens`/`max_completion_tokens`) down to a per-model ceiling on the
 # same leg, from the new gateway.config.json `maxOutputTokens` key — downward only, never a
 # raise, never another target, 0011 is a dependency-only lockfile bump (fast-uri 3.1.8,
-# undici 6.29.0 — within their declared ranges, no source change), and 0012 is a
+# undici 6.29.0 — within their declared ranges, no source change), 0012 is a
 # dependency-only lockfile bump (brace-expansion 5.0.12, within minimatch's `^5.0.2`), and
 # 0013 adds the POST /v1/systemone decision-model route (strict `type: "systemone"` provider
-# allowlist, provider-credential-only upstream bearer, verbatim relay).
+# allowlist, provider-credential-only upstream bearer, verbatim relay), and 0014 is a
+# dependency-only lockfile bump (fastify 5.12.5, within the declared `^5.8.2`, no source change).
 # The replace-vs-integrate design spike the stabilization series
 # (plans/router-prefill-keepalive-and-protocol-gaps.md) required before any further semantic
 # patch was run and answered "continue vendoring on this pin" with evidence —
@@ -113,7 +114,11 @@ COPY patches/0013-systemone-route.patch /tmp/0013-systemone-route.patch
 RUN git apply --check /tmp/0013-systemone-route.patch \
     && git apply /tmp/0013-systemone-route.patch
 
-# The repo's own package-lock.json — measured green 2026-08-25 (145 packages, <1s); 147 after patch 0008 (fastify 5.12.4, measured 2026-09-13); still 147 after 0011 (measured 2026-09-29) and 0012 (measured 2026-10-01).
+COPY patches/0014-fastify-security-bump.patch /tmp/0014-fastify-security-bump.patch
+RUN git apply --check /tmp/0014-fastify-security-bump.patch \
+    && git apply /tmp/0014-fastify-security-bump.patch
+
+# The repo's own package-lock.json — measured green 2026-08-25 (145 packages, <1s); 147 after patch 0008 (fastify 5.12.4, measured 2026-09-13); still 147 after 0011 (measured 2026-09-29), 0012 (measured 2026-10-01) and 0014 (fastify 5.12.5, measured 2026-10-09).
 RUN npm ci
 
 # build.js -> esbuild bundle to dist/index.js — measured green 2026-08-25 (dist byte-identical

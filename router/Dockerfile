@@ -44,7 +44,7 @@
 # that `782cd51` resolves to (confirmed via `git log -1` after fetch: "Bump package version to
 # 1.0.18") — same pinned commit, just spelled out in the only form the fetch protocol accepts.
 
-FROM node:24-slim AS build
+FROM node:24-trixie-slim AS build
 
 # Full SHA for 782cd51 (782cd51941e5da198ea6543feb7dc9e6e8ee3915) — see the deviation note
 # above for why the short form cannot be used in the `git fetch` step itself.
@@ -155,7 +155,7 @@ RUN npx vitest run src/adapters/builtins/common.test.ts src/gateway/streaming-co
 # dist/index.js, so pruning devDependencies is the only trim the runtime stage needs.
 RUN npm prune --omit=dev
 
-FROM node:24-slim AS runtime
+FROM node:24-trixie-slim AS runtime
 
 LABEL org.opencontainers.image.title="inference-engine-router" \
       org.opencontainers.image.description="@the-next-ai/ai-gateway 1.0.18, source build at 782cd51, thirteen-patch series: x-api-key passthrough-bearer omission, prefill/idle-gap ping keepalive, upstream error-body passthrough, /v1/messages/count_tokens route, dependency-only lockfile bump (find-my-way/fast-uri/brace-expansion), per-request telemetry jsonl sink, effort -> chat_template_kwargs mapping on the openai_chat_completions leg, dependency-only lockfile bump (fastify 5.12.4), distinct xhigh/max effort levels with a high-row fallback, per-model answer-token clamp on the same leg, dependency-only lockfile bump (fast-uri/undici), dependency-only lockfile bump (brace-expansion), POST /v1/systemone decision-model route"

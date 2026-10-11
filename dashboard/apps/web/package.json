@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
-    "preview": "vite preview"
+    "dev": "bun build.ts --dev",
+    "build": "bun build.ts",
+    "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "watch": "bun build.ts --watch"
   },
   "dependencies": {
     "@bench-dashboard/shared": "workspace:*",
@@ -17,8 +17,6 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^7.3.1",
-    "svelte": "^5.46.4",
-    "vite": "^8.0.16"
+    "svelte": "^5.46.4"
   }
 }

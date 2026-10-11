@@ -260,7 +260,7 @@ describe("GET /api/export/scoreboard-capture", () => {
     expect(body.recordCount).toBe(3);
     const smokeCell = body.records.find((r) => r.experimentId === "fixture-v2-smoke-cell");
     expect(smokeCell).toBeDefined();
-    expect((smokeCell?.config as { schema_version: number }).schema_version).toBe(2);
+    expect((smokeCell!.config as { schema_version: number }).schema_version).toBe(2);
     // Reconstructed from `trials`/`metrics` `raw_json`, ordered by `line_index` — matches
     // the original `samples.jsonl`'s 3 `sampling_echo_check` lines exactly (VRAM lives in
     // `config.json`, never `samples.jsonl`, so it is excluded here and reachable instead

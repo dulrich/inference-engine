@@ -62,7 +62,7 @@ describe("readRecordDir", () => {
     if (result.kind !== "v2") throw new Error("unreachable");
     const unknown = result.record.trials.find((t) => t.type === "future_probe_type");
     expect(unknown).toBeDefined();
-    expect((unknown?.raw as { some_future_field: number }).some_future_field).toBe(42);
+    expect((unknown!.raw as { some_future_field: number }).some_future_field).toBe(42);
   });
 
   test("routes timing_round samples to metrics, not trials", async () => {

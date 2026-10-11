@@ -46,6 +46,7 @@
   // comment on why this isn't split into two effects (a second effect reading
   // `selectedRepo` inside its body would re-track it too and double-fetch).
   $effect(() => {
+    // eslint-disable-next-line no-unused-expressions -- bare read registers the $effect dependency
     refreshToken;
     if (selectedRepo !== null) void loadRows(selectedRepo);
   });

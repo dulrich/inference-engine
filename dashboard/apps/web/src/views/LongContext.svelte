@@ -84,6 +84,7 @@
   // ONE effect tracking both `experiments` and `refreshToken` -- see Runs.svelte's own
   // comment on why this isn't split into two effects.
   $effect(() => {
+    // eslint-disable-next-line no-unused-expressions -- bare read registers the $effect dependency
     refreshToken;
     void loadCurves(experiments);
   });

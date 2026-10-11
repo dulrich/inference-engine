@@ -4,7 +4,7 @@ import { join } from "node:path";
 // computed once at module load from `process.env`, imported everywhere else. No per-field
 // `Bun.env` reads scattered through the codebase.
 //
-// Ports: 4810 (this dashboard API) / 5810 (Vite dev, `apps/web/vite.config.ts`) are the
+// Ports: 4810 (this dashboard API) / 5810 (web dev server, `apps/web/build.ts`) are the
 // SERVICES.md-reserved pair for "Inference Engine (dashboard)" — root plan Public
 // Interfaces. Never 4830/5830 (those are model_scoreboard's).
 

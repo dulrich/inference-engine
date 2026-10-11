@@ -47,7 +47,8 @@ src/                  AppHeader, SurroundControl, PollControl, createPoller,
 boot/surround-boot.js no-flash surround snippet, inlined into each tool's index.html
 ```
 
-The package ships **uncompiled** `.svelte`/`.ts`; the consumer's Vite compiles it.
+The package ships **uncompiled** `.svelte`/`.ts`; the consumer's owned `apps/web/build.ts`
+(`Bun.build` + `svelte/compiler`) compiles it.
 peerDependencies: `svelte ^5`, `lucide-svelte`.
 
 ## Consuming (per tool)
@@ -57,9 +58,9 @@ peerDependencies: `svelte ^5`, `lucide-svelte`.
 2. Web app dependency: `"@fleet-tools/signalworks": "workspace:*"`, **then**
    `bun install` — Bun only materializes the workspace symlink once the dep is listed;
    installing first leaves typecheck failing with "Cannot find module".
-3. Lint: add `packages/signalworks` to the tool's eslint `globalIgnores` — the vendored
-   copy is never hand-edited, and consumer configs don't grant browser globals under
-   `packages/*` (strict `no-undef` fails otherwise).
+3. Lint: add `packages/signalworks` to the tool's `.oxlintrc.json` `ignorePatterns` and
+   `biome.json` `files.includes` (as `!packages/signalworks`) — the vendored copy is never
+   hand-edited, and its Svelte 4 `$:` syntax trips strict `no-undef`.
 4. `main.ts` — import the CSS **before** the tool's own `app.css`:
    ```ts
    import "@fleet-tools/signalworks/css";

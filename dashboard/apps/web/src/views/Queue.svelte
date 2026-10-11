@@ -64,6 +64,7 @@
   }
 
   $effect(() => {
+    // eslint-disable-next-line no-unused-expressions -- bare read registers the $effect dependency
     refreshToken;
     void loadQueue();
   });

@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "files": {
+    "includes": ["**/*.css", "!**/node_modules", "!**/dist", "!**/data", "!**/coverage", "!packages/signalworks"]
+  },
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+  "javascript": { "linter": { "enabled": false } },
+  "json": { "linter": { "enabled": false } },
+  "css": { "linter": { "enabled": true } },
+  "linter": { "enabled": true, "rules": { "recommended": true } }
+}

@@ -13,7 +13,7 @@ RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run --filter '@bench-dashboard/web' build
 
-# ---- prod-deps: production-only dependency tree (no vite/esbuild/svelte-check/etc.) ----
+# ---- prod-deps: production-only dependency tree (no svelte-check/typescript/oxlint/biome/etc.) ----
 FROM oven/bun:1.3 AS prod-deps
 WORKDIR /app
 COPY package.json bun.lock tsconfig.base.json ./

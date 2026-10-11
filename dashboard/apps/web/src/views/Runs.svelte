@@ -54,6 +54,7 @@
   // a double fetch on every `runId` change (a second effect that also reads `runId` inside
   // its body would re-track it too and fire alongside this one).
   $effect(() => {
+    // eslint-disable-next-line no-unused-expressions -- bare read registers the $effect dependency
     refreshToken;
     if (runId !== undefined) {
       void loadDetail(runId);

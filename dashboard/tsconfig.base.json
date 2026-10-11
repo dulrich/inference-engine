@@ -6,6 +6,8 @@
     "lib": ["ES2022", "DOM"],
     "types": ["bun"],
     "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noUncheckedIndexedAccess": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

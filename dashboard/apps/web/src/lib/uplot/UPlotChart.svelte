@@ -44,7 +44,9 @@
   }
 
   $effect(() => {
+    // eslint-disable-next-line no-unused-expressions -- bare read registers the $effect dependency
     data;
+    // eslint-disable-next-line no-unused-expressions -- bare read registers the $effect dependency
     buildOptions;
     build();
     return () => {

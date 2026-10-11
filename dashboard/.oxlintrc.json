@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "env": { "browser": true, "node": true, "es2024": true },
+  "globals": {
+    "Bun": "readonly",
+    "$state": "readonly",
+    "$derived": "readonly",
+    "$effect": "readonly",
+    "$props": "readonly",
+    "$bindable": "readonly",
+    "$inspect": "readonly",
+    "$host": "readonly"
+  },
+  "rules": {
+    "no-explicit-any": "error",
+    "no-empty": "error",
+    "no-undef": "error"
+  },
+  "ignorePatterns": [
+    "node_modules",
+    "apps/*/dist",
+    "packages/*/dist",
+    "coverage",
+    "data",
+    "packages/signalworks"
+  ]
+}

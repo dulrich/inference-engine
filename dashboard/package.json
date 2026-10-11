@@ -14,12 +14,13 @@
     "start": "bun run --filter '@bench-dashboard/api' start",
     "ingest": "bun run --filter '@bench-dashboard/api' ingest",
     "smoke": "bun run --filter '@bench-dashboard/api' smoke",
-    "test": "bun test apps packages scripts",
+    "test": "bun test apps packages/shared scripts",
     "check:recipes": "bun scripts/check-serving-recipes.ts",
-    "lint": "oxlint --deny-warnings && bun scripts/svelte-template-lint.ts && biome lint",
+    "lint": "oxlint --deny-warnings && bun packages/webkit/svelte-template-lint.ts && biome lint",
     "typecheck": "tsc -p packages/shared/tsconfig.json && tsc -p apps/api/tsconfig.json && bun run --filter '@bench-dashboard/web' check",
     "test:theme": "bun packages/signalworks/scripts/check-contrast.mjs --signalworks packages/signalworks/css apps/web/src",
     "design:verify": "bash <code-root>/fleet-tools/signalworks/install.sh --verify --dest .",
+    "webkit:verify": "bash <code-root>/fleet-tools/webkit/install.sh --verify --dest .",
     "test:security": "trivy fs --scanners vuln,misconfig --include-dev-deps --skip-db-update --skip-check-update --exit-code 1 --severity CRITICAL,HIGH ."
   },
   "devDependencies": {

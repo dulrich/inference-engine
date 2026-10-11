@@ -47,6 +47,9 @@ function spaResponse(pathname: string): Response {
   return new Response(Bun.file(filePath), { headers: { "Cache-Control": cacheControl } });
 }
 
+// Unknown /api paths are a JSON 404, never the SPA shell (registered before the fallback).
+app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
+
 // GUARDED registration: with no built web dir (every `bun test` run, an API-only smoke
 // process) the wildcard must not be registered at all, so an unknown `/api/*` path falls
 // through to Hono's 404 instead of being served a nonexistent `index.html`.

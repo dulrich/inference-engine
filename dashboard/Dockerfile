@@ -7,6 +7,7 @@ WORKDIR /app
 COPY package.json bun.lock tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/signalworks/package.json packages/signalworks/
+COPY packages/webkit/package.json packages/webkit/
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 RUN bun install --frozen-lockfile
@@ -19,6 +20,7 @@ WORKDIR /app
 COPY package.json bun.lock tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/signalworks/package.json packages/signalworks/
+COPY packages/webkit/package.json packages/webkit/
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 RUN bun install --frozen-lockfile --production

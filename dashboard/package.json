@@ -16,7 +16,7 @@
     "smoke": "bun run --filter '@bench-dashboard/api' smoke",
     "test": "bun test apps packages/shared scripts",
     "check:recipes": "bun scripts/check-serving-recipes.ts",
-    "lint": "oxlint --deny-warnings && bun packages/webkit/svelte-template-lint.ts && biome lint",
+    "lint": "oxlint --deny-warnings --report-unused-disable-directives && bun packages/webkit/svelte-template-lint.ts && biome lint",
     "typecheck": "tsc -p packages/shared/tsconfig.json && tsc -p apps/api/tsconfig.json && bun run --filter '@bench-dashboard/web' check",
     "test:theme": "bun packages/signalworks/scripts/check-contrast.mjs --signalworks packages/signalworks/css apps/web/src",
     "design:verify": "bash <code-root>/fleet-tools/signalworks/install.sh --verify --dest .",

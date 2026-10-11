@@ -123,7 +123,7 @@ async function readJsonl(path: string): Promise<unknown[]> {
     try {
       return JSON.parse(line) as unknown;
     } catch (error) {
-      throw new Error(`${path}:${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`${path}:${index + 1}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
   });
 }

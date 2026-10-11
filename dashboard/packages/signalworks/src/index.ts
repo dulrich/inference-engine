@@ -14,3 +14,5 @@ export type {
   LiveState,
   LiveStorageLike,
 } from "./createLiveSource";
+export { defaultHomeHrefFor, GATEWAY_CENTER_LABEL } from "./homeHref";
+export type { HomeLocation } from "./homeHref";

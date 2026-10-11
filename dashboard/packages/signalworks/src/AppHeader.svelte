@@ -6,6 +6,7 @@
   import { House } from "lucide-svelte";
   import type { ComponentType } from "svelte";
   import SurroundControl from "./SurroundControl.svelte";
+  import { defaultHomeHrefFor } from "./homeHref";
 
   /** Tool name — the small-caps lower line (e.g. "Subscription Tracker"). */
   export let tool: string;
@@ -23,8 +24,9 @@
   /** Pre-rename surround keys, migrated then removed by SurroundControl. */
   export let legacySurroundKeys: readonly string[] = [];
   /**
-   * Command Center link. Default: VITE_COMMAND_CENTER_URL, else the current host
-   * on :4730. Pass null to suppress the link entirely.
+   * Command Center link. Default: VITE_COMMAND_CENTER_URL; else, when served through
+   * the TLS gateway (no explicit port, `<tool>.<parent>` name), `<protocol>//center.<parent>/`;
+   * else the current host on :4730. Pass null to suppress the link entirely.
    */
   export let homeHref: string | null | undefined = undefined;
 
@@ -32,7 +34,7 @@
     const env = (import.meta as { env?: Record<string, string | undefined> }).env;
     const fromEnv = env?.VITE_COMMAND_CENTER_URL;
     if (fromEnv) return fromEnv;
-    return `${location.protocol}//${location.hostname}:4730/`;
+    return defaultHomeHrefFor(location);
   }
 
   $: resolvedHomeHref = homeHref === undefined ? defaultHomeHref() : homeHref;

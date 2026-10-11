@@ -93,7 +93,8 @@ peerDependencies: `svelte ^5`, `lucide-svelte`.
   normal brand mark and must match the tool's Command Center card + favicon (the
   tool-glyph convention); `glyph` (serif text) is the exception; `icon` wins when both
   are given. `homeHref` defaults to `VITE_COMMAND_CENTER_URL`, else
-  `location`-derived `:4730`; pass `null` to suppress the home link. Slots: `nav`
+  `location`-derived: through the gateway (no port, `<tool>.<parent>`) →
+  `https://center.<parent>/`, otherwise `:4730` (`defaultHomeHrefFor`); pass `null` to suppress the home link. Slots: `nav`
   (use `<nav class="sw-nav">` for styled links), `poll`.
 - **SurroundControl** `{appId, legacyKeys=[]}` — CC-06 Moon/Contrast/Sun; key
   `${appId}.surround.v1`; migrates then removes `legacyKeys`. Rendered by AppHeader —

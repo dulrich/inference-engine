@@ -36,7 +36,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Optional
+from typing import Any, ClassVar
 
 BAKEOFF_DIR = Path(__file__).resolve().parent.parent
 if str(BAKEOFF_DIR) not in sys.path:
@@ -105,7 +105,7 @@ def _gguf_string(value: str) -> bytes:
 
 def _build_gguf(
     metadata: "list[tuple[str, int, object]]",
-    tensors: "Optional[list[tuple[str, tuple[int, ...], int]]]" = None,
+    tensors: "list[tuple[str, tuple[int, ...], int]] | None" = None,
 ) -> bytes:
     """Synthesizes a minimal, spec-shaped GGUF header + KV block + tensor-info directory.
 
@@ -301,7 +301,7 @@ class PlacementBehaviorTests(unittest.TestCase):
 
     # `ClassVar` is the accurate annotation for a test-class constant table here, not a
     # workaround -- see `llama/bakeoff/AGENTS.md` "Known-false-positive shapes".
-    METADATA: ClassVar[Dict[str, Any]] = {"architecture": "qwen35moe", "block_count": 4}
+    METADATA: ClassVar[dict[str, Any]] = {"architecture": "qwen35moe", "block_count": 4}
 
     def _tensors(self):
         return [

@@ -24,13 +24,13 @@ from __future__ import annotations
 
 import re
 import subprocess
-from datetime import datetime, timezone
-from typing import Callable, Iterable, Optional
+from collections.abc import Callable, Iterable
+from datetime import UTC, datetime
 
 HANG_SIGNATURE_RE = re.compile(r"MES might be in unrecoverable state|Failed to evict process queues")
 
 
-def detect_hang_signature(lines: Iterable[str]) -> Optional[str]:
+def detect_hang_signature(lines: Iterable[str]) -> str | None:
     """Scans `lines` (any iterable of decoded kernel-log lines -- a finite test list, or a real
     live source) and returns the first line matching the hang signature, or `None` if the
     iterable is exhausted with no match. Pure function, no I/O."""
@@ -40,7 +40,7 @@ def detect_hang_signature(lines: Iterable[str]) -> Optional[str]:
     return None
 
 
-def poll_journal_for_hang(since_iso: str, timeout: float = 5.0) -> Optional[str]:
+def poll_journal_for_hang(since_iso: str, timeout: float = 5.0) -> str | None:
     """LIVE: `journalctl -k --since <since_iso>` (bounded, not `-f`) -- `run_queue`'s per-cell
     `hang_check_fn` calling this repeatedly achieves the same never-miss-a-line property as a
     persistent `-f` follower (each poll's `--since` covers everything since the last check)
@@ -59,16 +59,16 @@ def poll_journal_for_hang(since_iso: str, timeout: float = 5.0) -> Optional[str]
     return detect_hang_signature(result.stdout.splitlines())
 
 
-def make_live_hang_check_fn() -> Callable[[], Optional[str]]:
+def make_live_hang_check_fn() -> Callable[[], str | None]:
     """The real per-cell hang check for the CLI path. `run_queue`'s `hang_check_fn` default is a
     no-op (correct for tests); `cmd_run` wires this in for live runs. Each call polls
     `journalctl -k` since the previous call (first call: since this factory was built), so
     repeated per-cell polling never misses a line."""
-    state = {"since": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")}
+    state = {"since": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")}
 
-    def _check() -> Optional[str]:
+    def _check() -> str | None:
         since = state["since"]
-        state["since"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        state["since"] = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
         return poll_journal_for_hang(since)
 
     return _check

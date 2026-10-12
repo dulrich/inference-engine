@@ -79,9 +79,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 # `sweep` and the `control_*` modules live beside this file with no package `__init__.py` under
 # `llama/` -- see batch.py's own comment on this exact gotcha. Plain top-level imports work
@@ -189,16 +190,16 @@ __all__ = [
 
 def write_result(
     paths: Paths, invocation_id: str, stage: str, *,
-    pid: Optional[int] = None, pgid: Optional[int] = None,
-    pid_starttime: Optional[str] = None, boot_id: Optional[str] = None,
-    run_exit: Optional[int] = None, verify_exit: Optional[int] = None,
-    restart_failed: Optional[str] = None,
-    ended_at: Optional[str] = None, now_fn: Optional[Callable[[], datetime]] = None,
-) -> Dict[str, Any]:
+    pid: int | None = None, pgid: int | None = None,
+    pid_starttime: str | None = None, boot_id: str | None = None,
+    run_exit: int | None = None, verify_exit: int | None = None,
+    restart_failed: str | None = None,
+    ended_at: str | None = None, now_fn: Callable[[], datetime] | None = None,
+) -> dict[str, Any]:
     """`results/<inv-id>.json` -- wrapper-owned evidence channel, stage advances via repeated
     calls (each merges onto the existing file rather than replacing it, so identity fields
     written at `stage:"wrapper-started"` survive every later advance)."""
-    now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+    now_fn = now_fn or (lambda: datetime.now(UTC))
     path = paths.results_dir / f"{invocation_id}.json"
     existing = read_json_safe(path) or {"invocation_id": invocation_id}
     existing["stage"] = stage
@@ -216,12 +217,12 @@ def write_result(
 
 def write_live(
     paths: Paths, invocation_id: str, request_id: str, queue_stem: str,
-    pid: int, pgid: int, pid_starttime: Optional[str], boot_id: str,
-    started_at: Optional[str] = None, now_fn: Optional[Callable[[], datetime]] = None,
-) -> Dict[str, Any]:
+    pid: int, pgid: int, pid_starttime: str | None, boot_id: str,
+    started_at: str | None = None, now_fn: Callable[[], datetime] | None = None,
+) -> dict[str, Any]:
     """Publishes `live.json` in full (wrapper step 5) -- always `phase:"running"` at publish
     time; use `set_live_phase` to advance it afterward (step 7's `"verifying"`)."""
-    now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+    now_fn = now_fn or (lambda: datetime.now(UTC))
     body = {
         "invocation_id": invocation_id, "request_id": request_id, "queue_stem": queue_stem,
         "pid": pid, "pgid": pgid, "pid_starttime": pid_starttime, "boot_id": boot_id,
@@ -231,7 +232,7 @@ def write_live(
     return body
 
 
-def set_live_phase(paths: Paths, phase: str) -> Optional[Dict[str, Any]]:
+def set_live_phase(paths: Paths, phase: str) -> dict[str, Any] | None:
     existing = read_json_safe(paths.live_path)
     if existing is None:
         return None
@@ -249,9 +250,9 @@ def clear_live(paths: Paths) -> None:
 
 def orphan_recover(
     port: int, container: str,
-    find_pid_fn: Optional[Callable[..., Optional[int]]] = None,
-    teardown_fn: Optional[Callable[..., Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
+    find_pid_fn: Callable[..., int | None] | None = None,
+    teardown_fn: Callable[..., dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Wrapper step 4's orphan-workload recovery: detect a surviving `llama-server` from a prior
     crashed run (via `sweep.find_host_pid_by_port`) and tear it down (`sweep.
     teardown_scratch_server`, host `os.kill`) before any new run is admitted against an uncleared
@@ -427,7 +428,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
     parser = build_arg_parser()

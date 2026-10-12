@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 
 from cell_model import ResolvedCell
 from queue_file import DEFAULT_REQUEST_TIMEOUT_S, QueueValidationError
@@ -47,7 +48,7 @@ CORRECTNESS_FAILURE_REASONS = ("degenerate", "needle_failure")
 
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def default_state_path(queue_path: Path) -> Path:
@@ -57,7 +58,7 @@ def default_state_path(queue_path: Path) -> Path:
 def init_state(
     resolved_cells: Sequence[ResolvedCell],
     request_timeout_s: int = DEFAULT_REQUEST_TIMEOUT_S,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "queue_state": QUEUE_RUNNING,
         "created_at": utc_now_iso(),
@@ -81,14 +82,14 @@ def init_state(
     }
 
 
-def load_state(state_path: Path) -> Optional[Dict[str, Any]]:
+def load_state(state_path: Path) -> dict[str, Any] | None:
     if not state_path.exists():
         return None
-    with open(state_path, "r", encoding="utf-8") as f:
+    with open(state_path, encoding="utf-8") as f:
         return json.load(f)
 
 
-def save_state(state_path: Path, state: Dict[str, Any]) -> None:
+def save_state(state_path: Path, state: dict[str, Any]) -> None:
     """Atomic write (`os.replace` after a same-directory temp file) -- a crash mid-write never
     leaves a truncated/corrupt state file behind for the next invocation to trip over."""
     state["updated_at"] = utc_now_iso()
@@ -99,7 +100,7 @@ def save_state(state_path: Path, state: Dict[str, Any]) -> None:
     os.replace(tmp_path, state_path)
 
 
-def apply_interrupted_rule(state: Dict[str, Any]) -> List[str]:
+def apply_interrupted_rule(state: dict[str, Any]) -> list[str]:
     """A `running` cell found at startup means the previous invocation crashed mid-cell (a clean
     exit always leaves a cell `completed`/`failed`/`aborted-hang`/`skipped-propagated`, never
     `running`) -- mark it `failed` with reason `interrupted`, never silently re-run it. Returns
@@ -113,7 +114,7 @@ def apply_interrupted_rule(state: Dict[str, Any]) -> List[str]:
     return changed
 
 
-def re_arm_state(state: Dict[str, Any]) -> None:
+def re_arm_state(state: dict[str, Any]) -> None:
     """`--re-arm`: every cell not already `completed` goes back to `pending` (this includes
     `failed`, `skipped-propagated`, and `aborted-hang` cells -- a full retry of everything that
     didn't succeed), and the queue state resets to `running`. A `completed` cell's record already
@@ -128,8 +129,8 @@ def re_arm_state(state: Dict[str, Any]) -> None:
 
 
 def re_arm_cells(
-    state: Dict[str, Any], names: List[str], resolved_cells: Sequence[ResolvedCell]
-) -> List[str]:
+    state: dict[str, Any], names: list[str], resolved_cells: Sequence[ResolvedCell]
+) -> list[str]:
     """`--re-arm-cell <cell_id-or-alias>` (WP-6; WP-5 punt): the targeted, per-cell counterpart
     to the all-or-nothing `re_arm_state` -- exactly the surgical state-file hand-edit WP-5's
     attended run performed three times, made a first-class knob. Each named cell (matched by
@@ -156,9 +157,9 @@ def re_arm_cells(
 
 def propagate_skips(
     resolved_cells: Sequence[ResolvedCell],
-    state: Dict[str, Any],
+    state: dict[str, Any],
     failing_cell_id: str,
-) -> List[str]:
+) -> list[str]:
     """Skip propagation (audit E2, pinned): when `failing_cell_id`'s KV arm is quantized
     (`-ctk`/`-ctv` != f16) and it failed for a correctness reason, mark every LATER `pending` cell
     (queue order) with the same `(queue model id, ctk, ctv)` and a larger `-c` as

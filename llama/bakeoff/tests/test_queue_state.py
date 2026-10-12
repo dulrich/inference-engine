@@ -10,7 +10,7 @@ are always fakes."""
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 BAKEOFF_DIR = Path(__file__).resolve().parent.parent
@@ -222,7 +222,7 @@ class TestWp6QueueStateMismatch(unittest.TestCase):
             batch.run_queue(
                 queue_path,
                 scratch_server_fn=fake_scratch_server_factory(),
-                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                 vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                 vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
             )
@@ -234,7 +234,7 @@ class TestWp6QueueStateMismatch(unittest.TestCase):
                     edited_path,
                     re_arm=True,  # even an explicit re-arm never bridges a mismatched queue
                     scratch_server_fn=fake_scratch_server_factory(),
-                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                     vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                     vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
                 )
@@ -260,7 +260,7 @@ class TestWpBOldStateWithoutAlias(unittest.TestCase):
             result = batch.run_queue(
                 queue_path,
                 scratch_server_fn=fake_scratch_server_factory(),
-                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                 vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                 vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
             )
@@ -292,7 +292,7 @@ class TestWp1RequestTimeoutSStateSnapshot(unittest.TestCase):
             batch.run_queue(
                 queue_path,
                 scratch_server_fn=fake_scratch_server_factory(),
-                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                 vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                 vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
             )
@@ -303,7 +303,7 @@ class TestWp1RequestTimeoutSStateSnapshot(unittest.TestCase):
                     edited_path,
                     re_arm=True,  # even an explicit re-arm never bridges a mismatched timeout
                     scratch_server_fn=fake_scratch_server_factory(),
-                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                     vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                     vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
                 )
@@ -325,7 +325,7 @@ class TestWp1RequestTimeoutSStateSnapshot(unittest.TestCase):
             result = batch.run_queue(
                 queue_path,
                 scratch_server_fn=fake_scratch_server_factory(),
-                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                 vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                 vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
             )

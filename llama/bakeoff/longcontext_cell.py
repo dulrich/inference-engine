@@ -34,7 +34,8 @@ from __future__ import annotations
 
 import hashlib
 import random
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence
+from collections.abc import Callable, Sequence
+from typing import Any, NamedTuple
 
 import run_harness
 from longcontext_classifier import (
@@ -56,16 +57,16 @@ from longcontext_tasks import POSITION_FRACTIONS, TASKS, Task
 # Position-sweep + n-trial cell driver
 # ---------------------------------------------------------------------------------------------
 
-RequestFn = Callable[[str, int, Dict[str, Optional[float]]], Dict[str, Any]]
+RequestFn = Callable[[str, int, dict[str, float | None]], dict[str, Any]]
 
 
 class CellResult(NamedTuple):
-    samples: List[Dict[str, Any]]
-    completions: List[Dict[str, Any]]
-    summary: Optional[Dict[str, Any]]
+    samples: list[dict[str, Any]]
+    completions: list[dict[str, Any]]
+    summary: dict[str, Any] | None
 
 
-def _require_pinned_sampling(sampling_arm: Optional[str], sampling_payload: Optional[Dict[str, Any]]) -> None:
+def _require_pinned_sampling(sampling_arm: str | None, sampling_payload: dict[str, Any] | None) -> None:
     """Doc Req 3 / plan Decisions locked, enforced mechanically, not just documented: every
     correctness-bearing request this module drives must carry an explicit, filled sampling
     payload and a named arm. Raises `ValueError` rather than silently sending an unpinned
@@ -116,17 +117,17 @@ class HaystackOverBudgetError(RuntimeError):
 class HaystackFit(NamedTuple):
     haystack: HaystackAssembly
     rng: random.Random
-    measured_tokens: Optional[int]
+    measured_tokens: int | None
     shrink_attempts: int
 
 
 def _assemble_haystack_fit(
     haystack_seed: int,
     target_tokens: int,
-    manifest: Optional[Dict[str, Any]],
-    chars_per_token: Optional[float],
-    tokenize_fn: Optional[Callable[[str], int]],
-    token_budget: Optional[int],
+    manifest: dict[str, Any] | None,
+    chars_per_token: float | None,
+    tokenize_fn: Callable[[str], int] | None,
+    token_budget: int | None,
 ) -> HaystackFit:
     """Assembles one trial's haystack and, when `tokenize_fn`/`token_budget` are both supplied,
     measures it against the live server's own tokenizer and deterministically shrinks it until it
@@ -185,15 +186,15 @@ def run_cell(
     position_fraction: float,
     target_tokens: int,
     sampling_arm: str,
-    sampling_payload: Dict[str, Any],
+    sampling_payload: dict[str, Any],
     n_trials: int = MIN_TRIALS_FOR_WILSON,
     max_tokens: int = 256,
-    manifest: Optional[Dict[str, Any]] = None,
+    manifest: dict[str, Any] | None = None,
     haystack_structure: str = HAYSTACK_STRUCTURE_COHERENT,
     wilson_sided: str = "two",
-    chars_per_token: Optional[float] = None,
-    tokenize_fn: Optional[Callable[[str], int]] = None,
-    token_budget: Optional[int] = None,
+    chars_per_token: float | None = None,
+    tokenize_fn: Callable[[str], int] | None = None,
+    token_budget: int | None = None,
 ) -> CellResult:
     """Runs one (task, position_fraction) cell for `n_trials` distinct `haystack_seed`s,
     emitting schema-v2 `longcontext_probe` samples/completions and (for `n_trials >=
@@ -240,8 +241,8 @@ def run_cell(
     manifest = manifest or load_corpus_manifest()
     corpus_manifest_id = manifest.get("corpus_id")
 
-    samples: List[Dict[str, Any]] = []
-    completions: List[Dict[str, Any]] = []
+    samples: list[dict[str, Any]] = []
+    completions: list[dict[str, Any]] = []
 
     for trial_index in range(n_trials):
         haystack_seed = derive_trial_seed(cell_id, trial_index, "haystack")
@@ -376,7 +377,7 @@ def run_cell(
         samples.append(sample)
         completions.append(completion)
 
-    summary: Optional[Dict[str, Any]] = None
+    summary: dict[str, Any] | None = None
     if len(samples) >= MIN_TRIALS_FOR_WILSON:
         # Failure convention (this WP's own call, documented here and in the report): a trial
         # "fails" for this summary whenever its classifier_verdict is anything other than
@@ -400,11 +401,11 @@ def run_position_sweep(
     cell_id_prefix: str,
     target_tokens: int,
     sampling_arm: str,
-    sampling_payload: Dict[str, Any],
+    sampling_payload: dict[str, Any],
     positions: Sequence[float] = POSITION_FRACTIONS,
     n_trials: int = MIN_TRIALS_FOR_WILSON,
     **run_cell_kwargs: Any,
-) -> Dict[float, CellResult]:
+) -> dict[float, CellResult]:
     """Runs `task` at every position in `positions` (default `POSITION_FRACTIONS`, the plan's
     {0.10, 0.45, 0.85} first-class cells) as INDEPENDENT cells -- returns a dict keyed by
     `position_fraction`, each value a standalone `CellResult`. Never merges, sums, or averages
@@ -412,7 +413,7 @@ def run_position_sweep(
     or tasks"); a caller that wants a rollup number is doing something this function
     deliberately does not do.
     """
-    results: Dict[float, CellResult] = {}
+    results: dict[float, CellResult] = {}
     for position_fraction in positions:
         cell_id = f"{cell_id_prefix}-pos{position_fraction:.2f}"
         results[position_fraction] = run_cell(
@@ -440,7 +441,7 @@ def build_live_request_fn(base_url: str, alias: str, timeout: float = 300) -> Re
     A thin closure only -- no battery logic lives here. Calling the RETURNED function performs a
     real HTTP request; calling THIS function does not (building the closure is pure)."""
 
-    def request_fn(prompt: str, max_tokens: int, sampling: Dict[str, Any]) -> Dict[str, Any]:
+    def request_fn(prompt: str, max_tokens: int, sampling: dict[str, Any]) -> dict[str, Any]:
         return run_harness._execute_streaming_request(
             base_url,
             alias,
@@ -462,19 +463,19 @@ def run_live_battery(
     cell_id_prefix: str,
     target_tokens: int,
     sampling_arm: str,
-    sampling_payload: Dict[str, Any],
+    sampling_payload: dict[str, Any],
     n_trials: int = MIN_TRIALS_FOR_WILSON,
-    tasks: Optional[Dict[str, Task]] = None,
+    tasks: dict[str, Task] | None = None,
     positions: Sequence[float] = POSITION_FRACTIONS,
     max_tokens: int = 256,
     timeout: float = 300,
-    manifest: Optional[Dict[str, Any]] = None,
-    request_fn: Optional[RequestFn] = None,
-    chars_per_token: Optional[float] = None,
-    max_tokens_by_task: Optional[Dict[str, int]] = None,
-    tokenize_fn: Optional[Callable[[str], int]] = None,
-    token_budget: Optional[int] = None,
-) -> Dict[str, Dict[float, CellResult]]:
+    manifest: dict[str, Any] | None = None,
+    request_fn: RequestFn | None = None,
+    chars_per_token: float | None = None,
+    max_tokens_by_task: dict[str, int] | None = None,
+    tokenize_fn: Callable[[str], int] | None = None,
+    token_budget: int | None = None,
+) -> dict[str, dict[float, CellResult]]:
     """The live entry point: drives the FULL battery -- every task in `tasks` (default `TASKS`,
     all three battery tasks) x every position in `positions` (default `POSITION_FRACTIONS`) x
     `n_trials` -- against one live scratch server, matching the plan's "position sweep x tasks x
@@ -504,7 +505,7 @@ def run_live_battery(
     """
     effective_request_fn = request_fn or build_live_request_fn(base_url, alias, timeout=timeout)
     tasks = tasks or TASKS
-    results: Dict[str, Dict[float, CellResult]] = {}
+    results: dict[str, dict[float, CellResult]] = {}
     for task_name, task in tasks.items():
         # WP-6 (WP-5 punt): a per-task response-token override -- the verbose production arm
         # (temp 1.0) needs more than the flat 256-token cap to enumerate multi_needle's several

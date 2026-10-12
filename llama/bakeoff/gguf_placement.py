@@ -21,7 +21,7 @@ a CPU-resident tensor is pinned or lazy.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, NamedTuple
 
 from gguf_reader import GIB, TensorInfo
 
@@ -73,7 +73,7 @@ class PlacementBytes(NamedTuple):
     lazy_bytes: int
 
 
-def _parse_ngl_full_offload(ngl: Any, block_count: Optional[int]) -> Optional[bool]:
+def _parse_ngl_full_offload(ngl: Any, block_count: int | None) -> bool | None:
     """`True` when `-ngl`'s value means "every layer's weights start out GPU-resident" (this
     repo's own `99` convention, the literal string `"all"`, or an explicit int >=
     `block_count`); `False` for a genuine partial-layer offload (a smaller explicit int) --
@@ -98,7 +98,7 @@ def _parse_ngl_full_offload(ngl: Any, block_count: Optional[int]) -> Optional[bo
     return ngl >= block_count
 
 
-def _ot_cpu_patterns(value: Any) -> Optional[List[str]]:
+def _ot_cpu_patterns(value: Any) -> list[str] | None:
     """Parses an `-ot` flag value -- a single string (optionally comma-joining several
     `<pattern>=<target>` entries) or a JSON list of such strings -- into the list of regex
     patterns that target `=CPU`. `[]` if the flag is absent/empty (a no-op, not an error). `None`
@@ -108,7 +108,7 @@ def _ot_cpu_patterns(value: Any) -> Optional[List[str]]:
     if not value:
         return []
     entries = value if isinstance(value, list) else str(value).split(",")
-    patterns: List[str] = []
+    patterns: list[str] = []
     for entry in entries:
         entry = entry.strip()
         if not entry:
@@ -154,10 +154,10 @@ _TOKEN_EMBD_TENSOR_NAME = "token_embd.weight"
 
 
 def derive_placement_bytes(
-    tensor_infos: List[TensorInfo],
-    server_flags: Dict[str, Any],
-    metadata: Dict[str, Any],
-) -> Optional[PlacementBytes]:
+    tensor_infos: list[TensorInfo],
+    server_flags: dict[str, Any],
+    metadata: dict[str, Any],
+) -> PlacementBytes | None:
     """Derives GPU-resident / CPU-resident-pinned / CPU-resident-lazy weight byte totals from a
     model's tensor directory and its normalized `server_flags`. `metadata` here is the
     `gguf_attention_geometry`-SHAPED dict (top-level `architecture`/`block_count` keys) that

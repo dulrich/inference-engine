@@ -18,7 +18,7 @@ touching) defaults in any test that imports from this module. The one real seam 
 
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 BAKEOFF_DIR = Path(__file__).resolve().parent.parent
@@ -65,7 +65,7 @@ def _write_request(paths, request_id, action, requested_at="2026-08-24T00:00:00Z
 
 def _run_dispatch(paths, queues_dir, **overrides):
     kwargs = dict(
-        now_fn=_fixed_now(datetime(2026, 8, 24, 0, 5, 0, tzinfo=timezone.utc)),
+        now_fn=_fixed_now(datetime(2026, 8, 24, 0, 5, 0, tzinfo=UTC)),
         boot_id_fn=lambda: BOOT_ID,
         pgid_alive_fn=_never_alive,
         pid_alive_fn=lambda pid, st: False,

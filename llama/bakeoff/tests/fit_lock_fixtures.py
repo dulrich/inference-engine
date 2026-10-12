@@ -12,7 +12,7 @@ module docstring for the campaign history (which queue/WP extended the table whe
 these numbers are independently hand-checkable rather than derived from the implementation.
 """
 
-from typing import List, NamedTuple
+from typing import NamedTuple
 
 
 class GoldenCell(NamedTuple):
@@ -23,7 +23,7 @@ class GoldenCell(NamedTuple):
 
 class GoldenQueue(NamedTuple):
     vram_profile: str
-    cells: List[GoldenCell]
+    cells: list[GoldenCell]
 
 
 GOLDEN = {

@@ -26,8 +26,9 @@ from __future__ import annotations
 import functools
 import json
 import random
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Any, NamedTuple
 
 # `run_harness` lives beside this file with no package `__init__.py` under `llama/` -- a plain
 # top-level import works whenever the importer has already put this directory on `sys.path`.
@@ -46,11 +47,11 @@ MANIFEST_PATH = CORPUS_DIR / "manifest.json"
 # different value through `run_cell(..., haystack_structure=...)`, not require a rewrite here).
 HAYSTACK_STRUCTURE_COHERENT = "coherent"
 
-_BOOK_TEXT_CACHE: Dict[str, str] = {}
+_BOOK_TEXT_CACHE: dict[str, str] = {}
 
 
 @functools.lru_cache(maxsize=1)
-def load_corpus_manifest(path: Optional[str] = None) -> Dict[str, Any]:
+def load_corpus_manifest(path: str | None = None) -> dict[str, Any]:
     """Loads and caches `corpus/manifest.json` (module-level cache -- the manifest is static
     for the process lifetime; tests that need a different manifest pass one explicitly to the
     functions below instead of mutating this cache)."""
@@ -59,7 +60,7 @@ def load_corpus_manifest(path: Optional[str] = None) -> Dict[str, Any]:
         return json.load(f)
 
 
-def load_book_text(book_id: str, manifest: Optional[Dict[str, Any]] = None) -> str:
+def load_book_text(book_id: str, manifest: dict[str, Any] | None = None) -> str:
     """Reads one corpus book's full text by its manifest `id`, cached by file name (a book's
     text is immutable for the process lifetime -- re-reading the same file on every trial would
     be wasteful for a near-ceiling sweep with dozens of trials)."""
@@ -81,16 +82,16 @@ def load_book_text(book_id: str, manifest: Optional[Dict[str, Any]] = None) -> s
 
 class HaystackAssembly(NamedTuple):
     text: str
-    book_ids: Tuple[str, ...]
+    book_ids: tuple[str, ...]
     char_count: int
 
 
 def _select_contiguous_passages(
-    book_texts: Dict[str, str],
+    book_texts: dict[str, str],
     book_order: Sequence[str],
     target_chars: int,
     rng: random.Random,
-) -> Tuple[str, Tuple[str, ...]]:
+) -> tuple[str, tuple[str, ...]]:
     """Core, disk-free chunk-selection algorithm (separated from `assemble_haystack` so it's
     directly unit-testable against small synthetic texts, without needing the real corpus files
     on disk for every test).
@@ -130,8 +131,8 @@ def _select_contiguous_passages(
     """
     if target_chars <= 0 or not book_order:
         return "", ()
-    parts: List[str] = []
-    used: List[str] = []
+    parts: list[str] = []
+    used: list[str] = []
     total = 0
     pass_num = 0
     # Guards against an unreachable target (e.g. every book exhausted at zero remaining length)
@@ -173,8 +174,8 @@ def _select_contiguous_passages(
 def assemble_haystack(
     rng: random.Random,
     target_tokens: int,
-    manifest: Optional[Dict[str, Any]] = None,
-    chars_per_token: Optional[float] = None,
+    manifest: dict[str, Any] | None = None,
+    chars_per_token: float | None = None,
 ) -> HaystackAssembly:
     """Deterministic, seeded haystack assembly from the coherent corpus.
 
@@ -221,7 +222,7 @@ def _snap_to_sentence_boundary(text: str, fraction: float) -> int:
     return boundary + 2 if boundary != -1 else insert_at
 
 
-def insert_at_fraction(haystack_text: str, fraction: float, injected: str) -> Tuple[str, int]:
+def insert_at_fraction(haystack_text: str, fraction: float, injected: str) -> tuple[str, int]:
     """Inserts `injected` at the sentence boundary at-or-after `fraction` of `haystack_text`'s
     length. Returns `(assembled_text, insert_char_offset)`."""
     boundary = _snap_to_sentence_boundary(haystack_text, fraction)
@@ -230,7 +231,7 @@ def insert_at_fraction(haystack_text: str, fraction: float, injected: str) -> Tu
 
 def insert_multiple(
     haystack_text: str, fractions: Sequence[float], injections: Sequence[str]
-) -> Tuple[str, List[int]]:
+) -> tuple[str, list[int]]:
     """Inserts multiple snippets at their respective fractions, each snapped to its own sentence
     boundary computed against the ORIGINAL (pre-insertion) text. `fractions` MUST be given in
     ascending order (raises `ValueError` otherwise) -- `.find(". ", insert_at)` with a

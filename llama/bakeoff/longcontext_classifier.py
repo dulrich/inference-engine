@@ -30,7 +30,8 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Any, NamedTuple
 
 # ---------------------------------------------------------------------------------------------
 # Degeneracy classifier (doc Req 6: tag SHAPE, not just pass/fail)
@@ -72,14 +73,14 @@ VERDICTS = ("correct", "wrong", "degenerate", "truncated(benign)")
 DEGENERATE_SHAPES = ("incoherent", "repetition", "special_token_spam")
 
 
-def _tokenize(text: str) -> List[str]:
+def _tokenize(text: str) -> list[str]:
     return _TOKEN_RE.findall((text or "").lower())
 
 
 def _max_ngram_repetition_rate(tokens: Sequence[str], n: int) -> float:
     if len(tokens) < n:
         return 0.0
-    counts: Dict[Tuple[str, ...], int] = {}
+    counts: dict[tuple[str, ...], int] = {}
     grams = 0
     for i in range(len(tokens) - n + 1):
         gram = tuple(tokens[i:i + n])
@@ -96,11 +97,11 @@ def _distinct_ratio(tokens: Sequence[str], n: int) -> float:
 
 
 def compute_flags(
-    reasoning_text: Optional[str],
-    content_text: Optional[str],
-    finish_reason: Optional[str],
-    haystack_text: Optional[str] = None,
-) -> Dict[str, Any]:
+    reasoning_text: str | None,
+    content_text: str | None,
+    finish_reason: str | None,
+    haystack_text: str | None = None,
+) -> dict[str, Any]:
     """Automated flags over the full `reasoning_text` + `content_text` stream (plan classifier
     spec, restated in the WP-3 brief): max n-gram repetition rate, distinct-2 ratio,
     haystack-vocabulary overlap, content-channel-never-reached, budget-exhausted-in-reasoning,
@@ -128,7 +129,7 @@ def compute_flags(
         finish_reason == "length" and content_channel_never_reached
     )
 
-    haystack_vocabulary_overlap: Optional[float] = None
+    haystack_vocabulary_overlap: float | None = None
     if haystack_text:
         haystack_words = set(_tokenize(haystack_text))
         content_tokens = {w for w in tokens if w not in CORE_FUNCTION_WORDS}
@@ -150,16 +151,16 @@ def compute_flags(
 
 class ClassifierResult(NamedTuple):
     verdict: str
-    shape: Optional[str]
-    flags: Dict[str, Any]
+    shape: str | None
+    flags: dict[str, Any]
 
 
 def classify_trial(
-    reasoning_text: Optional[str],
-    content_text: Optional[str],
-    finish_reason: Optional[str],
-    correct: Optional[bool] = None,
-    haystack_text: Optional[str] = None,
+    reasoning_text: str | None,
+    content_text: str | None,
+    finish_reason: str | None,
+    correct: bool | None = None,
+    haystack_text: str | None = None,
 ) -> ClassifierResult:
     """Verdict per trial: `correct / wrong / degenerate / truncated(benign)` (plan-pinned
     taxonomy), with a shape tag (`DEGENERATE_SHAPES`) whenever the verdict is `degenerate` (doc
@@ -239,7 +240,7 @@ def classify_trial(
 # MUST state which convention it's using at every use site (plan Statistics pin) -- this
 # module enforces that by making `sided` a required-with-no-default parameter, never silently
 # defaulting to one or the other.
-_Z_TABLE: Dict[Tuple[str, float], float] = {
+_Z_TABLE: dict[tuple[str, float], float] = {
     ("two", 0.95): 1.959963985,
     ("one", 0.95): 1.644853627,
 }
@@ -247,7 +248,7 @@ _Z_TABLE: Dict[Tuple[str, float], float] = {
 MIN_TRIALS_FOR_WILSON = 10  # plan's n>=10-per-cell statistics floor
 
 
-def wilson_interval(k: int, n: int, sided: str, confidence: float = 0.95) -> Dict[str, Any]:
+def wilson_interval(k: int, n: int, sided: str, confidence: float = 0.95) -> dict[str, Any]:
     """95% Wilson score interval on a failure (or any binomial) rate `k / n`.
 
     `sided` is REQUIRED (`"two"` or `"one"`) -- no default, per the plan's binding "state the
@@ -308,5 +309,5 @@ def derive_trial_seed(cell_id: str, trial_index: int, purpose: str) -> int:
     function of its three inputs -- re-running the same cell reproduces the identical trial
     sequence, never a source of new randomness across runs.
     """
-    digest = hashlib.sha256(f"{cell_id}:{trial_index}:{purpose}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{cell_id}:{trial_index}:{purpose}".encode()).hexdigest()
     return int(digest[:8], 16) & 0x7FFFFFFF

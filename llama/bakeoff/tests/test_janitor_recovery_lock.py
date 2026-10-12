@@ -14,7 +14,7 @@ import json
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
@@ -35,7 +35,7 @@ import control_dispatcher as cd  # noqa: E402
 import control_phases  # noqa: E402
 from control_store import flock_nonblocking_acquire, flock_release  # noqa: E402
 
-NOW = datetime(2026, 8, 24, 0, 10, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 24, 0, 10, 0, tzinfo=UTC)
 DEFERRED = "recovery-deferred: cron.lock busy (req-inv)"
 
 

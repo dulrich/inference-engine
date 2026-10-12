@@ -18,8 +18,9 @@ pgid numbers all recur across boots, so without the boot id they are not identit
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 __all__ = [
     "default_pid_alive",
@@ -33,11 +34,11 @@ __all__ = [
 
 
 def read_boot_id(path: str = "/proc/sys/kernel/random/boot_id") -> str:
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return f.read().strip()
 
 
-def parse_stat_fields(text: str) -> Optional[List[str]]:
+def parse_stat_fields(text: str) -> list[str] | None:
     """`/proc/<pid>/stat` is `pid (comm) state ppid pgrp ...` -- `comm` can itself contain spaces
     or parentheses, so field-splitting must anchor on the LAST `)` rather than naive whitespace
     splitting from the start."""
@@ -48,7 +49,7 @@ def parse_stat_fields(text: str) -> Optional[List[str]]:
     return rest if rest else None
 
 
-def read_pid_starttime(pid: int) -> Optional[str]:
+def read_pid_starttime(pid: int) -> str | None:
     """Field 22 (starttime) of `/proc/<pid>/stat` -- `rest[0]` is state (field 3), so starttime
     (field 22) is `rest[22 - 3]` = `rest[19]`."""
     try:
@@ -61,7 +62,7 @@ def read_pid_starttime(pid: int) -> Optional[str]:
     return fields[19]
 
 
-def read_pgid(pid: int) -> Optional[int]:
+def read_pgid(pid: int) -> int | None:
     try:
         text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     except OSError:
@@ -92,7 +93,7 @@ def pgid_alive(pgid: int) -> bool:
     return False
 
 
-def default_pid_alive(pid: Optional[int], expected_starttime: Optional[str]) -> bool:
+def default_pid_alive(pid: int | None, expected_starttime: str | None) -> bool:
     """Specific-pid liveness (used for the wrapper-lost anomaly: pgid can still be alive via a
     surviving `batch.py` child while the wrapper itself is gone). Confirms the SAME process via
     starttime when it's available, defending (best-effort) against pid reuse."""
@@ -108,7 +109,7 @@ def default_pid_alive(pid: Optional[int], expected_starttime: Optional[str]) -> 
     return bool(fields) and len(fields) > 19 and fields[19] == expected_starttime
 
 
-def group_alive(raw: Optional[Dict[str, Any]], boot_id_fn: Callable[[], str], pgid_alive_fn: Callable[[int], bool]) -> bool:
+def group_alive(raw: dict[str, Any] | None, boot_id_fn: Callable[[], str], pgid_alive_fn: Callable[[int], bool]) -> bool:
     """Shared group-liveness test for both `live.json` and a `results/<inv-id>.json` record (same
     `pgid`/`boot_id` identity fields in both schemas). A `boot_id` mismatch is dead by definition
     (pid/starttime/pgid numbers recur across boots)."""

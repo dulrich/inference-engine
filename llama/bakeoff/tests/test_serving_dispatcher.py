@@ -22,7 +22,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 BAKEOFF_DIR = Path(__file__).resolve().parent.parent
@@ -42,7 +42,7 @@ DECLARATION_PATH = REPO_ROOT / "router" / "visibility.json"
 SAMPLE_DECLARATION_PATH = FIXTURES / "router" / "visibility.sample.json"
 WRAPPER = BAKEOFF_DIR / "serving-dispatch.sh"
 
-NOW = datetime(2026, 9, 13, 12, 0, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 9, 13, 12, 0, 0, tzinfo=UTC)
 NOW_ISO = "2026-09-13T12:00:00Z"
 
 # Two keys of the real declaration, chosen for their `gateway_id`: one non-null (so `cc` is

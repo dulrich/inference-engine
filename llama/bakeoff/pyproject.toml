@@ -43,11 +43,6 @@ ignore = [
     "E501",    # 315x line-too-long. Prose//data lines in docstrings and tables; the repo's
                # markdown contract is explicitly "never hard-wrap", and no formatter is
                # prescribed here, so a column limit would be churn with no defect value.
-    "UP",      # 796x pyupgrade (UP006/UP045/UP017/UP035/UP037). Mechanical `List[str]`->
-               # `list[str]`, `Optional[X]`->`X | None`, `timezone.utc`->`UTC`. All safe and
-               # autofixable, but it rewrites annotations in all 29 modules at once and would
-               # bury this sprint's behaviour-preserving refactor diff. Land it as its own
-               # single-purpose commit, where `--diff` is the whole review.
     "B905",    # 5x zip-without-explicit-strict. Adding `strict=` is a REAL behaviour change
                # (raises on length mismatch); each site needs its own judgement about whether
                # a mismatch is a bug or tolerated.

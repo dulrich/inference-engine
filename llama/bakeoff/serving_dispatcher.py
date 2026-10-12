@@ -86,9 +86,10 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 from control_store import (
     Paths,
@@ -157,7 +158,7 @@ EXIT_RECONCILIATION_FAILED = 3
 # -------------------------------------------------------------------------------------------
 
 
-def default_visibility_path(repo_root: Optional[Path] = None) -> Path:
+def default_visibility_path(repo_root: Path | None = None) -> Path:
     return (Path(repo_root) if repo_root else REPO_ROOT) / "router" / "visibility.json"
 
 
@@ -171,7 +172,7 @@ def serving_lock_path(paths: Paths) -> Path:
     return paths.state_dir / SERVING_LOCK_BASENAME
 
 
-def picker_argv(repo_root: Path) -> List[str]:
+def picker_argv(repo_root: Path) -> list[str]:
     """Bare `--write`: the picker rewrites `modelPicker.options` and re-serialises the rest of
     `settings.json` unchanged, so an existing `--launch-profile` env block (which needs the
     gateway key from fleet-tools's `.env`) survives verbatim. Verified against a tempdir HOME
@@ -179,7 +180,7 @@ def picker_argv(repo_root: Path) -> List[str]:
     return ["node", str(Path(repo_root) / "router" / PICKER_BASENAME), "--write"]
 
 
-def sync_argv(repo_root: Path) -> List[str]:
+def sync_argv(repo_root: Path) -> list[str]:
     return ["python3", str(Path(repo_root) / "scripts" / SYNC_BASENAME), "--apply"]
 
 
@@ -209,8 +210,8 @@ def default_unlink(path: Path) -> None:
 
 
 def _ingest(
-    paths: Paths, declaration: Dict[str, Any],
-) -> Tuple[List[ServingRequest], List[Tuple[str, str]], int]:
+    paths: Paths, declaration: dict[str, Any],
+) -> tuple[list[ServingRequest], list[tuple[str, str]], int]:
     """`(pending, rejections, ignored)`. `pending` is sorted `(requested_at, request_id)`
     ascending -- the same tuple `control_phases.ingest_pass` uses, and for the same reason:
     directory enumeration order is never load-bearing, and the id's whole-second stamp does not
@@ -223,8 +224,8 @@ def _ingest(
     except OSError:
         names = []
     ignored = 0
-    pending: List[ServingRequest] = []
-    rejections: List[Tuple[str, str]] = []
+    pending: list[ServingRequest] = []
+    rejections: list[tuple[str, str]] = []
     for name in names:
         if not REQUEST_BASENAME_RE.match(name):
             ignored += 1
@@ -244,9 +245,9 @@ def _ingest(
 
 
 def _stage_declaration(
-    declaration: Dict[str, Any],
+    declaration: dict[str, Any],
     visibility_path: Path,
-    winners: Dict[str, ServingRequest],
+    winners: dict[str, ServingRequest],
 ) -> bool:
     """Fold EVERY winning request of the pass into the one in-memory declaration and publish it
     with a SINGLE atomic write -- `True` when anything was written. Only the targeted keys'
@@ -271,7 +272,7 @@ def _reconcile(
     repo_root: Path,
     run_picker: Callable[[Sequence[str]], int],
     run_sync: Callable[[Sequence[str]], int],
-) -> Tuple[str, Optional[str]]:
+) -> tuple[str, str | None]:
     """The pass's ONE projection -- picker, then sync, then `(state, reason)`. Called exactly once
     per valid pass regardless of how many requests it carried (including zero). A non-zero exit
     short-circuits the rest and names the step that failed; the declaration edit is KEPT either
@@ -285,7 +286,7 @@ def _reconcile(
     return "applied", None
 
 
-def _previous_recent(status_path: Path) -> List[Dict[str, Any]]:
+def _previous_recent(status_path: Path) -> list[dict[str, Any]]:
     """`recent[]` carried forward from the previous pass. An absent, unparseable, oversized or
     schema-invalid status file is treated as no history -- never partially trusted."""
     previous = read_json_safe(status_path)
@@ -308,7 +309,7 @@ def _prune(
         survivors = []
     for path in survivors:
         try:
-            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
         except OSError:
             continue
         if (now - mtime).total_seconds() <= PRUNE_AGE_SECONDS:
@@ -324,13 +325,13 @@ def _prune(
 def execute_pass(
     paths: Paths,
     visibility_path: Path,
-    now_fn: Optional[Callable[[], datetime]] = None,
-    run_picker: Optional[Callable[[Sequence[str]], int]] = None,
-    run_sync: Optional[Callable[[Sequence[str]], int]] = None,
+    now_fn: Callable[[], datetime] | None = None,
+    run_picker: Callable[[Sequence[str]], int] | None = None,
+    run_sync: Callable[[Sequence[str]], int] | None = None,
     *,
-    repo_root: Optional[Path] = None,
-    unlink_fn: Optional[Callable[[Path], None]] = None,
-) -> Tuple[int, Dict[str, int]]:
+    repo_root: Path | None = None,
+    unlink_fn: Callable[[Path], None] | None = None,
+) -> tuple[int, dict[str, int]]:
     """One serving pass, as ONE reconciliation transaction -- `(exit_code, counts)`;
     `dispatch_pass` is the printing wrapper.
 
@@ -361,7 +362,7 @@ def execute_pass(
     no request to disposition): its whole signal is `EXIT_RECONCILIATION_FAILED` plus the stderr
     line below, which is why the pass has a distinct exit code at all.
     """
-    now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+    now_fn = now_fn or (lambda: datetime.now(UTC))
     picker = run_picker or run_subprocess
     sync = run_sync or run_subprocess
     root = Path(repo_root) if repo_root else REPO_ROOT
@@ -383,8 +384,8 @@ def execute_pass(
 
     pending, rejections, counts["ignored"] = _ingest(paths, declaration)
 
-    records: List[Dict[str, Any]] = []
-    dispositioned: List[str] = []
+    records: list[dict[str, Any]] = []
+    dispositioned: list[str] = []
     for request_id, rejection_reason in rejections:
         records.append(make_record(request_id, "rejected", rejection_reason, now))
         dispositioned.append(request_id)
@@ -392,7 +393,7 @@ def execute_pass(
 
     # Latest request per `model_key` wins (`pending` is ascending, so the last one seen for a key
     # is the winner); a superseded request is represented by that winner, never applied separately.
-    winners: Dict[str, ServingRequest] = {request.model_key: request for request in pending}
+    winners: dict[str, ServingRequest] = {request.model_key: request for request in pending}
     _stage_declaration(declaration, visibility_path, winners)
     state, reason = _reconcile(root, picker, sync)
     if state == "failed":
@@ -424,12 +425,12 @@ def execute_pass(
 def dispatch_pass(
     paths: Paths,
     visibility_path: Path,
-    now_fn: Optional[Callable[[], datetime]] = None,
-    run_picker: Optional[Callable[[Sequence[str]], int]] = None,
-    run_sync: Optional[Callable[[Sequence[str]], int]] = None,
+    now_fn: Callable[[], datetime] | None = None,
+    run_picker: Callable[[Sequence[str]], int] | None = None,
+    run_sync: Callable[[Sequence[str]], int] | None = None,
     *,
-    repo_root: Optional[Path] = None,
-    unlink_fn: Optional[Callable[[Path], None]] = None,
+    repo_root: Path | None = None,
+    unlink_fn: Callable[[Path], None] | None = None,
 ) -> int:
     """`execute_pass` plus the one-line JSON pass summary on stdout (the cron log's whole
     content on a quiet pass). Never prints the environment."""
@@ -492,7 +493,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
     args = build_arg_parser().parse_args(argv)

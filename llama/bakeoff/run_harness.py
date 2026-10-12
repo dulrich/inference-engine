@@ -53,7 +53,7 @@ import re
 import sys
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # -- re-exports: the public surface `batch.py`, `cell_record.py`, `cell_runner.py`,
 # -- `longcontext*.py`, `verify_run.py`, `sampling_table.py`, and every `tests/test_*.py` have
@@ -129,7 +129,7 @@ def resolve_llama_cpp_build() -> str:
     return match.group(1)
 
 
-def compute_file_lineage(host_path: Path, chunk_size: int = 1024 * 1024) -> Dict[str, Any]:
+def compute_file_lineage(host_path: Path, chunk_size: int = 1024 * 1024) -> dict[str, Any]:
     """Reads a local GGUF file to derive `filename`/`file_size`/`sha256` for config.json's
     lineage block. Takes a real host filesystem path -- this module deliberately does not
     hardcode the container-internal `/models` -> host bind-mount mapping (that mapping lives in
@@ -159,7 +159,7 @@ def compute_file_lineage(host_path: Path, chunk_size: int = 1024 * 1024) -> Dict
 # temperature 0 is deterministic by construction, so top_p/top_k are pinned to no-op values
 # (top_p=1.0 keeps the full distribution available before temperature-0 argmax selects one
 # token; top_k=1 is belt-and-suspenders with the same effect). Numeric values are fixed.
-SAMPLING_ARM_CAPABILITY: Dict[str, Optional[float]] = {"temperature": 0.0, "top_p": 1.0, "top_k": 1}
+SAMPLING_ARM_CAPABILITY: dict[str, float | None] = {"temperature": 0.0, "top_p": 1.0, "top_k": 1}
 
 # Production arm: "the model's own recommended sampling" is a per-model fact (e.g. Gemma's
 # card recommends ~temperature 1.0; a different model recommends something else) -- this harness
@@ -168,10 +168,10 @@ SAMPLING_ARM_CAPABILITY: Dict[str, Optional[float]] = {"temperature": 0.0, "top_
 # only: `None` placeholders the caller (a later WP or campaign that already knows the specific
 # model's recommended sampling) fills in before use. `seed` is the one field this WP fixes for
 # both arms -- seeding is a harness policy, not a per-model one (see `sampling_arm_payload`).
-SAMPLING_ARM_PRODUCTION: Dict[str, Optional[float]] = {"temperature": None, "top_p": None, "top_k": None}
+SAMPLING_ARM_PRODUCTION: dict[str, float | None] = {"temperature": None, "top_p": None, "top_k": None}
 
 
-def sampling_arm_payload(arm: Dict[str, Optional[float]], seed: int) -> Dict[str, Optional[float]]:
+def sampling_arm_payload(arm: dict[str, float | None], seed: int) -> dict[str, float | None]:
     """Merges a sampling-arm preset (`SAMPLING_ARM_CAPABILITY`/`SAMPLING_ARM_PRODUCTION`, or a
     caller-built dict with the production arm's `None` placeholders filled in) with an explicit
     seed -- the caller-supplied value, never a harness-chosen default (Decisions locked:
@@ -212,18 +212,18 @@ def needle_probe(
     base_url: str,
     alias: str,
     size: str,
-    context_ceiling: Optional[int] = None,
+    context_ceiling: int | None = None,
     position_fraction: float = 0.45,
     max_tokens: int = 256,
     timeout: float = 300,
-    seed: Optional[int] = None,
-    target_actual_tokens: Optional[int] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    top_k: Optional[float] = None,
-    sampler_seed: Optional[int] = None,
-    sampling_arm: Optional[str] = None,
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    seed: int | None = None,
+    target_actual_tokens: int | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    top_k: float | None = None,
+    sampler_seed: int | None = None,
+    sampling_arm: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Formalizes the needle-in-haystack correctness probe both prior Ling plans hand-rolled ad
     hoc (runs/dispatch/wp-1-report.md, runs/dispatch/wp-2-report.md from
     ling-3-tiny-context-ceiling; docs/ling-3-tiny-bakeoff-results.md has the worked pattern: a
@@ -324,7 +324,7 @@ def needle_probe(
 
     _prompt, prompt_sha256, result = _build_and_send(target_tokens)
 
-    calibration_tolerance_met: Optional[bool] = None
+    calibration_tolerance_met: bool | None = None
     if calibrated:
         actual_prompt_tokens = (result["usage"] or {}).get("prompt_tokens")
         tolerance_met = (
@@ -408,7 +408,7 @@ def needle_probe(
 
 def fetch_router_logs(
     router_base_url: str = DEFAULT_ROUTER_BASE_URL,
-    tail_bytes: Optional[int] = None,
+    tail_bytes: int | None = None,
     timeout: float = 30,
 ) -> str:
     """Fetches llama-swap's own captured stdout/stderr log ring buffer: a plain
@@ -445,7 +445,7 @@ def fetch_router_logs(
 # ---------------------------------------------------------------------------------------------
 
 
-def load_quality_corpus(path: Optional[Path] = None) -> List[Dict[str, Any]]:
+def load_quality_corpus(path: Path | None = None) -> list[dict[str, Any]]:
     path = Path(path) if path else QUALITY_CORPUS_PATH
     entries = []
     with path.open("r", encoding="utf-8") as f:
@@ -460,15 +460,15 @@ def load_quality_corpus(path: Optional[Path] = None) -> List[Dict[str, Any]]:
 def run_quality_corpus(
     base_url: str,
     alias: str,
-    corpus: Optional[List[Dict[str, Any]]] = None,
+    corpus: list[dict[str, Any]] | None = None,
     max_tokens: int = 768,
     timeout: float = 180,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    top_k: Optional[float] = None,
-    sampler_seed: Optional[int] = None,
-    sampling_arm: Optional[str] = None,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    temperature: float | None = None,
+    top_p: float | None = None,
+    top_k: float | None = None,
+    sampler_seed: int | None = None,
+    sampling_arm: str | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Runs every fixed quality-corpus prompt once against `alias`. No automated judge --
     per Decisions locked, scoring stays manual/raw-capture this round; the per-answer rubric
     fields are written as `null` placeholders for a human (or a later WP) to fill in.
@@ -483,8 +483,8 @@ def run_quality_corpus(
     if corpus is None:
         corpus = load_quality_corpus()
 
-    samples: List[Dict[str, Any]] = []
-    completions: List[Dict[str, Any]] = []
+    samples: list[dict[str, Any]] = []
+    completions: list[dict[str, Any]] = []
     for entry in corpus:
         messages = entry.get("messages")
         if not messages:

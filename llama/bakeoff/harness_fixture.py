@@ -27,9 +27,8 @@ from __future__ import annotations
 
 import random
 import statistics
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
 # ---------------------------------------------------------------------------------------------
 # Paths and constants
@@ -109,7 +108,7 @@ def _build_filler_text(target_tokens: int, seed: int) -> str:
     """
     rng = random.Random(seed)
     target_chars = int(target_tokens * CHARS_PER_TOKEN_ESTIMATE)
-    parts: List[str] = []
+    parts: list[str] = []
     length = 0
     words_in_sentence = 0
     sentence_target = rng.randint(8, 16)
@@ -136,14 +135,14 @@ FIXTURE_PROMPT_TEXT = FIXTURE_PROMPT_BODY + FIXTURE_INSTRUCTION
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _single_user_message(prompt: str) -> List[Dict[str, str]]:
+def _single_user_message(prompt: str) -> list[dict[str, str]]:
     return [{"role": "user", "content": prompt}]
 
 
-def summarize(values: List[Optional[float]]) -> Dict[str, Optional[float]]:
+def summarize(values: list[float | None]) -> dict[str, float | None]:
     """n/median/mean/min/max/stdev over the non-null values (stdlib `statistics`)."""
     clean = [v for v in values if v is not None]
     if not clean:

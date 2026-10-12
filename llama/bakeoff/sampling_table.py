@@ -36,8 +36,6 @@ updates the other in the same change; a key only one home carries is not drift.
 
 from __future__ import annotations
 
-from typing import Dict
-
 
 class MissingProductionSamplingError(KeyError):
     """Raised by `production_sampling()` when `model_family` has no researched, complete
@@ -56,7 +54,7 @@ class MissingProductionSamplingError(KeyError):
 # researched live 2026-08-23 (WebSearch/WebFetch, doc research, no live-service operation).
 # ---------------------------------------------------------------------------------------------
 
-_PRODUCTION_SAMPLING: Dict[str, Dict[str, float]] = {
+_PRODUCTION_SAMPLING: dict[str, dict[str, float]] = {
     # gemma4 -- google/gemma-4-12B-it, "Best Practices" section 1 "Sampling Parameters":
     # "Use the following standardized sampling configuration across all use cases:
     #  temperature=1.0, top_p=0.95, top_k=64"
@@ -107,7 +105,7 @@ _PRODUCTION_SAMPLING: Dict[str, Dict[str, float]] = {
 }
 
 
-def production_sampling(model_family: str) -> Dict[str, float]:
+def production_sampling(model_family: str) -> dict[str, float]:
     """Returns a fresh `{"temperature": float, "top_p": float, "top_k": int}` dict for
     `model_family` (a GGUF `general.architecture` string -- `gemma4`, `qwen35`, `qwen35moe`, or
     `bailingmoe3`; see the module-level table above for each entry's source citation).
@@ -129,7 +127,7 @@ def production_sampling(model_family: str) -> Dict[str, float]:
     return dict(_PRODUCTION_SAMPLING[model_family])
 
 
-def known_families() -> Dict[str, Dict[str, float]]:
+def known_families() -> dict[str, dict[str, float]]:
     """Read-only snapshot of every family this table has a complete entry for -- convenience for
     a caller (or a queue author) deciding up front which families support the `production` arm at
     all, without having to catch `MissingProductionSamplingError` per family (audit M3: a queue

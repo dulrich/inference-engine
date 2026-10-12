@@ -30,7 +30,7 @@ import os
 import stat
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from control_protocol import MAX_REQUEST_BYTES
 
@@ -86,7 +86,7 @@ class Paths:
             d.mkdir(parents=True, exist_ok=True)
 
 
-def resolve_state_dir(args: Optional[argparse.Namespace] = None) -> Path:
+def resolve_state_dir(args: argparse.Namespace | None = None) -> Path:
     override = getattr(args, "state_dir", None) if args is not None else None
     if override:
         return Path(override)
@@ -96,7 +96,7 @@ def resolve_state_dir(args: Optional[argparse.Namespace] = None) -> Path:
     return Path.home() / ".local/state/inference-bakeoff"
 
 
-def resolve_queues_dir(args: Optional[argparse.Namespace] = None) -> Path:
+def resolve_queues_dir(args: argparse.Namespace | None = None) -> Path:
     override = getattr(args, "queues_dir", None) if args is not None else None
     if override:
         return Path(override)
@@ -116,7 +116,7 @@ def tmp_path_for(path: Path) -> Path:
     return path.with_name(f".{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}")
 
 
-def atomic_write_json(path: Path, obj: Dict[str, Any]) -> None:
+def atomic_write_json(path: Path, obj: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = tmp_path_for(path)
     with open(tmp, "w", encoding="utf-8") as f:
@@ -133,8 +133,8 @@ def atomic_touch(path: Path) -> None:
 
 
 def read_json_safe(
-    path: Path, max_bytes: int = 1_048_576, anomalies: Optional[List[str]] = None,
-) -> Optional[Dict[str, Any]]:
+    path: Path, max_bytes: int = 1_048_576, anomalies: list[str] | None = None,
+) -> dict[str, Any] | None:
     """Unparseable/oversized/missing control files are treated as absent, never trusted (plan
     crash-recovery matrix row 13) -- every dispatcher read of a host-written control file goes
     through this, never a bare `json.load`. A GENUINELY absent file (the common case -- most
@@ -153,7 +153,7 @@ def read_json_safe(
             anomalies.append(f"unreadable-control-file: {path.name}")
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         if anomalies is not None:
@@ -166,7 +166,7 @@ def read_json_safe(
     return data
 
 
-def safe_read_request_bytes(path: Path, max_bytes: int = MAX_REQUEST_BYTES) -> Optional[bytes]:
+def safe_read_request_bytes(path: Path, max_bytes: int = MAX_REQUEST_BYTES) -> bytes | None:
     """`lstat` regular-file check, `O_NOFOLLOW|O_NONBLOCK` open, hard size bound BEFORE parse --
     a request whose basename we trust (regex-matched) but whose content we do NOT (drop-box files
     are container-written, outside the trust boundary)."""
@@ -201,7 +201,7 @@ def safe_read_request_bytes(path: Path, max_bytes: int = MAX_REQUEST_BYTES) -> O
 # -------------------------------------------------------------------------------------------
 
 
-def flock_nonblocking_acquire(lock_path: Path) -> Optional[int]:
+def flock_nonblocking_acquire(lock_path: Path) -> int | None:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
     try:

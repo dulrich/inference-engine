@@ -21,7 +21,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import sweep
 from cell_model import (
@@ -86,7 +86,7 @@ class QueueValidationError(ValueError):
 # -------------------------------------------------------------------------------------------
 
 
-def parse_deadline_time(deadline: str) -> Tuple[int, int]:
+def parse_deadline_time(deadline: str) -> tuple[int, int]:
     try:
         hh, mm = deadline.split(":")
         hh, mm = int(hh), int(mm)
@@ -146,7 +146,7 @@ def _validate_models(models: Any) -> None:
                 raise QueueValidationError(str(exc)) from exc
 
 
-def _validate_cell(idx: int, cell: Dict[str, Any], models: Dict[str, Any]) -> None:
+def _validate_cell(idx: int, cell: dict[str, Any], models: dict[str, Any]) -> None:
     missing = [k for k in _REQUIRED_ABBREVIATED_CELL_KEYS if k not in cell]
     if missing:
         raise QueueValidationError(f"cells[{idx}] missing required key(s): {missing}")
@@ -193,7 +193,7 @@ def _validate_cell(idx: int, cell: Dict[str, Any], models: Dict[str, Any]) -> No
         )
 
 
-def validate_queue(queue: Dict[str, Any]) -> None:
+def validate_queue(queue: dict[str, Any]) -> None:
     if queue.get("queue_format") != QUEUE_FORMAT_VERSION:
         raise QueueValidationError(
             f"unsupported queue_format {queue.get('queue_format')!r}; expected {QUEUE_FORMAT_VERSION}"
@@ -228,7 +228,7 @@ def validate_queue(queue: Dict[str, Any]) -> None:
         _validate_cell(idx, cell, models)
 
 
-def effective_request_timeout_s(queue: Dict[str, Any]) -> int:
+def effective_request_timeout_s(queue: dict[str, Any]) -> int:
     """The queue's effective per-request transport timeout (seconds): the top-level
     `request_timeout_s` when present, else `DEFAULT_REQUEST_TIMEOUT_S` -- the same fallback rule
     `validate_queue` enforces the shape of, exposed as a pure function so `batch.py`/
@@ -236,8 +236,8 @@ def effective_request_timeout_s(queue: Dict[str, Any]) -> int:
     return queue.get("request_timeout_s", DEFAULT_REQUEST_TIMEOUT_S)
 
 
-def load_queue(queue_path: Path) -> Dict[str, Any]:
-    with open(queue_path, "r", encoding="utf-8") as f:
+def load_queue(queue_path: Path) -> dict[str, Any]:
+    with open(queue_path, encoding="utf-8") as f:
         queue = json.load(f)
     validate_queue(queue)
     return queue
@@ -248,7 +248,7 @@ def load_queue(queue_path: Path) -> Dict[str, Any]:
 # -------------------------------------------------------------------------------------------
 
 
-def _merge_server_flags(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_server_flags(model_entry: dict[str, Any], abbreviated: dict[str, Any]) -> dict[str, Any]:
     """The registry entry's base `server_flags` with this cell's `c`/`ctk`/`ctv`/`fa` overrides,
     then the base-vs-MTP arm applied.
 
@@ -278,7 +278,7 @@ def _merge_server_flags(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]
     return flags
 
 
-def resolve_cell(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]) -> ResolvedCell:
+def resolve_cell(model_entry: dict[str, Any], abbreviated: dict[str, Any]) -> ResolvedCell:
     """Merges one queue model registry entry with one abbreviated cell into a `ResolvedCell`.
 
     The flags are normalized through `sweep.normalize_cell` (the shared normal form every
@@ -296,7 +296,7 @@ def resolve_cell(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]) -> Re
     """
     flags = _merge_server_flags(model_entry, abbreviated)
 
-    raw: Dict[str, Any] = {
+    raw: dict[str, Any] = {
         "alias": abbreviated["alias"],
         "model_container_path": model_entry["model_container_path"],
         "server_flags": flags,
@@ -337,13 +337,13 @@ def resolve_cell(model_entry: Dict[str, Any], abbreviated: Dict[str, Any]) -> Re
     )
 
 
-def resolve_queue_cells(queue: Dict[str, Any]) -> List[ResolvedCell]:
+def resolve_queue_cells(queue: dict[str, Any]) -> list[ResolvedCell]:
     """Resolves every abbreviated cell in queue order. Duplicate `cell_id`s across the resolved
     list (two abbreviated cells that happen to render identically) raise -- a queue's cells are
     meant to be distinct measurements, and the state machine keys everything by `cell_id`, so a
     collision would silently merge two cells' state."""
     models = queue["models"]
-    out: List[ResolvedCell] = []
+    out: list[ResolvedCell] = []
     seen_ids = set()
     for idx, abbreviated in enumerate(queue["cells"]):
         model_entry = models[abbreviated["model"]]
@@ -382,14 +382,14 @@ class ResolvedQueue:
     absent-field defaulting already applied) -- never re-derive either from `queue` again."""
 
     queue_path: Path
-    queue: Dict[str, Any]
-    cells: List[ResolvedCell]
+    queue: dict[str, Any]
+    cells: list[ResolvedCell]
     vram_profile: str
     request_timeout_s: int
 
 
 def load_resolved_queue(
-    queue_path: Path, vram_profile_override: Optional[str] = None
+    queue_path: Path, vram_profile_override: str | None = None
 ) -> ResolvedQueue:
     """Loads and resolves `queue_path` exactly once: one `load_queue` call, one
     `resolve_queue_cells` call. `vram_profile_override` is the CLI's `--vram-profile`; when given

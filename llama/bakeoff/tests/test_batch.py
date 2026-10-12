@@ -20,7 +20,7 @@ import json
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
@@ -124,7 +124,7 @@ class TestSizeProjection(unittest.TestCase):
             result = batch.run_queue(
                 queue_path,
                 scratch_server_fn=fake_scratch_server_factory(spawned=spawned),
-                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                 vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                 vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
             )
@@ -151,7 +151,7 @@ class TestRunQueueEndToEnd(unittest.TestCase):
         queue_path = _write_queue(tmp, queue)
         defaults = dict(
             scratch_server_fn=fake_scratch_server_factory(),
-            now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+            now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
             vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
             vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
         )
@@ -187,8 +187,8 @@ class TestRunQueueEndToEnd(unittest.TestCase):
                 _minimal_queue(deadline="00:30"), tmp,
                 scratch_server_fn=fake_scratch_server_factory(spawned=spawned),
                 now_fn=sequenced_now_fn(
-                    datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc),
-                    datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc),  # past the rolled-forward deadline
+                    datetime(2026, 8, 23, 1, 0, tzinfo=UTC),
+                    datetime(2026, 8, 24, 1, 0, tzinfo=UTC),  # past the rolled-forward deadline
                 ),
                 container_controller=controller,
             )
@@ -210,8 +210,8 @@ class TestRunQueueEndToEnd(unittest.TestCase):
                 queue_path2,
                 scratch_server_fn=fake_scratch_server_factory(),
                 now_fn=sequenced_now_fn(
-                    datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc),
-                    datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc),
+                    datetime(2026, 8, 23, 1, 0, tzinfo=UTC),
+                    datetime(2026, 8, 24, 1, 0, tzinfo=UTC),
                 ),
                 vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                 vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
@@ -222,7 +222,7 @@ class TestRunQueueEndToEnd(unittest.TestCase):
             second = batch.run_queue(
                 queue_path2,
                 scratch_server_fn=fake_scratch_server_factory(),
-                now_fn=fixed_now_fn(datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc)),
+                now_fn=fixed_now_fn(datetime(2026, 8, 24, 1, 0, tzinfo=UTC)),
                 vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                 vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
                 container_controller=FakeContainerController(),
@@ -240,7 +240,7 @@ class TestRunQueueEndToEnd(unittest.TestCase):
             second = batch.run_queue(
                 queue_path,
                 scratch_server_fn=fake_scratch_server_factory(),
-                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                 vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                 vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
                 container_controller=controller,
@@ -257,7 +257,7 @@ class TestRunQueueEndToEnd(unittest.TestCase):
                 queue_path,
                 re_arm=True,
                 scratch_server_fn=fake_scratch_server_factory(),
-                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                 vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                 vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
                 container_controller=FakeContainerController(),
@@ -279,7 +279,7 @@ class TestRunQueueEndToEnd(unittest.TestCase):
             result = batch.run_queue(
                 queue_path,
                 scratch_server_fn=fake_scratch_server_factory(spawned=spawned),
-                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                 vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                 vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
                 container_controller=FakeContainerController(),
@@ -358,7 +358,7 @@ class TestRunQueueEndToEnd(unittest.TestCase):
                     queue_path,
                     scratch_server_fn=fake_scratch_server_factory(),
                     cell_runner=raising_runner,
-                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                     vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                     vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
                     container_controller=controller,
@@ -378,7 +378,7 @@ class TestRunQueueEndToEnd(unittest.TestCase):
                     queue_path,
                     scratch_server_fn=fake_scratch_server_factory(),
                     cell_runner=raising_runner,
-                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                     vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                     vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
                     container_controller=controller,
@@ -400,7 +400,7 @@ class TestRunQueueEndToEnd(unittest.TestCase):
             result = batch.run_queue(
                     queue_path,
                     scratch_server_fn=fake_scratch_server_factory(),
-                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                     vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                     vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
                     container_controller=controller,
@@ -415,7 +415,7 @@ class TestRunQueueEndToEnd(unittest.TestCase):
             result2 = batch.run_queue(
                 queue_path,
                 scratch_server_fn=fake_scratch_server_factory(),
-                now_fn=fixed_now_fn(datetime(2026, 8, 23, 2, 0, tzinfo=timezone.utc)),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 2, 0, tzinfo=UTC)),
                 vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                 vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
                 container_controller=ok, re_arm=True,
@@ -433,7 +433,7 @@ class TestBudgetArithmeticInRunQueue(unittest.TestCase):
                 batch.run_queue(
                     queue_path,
                     scratch_server_fn=fake_scratch_server_factory(),
-                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                     vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                     vram_used_bytes_fn=lambda: int(3.3 * sweep.GIB),  # live-desktop baseline
                     container_controller=controller,
@@ -447,7 +447,7 @@ class TestBudgetArithmeticInRunQueue(unittest.TestCase):
             result = batch.run_queue(
                 queue_path,
                 scratch_server_fn=fake_scratch_server_factory(),
-                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                 vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                 vram_used_bytes_fn=lambda: int(0.2 * sweep.GIB),
                 container_controller=controller,
@@ -463,7 +463,7 @@ class TestBudgetArithmeticInRunQueue(unittest.TestCase):
                     queue_path,
                     vram_profile="headless",
                     scratch_server_fn=fake_scratch_server_factory(),
-                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                    now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                     vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                     vram_used_bytes_fn=lambda: int(3.3 * sweep.GIB),
                     container_controller=FakeContainerController(),
@@ -479,7 +479,7 @@ class TestControlWp2StopMarkerAndDeadline(unittest.TestCase):
         queue_path = _write_queue(tmp, queue)
         defaults = dict(
             scratch_server_fn=fake_scratch_server_factory(),
-            now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+            now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
             vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
             vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
         )
@@ -557,8 +557,8 @@ class TestControlWp2StopMarkerAndDeadline(unittest.TestCase):
                 _minimal_queue(deadline="23:59"), tmp,
                 scratch_server_fn=fake_scratch_server_factory(spawned=spawned),
                 now_fn=sequenced_now_fn(
-                    datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc),
-                    datetime(2026, 8, 23, 2, 0, tzinfo=timezone.utc),
+                    datetime(2026, 8, 23, 1, 0, tzinfo=UTC),
+                    datetime(2026, 8, 23, 2, 0, tzinfo=UTC),
                 ),
                 deadline_minutes=30,
             )
@@ -571,8 +571,8 @@ class TestControlWp2StopMarkerAndDeadline(unittest.TestCase):
             _, result = self._run(
                 _minimal_queue(deadline="00:30"), tmp,
                 now_fn=sequenced_now_fn(
-                    datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc),
-                    datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc),
+                    datetime(2026, 8, 23, 1, 0, tzinfo=UTC),
+                    datetime(2026, 8, 24, 1, 0, tzinfo=UTC),
                 ),
             )
             self.assertEqual(result["queue_state"], batch.QUEUE_PAUSED_RESUMABLE)
@@ -757,7 +757,7 @@ class TestWp5DetailPersistence(unittest.TestCase):
                 queue_path,
                 cell_runner=lambda handle, cell: batch.CellOutcome("completed", None, False, dict(detail)),
                 scratch_server_fn=fake_scratch_server_factory(),
-                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=timezone.utc)),
+                now_fn=fixed_now_fn(datetime(2026, 8, 23, 1, 0, tzinfo=UTC)),
                 vram_total_bytes_fn=lambda: int(15.92 * sweep.GIB),
                 vram_used_bytes_fn=lambda: int(3.1 * sweep.GIB),
             )

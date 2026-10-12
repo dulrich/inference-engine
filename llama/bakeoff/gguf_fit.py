@@ -42,8 +42,9 @@ v2.md` Key Changes/WP-1). See `classify_fit`.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any
 
 from gguf_cache import (  # noqa: F401 -- re-exported facade, see the module docstring
     INDEXER_GEOMETRY_KEYS,
@@ -150,7 +151,7 @@ def read_vram_total_bytes(sysfs_path: str = "/sys/class/drm/card1/device/mem_inf
     rationale as `read_vram_used_bytes()` below (this repo's established VRAM read-back
     technique). Real, live-capable; never invoked by this WP's own tests (`compute_vram_budget_
     bytes`'s `vram_total_bytes_fn` parameter is what tests fake)."""
-    with open(sysfs_path, "r", encoding="utf-8") as f:
+    with open(sysfs_path, encoding="utf-8") as f:
         return int(f.read().strip())
 
 
@@ -168,14 +169,14 @@ def read_vram_used_bytes(sysfs_path: str = "/sys/class/drm/card1/device/mem_info
     identical sysfs VRAM counters -- a host-side read avoids depending on a scratch server (or any
     container) being reachable at all, which matters for a pre-load baseline read.
     """
-    with open(sysfs_path, "r", encoding="utf-8") as f:
+    with open(sysfs_path, encoding="utf-8") as f:
         return int(f.read().strip())
 
 
 def compute_vram_budget_bytes(
     vram_profile: str,
     vram_total_bytes_fn: Callable[[], int] = read_vram_total_bytes,
-    vram_used_bytes_fn: Optional[Callable[[], int]] = None,
+    vram_used_bytes_fn: Callable[[], int] | None = None,
 ) -> float:
     """Resolves `vram_profile` ('desktop-shared'|'headless') to an admissible cell-footprint
     budget in bytes, audit B4's formula: `min(profile_cap, mem_info_vram_total -
@@ -221,8 +222,8 @@ def compute_vram_budget_bytes(
 
 
 def _resolve_geometry_and_weights(
-    cell: Dict[str, Any],
-) -> Tuple[Optional[int], Optional[Dict[str, Any]], Optional[str], Optional[Dict[str, int]]]:
+    cell: dict[str, Any],
+) -> tuple[int | None, dict[str, Any] | None, str | None, dict[str, int] | None]:
     """Wraps `_resolve_geometry_and_weights_raw` with placement-awareness (audit B2, extended by
     WP-4): when the cell carries a `gpu_weights_bytes` override, it REPLACES the raw file-size/
     synthetic `weights_bytes` figure -- a cell running under `-ncmoe` (or any other partial-offload
@@ -253,7 +254,7 @@ def _resolve_geometry_and_weights(
     override = cell.get("gpu_weights_bytes")
     if weights_bytes is not None and override is not None:
         return override, geometry, reason, None
-    derived: Optional[Dict[str, int]] = None
+    derived: dict[str, int] | None = None
     if weights_bytes is not None and geometry is not None:
         flags = cell.get("server_flags", {})
         host_path = cell.get("model_host_path")
@@ -270,7 +271,7 @@ def _resolve_geometry_and_weights(
     return weights_bytes, geometry, reason, derived
 
 
-def _cell_has_recognized_placement_flag(flags: Dict[str, Any]) -> bool:
+def _cell_has_recognized_placement_flag(flags: dict[str, Any]) -> bool:
     """The WP-4 activation gate (Decisions locked 8 / plan hard constraint): the derivation is
     ATTEMPTED only when the normalized `server_flags` explicitly carry one of these three keys --
     none of `-ncmoe`/`-cmoe`/`-ot` is a `_DEFAULT_SERVER_FLAGS` (`cell_spec.py`) entry, so presence
@@ -285,7 +286,7 @@ def _cell_has_recognized_placement_flag(flags: Dict[str, Any]) -> bool:
     return bool(flags.get("-ot"))
 
 
-def _resolve_geometry_and_weights_raw(cell: Dict[str, Any]) -> Tuple[Optional[int], Optional[Dict[str, Any]], Optional[str]]:
+def _resolve_geometry_and_weights_raw(cell: dict[str, Any]) -> tuple[int | None, dict[str, Any] | None, str | None]:
     """Returns `(weights_bytes, geometry, reason_unknown)`. Prefers a real host GGUF
     (`model_host_path`) when present; falls back to `synthetic_geometry` (fixture/testing
     override -- never used when a real host path is given, so a real cell can never silently run
@@ -336,11 +337,11 @@ def _resolve_geometry_and_weights_raw(cell: Dict[str, Any]) -> Tuple[Optional[in
 
 
 def classify_fit(
-    cell: Dict[str, Any],
+    cell: dict[str, Any],
     vram_profile: str = "desktop-shared",
     vram_total_bytes_fn: Callable[[], int] = read_vram_total_bytes,
-    vram_used_bytes_fn: Optional[Callable[[], int]] = None,
-) -> Dict[str, Any]:
+    vram_used_bytes_fn: Callable[[], int] | None = None,
+) -> dict[str, Any]:
     """Pure-math VRAM-fit predictor. Returns a dict always carrying `classification` (one of
     `"fits"`, `"marginal"`, `"excluded"`, `"unknown"`) plus the numbers behind it -- never raises
     on missing geometry (that's the `"unknown"` case, with `reason` explaining why), since a

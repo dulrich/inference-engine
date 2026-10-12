@@ -44,9 +44,10 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 import sweep
 from control_process import default_pid_alive, group_alive, pgid_alive, read_boot_id
@@ -104,8 +105,8 @@ DEFAULT_ROUTER_CONTAINER = sweep.DEFAULT_CONTAINER_NAME
 # -------------------------------------------------------------------------------------------
 
 
-def write_disposition(paths: Paths, request_id: str, state: str, reason: Optional[str], now_fn: Optional[Callable[[], datetime]] = None) -> None:
-    now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+def write_disposition(paths: Paths, request_id: str, state: str, reason: str | None, now_fn: Callable[[], datetime] | None = None) -> None:
+    now_fn = now_fn or (lambda: datetime.now(UTC))
     dst = paths.dispositions_dir / f"{request_id}.json"
     if dst.exists():
         return  # write-once, retained forever -- never silently overwritten.
@@ -115,10 +116,10 @@ def write_disposition(paths: Paths, request_id: str, state: str, reason: Optiona
 
 def write_action(
     paths: Paths, request_id: str, action: str,
-    target_invocation_id: Optional[str], target_request_id: Optional[str],
-    now_fn: Optional[Callable[[], datetime]] = None,
+    target_invocation_id: str | None, target_request_id: str | None,
+    now_fn: Callable[[], datetime] | None = None,
 ) -> None:
-    now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+    now_fn = now_fn or (lambda: datetime.now(UTC))
     dst = paths.actions_dir / f"{request_id}.json"
     if dst.exists():
         return  # replay resumes from what's already recorded -- never re-derived/overwritten.
@@ -135,7 +136,7 @@ def write_action(
 # -------------------------------------------------------------------------------------------
 
 
-def ingest_pass(paths: Paths, queues_dir: Path, now_fn: Optional[Callable[[], datetime]] = None) -> Tuple[List[IngestedRequest], int]:
+def ingest_pass(paths: Paths, queues_dir: Path, now_fn: Callable[[], datetime] | None = None) -> tuple[list[IngestedRequest], int]:
     """Enumerates `requests/`, hardens+validates each unprocessed matching file, and returns
     `(pending, ignored_invalid_names)`. `pending` is sorted `(requested_at, request_id)` ascending
     (cycle-2 E1 -- directory enumeration order is never load-bearing). A basename that doesn't
@@ -148,7 +149,7 @@ def ingest_pass(paths: Paths, queues_dir: Path, now_fn: Optional[Callable[[], da
     `dispositions/<id>.json` already exists is skipped entirely -- never re-derived from an
     in-memory set."""
     ignored = 0
-    pending: List[IngestedRequest] = []
+    pending: list[IngestedRequest] = []
     try:
         names = sorted(os.listdir(paths.requests_dir))
     except OSError:
@@ -313,7 +314,7 @@ def _act_start(
 
 
 def act_phase(
-    pending: List[IngestedRequest], paths: Paths, now_fn: Callable[[], datetime],
+    pending: list[IngestedRequest], paths: Paths, now_fn: Callable[[], datetime],
     boot_id_fn: Callable[[], str], pgid_alive_fn: Callable[[int], bool],
     probe_cron_lock_fn: Callable[[], bool], launch_fn: Callable[[IngestedRequest], None],
 ) -> None:
@@ -348,7 +349,7 @@ def _claim_group_alive(paths: Paths, request_id: str, boot_id_fn: Callable[[], s
 def terminalize_phase(
     paths: Paths, now_fn: Callable[[], datetime],
     boot_id_fn: Callable[[], str], pgid_alive_fn: Callable[[int], bool],
-) -> Tuple[List[str], Set[str]]:
+) -> tuple[list[str], set[str]]:
     """Walks every claim without a disposition yet and dispositions it from EVIDENCE (never bare
     elapsed time alone): `busy` result -> `launch-failed(busy)` immediately (no grace -- the
     wrapper already reported it); no result after grace AND no live group for it ->
@@ -359,8 +360,8 @@ def terminalize_phase(
     an ALREADY-terminalized (specifically already `launch-failed`) id is never silently
     reconciled -- it's returned as a `late-launch-after-terminal` anomaly instead. Returns
     `(anomaly_strings, late_launch_request_ids)`."""
-    anomalies: List[str] = []
-    late_launch_ids: Set[str] = set()
+    anomalies: list[str] = []
+    late_launch_ids: set[str] = set()
     now = now_fn()
     try:
         claim_files = sorted(paths.claims_dir.glob("*.json"))
@@ -404,7 +405,7 @@ def terminalize_phase(
 
 
 def map_last_run_disposition(
-    run_exit: Optional[int], verify_exit: Optional[int], late_launch: bool, restart_failed: Optional[str] = None,
+    run_exit: int | None, verify_exit: int | None, late_launch: bool, restart_failed: str | None = None,
 ) -> str:
     """Pinned (WP-3 brief): `clean` iff both exit codes are exactly 0 (a deadline/stop pause is a
     NORMAL `batch run` exit-0 outcome, not a needs-attention condition on its own -- queue state
@@ -423,14 +424,14 @@ def map_last_run_disposition(
 
 def compose_last_run(
     paths: Paths, now_fn: Callable[[], datetime],
-    late_launch_ids: Set[str], janitor_crash_invocation_id: Optional[str] = None,
-    janitor_restart_failed: Optional[str] = None,
+    late_launch_ids: set[str], janitor_crash_invocation_id: str | None = None,
+    janitor_restart_failed: str | None = None,
 ) -> None:
     """Composes `last-run.json` from the NEWEST terminal evidence across every
     `results/*.json` at `stage:"exited"` plus (if given) a freshly-janitor-detected crash --
     dispatcher-sole-writer, never overwritten with older/no-newer evidence."""
     existing = read_json_safe(paths.last_run_path)
-    candidates: List[Dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     try:
         result_files = list(paths.results_dir.glob("*.json"))
     except OSError:
@@ -469,7 +470,7 @@ def compose_last_run(
 _LIVE_IDENTITY_KEYS = ("invocation_id", "request_id", "pid", "pgid", "pid_starttime", "boot_id")
 
 
-def _live_identity(live: Dict[str, Any]) -> Tuple[Any, ...]:
+def _live_identity(live: dict[str, Any]) -> tuple[Any, ...]:
     """The fields that name ONE invocation's process identity -- `phase` is excluded on purpose
     (`set_live_phase` rewrites it in place during a healthy run)."""
     return tuple(live.get(k) for k in _LIVE_IDENTITY_KEYS)
@@ -477,12 +478,12 @@ def _live_identity(live: Dict[str, Any]) -> Tuple[Any, ...]:
 
 def janitor_phase(
     paths: Paths, now_fn: Callable[[], datetime],
-    boot_id_fn: Callable[[], str], pgid_alive_fn: Callable[[int], bool], pid_alive_fn: Callable[[Optional[int], Optional[str]], bool],
-    find_pid_fn: Callable[..., Optional[int]], teardown_fn: Callable[..., Dict[str, Any]], router_start_fn: Callable[[str], None],
+    boot_id_fn: Callable[[], str], pgid_alive_fn: Callable[[int], bool], pid_alive_fn: Callable[[int | None, str | None], bool],
+    find_pid_fn: Callable[..., int | None], teardown_fn: Callable[..., dict[str, Any]], router_start_fn: Callable[[str], None],
     port: int, scratch_container: str, router_container: str,
-    late_launch_ids: Set[str],
-    acquire_cron_lock_fn: Optional[Callable[[], Optional[int]]] = None,
-) -> List[str]:
+    late_launch_ids: set[str],
+    acquire_cron_lock_fn: Callable[[], int | None] | None = None,
+) -> list[str]:
     """Controller-liveness truth + workload-aware crash recovery. Wrapper-dead-but-group-alive is
     an anomaly only (stop stays admissible -- `batch.py`, the marker consumer, is the survivor);
     a `boot_id` mismatch is dead by definition; a genuinely empty group triggers the FULL
@@ -503,7 +504,7 @@ def janitor_phase(
     as a `"recovery-deferred: ..."` anomaly. Once held, `live.json` is re-read: if it no longer
     names the same invocation (removed, unreadable, or replaced by a new run), nothing destructive
     happens this pass. Never an acquire-then-release probe -- that reopens the race."""
-    anomalies: List[str] = []
+    anomalies: list[str] = []
     live = read_json_safe(paths.live_path, anomalies=anomalies)
     if live is None:
         return anomalies
@@ -555,7 +556,7 @@ def janitor_phase(
         # `router_start_fn` is `subprocess.run([...], check=False)`, so failure arrives as a nonzero
         # `returncode`, not an exception; a custom seam may raise instead. Both become one anomaly
         # line and ride into `last-run.json` (plan restart-failure-surfacing WP-1).
-        restart_failed: Optional[str] = None
+        restart_failed: str | None = None
         try:
             started = router_start_fn(router_container)
             returncode = getattr(started, "returncode", 0)
@@ -583,7 +584,7 @@ def janitor_phase(
 # -------------------------------------------------------------------------------------------
 
 
-def project_request_state(paths: Paths, request_id: str) -> Tuple[str, Optional[str]]:
+def project_request_state(paths: Paths, request_id: str) -> tuple[str, str | None]:
     """Wire-state precedence: disposition -> live -> claim -> pending. `live.json`'s presence is
     trusted as-is here -- the janitor (phase 4, already run this pass) is what keeps it accurate,
     removing it whenever the group is genuinely dead."""
@@ -599,13 +600,13 @@ def project_request_state(paths: Paths, request_id: str) -> Tuple[str, Optional[
     return "pending", None
 
 
-def _build_requests_digest(paths: Paths) -> List[Dict[str, Any]]:
+def _build_requests_digest(paths: Paths) -> list[dict[str, Any]]:
     """The digest deliberately does NOT re-run `validate_request_body`: a request rejected for
     any reason (including WP-R4's schema check) still belongs on the dashboard, showing the
     `rejected` state and the reason its disposition recorded. This function only needs enough of
     the body to label the row -- an `action` in the pinned vocabulary and a `requested_at` to
     sort by; every verdict comes from `project_request_state` reading durable host evidence."""
-    digest: List[Dict[str, Any]] = []
+    digest: list[dict[str, Any]] = []
     try:
         names = sorted(os.listdir(paths.requests_dir))
     except OSError:
@@ -638,8 +639,8 @@ def _build_requests_digest(paths: Paths) -> List[Dict[str, Any]]:
 
 def compose_status(
     paths: Paths, now_fn: Callable[[], datetime],
-    ignored_invalid_names: int, anomalies: List[str],
-) -> Dict[str, Any]:
+    ignored_invalid_names: int, anomalies: list[str],
+) -> dict[str, Any]:
     armed = paths.armed_marker.exists()
     live_raw = read_json_safe(paths.live_path)
     live = None
@@ -677,7 +678,7 @@ def compose_status(
 
 def _prune_if_old(path: Path, now: datetime) -> None:
     try:
-        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
     except OSError:
         return
     if (now - mtime).total_seconds() > PRUNE_AGE_SECONDS:
@@ -744,26 +745,26 @@ def default_launch(req: IngestedRequest, paths: Paths, queues_dir: Path, run_win
 def dispatch_pass(
     paths: Paths,
     queues_dir: Path,
-    now_fn: Optional[Callable[[], datetime]] = None,
-    boot_id_fn: Optional[Callable[[], str]] = None,
-    pgid_alive_fn: Optional[Callable[[int], bool]] = None,
-    pid_alive_fn: Optional[Callable[[Optional[int], Optional[str]], bool]] = None,
-    probe_cron_lock_fn: Optional[Callable[[], bool]] = None,
-    launch_fn: Optional[Callable[[IngestedRequest], None]] = None,
-    find_pid_fn: Optional[Callable[..., Optional[int]]] = None,
-    teardown_fn: Optional[Callable[..., Dict[str, Any]]] = None,
-    router_start_fn: Optional[Callable[[str], None]] = None,
-    acquire_cron_lock_fn: Optional[Callable[[], Optional[int]]] = None,
+    now_fn: Callable[[], datetime] | None = None,
+    boot_id_fn: Callable[[], str] | None = None,
+    pgid_alive_fn: Callable[[int], bool] | None = None,
+    pid_alive_fn: Callable[[int | None, str | None], bool] | None = None,
+    probe_cron_lock_fn: Callable[[], bool] | None = None,
+    launch_fn: Callable[[IngestedRequest], None] | None = None,
+    find_pid_fn: Callable[..., int | None] | None = None,
+    teardown_fn: Callable[..., dict[str, Any]] | None = None,
+    router_start_fn: Callable[[str], None] | None = None,
+    acquire_cron_lock_fn: Callable[[], int | None] | None = None,
     port: int = DEFAULT_PORT,
     scratch_container: str = DEFAULT_SCRATCH_CONTAINER,
     router_container: str = DEFAULT_ROUTER_CONTAINER,
-    run_window_path: Optional[Path] = None,
-) -> Dict[str, Any]:
+    run_window_path: Path | None = None,
+) -> dict[str, Any]:
     """Runs the six phases in order (ingest -> act -> terminalize -> janitor -> publish -> prune)
     and returns the composed `status.json` dict. Every collaborator that could touch a real
     process/Docker is injectable with a safe real-but-never-exercised-by-tests default, same
     pattern as `batch.py.run_queue` -- see the module docstring."""
-    now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+    now_fn = now_fn or (lambda: datetime.now(UTC))
     boot_id_fn = boot_id_fn or read_boot_id
     pgid_alive_fn = pgid_alive_fn or pgid_alive
     pid_alive_fn = pid_alive_fn or default_pid_alive

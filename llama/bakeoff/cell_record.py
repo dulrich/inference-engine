@@ -20,7 +20,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import run_harness
 from cell_model import ResolvedCell
@@ -43,7 +43,7 @@ _MAX_STRING_FIELD_CHARS = 4000
 _CHARS_PER_TOKEN_CONSERVATIVE = 5  # generous vs. this repo's own measured ~3.7-4.2 chars/token
 
 
-def project_cell_record_size_bytes(context: Optional[int], trials: int) -> int:
+def project_cell_record_size_bytes(context: int | None, trials: int) -> int:
     """Conservative pre-enqueue size projection for one cell's contribution to
     `llama/bakeoff/records/<experiment-id>/{samples,completions}.jsonl` (the two per-trial files;
     `run_harness.write_experiment_record`'s `SIZE_LIMIT_BYTES` budget covers the whole
@@ -110,7 +110,7 @@ def project_cell_record_size_bytes(context: Optional[int], trials: int) -> int:
 _SHARED_MODELS_ORG_REPO_RE = re.compile(r"^/(?:home/_shared_models|models)/([^/]+)/([^/]+)/[^/]+$")
 
 
-def hf_repo_from_host_path(host_path: Optional[str]) -> Optional[str]:
+def hf_repo_from_host_path(host_path: str | None) -> str | None:
     """Derives `"<org>/<repo>"` from a `model_host_path` under the shared-models mount, else
     `None`. `host_path` must match `^/(?:home/_shared_models|models)/([^/]+)/([^/]+)/[^/]+$`
     exactly -- either accepted mount prefix (`/srv/models` is the frozen pre-migration
@@ -128,7 +128,7 @@ def hf_repo_from_host_path(host_path: Optional[str]) -> Optional[str]:
     return f"{org}/{repo}"
 
 
-def _lineage_fields(host_path: Optional[str]) -> Dict[str, Any]:
+def _lineage_fields(host_path: str | None) -> dict[str, Any]:
     """`filename`/`file_size` come from the cell's own `model_host_path` (stat'd live). `hf_repo`
     is derived from that same path -- hashing a multi-GiB GGUF per cell is not worth the
     wall-clock, but the registry's own directory layout already encodes the repo for free.
@@ -152,7 +152,7 @@ def _lineage_fields(host_path: Optional[str]) -> Dict[str, Any]:
     }
 
 
-def cell_timing_fields(handle: Any) -> Dict[str, Any]:
+def cell_timing_fields(handle: Any) -> dict[str, Any]:
     """The four additive `config.json` timing keys for the cell `handle` belongs to, read at the
     moment the record is about to be written (WP-1, `bakeoff-timing-records-and-estimates.md`).
 
@@ -166,7 +166,7 @@ def cell_timing_fields(handle: Any) -> Dict[str, Any]:
     residency transition, which this measurement is not.
     """
     started_monotonic = getattr(handle, "started_monotonic", None)
-    wall_seconds: Optional[float] = None
+    wall_seconds: float | None = None
     if isinstance(started_monotonic, (int, float)) and not isinstance(started_monotonic, bool):
         wall_seconds = time.monotonic() - started_monotonic
     return {
@@ -177,16 +177,16 @@ def cell_timing_fields(handle: Any) -> Dict[str, Any]:
     }
 
 
-def _flatten_battery(battery_results: Dict[str, Dict[float, Any]]):
+def _flatten_battery(battery_results: dict[str, dict[float, Any]]):
     """`{task: {position_fraction: CellResult}}` -> (samples, completions, first Wilson summary).
 
     `wilson_summary` is the first non-null per-task/position summary from the battery (Wilson
     intervals exist only where `n_trials >= longcontext.MIN_TRIALS_FOR_WILSON`); `None` for
     smoke-depth cells -- `write_experiment_record` keeps the key present either way.
     """
-    samples: List[Dict[str, Any]] = []
-    completions: List[Dict[str, Any]] = []
-    wilson_summary: Optional[Dict[str, Any]] = None
+    samples: list[dict[str, Any]] = []
+    completions: list[dict[str, Any]] = []
+    wilson_summary: dict[str, Any] | None = None
     for per_position in battery_results.values():
         for cell_result in per_position.values():
             samples.extend(cell_result.samples)
@@ -199,19 +199,19 @@ def _flatten_battery(battery_results: Dict[str, Dict[float, Any]]):
 def write_cell_record(
     records_dir: Path,
     cell: ResolvedCell,
-    battery_results: Dict[str, Dict[float, Any]],
-    vram_baseline_bytes: Optional[int],
-    vram_loaded_bytes: Optional[int],
-    sampling_arm_effective: Optional[str],
-    vram_profile: Optional[str] = None,
-    response_caps: Optional[Dict[str, Any]] = None,
-    cell_started_at: Optional[str] = None,
-    cell_ended_at: Optional[str] = None,
-    cell_wall_seconds: Optional[float] = None,
-    scratch_startup_seconds: Optional[float] = None,
-    extra_samples: Optional[List[Dict[str, Any]]] = None,
-    extra_completions: Optional[List[Dict[str, Any]]] = None,
-    timing_geometry: Optional[Dict[str, Any]] = None,
+    battery_results: dict[str, dict[float, Any]],
+    vram_baseline_bytes: int | None,
+    vram_loaded_bytes: int | None,
+    sampling_arm_effective: str | None,
+    vram_profile: str | None = None,
+    response_caps: dict[str, Any] | None = None,
+    cell_started_at: str | None = None,
+    cell_ended_at: str | None = None,
+    cell_wall_seconds: float | None = None,
+    scratch_startup_seconds: float | None = None,
+    extra_samples: list[dict[str, Any]] | None = None,
+    extra_completions: list[dict[str, Any]] | None = None,
+    timing_geometry: dict[str, Any] | None = None,
 ) -> Path:
     """Persists one live cell's battery output as a standard four-file
     `run_harness.write_experiment_record` directory under `records_dir/<cell_id>/` -- exactly the

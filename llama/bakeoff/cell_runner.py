@@ -24,8 +24,9 @@ Zero new runtime dependencies: Python 3 stdlib only.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, NamedTuple
 
 import longcontext
 import run_harness
@@ -130,9 +131,9 @@ class TimingArm(NamedTuple):
     item, which is how the runner knows to leave `CellOutcome.detail` byte-identical to its
     pre-timing-arm shape."""
 
-    samples: List[Dict[str, Any]]
-    completions: List[Dict[str, Any]]
-    detail: Optional[Dict[str, Any]]
+    samples: list[dict[str, Any]]
+    completions: list[dict[str, Any]]
+    detail: dict[str, Any] | None
 
 
 # The "this cell had no timing arm" value. Its empty lists are never mutated -- `write_cell_record`
@@ -140,7 +141,7 @@ class TimingArm(NamedTuple):
 NO_TIMING = TimingArm([], [], None)
 
 
-def resolve_timing_rounds(override: Optional[int]) -> int:
+def resolve_timing_rounds(override: int | None) -> int:
     """The per-cell `timing_rounds` override, else `TIMING_DEFAULT_ROUNDS`. A non-int or
     non-positive value falls back to the default rather than raising -- `validate_queue` already
     rejects a malformed override at load time, so reaching here with one means a hand-built cell,
@@ -150,7 +151,7 @@ def resolve_timing_rounds(override: Optional[int]) -> int:
     return TIMING_DEFAULT_ROUNDS
 
 
-def resolve_timing_prompt(prompt_tokens_target: Optional[int]) -> Tuple[str, str]:
+def resolve_timing_prompt(prompt_tokens_target: int | None) -> tuple[str, str]:
     """The per-cell `timing_prompt_tokens` override resolved to `(prompt, prompt_source)`. Same
     defensive fallback shape as `resolve_timing_rounds`: a non-int or non-positive value reads as
     absent rather than raising.
@@ -174,7 +175,7 @@ def resolve_timing_prompt(prompt_tokens_target: Optional[int]) -> Tuple[str, str
     return TIMING_PROMPT, "fixed-short"
 
 
-def resolve_timing_max_tokens(override: Optional[int]) -> int:
+def resolve_timing_max_tokens(override: int | None) -> int:
     """The per-cell `timing_max_tokens` override, else `TIMING_MAX_TOKENS` -- same defensive
     fallback shape as `resolve_timing_rounds`."""
     if isinstance(override, int) and not isinstance(override, bool) and override >= 1:
@@ -183,9 +184,9 @@ def resolve_timing_max_tokens(override: Optional[int]) -> int:
 
 
 def run_timing_rounds(
-    handle: "sweep.ScratchServerHandle",
+    handle: sweep.ScratchServerHandle,
     cell: ResolvedCell,
-    round_fn: Optional[Callable[..., Any]] = None,
+    round_fn: Callable[..., Any] | None = None,
     timeout: float = 180.0,
 ) -> TimingArm:
     """The `"timing"` battery item: `resolve_timing_rounds(...)` short-prompt generation rounds
@@ -222,9 +223,9 @@ def run_timing_rounds(
     rounds = resolve_timing_rounds(cell.queue.timing_rounds)
     prompt, prompt_source = resolve_timing_prompt(cell.queue.timing_prompt_tokens)
     max_tokens = resolve_timing_max_tokens(cell.queue.timing_max_tokens)
-    samples: List[Dict[str, Any]] = []
-    completions: List[Dict[str, Any]] = []
-    error: Optional[str] = None
+    samples: list[dict[str, Any]] = []
+    completions: list[dict[str, Any]] = []
+    error: str | None = None
     for round_index in range(rounds):
         run_state = TIMING_ROUND_STATES[0] if round_index == 0 else TIMING_ROUND_STATES[1]
         try:
@@ -257,7 +258,7 @@ def run_timing_rounds(
 
 
 def default_cell_runner(
-    handle: "sweep.ScratchServerHandle", cell: Optional[ResolvedCell] = None,
+    handle: sweep.ScratchServerHandle, cell: ResolvedCell | None = None,
 ) -> CellOutcome:
     """Verifies the scratch server actually came up healthy and passed startup-state
     verification, and marks the cell `completed` on that basis alone -- it runs NO battery.
@@ -275,12 +276,12 @@ def default_cell_runner(
 class _SamplingChoice(NamedTuple):
     requested: str
     effective: str
-    payload: Dict[str, Any]
-    fallback_reason: Optional[str]
+    payload: dict[str, Any]
+    fallback_reason: str | None
 
 
 def _choose_sampling(
-    cell: ResolvedCell, production_sampling_fn: Callable[[str], Dict[str, float]],
+    cell: ResolvedCell, production_sampling_fn: Callable[[str], dict[str, float]],
 ) -> _SamplingChoice:
     """Resolves the cell's requested sampling arm into a concrete payload, closing
     `run_harness`'s documented `SAMPLING_ARM_PRODUCTION` None-placeholder deferral. A
@@ -293,7 +294,7 @@ def _choose_sampling(
     """
     requested = cell.queue.sampling_arm
     effective = requested
-    fallback_reason: Optional[str] = None
+    fallback_reason: str | None = None
     if requested == "production":
         try:
             preset = production_sampling_fn(cell.model_family)
@@ -308,14 +309,14 @@ def _choose_sampling(
     )
 
 
-def _read_vram(vram_used_bytes_fn: Callable[[], int]) -> Optional[int]:
+def _read_vram(vram_used_bytes_fn: Callable[[], int]) -> int | None:
     try:
         return vram_used_bytes_fn()
     except OSError:
         return None
 
 
-def _timing_geometry_for_record(cell: ResolvedCell, timing: TimingArm) -> Optional[Dict[str, Any]]:
+def _timing_geometry_for_record(cell: ResolvedCell, timing: TimingArm) -> dict[str, Any] | None:
     """The record's optional `config.json` `timing_geometry` block (plan "Decisions locked",
     audit B2), or `None` when it must be omitted.
 
@@ -338,14 +339,14 @@ def _timing_geometry_for_record(cell: ResolvedCell, timing: TimingArm) -> Option
 
 
 def _persist(
-    records_dir: Optional[Path],
+    records_dir: Path | None,
     cell: ResolvedCell,
-    handle: "sweep.ScratchServerHandle",
-    battery_results: Dict[str, Dict[float, Any]],
-    vram_after_bytes: Optional[int],
-    sampling_arm_effective: Optional[str],
-    vram_profile: Optional[str],
-    response_caps: Dict[str, Any],
+    handle: sweep.ScratchServerHandle,
+    battery_results: dict[str, dict[float, Any]],
+    vram_after_bytes: int | None,
+    sampling_arm_effective: str | None,
+    vram_profile: str | None,
+    response_caps: dict[str, Any],
     timing: TimingArm,
 ):
     """Writes the record and returns `(record_path, record_error)`. A persistence failure (size
@@ -372,15 +373,15 @@ def _persist(
 
 
 def make_longcontext_cell_runner(
-    battery_fn: Optional[Callable[..., Dict[str, Dict[float, Any]]]] = None,
-    production_sampling_fn: Optional[Callable[[str], Dict[str, float]]] = None,
-    vram_used_bytes_fn: Optional[Callable[[], int]] = None,
+    battery_fn: Callable[..., dict[str, dict[float, Any]]] | None = None,
+    production_sampling_fn: Callable[[str], dict[str, float]] | None = None,
+    vram_used_bytes_fn: Callable[[], int] | None = None,
     max_tokens: int = 256,
     timeout: float = 300,
-    records_dir: Optional[Path] = None,
-    vram_profile: Optional[str] = None,
-    timing_round_fn: Optional[Callable[..., Any]] = None,
-) -> Callable[["sweep.ScratchServerHandle", ResolvedCell], CellOutcome]:
+    records_dir: Path | None = None,
+    vram_profile: str | None = None,
+    timing_round_fn: Callable[..., Any] | None = None,
+) -> Callable[[sweep.ScratchServerHandle, ResolvedCell], CellOutcome]:
     """Builds the real live `cell_runner` for a queue cell.
 
     The returned `_runner` is one linear sequence:
@@ -411,7 +412,7 @@ def make_longcontext_cell_runner(
     response_caps = {"default": max_tokens, "by_task": LONGCONTEXT_MAX_TOKENS_BY_TASK}
 
     def _startup_only(
-        handle: "sweep.ScratchServerHandle", cell: ResolvedCell, timing: TimingArm,
+        handle: sweep.ScratchServerHandle, cell: ResolvedCell, timing: TimingArm,
     ) -> CellOutcome:
         """A cell with no `"needle"` battery item: startup verification is the whole
         measurement. VRAM read-backs are persisted via the state file's `detail` AND as a
@@ -419,7 +420,7 @@ def make_longcontext_cell_runner(
         subdirectory fails `verify_run`'s `records_present` check, which would page the
         unattended loop on every fit-measurement cell."""
         vram_after = _read_vram(vram_used_bytes_fn)
-        detail: Dict[str, Any] = {
+        detail: dict[str, Any] = {
             "startup_details": handle.details,
             "vram_before_bytes": handle.vram_before_bytes,
             "vram_after_bytes": vram_after,
@@ -435,7 +436,7 @@ def make_longcontext_cell_runner(
         return COMPLETED.with_detail(detail)
 
     def _measure_longcontext(
-        handle: "sweep.ScratchServerHandle", cell: ResolvedCell, timing: TimingArm,
+        handle: sweep.ScratchServerHandle, cell: ResolvedCell, timing: TimingArm,
     ) -> CellOutcome:
         arm_gate = classify_sampling_arm(cell.queue.sampling_arm)
         if arm_gate is not None:
@@ -512,7 +513,7 @@ def make_longcontext_cell_runner(
 
         return classify_battery_samples(samples_by_task).with_detail(detail)
 
-    def _runner(handle: "sweep.ScratchServerHandle", cell: ResolvedCell) -> CellOutcome:
+    def _runner(handle: sweep.ScratchServerHandle, cell: ResolvedCell) -> CellOutcome:
         gate = classify_startup(handle.healthy, handle.verified)
         if gate is not None:
             return gate.with_detail({"startup_details": handle.details})

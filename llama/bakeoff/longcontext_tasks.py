@@ -23,7 +23,7 @@ Zero new runtime dependencies: Python 3 stdlib only.
 from __future__ import annotations
 
 import random
-from typing import Any, Dict, NamedTuple, Tuple
+from typing import Any, NamedTuple
 
 # `run_harness._generate_reference_code` is resolved through the module object at call time --
 # same reason every other module here imports `run_harness` rather than the symbol.
@@ -43,7 +43,7 @@ class TrialSpec(NamedTuple):
     expected: Any
     task: str
     position_fraction: float
-    meta: Dict[str, Any]
+    meta: dict[str, Any]
 
 
 class Task:
@@ -144,7 +144,7 @@ class MultiNeedleTask(Task):
 # find by literal string-matching the question against the haystack. Kept as a small, fixed,
 # versioned set (this WP's own call, matching quality_corpus.jsonl's precedent of a small fixed
 # battery rather than a growing one).
-PASSAGE_QA_ITEMS: Tuple[Dict[str, str], ...] = (
+PASSAGE_QA_ITEMS: tuple[dict[str, str], ...] = (
     {
         "id": "qa-organ-restorer",
         "passage": (
@@ -226,10 +226,10 @@ class PassageQATask(Task):
         return trial.expected.lower() in content_text.lower()
 
 
-TASKS: Dict[str, Task] = {
+TASKS: dict[str, Task] = {
     "single_needle": SingleNeedleTask(),
     "multi_needle": MultiNeedleTask(),
     "passage_qa": PassageQATask(),
 }
 
-POSITION_FRACTIONS: Tuple[float, ...] = (0.10, 0.45, 0.85)
+POSITION_FRACTIONS: tuple[float, ...] = (0.10, 0.45, 0.85)

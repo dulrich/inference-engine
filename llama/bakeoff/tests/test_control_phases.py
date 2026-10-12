@@ -21,7 +21,7 @@ import os
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 BAKEOFF_DIR = Path(__file__).resolve().parent.parent
@@ -127,7 +127,7 @@ class TestIngestHardening(unittest.TestCase):
 
     def test_already_dispositioned_id_is_never_reprocessed(self):
         _write_request(self.paths, REQ_A, "arm")
-        cd.write_disposition(self.paths, REQ_A, "done", None, lambda: datetime.now(timezone.utc))
+        cd.write_disposition(self.paths, REQ_A, "done", None, lambda: datetime.now(UTC))
         # Corrupt the request body now -- idempotence must come from the disposition file
         # existing, never from re-deriving/re-validating body content.
         (self.paths.requests_dir / f"{REQ_A}.json").write_text("not json at all")
@@ -268,7 +268,7 @@ class TestCancel(unittest.TestCase):
                 request_id=REQ_A, action="cancel", queue_stem=None, minutes=None,
                 target_request_id=REQ_B, requested_at="2026-08-24T00:00:00Z",
             )
-            now_fn = _fixed_now(datetime(2026, 8, 24, 0, 5, 0, tzinfo=timezone.utc))
+            now_fn = _fixed_now(datetime(2026, 8, 24, 0, 5, 0, tzinfo=UTC))
             cd.act_phase(
                 [cancel_req], paths, now_fn, lambda: BOOT_ID, _never_alive,
                 probe_cron_lock_fn=lambda: True, launch_fn=lambda req: None,
@@ -285,7 +285,7 @@ class TestCancel(unittest.TestCase):
             paths = _make_paths(tmp)
             queues_dir = _write_queue_stem(tmp)
             _write_request(paths, REQ_B, "start", queue_stem="ladder-v1", minutes=60, requested_at="2026-08-23T00:00:00Z")
-            cd.write_disposition(paths, REQ_B, "launch-failed", "busy", lambda: datetime.now(timezone.utc))
+            cd.write_disposition(paths, REQ_B, "launch-failed", "busy", lambda: datetime.now(UTC))
             _write_request(paths, REQ_A, "cancel", target_request_id=REQ_B)
             _run_dispatch(paths, queues_dir)
             disp = json.loads((paths.dispositions_dir / f"{REQ_A}.json").read_text())
@@ -341,7 +341,7 @@ class TestReplayFromAction(unittest.TestCase):
                 "phase": "running", "started_at": "2026-08-24T00:00:00Z",
             })
             _write_request(paths, REQ_A, "stop")
-            cd.write_action(paths, REQ_A, "stop", "req-live-inv", "req-live-inv", lambda: datetime.now(timezone.utc))
+            cd.write_action(paths, REQ_A, "stop", "req-live-inv", "req-live-inv", lambda: datetime.now(UTC))
             # Marker was NOT yet created (dispatcher crashed between action-write and marker-create).
             self.assertFalse(paths.stop_marker("req-live-inv").exists())
             _run_dispatch(paths, queues_dir, pgid_alive_fn=_always_alive)
@@ -361,7 +361,7 @@ class TestReplayFromAction(unittest.TestCase):
                 "phase": "running", "started_at": "2026-08-24T01:00:00Z",
             })
             _write_request(paths, REQ_A, "stop")
-            cd.write_action(paths, REQ_A, "stop", "req-dead-inv", "req-dead-inv", lambda: datetime.now(timezone.utc))
+            cd.write_action(paths, REQ_A, "stop", "req-dead-inv", "req-dead-inv", lambda: datetime.now(UTC))
             _run_dispatch(paths, queues_dir, pgid_alive_fn=_always_alive)
             self.assertFalse(paths.stop_marker("req-dead-inv").exists())
             self.assertFalse(paths.stop_marker("req-later-inv").exists())  # never retargeted
@@ -373,7 +373,7 @@ class TestReplayFromAction(unittest.TestCase):
             paths = _make_paths(tmp)
             queues_dir = _write_queue_stem(tmp)
             _write_request(paths, REQ_A, "cancel", target_request_id=REQ_B)
-            cd.write_action(paths, REQ_A, "cancel", None, REQ_B, lambda: datetime.now(timezone.utc))
+            cd.write_action(paths, REQ_A, "cancel", None, REQ_B, lambda: datetime.now(UTC))
             _run_dispatch(paths, queues_dir)
             target_disp = json.loads((paths.dispositions_dir / f"{REQ_B}.json").read_text())
             cancel_disp = json.loads((paths.dispositions_dir / f"{REQ_A}.json").read_text())
@@ -391,7 +391,7 @@ class TestTerminalizationGrace(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
             self._claim(paths, REQ_A, "2026-08-24T00:01:00Z")
-            now = datetime(2026, 8, 24, 0, 3, 0, tzinfo=timezone.utc)  # 2 min old, grace is 5
+            now = datetime(2026, 8, 24, 0, 3, 0, tzinfo=UTC)  # 2 min old, grace is 5
             anomalies, _late = cd.terminalize_phase(paths, lambda: now, lambda: BOOT_ID, _never_alive)
             self.assertFalse((paths.dispositions_dir / f"{REQ_A}.json").exists())
             self.assertEqual(anomalies, [])
@@ -400,7 +400,7 @@ class TestTerminalizationGrace(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
             self._claim(paths, REQ_A, "2026-08-24T00:00:00Z")
-            now = datetime(2026, 8, 24, 0, 6, 0, tzinfo=timezone.utc)  # 6 min old
+            now = datetime(2026, 8, 24, 0, 6, 0, tzinfo=UTC)  # 6 min old
             cd.terminalize_phase(paths, lambda: now, lambda: BOOT_ID, _never_alive)
             disp = json.loads((paths.dispositions_dir / f"{REQ_A}.json").read_text())
             self.assertEqual((disp["state"], disp["reason"]), ("launch-failed", "no-launch-evidence"))
@@ -412,7 +412,7 @@ class TestTerminalizationGrace(unittest.TestCase):
             cd.atomic_write_json(paths.results_dir / f"{REQ_A}.json", {
                 "invocation_id": REQ_A, "stage": "busy",
             })
-            now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=timezone.utc)
+            now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=UTC)
             cd.terminalize_phase(paths, lambda: now, lambda: BOOT_ID, _never_alive)
             disp = json.loads((paths.dispositions_dir / f"{REQ_A}.json").read_text())
             self.assertEqual((disp["state"], disp["reason"]), ("launch-failed", "busy"))
@@ -425,7 +425,7 @@ class TestTerminalizationGrace(unittest.TestCase):
                 "invocation_id": REQ_A, "stage": "wrapper-started",
                 "pid": 999, "pgid": 999, "pid_starttime": "1", "boot_id": BOOT_ID,
             })
-            now = datetime(2026, 8, 24, 0, 6, 0, tzinfo=timezone.utc)
+            now = datetime(2026, 8, 24, 0, 6, 0, tzinfo=UTC)
             cd.terminalize_phase(paths, lambda: now, lambda: BOOT_ID, _never_alive)
             disp = json.loads((paths.dispositions_dir / f"{REQ_A}.json").read_text())
             self.assertEqual((disp["state"], disp["reason"]), ("launch-failed", "pre-run-crash"))
@@ -438,7 +438,7 @@ class TestTerminalizationGrace(unittest.TestCase):
                 "invocation_id": REQ_A, "stage": "wrapper-started",
                 "pid": 999, "pgid": 999, "pid_starttime": "1", "boot_id": BOOT_ID,
             })
-            now = datetime(2026, 8, 24, 0, 6, 0, tzinfo=timezone.utc)
+            now = datetime(2026, 8, 24, 0, 6, 0, tzinfo=UTC)
             cd.terminalize_phase(paths, lambda: now, lambda: BOOT_ID, _always_alive)
             self.assertFalse((paths.dispositions_dir / f"{REQ_A}.json").exists())
 
@@ -450,7 +450,7 @@ class TestTerminalizationGrace(unittest.TestCase):
                 "invocation_id": REQ_A, "stage": "exited",
                 "run_exit": 0, "verify_exit": 0, "ended_at": "2026-08-24T00:02:00Z",
             })
-            now = datetime(2026, 8, 24, 0, 2, 30, tzinfo=timezone.utc)
+            now = datetime(2026, 8, 24, 0, 2, 30, tzinfo=UTC)
             cd.terminalize_phase(paths, lambda: now, lambda: BOOT_ID, _never_alive)
             disp = json.loads((paths.dispositions_dir / f"{REQ_A}.json").read_text())
             self.assertEqual(disp["state"], "done")
@@ -459,12 +459,12 @@ class TestTerminalizationGrace(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
             self._claim(paths, REQ_A, "2026-08-24T00:00:00Z")
-            cd.write_disposition(paths, REQ_A, "launch-failed", "no-launch-evidence", lambda: datetime.now(timezone.utc))
+            cd.write_disposition(paths, REQ_A, "launch-failed", "no-launch-evidence", lambda: datetime.now(UTC))
             cd.atomic_write_json(paths.results_dir / f"{REQ_A}.json", {
                 "invocation_id": REQ_A, "stage": "wrapper-started",
                 "pid": 1, "pgid": 1, "pid_starttime": "1", "boot_id": BOOT_ID,
             })
-            now = datetime(2026, 8, 24, 0, 10, 0, tzinfo=timezone.utc)
+            now = datetime(2026, 8, 24, 0, 10, 0, tzinfo=UTC)
             anomalies, late_ids = cd.terminalize_phase(paths, lambda: now, lambda: BOOT_ID, _never_alive)
             self.assertIn(REQ_A, late_ids)
             self.assertTrue(any("late-launch-after-terminal" in a for a in anomalies))
@@ -490,7 +490,7 @@ class TestJanitor(unittest.TestCase):
             self._live(paths)
             calls = {"find": [], "teardown": [], "router_start": []}
             cd.janitor_phase(
-                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=timezone.utc),
+                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=UTC),
                 lambda: BOOT_ID, _never_alive, lambda pid, st: False,
                 find_pid_fn=lambda port, container=None: (calls["find"].append((port, container)), 555)[1],
                 teardown_fn=lambda port, container=None: (calls["teardown"].append((port, container)), {"ok": True})[1],
@@ -514,7 +514,7 @@ class TestJanitor(unittest.TestCase):
             paths = _make_paths(tmp)
             self._live(paths)
             anomalies = cd.janitor_phase(
-                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=timezone.utc),
+                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=UTC),
                 lambda: BOOT_ID, _never_alive, lambda pid, st: False,
                 find_pid_fn=lambda port, container=None: None,
                 teardown_fn=lambda port, container=None: None,
@@ -535,7 +535,7 @@ class TestJanitor(unittest.TestCase):
             paths = _make_paths(tmp)
             self._live(paths)
             anomalies = cd.janitor_phase(
-                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=timezone.utc),
+                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=UTC),
                 lambda: BOOT_ID, _never_alive, lambda pid, st: False,
                 find_pid_fn=lambda port, container=None: None,
                 teardown_fn=lambda port, container=None: None,
@@ -553,7 +553,7 @@ class TestJanitor(unittest.TestCase):
             self._live(paths)
             calls = {"teardown": [], "router_start": []}
             cd.janitor_phase(
-                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=timezone.utc),
+                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=UTC),
                 lambda: BOOT_ID, _never_alive, lambda pid, st: False,
                 find_pid_fn=lambda port, container=None: None,
                 teardown_fn=lambda port, container=None: calls["teardown"].append((port, container)),
@@ -569,7 +569,7 @@ class TestJanitor(unittest.TestCase):
             paths = _make_paths(tmp)
             self._live(paths)
             anomalies = cd.janitor_phase(
-                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=timezone.utc),
+                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=UTC),
                 lambda: BOOT_ID, _always_alive, lambda pid, st: False,  # group alive, specific wrapper pid dead
                 find_pid_fn=lambda port, container=None: None,
                 teardown_fn=lambda port, container=None: None,
@@ -586,7 +586,7 @@ class TestJanitor(unittest.TestCase):
             paths = _make_paths(tmp)
             self._live(paths, boot_id="a-different-boot")
             cd.janitor_phase(
-                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=timezone.utc),
+                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=UTC),
                 lambda: BOOT_ID, _always_alive, lambda pid, st: True,  # group WOULD look alive by pgid alone
                 find_pid_fn=lambda port, container=None: None,
                 teardown_fn=lambda port, container=None: None,
@@ -602,7 +602,7 @@ class TestJanitor(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
             anomalies = cd.janitor_phase(
-                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=timezone.utc),
+                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=UTC),
                 lambda: BOOT_ID, _always_alive, lambda pid, st: True,
                 find_pid_fn=lambda port, container=None: None,
                 teardown_fn=lambda port, container=None: None,
@@ -619,7 +619,7 @@ class TestJanitor(unittest.TestCase):
             paths.live_path.parent.mkdir(parents=True, exist_ok=True)
             paths.live_path.write_text("not valid json {{{")
             anomalies = cd.janitor_phase(
-                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=timezone.utc),
+                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=UTC),
                 lambda: BOOT_ID, _always_alive, lambda pid, st: True,
                 find_pid_fn=lambda port, container=None: None,
                 teardown_fn=lambda port, container=None: None,
@@ -637,7 +637,7 @@ class TestJanitor(unittest.TestCase):
             paths = _make_paths(tmp)
             self._live(paths, invocation_id=REQ_A, request_id=REQ_A)
             anomalies = cd.janitor_phase(
-                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=timezone.utc),
+                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=UTC),
                 lambda: BOOT_ID, _always_alive, lambda pid, st: True,
                 find_pid_fn=lambda port, container=None: None,
                 teardown_fn=lambda port, container=None: None,
@@ -659,7 +659,7 @@ class TestJanitor(unittest.TestCase):
                 "request_id": REQ_A, "claimed_at": "2026-08-24T00:00:00Z", "queue_stem": "ladder-v1", "minutes": 60,
             })
             anomalies = cd.janitor_phase(
-                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=timezone.utc),
+                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=UTC),
                 lambda: BOOT_ID, _always_alive, lambda pid, st: True,
                 find_pid_fn=lambda port, container=None: None,
                 teardown_fn=lambda port, container=None: None,
@@ -674,7 +674,7 @@ class TestJanitor(unittest.TestCase):
             paths = _make_paths(tmp)
             self._live(paths, invocation_id="nightly-20260824", request_id="nightly-20260824")
             anomalies = cd.janitor_phase(
-                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=timezone.utc),
+                paths, lambda: datetime(2026, 8, 24, 0, 10, 0, tzinfo=UTC),
                 lambda: BOOT_ID, _always_alive, lambda pid, st: True,
                 find_pid_fn=lambda port, container=None: None,
                 teardown_fn=lambda port, container=None: None,
@@ -737,7 +737,7 @@ class TestWireStateProjection(unittest.TestCase):
             cd.atomic_write_json(paths.live_path, {"request_id": REQ_A, "invocation_id": REQ_A})
             self.assertEqual(cd.project_request_state(paths, REQ_A), ("running", None))
             # disposition wins over everything else.
-            cd.write_disposition(paths, REQ_A, "done", None, lambda: datetime.now(timezone.utc))
+            cd.write_disposition(paths, REQ_A, "done", None, lambda: datetime.now(UTC))
             self.assertEqual(cd.project_request_state(paths, REQ_A), ("done", None))
 
 
@@ -784,29 +784,29 @@ class TestPrune(unittest.TestCase):
     def test_old_files_pruned_recent_files_retained(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
-            old_ts = (datetime.now(timezone.utc) - timedelta(days=31)).timestamp()
-            recent_ts = (datetime.now(timezone.utc) - timedelta(days=1)).timestamp()
+            old_ts = (datetime.now(UTC) - timedelta(days=31)).timestamp()
+            recent_ts = (datetime.now(UTC) - timedelta(days=1)).timestamp()
             old_req = paths.requests_dir / "req-20260101T000000Z-0011223344556677.json"
             recent_req = paths.requests_dir / "req-20260101T000001Z-0011223344556678.json"
             old_req.write_text("{}")
             recent_req.write_text("{}")
             os.utime(old_req, (old_ts, old_ts))
             os.utime(recent_req, (recent_ts, recent_ts))
-            cd.prune_phase(paths, lambda: datetime.now(timezone.utc))
+            cd.prune_phase(paths, lambda: datetime.now(UTC))
             self.assertFalse(old_req.exists())
             self.assertTrue(recent_req.exists())
 
     def test_claims_and_dispositions_never_pruned_regardless_of_age(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
-            old_ts = (datetime.now(timezone.utc) - timedelta(days=400)).timestamp()
+            old_ts = (datetime.now(UTC) - timedelta(days=400)).timestamp()
             claim = paths.claims_dir / f"{REQ_A}.json"
             disp = paths.dispositions_dir / f"{REQ_A}.json"
             claim.write_text("{}")
             disp.write_text("{}")
             os.utime(claim, (old_ts, old_ts))
             os.utime(disp, (old_ts, old_ts))
-            cd.prune_phase(paths, lambda: datetime.now(timezone.utc))
+            cd.prune_phase(paths, lambda: datetime.now(UTC))
             self.assertTrue(claim.exists())
             self.assertTrue(disp.exists())
 
@@ -818,7 +818,7 @@ class TestPrune(unittest.TestCase):
             dead_marker.touch()
             live_marker.touch()
             cd.atomic_write_json(paths.live_path, {"invocation_id": "req-live-inv"})
-            cd.prune_phase(paths, lambda: datetime.now(timezone.utc))
+            cd.prune_phase(paths, lambda: datetime.now(UTC))
             self.assertFalse(dead_marker.exists())
             self.assertTrue(live_marker.exists())
 
@@ -827,7 +827,7 @@ class TestStatusShape(unittest.TestCase):
     def test_pinned_keys_present_with_explicit_nulls(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
-            now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=timezone.utc)
+            now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=UTC)
             status = cd.compose_status(paths, lambda: now, 0, [])
             self.assertEqual(
                 set(status.keys()),
@@ -854,7 +854,7 @@ class TestStatusShape(unittest.TestCase):
                 "invocation_id": "req-inv", "request_id": "req-inv", "ended_at": "2026-08-23T23:00:00Z",
                 "run_exit": 0, "verify_exit": 0, "disposition": "clean",
             })
-            now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=timezone.utc)
+            now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=UTC)
             status = cd.compose_status(paths, lambda: now, 3, ["some anomaly"])
             self.assertEqual(status["live"], {
                 "request_id": "req-inv", "queue_stem": "ladder-v1", "phase": "running", "started_at": "2026-08-24T00:00:00Z",
@@ -871,8 +871,8 @@ class TestStatusShape(unittest.TestCase):
             paths = _make_paths(tmp)
             _write_request(paths, REQ_B, "arm", requested_at="2026-08-24T00:00:01Z")
             _write_request(paths, REQ_A, "arm", requested_at="2026-08-24T00:00:00Z")
-            cd.write_disposition(paths, REQ_A, "done", None, lambda: datetime.now(timezone.utc))
-            now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=timezone.utc)
+            cd.write_disposition(paths, REQ_A, "done", None, lambda: datetime.now(UTC))
+            now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=UTC)
             status = cd.compose_status(paths, lambda: now, 0, [])
             self.assertEqual([r["request_id"] for r in status["requests"]], [REQ_A, REQ_B])
             self.assertEqual(status["requests"][0]["state"], "done")

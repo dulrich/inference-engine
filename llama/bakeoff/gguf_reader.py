@@ -31,7 +31,7 @@ from __future__ import annotations
 import re
 import struct
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, NamedTuple
 
 GIB = 1024 ** 3
 
@@ -66,7 +66,7 @@ _GGUF_TYPE_FLOAT64 = 12
 
 # (struct format char, byte size) for every fixed-size scalar type. STRING/ARRAY are handled
 # separately (variable length).
-_GGUF_SCALAR_STRUCT: Dict[int, Tuple[str, int]] = {
+_GGUF_SCALAR_STRUCT: dict[int, tuple[str, int]] = {
     _GGUF_TYPE_UINT8: ("B", 1),
     _GGUF_TYPE_INT8: ("b", 1),
     _GGUF_TYPE_UINT16: ("H", 2),
@@ -108,7 +108,7 @@ def _read_gguf_value(f, value_type: int) -> Any:
     return val
 
 
-def read_gguf_metadata(gguf_path: Path) -> Dict[str, Any]:
+def read_gguf_metadata(gguf_path: Path) -> dict[str, Any]:
     """Parses a GGUF file's magic/version/counts header plus its metadata key/value block only --
     never the tensor-info array or the tensor data itself. Raises `GGUFParseError` on a bad magic
     or a truncated/malformed metadata block; raises `OSError` (uncaught) if the path can't be
@@ -121,7 +121,7 @@ def read_gguf_metadata(gguf_path: Path) -> Dict[str, Any]:
         struct.unpack("<I", _read_exact(f, 4))  # version -- not currently needed by callers
         struct.unpack("<Q", _read_exact(f, 8))  # tensor_count -- ditto
         (kv_count,) = struct.unpack("<Q", _read_exact(f, 8))
-        metadata: Dict[str, Any] = {}
+        metadata: dict[str, Any] = {}
         for _ in range(kv_count):
             key = _read_gguf_string(f)
             (value_type,) = struct.unpack("<I", _read_exact(f, 4))
@@ -155,7 +155,7 @@ def read_gguf_metadata(gguf_path: Path) -> Dict[str, Any]:
 # `docs/qwen4exp-ple-ondisk-spike.md`'s 26.82 GiB PLE-table / 42.92 GiB routed-expert figures, not
 # the plan's own Context-section "session" figures of 29.84/45.34 GiB (see
 # `tests/test_gguf_tensor_classes.py` and the WP-4 report for the reconciliation).
-GGML_TYPE_SIZES: Dict[int, Tuple[int, int]] = {
+GGML_TYPE_SIZES: dict[int, tuple[int, int]] = {
     0: (1, 4),  # F32
     1: (1, 2),  # F16
     2: (32, 18),  # Q4_0
@@ -195,7 +195,7 @@ class TensorInfo(NamedTuple):
     raw ggml type ids."""
 
     name: str
-    dims: Tuple[int, ...]
+    dims: tuple[int, ...]
     ggml_type: int
     nbytes: int
 
@@ -206,7 +206,7 @@ class TensorInfo(NamedTuple):
 _SPLIT_SHARD_RE = re.compile(r"^(?P<prefix>.*)-(?P<idx>\d{5})-of-(?P<total>\d{5})\.gguf$")
 
 
-def _sibling_shard_paths(gguf_path: Path, count: int) -> Optional[List[Path]]:
+def _sibling_shard_paths(gguf_path: Path, count: int) -> list[Path] | None:
     """Derives every shard path for a `split.count`-carrying GGUF from ONE shard's own path --
     never from `split.no` (a shard's OWN index is not needed to name its siblings). Returns
     `None` -- never a guess -- if `gguf_path`'s name doesn't match the split-shard convention at
@@ -221,7 +221,7 @@ def _sibling_shard_paths(gguf_path: Path, count: int) -> Optional[List[Path]]:
     return [gguf_path.parent / f"{prefix}-{i:05d}-of-{total_str}.gguf" for i in range(1, count + 1)]
 
 
-def _read_gguf_tensor_infos_one_shard(gguf_path: Path) -> Tuple[Dict[str, Any], List[TensorInfo]]:
+def _read_gguf_tensor_infos_one_shard(gguf_path: Path) -> tuple[dict[str, Any], list[TensorInfo]]:
     """Parses ONE GGUF file's KV metadata block AND its tensor-info array in a single sequential
     pass -- the tensor-info array immediately follows the KV block in the GGUF v3 layout
     `read_gguf_metadata` already documents. Raises `GGUFParseError` (bad magic, truncated file, or
@@ -240,12 +240,12 @@ def _read_gguf_tensor_infos_one_shard(gguf_path: Path) -> Tuple[Dict[str, Any], 
         struct.unpack("<I", _read_exact(f, 4))  # version -- not needed here either
         (tensor_count,) = struct.unpack("<Q", _read_exact(f, 8))
         (kv_count,) = struct.unpack("<Q", _read_exact(f, 8))
-        metadata: Dict[str, Any] = {}
+        metadata: dict[str, Any] = {}
         for _ in range(kv_count):
             key = _read_gguf_string(f)
             (value_type,) = struct.unpack("<I", _read_exact(f, 4))
             metadata[key] = _read_gguf_value(f, value_type)
-        tensor_infos: List[TensorInfo] = []
+        tensor_infos: list[TensorInfo] = []
         for _ in range(tensor_count):
             name = _read_gguf_string(f)
             (n_dims,) = struct.unpack("<I", _read_exact(f, 4))
@@ -266,7 +266,7 @@ def _read_gguf_tensor_infos_one_shard(gguf_path: Path) -> Tuple[Dict[str, Any], 
     return metadata, tensor_infos
 
 
-def read_gguf_tensor_infos(gguf_path: Path) -> Optional[List[TensorInfo]]:
+def read_gguf_tensor_infos(gguf_path: Path) -> list[TensorInfo] | None:
     """Returns every tensor's `(name, dims, ggml_type, nbytes)` for `gguf_path` -- and, when its
     own `split.count` metadata key is > 1, for every sibling shard too (all must exist; a missing
     shard fails the WHOLE read, never a partial one). `None` on any failure -- unknown ggml type,
@@ -289,7 +289,7 @@ def read_gguf_tensor_infos(gguf_path: Path) -> Optional[List[TensorInfo]]:
     shard_paths = _sibling_shard_paths(gguf_path, split_count)
     if shard_paths is None:
         return None
-    all_infos: List[TensorInfo] = []
+    all_infos: list[TensorInfo] = []
     for shard_path in shard_paths:
         if not shard_path.exists():
             return None

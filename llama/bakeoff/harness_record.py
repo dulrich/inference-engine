@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from harness_fixture import (
     DEFAULT_RUNS_DIR,
@@ -55,7 +55,7 @@ class SizeBudgetExceeded(Exception):
         self.limit_bytes = limit_bytes
 
 
-def _jsonl(records: List[Dict[str, Any]]) -> str:
+def _jsonl(records: list[dict[str, Any]]) -> str:
     if not records:
         return ""
     return "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n"
@@ -63,12 +63,12 @@ def _jsonl(records: List[Dict[str, Any]]) -> str:
 
 def write_experiment_record(
     experiment_id: str,
-    config: Dict[str, Any],
-    prompts: List[Dict[str, Any]],
-    completions: List[Dict[str, Any]],
-    samples: List[Dict[str, Any]],
-    base_dir: Optional[Path] = None,
-) -> Dict[str, Any]:
+    config: dict[str, Any],
+    prompts: list[dict[str, Any]],
+    completions: list[dict[str, Any]],
+    samples: list[dict[str, Any]],
+    base_dir: Path | None = None,
+) -> dict[str, Any]:
     """Writes `llama/bakeoff/records/<experiment-id>/{config.json,samples.jsonl,prompts.jsonl,
     completions.jsonl}`.
 

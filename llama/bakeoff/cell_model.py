@@ -37,8 +37,9 @@ Cell identity is frozen by contract: the ordered cell_ids of every committed que
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any
 
 # Same "no package `__init__.py` under `llama/`" gotcha every other module here documents: a
 # plain top-level import works because the importer has already put this directory on sys.path.
@@ -81,13 +82,13 @@ class FitMetadata:
     and a persisted `sweep_cell` block with the same code.
     """
 
-    gpu_weights_bytes: Optional[int] = None
-    kv_attention_layers: Optional[int] = None
-    swa_layer_spec: Optional[Tuple[bool, ...]] = None
-    indexer_geometry: Optional[IndexerGeometry] = None
+    gpu_weights_bytes: int | None = None
+    kv_attention_layers: int | None = None
+    swa_layer_spec: tuple[bool, ...] | None = None
+    indexer_geometry: IndexerGeometry | None = None
 
     @classmethod
-    def from_mapping(cls, raw: Mapping[str, Any]) -> "FitMetadata":
+    def from_mapping(cls, raw: Mapping[str, Any]) -> FitMetadata:
         """The ONE JSON -> typed adapter. Two callers, both reading a plain mapping whose keys
         are the wire names: `queue_file.resolve_cell` (a queue's `models[*]` registry entry) and
         `verify_run.check_vram_arithmetic` (a committed record's `config.json` `sweep_cell`
@@ -106,12 +107,12 @@ class FitMetadata:
 
     # -- JSON emission forms (both directions of the dict boundary use these, never a cast) ---
 
-    def swa_layer_spec_json(self) -> Optional[List[bool]]:
+    def swa_layer_spec_json(self) -> list[bool] | None:
         """A JSON list, never a tuple -- `json.dumps` cannot tell the two apart, but the record
         writer's `config.json` and every dict-equality assertion downstream can."""
         return None if self.swa_layer_spec is None else list(self.swa_layer_spec)
 
-    def indexer_geometry_json(self) -> Optional[Dict[str, int]]:
+    def indexer_geometry_json(self) -> dict[str, int] | None:
         return None if self.indexer_geometry is None else self.indexer_geometry.to_mapping()
 
 
@@ -126,10 +127,10 @@ class CellIdentity:
 
     alias: str
     model_container_path: str
-    server_flags: Dict[str, Any]
-    model_host_path: Optional[str] = None
+    server_flags: dict[str, Any]
+    model_host_path: str | None = None
 
-    def identity_payload(self) -> Dict[str, Any]:
+    def identity_payload(self) -> dict[str, Any]:
         """The exact dict shape `sweep.compute_cell_id` reads. Kept as a method rather than
         inlined so the one place that defines "what identity means" is greppable."""
         return {
@@ -155,14 +156,14 @@ class ExecutionSettings:
     at four call sites is the whole point.
     """
 
-    battery: Tuple[str, ...]
+    battery: tuple[str, ...]
     context: int
     kv_key_type: str
     kv_value_type: str
     flash_attention: Any
 
     @classmethod
-    def from_flags(cls, flags: Mapping[str, Any], battery: Sequence[str]) -> "ExecutionSettings":
+    def from_flags(cls, flags: Mapping[str, Any], battery: Sequence[str]) -> ExecutionSettings:
         return cls(
             battery=tuple(battery),
             context=flags["-c"],
@@ -204,14 +205,14 @@ class QueueCellMetadata:
     """
 
     model_id: str
-    sampling_arm: Optional[str] = None
-    trials: Optional[int] = None
-    chars_per_token: Optional[float] = None
-    timing_rounds: Optional[int] = None
-    spec_decode: Optional[str] = None
-    model_family: Optional[str] = None
-    timing_prompt_tokens: Optional[int] = None
-    timing_max_tokens: Optional[int] = None
+    sampling_arm: str | None = None
+    trials: int | None = None
+    chars_per_token: float | None = None
+    timing_rounds: int | None = None
+    spec_decode: str | None = None
+    model_family: str | None = None
+    timing_prompt_tokens: int | None = None
+    timing_max_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -234,18 +235,18 @@ class RecordMetadata:
     """
 
     cell_id: str
-    alias: Optional[str]
-    server_flags: Optional[Dict[str, Any]]
-    model_host_path: Optional[str]
-    battery: Optional[List[str]]
-    model_id: Optional[str]
-    spec_decode: Optional[str]
-    gpu_weights_bytes: Optional[int] = None
-    kv_attention_layers: Optional[int] = None
-    swa_layer_spec: Optional[List[bool]] = None
-    kv_indexer_geometry: Optional[Dict[str, Any]] = None
+    alias: str | None
+    server_flags: dict[str, Any] | None
+    model_host_path: str | None
+    battery: list[str] | None
+    model_id: str | None
+    spec_decode: str | None
+    gpu_weights_bytes: int | None = None
+    kv_attention_layers: int | None = None
+    swa_layer_spec: list[bool] | None = None
+    kv_indexer_geometry: dict[str, Any] | None = None
 
-    def sweep_cell_block(self, sampling_arm_effective: Optional[str]) -> Dict[str, Any]:
+    def sweep_cell_block(self, sampling_arm_effective: str | None) -> dict[str, Any]:
         """The `config.json` `sweep_cell` mapping, key order preserved from the pre-WP-R1
         `write_cell_record` literal so a newly written record diffs cleanly against a historical
         one. The four fit-passthrough keys are appended after `spec_decode`, always present
@@ -295,11 +296,11 @@ class ResolvedCell:
         return self.identity.alias
 
     @property
-    def server_flags(self) -> Dict[str, Any]:
+    def server_flags(self) -> dict[str, Any]:
         return self.identity.server_flags
 
     @property
-    def battery(self) -> Tuple[str, ...]:
+    def battery(self) -> tuple[str, ...]:
         return self.execution.battery
 
     @property
@@ -307,16 +308,16 @@ class ResolvedCell:
         return self.execution.context
 
     @property
-    def model_host_path(self) -> Optional[str]:
+    def model_host_path(self) -> str | None:
         return self.identity.model_host_path
 
     @property
-    def model_family(self) -> Optional[str]:
+    def model_family(self) -> str | None:
         return self.queue.model_family
 
     # -- the one dict adapter at the sweep.py boundary ---------------------------------------
 
-    def as_sweep_cell(self) -> Dict[str, Any]:
+    def as_sweep_cell(self) -> dict[str, Any]:
         """The plain-dict cell `sweep.normalize_cell`/`classify_fit`/`build_command`/
         `scratch_server` consume. Byte-for-byte the pre-WP-R1 normalized cell MINUS the seven
         bolted-on metadata keys, plus `cell_id` (which `sweep.scratch_server` reads).
@@ -325,7 +326,7 @@ class ResolvedCell:
         `resolve_cell` always built -- `compute_cell_id` uses `.get()`, so both spellings hash
         identically, but the adapter reproduces the historical shape exactly.
         """
-        cell: Dict[str, Any] = {
+        cell: dict[str, Any] = {
             "alias": self.identity.alias,
             "model_container_path": self.identity.model_container_path,
             "server_flags": dict(self.identity.server_flags),

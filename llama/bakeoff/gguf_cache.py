@@ -20,13 +20,14 @@ approximate.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
+from typing import Any
 
 from gguf_reader import GGUFParseError
 
 
-def gguf_attention_geometry(metadata: Dict[str, Any]) -> Dict[str, Optional[int]]:
+def gguf_attention_geometry(metadata: dict[str, Any]) -> dict[str, int | None]:
     """Extracts the handful of `<arch>.*` metadata keys the KV-cache-size formula needs.
 
     `key_length`/`value_length` fall back to `embedding_length // head_count` when the GGUF
@@ -111,7 +112,7 @@ def gguf_attention_geometry(metadata: Dict[str, Any]) -> Dict[str, Optional[int]
 # reports q4_0 K "42.0 KB/cell" vs q8_0 K+V "34.8 KB/cell" for its specific head geometry -- both
 # numbers are this same block-size arithmetic scaled by that model's head_count_kv*key_length,
 # not independently re-derived here.
-KV_TYPE_BYTES_PER_ELEMENT: Dict[str, float] = {
+KV_TYPE_BYTES_PER_ELEMENT: dict[str, float] = {
     "f32": 4.0,
     "f16": 2.0,
     "bf16": 2.0,
@@ -126,7 +127,7 @@ KV_TYPE_BYTES_PER_ELEMENT: Dict[str, float] = {
 # The exact key set a DSA-indexer geometry block carries, in emission order (WP-1,
 # qwen4exp-bakeoff-campaign, C4-B1). Named once, here, because `IndexerGeometry` below is the
 # ONLY thing in this repo allowed to spell them -- there is no second registry of these strings.
-INDEXER_GEOMETRY_KEYS: Tuple[str, ...] = ("layers", "key_length", "value_length")
+INDEXER_GEOMETRY_KEYS: tuple[str, ...] = ("layers", "key_length", "value_length")
 
 
 @dataclass(frozen=True)
@@ -149,7 +150,7 @@ class IndexerGeometry:
     value_length: int
 
     @classmethod
-    def from_mapping(cls, raw: Any, *, prefix: str = "") -> "IndexerGeometry":
+    def from_mapping(cls, raw: Any, *, prefix: str = "") -> IndexerGeometry:
         """Parses (and fully validates) a plain geometry mapping. `prefix` is prepended to the
         message of every `ValueError` raised here -- `queue_file` passes `"models[<id>] "` so the
         queue-validation text stays byte-identical to the pre-WP-R2 inline check."""
@@ -170,12 +171,12 @@ class IndexerGeometry:
         )
 
     @classmethod
-    def coerce(cls, raw: Union[Mapping[str, Any], "IndexerGeometry"]) -> "IndexerGeometry":
+    def coerce(cls, raw: Mapping[str, Any] | IndexerGeometry) -> IndexerGeometry:
         """The thin compatibility adapter at the legacy plain-dict seam: `verify_run` and
         `classify_fit` still hand this module a mapping read straight off a record/cell dict."""
         return raw if isinstance(raw, cls) else cls.from_mapping(raw)
 
-    def to_mapping(self) -> Dict[str, int]:
+    def to_mapping(self) -> dict[str, int]:
         """The one JSON emission form -- ordered `layers`/`key_length`/`value_length`, which is
         the order every committed record's `sweep_cell.kv_indexer_geometry` block already has."""
         return {
@@ -186,13 +187,13 @@ class IndexerGeometry:
 
 
 def kv_bytes_per_token(
-    geometry: Dict[str, Optional[int]],
+    geometry: dict[str, int | None],
     ctk: str,
     ctv: str,
-    kv_attention_layers: Optional[int] = None,
-    context: Optional[int] = None,
-    swa_layer_spec: Optional[List[bool]] = None,
-    kv_indexer_geometry: Optional[Union[Mapping[str, Any], IndexerGeometry]] = None,
+    kv_attention_layers: int | None = None,
+    context: int | None = None,
+    swa_layer_spec: list[bool] | None = None,
+    kv_indexer_geometry: Mapping[str, Any] | IndexerGeometry | None = None,
 ) -> float:
     """KV-cache bytes/token = attention_layers * (head_count_kv*key_length*bpe(ctk) +
     head_count_kv*value_length*bpe(ctv)) -- llama.cpp's own per-layer K+V cache tensor sizing.

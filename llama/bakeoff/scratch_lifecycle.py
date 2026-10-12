@@ -41,9 +41,9 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # `compute_cell_id`/`build_command` come from the plain-dict cell layer, and
 # `read_vram_used_bytes` from the pure VRAM/fit layer -- imported as module globals (not
@@ -81,7 +81,7 @@ def discover_bridge_ip(container: str = DEFAULT_CONTAINER_NAME) -> str:
 
 
 def spawn_scratch_server(
-    argv: List[str],
+    argv: list[str],
     log_path: str,
     container: str = DEFAULT_CONTAINER_NAME,
 ) -> None:
@@ -101,7 +101,7 @@ def spawn_scratch_server(
     )
 
 
-def find_host_pid_by_port(port: int, container: str = DEFAULT_CONTAINER_NAME) -> Optional[int]:
+def find_host_pid_by_port(port: int, container: str = DEFAULT_CONTAINER_NAME) -> int | None:
     """Finds the HOST-visible PID of the `llama-server --port <port>` process running inside
     `container`, via `docker top` (which reports real host PIDs, not container-namespace ones --
     this is what makes host-side `os.kill()` teardown possible without any kill/pkill binary
@@ -152,7 +152,7 @@ def teardown_scratch_server(
     port: int,
     container: str = DEFAULT_CONTAINER_NAME,
     grace_seconds: float = 5.0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Finds the host-visible PID for `port` (via `find_host_pid_by_port`) and signals it
     directly from the host (`os.kill` -- SIGTERM, then SIGKILL if it's still alive after
     `grace_seconds`). Never asks the container to kill its own child (no `kill`/`pkill` inside the
@@ -225,7 +225,7 @@ _STARTUP_PATTERNS = {
 }
 
 
-def verify_startup_state(log_text: str, cell: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
+def verify_startup_state(log_text: str, cell: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     """Parses a scratch server's redirected startup log and asserts it matches what `cell`
     requested. Returns `(ok, details)`: `ok` is `True` only if every checkable field was found in
     the log AND matched; any field the log doesn't mention at all (e.g. because `-v` wasn't
@@ -233,12 +233,12 @@ def verify_startup_state(log_text: str, cell: Dict[str, Any]) -> Tuple[bool, Dic
     pass -- an unverifiable cell is not a verified one.
     """
     flags = cell["server_flags"]
-    found: Dict[str, Optional[str]] = {}
+    found: dict[str, str | None] = {}
     for key, pattern in _STARTUP_PATTERNS.items():
         m = pattern.search(log_text)
         found[key] = m.group(0) if m else None
 
-    checks: Dict[str, bool] = {}
+    checks: dict[str, bool] = {}
 
     m = _STARTUP_PATTERNS["model_path"].search(log_text)
     expected_model = Path(cell["model_container_path"]).name
@@ -279,7 +279,7 @@ def verify_startup_state(log_text: str, cell: Dict[str, Any]) -> Tuple[bool, Dic
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 class ScratchServerHandle:
@@ -313,14 +313,14 @@ class ScratchServerHandle:
         base_url: str,
         healthy: bool,
         verified: bool,
-        details: Dict[str, Any],
+        details: dict[str, Any],
         log_text: str,
         vram_before_bytes: int,
         port: int,
         container: str,
-        started_at: Optional[str] = None,
-        started_monotonic: Optional[float] = None,
-        scratch_startup_seconds: Optional[float] = None,
+        started_at: str | None = None,
+        started_monotonic: float | None = None,
+        scratch_startup_seconds: float | None = None,
     ) -> None:
         self.cell_id = cell_id
         self.base_url = base_url
@@ -331,7 +331,7 @@ class ScratchServerHandle:
         self.vram_before_bytes = vram_before_bytes
         self.port = port
         self.container = container
-        self.teardown_result: Optional[Dict[str, Any]] = None
+        self.teardown_result: dict[str, Any] | None = None
         self.started_at = started_at if started_at is not None else _utc_now_iso()
         self.started_monotonic = (
             started_monotonic if started_monotonic is not None else time.monotonic()
@@ -348,7 +348,7 @@ class _ScratchServerContext:
 
     def __init__(
         self,
-        cell: Dict[str, Any],
+        cell: dict[str, Any],
         port: int,
         container: str,
         health_timeout: float,
@@ -357,7 +357,7 @@ class _ScratchServerContext:
         self.port = port
         self.container = container
         self.health_timeout = health_timeout
-        self.handle: Optional[ScratchServerHandle] = None
+        self.handle: ScratchServerHandle | None = None
 
     def __enter__(self) -> ScratchServerHandle:
         # WP-1 (bakeoff-timing-records-and-estimates): the cell clock starts HERE, at the top of
@@ -422,7 +422,7 @@ class _ScratchServerContext:
 
 
 def scratch_server(
-    cell: Dict[str, Any],
+    cell: dict[str, Any],
     port: int,
     container: str = DEFAULT_CONTAINER_NAME,
     health_timeout: float = 120.0,

@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
@@ -105,7 +105,7 @@ class TestDispatcherWrapperIntegration(unittest.TestCase):
             def _write_request(request_id, action, **extra):
                 body = {
                     "schema": "control-request-v1", "request_id": request_id, "action": action,
-                    "requested_at": cd.iso_z(datetime.now(timezone.utc)),
+                    "requested_at": cd.iso_z(datetime.now(UTC)),
                 }
                 body.update(extra)
                 (paths.requests_dir / f"{request_id}.json").write_text(json.dumps(body))

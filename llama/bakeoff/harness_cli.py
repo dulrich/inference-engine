@@ -22,7 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from harness_fixture import (
     DEFAULT_BASE_URL,
@@ -56,8 +56,8 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--timeout", type=float, default=180, help="per-request socket timeout (s)")
 
 
-def _lineage_from_args(args: argparse.Namespace) -> Dict[str, Any]:
-    lineage: Dict[str, Any] = {
+def _lineage_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    lineage: dict[str, Any] = {
         "hf_repo": getattr(args, "hf_repo", None),
         "hf_revision": getattr(args, "hf_revision", None) or "unknown",
         "llama_cpp_build": resolve_llama_cpp_build(),
@@ -105,9 +105,9 @@ def cmd_quality(args: argparse.Namespace) -> int:
 
 def cmd_full(args: argparse.Namespace) -> int:
     base_url, alias = args.base_url, args.alias
-    all_samples: List[Dict[str, Any]] = []
-    all_completions: List[Dict[str, Any]] = []
-    notes: List[str] = list(args.notes or [])
+    all_samples: list[dict[str, Any]] = []
+    all_completions: list[dict[str, Any]] = []
+    notes: list[str] = list(args.notes or [])
 
     sweep_samples, sweep_completions, sweep_summary = run_sweep(
         base_url, alias,
@@ -141,7 +141,7 @@ def cmd_full(args: argparse.Namespace) -> int:
             all_samples.append(s)
             all_completions.append(c)
 
-    prompts: List[Dict[str, Any]] = []
+    prompts: list[dict[str, Any]] = []
     if not args.skip_quality:
         corpus = load_quality_corpus(Path(args.corpus)) if args.corpus else load_quality_corpus()
         prompts = corpus
@@ -234,7 +234,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     return args.func(args)

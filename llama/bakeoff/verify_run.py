@@ -110,9 +110,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # Same "no package __init__.py under llama/" gotcha longcontext.py/batch.py's own comments
 # document -- a plain top-level import works whenever the importer has already put this
@@ -184,10 +184,10 @@ NEEDLE_OR_QUALITY_V2_FIELDS = (
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-def _item(check: str, cell_id: Optional[str], expected: Any, observed: Any, verdict: str) -> Dict[str, Any]:
+def _item(check: str, cell_id: str | None, expected: Any, observed: Any, verdict: str) -> dict[str, Any]:
     if verdict not in VERDICTS:
         raise ValueError(f"verify_run: bad verdict {verdict!r}, expected one of {VERDICTS}")
     return {"check": check, "cell_id": cell_id, "expected": expected, "observed": observed, "verdict": verdict}
@@ -198,7 +198,7 @@ def _item(check: str, cell_id: Optional[str], expected: Any, observed: Any, verd
 # -------------------------------------------------------------------------------------------
 
 
-def discover_state_path(run_dir: Path, state_path: Optional[Path] = None) -> Optional[Path]:
+def discover_state_path(run_dir: Path, state_path: Path | None = None) -> Path | None:
     """See module docstring's "Queue state discovery". Returns the first candidate that exists,
     or `None` if none do (never raises -- an absent state file degrades several checks to
     `unknown`, it never aborts verification outright by itself)."""
@@ -214,22 +214,22 @@ def discover_state_path(run_dir: Path, state_path: Optional[Path] = None) -> Opt
     return None
 
 
-def load_queue_state(run_dir: Path, state_path: Optional[Path] = None) -> Tuple[Optional[Dict[str, Any]], Optional[Path]]:
+def load_queue_state(run_dir: Path, state_path: Path | None = None) -> tuple[dict[str, Any] | None, Path | None]:
     resolved = discover_state_path(run_dir, state_path)
     if resolved is None:
         return None, None
     try:
-        with open(resolved, "r", encoding="utf-8") as f:
+        with open(resolved, encoding="utf-8") as f:
             return json.load(f), resolved
     except (OSError, json.JSONDecodeError):
         return None, resolved
 
 
-def discover_cell_dirs(run_dir: Path) -> Dict[str, Path]:
+def discover_cell_dirs(run_dir: Path) -> dict[str, Path]:
     """cell_id -> subdirectory path, for every immediate subdirectory of `run_dir` carrying a
     `config.json` (the `run_harness.write_experiment_record` marker file). Returns an empty dict
     for a non-existent or record-free `run_dir` -- never raises."""
-    out: Dict[str, Path] = {}
+    out: dict[str, Path] = {}
     if not run_dir.is_dir():
         return out
     for child in sorted(run_dir.iterdir()):
@@ -240,13 +240,13 @@ def discover_cell_dirs(run_dir: Path) -> Dict[str, Path]:
 
 def load_cell_records(
     cell_dir: Path,
-) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     """Returns `(config, samples, completions, errors)`. Never raises -- a parse failure on any
     one of the four files is recorded as a human-readable string in `errors` instead."""
-    errors: List[str] = []
-    config: Optional[Dict[str, Any]] = None
-    samples: List[Dict[str, Any]] = []
-    completions: List[Dict[str, Any]] = []
+    errors: list[str] = []
+    config: dict[str, Any] | None = None
+    samples: list[dict[str, Any]] = []
+    completions: list[dict[str, Any]] = []
 
     cfg_path = cell_dir / "config.json"
     try:
@@ -285,12 +285,12 @@ def load_cell_records(
 # -------------------------------------------------------------------------------------------
 
 
-def schema_conformance_errors(config: Optional[Dict[str, Any]], samples: List[Dict[str, Any]]) -> List[str]:
+def schema_conformance_errors(config: dict[str, Any] | None, samples: list[dict[str, Any]]) -> list[str]:
     """Pure function: `config`/`samples` already parsed (or `None`/`[]` on a parse failure the
     caller already recorded separately) -> a list of human-readable conformance error strings,
     empty when fully conformant. Every required-field list consumed here is transcribed from the
     frozen v2 contract (see module docstring), never re-derived."""
-    errors: List[str] = []
+    errors: list[str] = []
     if config is None:
         return ["config.json missing/unparseable -- cannot check schema conformance"]
 
@@ -331,7 +331,7 @@ def schema_conformance_errors(config: Optional[Dict[str, Any]], samples: List[Di
     return errors
 
 
-def _resolve_geometry(sweep_cell: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def _resolve_geometry(sweep_cell: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
     """Returns `(geometry, reason_unknown)`. Prefers a recorded `synthetic_geometry` fixture
     block (this module's own tests always use this path); falls back to a still-present
     `model_host_path` GGUF header (the real, live-capable path -- never exercised by this
@@ -354,7 +354,7 @@ def _resolve_geometry(sweep_cell: Dict[str, Any]) -> Tuple[Optional[Dict[str, An
     return geometry, None
 
 
-def check_vram_arithmetic(cell_id: str, config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def check_vram_arithmetic(cell_id: str, config: dict[str, Any] | None) -> dict[str, Any]:
     expected = f"estimated weights+KV delta within [{VRAM_ARITHMETIC_LOW_RATIO}x, {VRAM_ARITHMETIC_HIGH_RATIO}x] of measured vram.loaded_bytes - vram.baseline_bytes"
     if config is None:
         return _item(CHECK_VRAM_ARITHMETIC, cell_id, expected, "config.json missing/unparseable", "unknown")
@@ -430,7 +430,7 @@ def check_vram_arithmetic(cell_id: str, config: Optional[Dict[str, Any]]) -> Dic
     return _item(CHECK_VRAM_ARITHMETIC, cell_id, expected, observed, verdict)
 
 
-def check_prompt_tokens_tolerance(cell_id: str, samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+def check_prompt_tokens_tolerance(cell_id: str, samples: list[dict[str, Any]]) -> dict[str, Any]:
     expected = f"usage.prompt_tokens within ±{PROMPT_TOKENS_TOLERANCE:.0%} of target_tokens"
     relevant = [
         s for s in samples
@@ -452,7 +452,7 @@ def check_prompt_tokens_tolerance(cell_id: str, samples: List[Dict[str, Any]]) -
     return _item(CHECK_PROMPT_TOKENS_TOLERANCE, cell_id, expected, {"n": len(relevant), "violations": violations}, verdict)
 
 
-def check_wilson_min_trials(cell_id: str, config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def check_wilson_min_trials(cell_id: str, config: dict[str, Any] | None) -> dict[str, Any]:
     expected = f">= {longcontext.MIN_TRIALS_FOR_WILSON} trials whenever a wilson_summary verdict is claimed"
     wilson = (config or {}).get("wilson_summary")
     if wilson is None:
@@ -462,13 +462,13 @@ def check_wilson_min_trials(cell_id: str, config: Optional[Dict[str, Any]]) -> D
     return _item(CHECK_WILSON_MIN_TRIALS, cell_id, expected, {"n": n}, verdict)
 
 
-def check_classifier_distribution(cell_id: str, samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+def check_classifier_distribution(cell_id: str, samples: list[dict[str, Any]]) -> dict[str, Any]:
     """Informational-only per-cell count of `classifier_verdict` values. Deliberately generic --
     counts whatever verdict strings actually appear rather than enumerating a fixed taxonomy, so
     `"transport"` (assigned by `longcontext.run_cell` directly for `success=False` trials, never
     by `classify_trial`, hence not in `longcontext.VERDICTS`) surfaces as its own bucket exactly
     like `correct`/`wrong`/`degenerate`/`truncated(benign)` -- never folded, never a KeyError."""
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for s in samples:
         verdict = s.get("classifier_verdict")
         if verdict is None:
@@ -477,7 +477,7 @@ def check_classifier_distribution(cell_id: str, samples: List[Dict[str, Any]]) -
     return _item(CHECK_CLASSIFIER_DISTRIBUTION, cell_id, None, counts, "informational")
 
 
-def check_abort_state(queue_state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def check_abort_state(queue_state: dict[str, Any] | None) -> dict[str, Any]:
     expected = f"queue_state != {batch.QUEUE_ABORTED_HANG!r}"
     if queue_state is None:
         return _item(CHECK_ABORT_STATE, None, expected, {"reason": "no queue state file found"}, "unknown")
@@ -489,8 +489,8 @@ def check_abort_state(queue_state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def check_records_present_and_conformant(
-    cell_id: str, cell_state: Optional[str], cell_dir: Optional[Path],
-) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+    cell_id: str, cell_state: str | None, cell_dir: Path | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None, list[dict[str, Any]]]:
     """Returns `(items, config, samples)` -- `config`/`samples` are handed back so the caller's
     other per-cell checks (vram/prompt-tokens/wilson/classifier) don't re-parse the same files."""
     must_have_records = cell_state == batch.COMPLETED
@@ -518,7 +518,7 @@ def check_records_present_and_conformant(
 # -------------------------------------------------------------------------------------------
 
 
-def verify_run(run_dir: Path, state_path: Optional[Path] = None) -> Dict[str, Any]:
+def verify_run(run_dir: Path, state_path: Path | None = None) -> dict[str, Any]:
     """Runs the full checklist over `run_dir` (see module docstring for the run-directory and
     state-file conventions). Never raises for an ordinary "nothing to check" or "records
     missing" condition -- those are `exit_code: 2` / individual `fail` items respectively; this
@@ -535,8 +535,8 @@ def verify_run(run_dir: Path, state_path: Optional[Path] = None) -> Dict[str, An
     queue_state, resolved_state_path = load_queue_state(run_dir, state_path)
     cell_dirs = discover_cell_dirs(run_dir)
 
-    checks: List[Dict[str, Any]] = [check_abort_state(queue_state)]
-    cells_report: Dict[str, Any] = {}
+    checks: list[dict[str, Any]] = [check_abort_state(queue_state)]
+    cells_report: dict[str, Any] = {}
 
     state_cells = (queue_state or {}).get("cells") or {}
     # Union of every cell this run knows about: the queue state's own cell registry (authoritative
@@ -591,7 +591,7 @@ JSON_REPORT_NAME = "verify_report.json"
 MARKDOWN_REPORT_NAME = "verify_report.md"
 
 
-def write_json_report(run_dir: Path, result: Dict[str, Any]) -> Path:
+def write_json_report(run_dir: Path, result: dict[str, Any]) -> Path:
     path = run_dir / JSON_REPORT_NAME
     with open(path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, sort_keys=False)
@@ -599,8 +599,8 @@ def write_json_report(run_dir: Path, result: Dict[str, Any]) -> Path:
     return path
 
 
-def _render_markdown(result: Dict[str, Any]) -> str:
-    lines: List[str] = []
+def _render_markdown(result: dict[str, Any]) -> str:
+    lines: list[str] = []
     lines.append(f"# Verifier report -- `{result['run_dir']}`")
     lines.append("")
     lines.append(f"Generated: {result['generated_at']}  ")
@@ -650,7 +650,7 @@ def _render_markdown(result: Dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_markdown_report(run_dir: Path, result: Dict[str, Any]) -> Path:
+def write_markdown_report(run_dir: Path, result: dict[str, Any]) -> Path:
     path = run_dir / MARKDOWN_REPORT_NAME
     path.write_text(_render_markdown(result), encoding="utf-8")
     return path
@@ -672,7 +672,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
     parser = build_arg_parser()

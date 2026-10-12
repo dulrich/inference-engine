@@ -51,7 +51,7 @@ import json
 import shlex
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 MODULE_DIR = Path(__file__).resolve().parent
 LLAMA_DIR = MODULE_DIR.parent
@@ -127,18 +127,18 @@ from scratch_lifecycle import (  # noqa: E402,F401
 
 
 def expand_ladder(
-    base_cell: Dict[str, Any],
-    kv_type_ladder: List[Tuple[str, str]],
-    context_ladder: List[int],
-    battery: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
+    base_cell: dict[str, Any],
+    kv_type_ladder: list[tuple[str, str]],
+    context_ladder: list[int],
+    battery: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """Cross-products one base cell (model + alias-prefix + any shared flags) against a
     `(ctk, ctv)` ladder and a `-c` ladder, producing one normalized cell per combination. Each
     cell's alias gets a `-ctk<ctk>-ctv<ctv>-c<c>` suffix so the ladder's cells never collide on
     alias -- the base cell's own `alias` is used as the prefix. `battery`, if given, overrides
     the base cell's `battery` for every expanded cell (the base cell need not carry one).
     """
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for ctk, ctv in kv_type_ladder:
         for context in context_ladder:
             cell = dict(base_cell)
@@ -159,11 +159,11 @@ def expand_ladder(
 # -------------------------------------------------------------------------------------------
 
 
-def load_spec(spec_path: Path) -> List[Dict[str, Any]]:
+def load_spec(spec_path: Path) -> list[dict[str, Any]]:
     """Loads a sweep spec JSON file: `{"cells": [ {...}, ... ]}`. Every cell is passed through
     `normalize_cell()` before being returned, so callers never see a raw/under-defaulted cell.
     """
-    with open(spec_path, "r", encoding="utf-8") as f:
+    with open(spec_path, encoding="utf-8") as f:
         spec = json.load(f)
     raw_cells = spec.get("cells")
     if not raw_cells:
@@ -262,7 +262,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
     # `--dry-run llama/bakeoff/examples/sweep-example.json` (brief's exact gate invocation) is a

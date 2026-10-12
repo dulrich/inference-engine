@@ -17,7 +17,7 @@ import json
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 BAKEOFF_DIR = Path(__file__).resolve().parent.parent
@@ -108,7 +108,7 @@ class TestRestartFailureSurfacing(unittest.TestCase):
     def test_restart_failure_written_by_the_wrapper_reaches_status_json_with_needs_attention(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
-            now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=timezone.utc)
+            now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=UTC)
             cd.write_result(paths, "inv-1", "exited", run_exit=0, verify_exit=0,
                             restart_failed="CalledProcessError: docker start", now_fn=lambda: now)
             _run_dispatch(paths, Path(tmp) / "queues")
@@ -122,7 +122,7 @@ class TestRestartFailureSurfacing(unittest.TestCase):
     def test_a_clean_result_without_the_field_reports_restart_failed_null(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = _make_paths(tmp)
-            now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=timezone.utc)
+            now = datetime(2026, 8, 24, 0, 5, 0, tzinfo=UTC)
             cd.write_result(paths, "inv-1", "exited", run_exit=0, verify_exit=0, now_fn=lambda: now)
             _run_dispatch(paths, Path(tmp) / "queues")
             status = json.loads(paths.status_path.read_text())

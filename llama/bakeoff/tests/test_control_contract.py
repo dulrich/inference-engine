@@ -31,7 +31,7 @@ import shutil
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 BAKEOFF_DIR = Path(__file__).resolve().parent.parent
@@ -47,7 +47,7 @@ FIXTURES = REPO_ROOT / "dashboard/apps/api/fixtures/control"
 CONTRACT = FIXTURES / "contract-v1"
 
 BOOT_ID = "boot-contract-v1"
-PASS_NOW = datetime(2026, 8, 27, 12, 10, 0, tzinfo=timezone.utc)
+PASS_NOW = datetime(2026, 8, 27, 12, 10, 0, tzinfo=UTC)
 
 REQ_DISARM = "req-20260827T120000Z-00000000000000a1"
 REQ_ARM = "req-20260827T120100Z-00000000000000a2"

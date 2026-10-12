@@ -23,7 +23,8 @@ Zero new runtime dependencies: Python 3 stdlib only.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, NamedTuple, Optional, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any, NamedTuple
 
 from queue_state import CORRECTNESS_FAILURE_REASONS
 
@@ -45,10 +46,10 @@ class Disposition(NamedTuple):
     """
 
     status: str
-    reason: Optional[str] = None
+    reason: str | None = None
     correctness_failure: bool = False
 
-    def with_detail(self, detail: Optional[Dict[str, Any]] = None) -> "CellOutcome":
+    def with_detail(self, detail: dict[str, Any] | None = None) -> CellOutcome:
         return CellOutcome(self.status, self.reason, self.correctness_failure, detail)
 
 
@@ -57,10 +58,10 @@ class CellOutcome(NamedTuple):
     consumes and persists into the state file's per-cell `detail`."""
 
     status: str  # "completed" | "failed" | "aborted-hang"
-    reason: Optional[str] = None
+    reason: str | None = None
     correctness_failure: bool = False  # drives skip propagation -- only True for degenerate/
     #  needle-recall-class reasons, never for health-timeout/OOM/hang/interrupted/size-exceeded.
-    detail: Optional[Dict[str, Any]] = None
+    detail: dict[str, Any] | None = None
 
     @property
     def disposition(self) -> Disposition:
@@ -87,14 +88,14 @@ INTERRUPTED = _failed("interrupted")
 PROJECTED_SIZE_EXCEEDED = _failed("projected_size_exceeded")
 
 
-def aborted_hang(reason: Optional[str] = None) -> Disposition:
+def aborted_hang(reason: str | None = None) -> Disposition:
     """A kernel hang signature (or a runner reporting `aborted-hang` itself). Never a correctness
     failure: a wedged GPU says nothing about model quality, and propagating skips off it would
     suppress cells that were never measured."""
     return Disposition(STATUS_ABORTED_HANG, reason or "hang_signature", False)
 
 
-def classify_startup(healthy: bool, verified: bool) -> Optional[Disposition]:
+def classify_startup(healthy: bool, verified: bool) -> Disposition | None:
     """The startup gate, checked before any request is sent. `None` means "startup was clean,
     continue"; a `Disposition` means the cell is already decided.
 
@@ -108,7 +109,7 @@ def classify_startup(healthy: bool, verified: bool) -> Optional[Disposition]:
     return None
 
 
-def classify_sampling_arm(sampling_arm: Optional[str]) -> Optional[Disposition]:
+def classify_sampling_arm(sampling_arm: str | None) -> Disposition | None:
     """`None` when the requested arm is one this harness can run, else the failed disposition."""
     if sampling_arm not in ("capability", "production"):
         return INVALID_SAMPLING_ARM

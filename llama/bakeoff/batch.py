@@ -53,9 +53,10 @@ import json
 import signal
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 # `sweep`/`run_harness`/`longcontext`/`sampling_table` and this WP's own sibling modules live
 # beside this file with no package `__init__.py` under `llama/` -- see longcontext.py's own
@@ -185,8 +186,8 @@ def clear_restart_failure(state_path: Path) -> None:
 
 
 def record_restart_failure(
-    state_path: Path, container: Optional[str], exc: BaseException, now_fn: Callable[[], datetime],
-) -> Dict[str, Any]:
+    state_path: Path, container: str | None, exc: BaseException, now_fn: Callable[[], datetime],
+) -> dict[str, Any]:
     record = {
         "container": container,
         "error": f"{type(exc).__name__}: {exc}",
@@ -246,7 +247,7 @@ def _restore_signal_traps(old_handlers) -> None:
 
 def _execute_cell(
     cell: ResolvedCell,
-    cell_runner: Callable[["sweep.ScratchServerHandle", ResolvedCell], CellOutcome],
+    cell_runner: Callable[[sweep.ScratchServerHandle, ResolvedCell], CellOutcome],
     port: int,
     container: str,
     scratch_server_fn: Callable[..., Any],
@@ -275,11 +276,11 @@ def _execute_cell(
 def _load_or_init_state(
     queue_path: Path,
     state_path: Path,
-    resolved_cells: List[ResolvedCell],
+    resolved_cells: list[ResolvedCell],
     re_arm: bool,
-    re_arm_cell_names: Optional[List[str]],
+    re_arm_cell_names: list[str] | None,
     request_timeout_s: int = DEFAULT_REQUEST_TIMEOUT_S,
-) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Returns `(state, noop_result)`: exactly one is not `None`. A queue whose state file is
     already terminal (and that was not re-armed) yields the `noop_result` `run_queue` returns
     verbatim without running anything -- a terminal queue must never silently re-run.
@@ -335,7 +336,7 @@ def _load_or_init_state(
     return state, None
 
 
-def _size_check_failure(cell: ResolvedCell) -> Optional[Dict[str, Any]]:
+def _size_check_failure(cell: ResolvedCell) -> dict[str, Any] | None:
     """Pre-enqueue size check (audit E4, pinned): a cell at or above the large-context threshold
     whose projected record would blow `run_harness.SIZE_LIMIT_BYTES` never runs. Returns the
     state-file `detail` for the failure, or `None` when the cell may be enqueued."""
@@ -350,23 +351,23 @@ def _size_check_failure(cell: ResolvedCell) -> Optional[Dict[str, Any]]:
 
 def run_queue(
     queue_path: Path,
-    state_path: Optional[Path] = None,
-    vram_profile: Optional[str] = None,
+    state_path: Path | None = None,
+    vram_profile: str | None = None,
     dry_run: bool = False,
     re_arm: bool = False,
-    re_arm_cell_names: Optional[List[str]] = None,
-    cell_runner: Optional[Callable[["sweep.ScratchServerHandle", ResolvedCell], CellOutcome]] = None,
-    container_controller: Optional[ContainerController] = None,
-    hang_check_fn: Optional[Callable[[], Optional[str]]] = None,
-    now_fn: Optional[Callable[[], datetime]] = None,
-    vram_total_bytes_fn: Optional[Callable[[], int]] = None,
-    vram_used_bytes_fn: Optional[Callable[[], int]] = None,
-    scratch_server_fn: Optional[Callable[..., Any]] = None,
+    re_arm_cell_names: list[str] | None = None,
+    cell_runner: Callable[[sweep.ScratchServerHandle, ResolvedCell], CellOutcome] | None = None,
+    container_controller: ContainerController | None = None,
+    hang_check_fn: Callable[[], str | None] | None = None,
+    now_fn: Callable[[], datetime] | None = None,
+    vram_total_bytes_fn: Callable[[], int] | None = None,
+    vram_used_bytes_fn: Callable[[], int] | None = None,
+    scratch_server_fn: Callable[..., Any] | None = None,
     port: int = 8899,
     container: str = sweep.DEFAULT_CONTAINER_NAME,
-    stop_marker_path: Optional[Path] = None,
-    deadline_minutes: Optional[int] = None,
-) -> Dict[str, Any]:
+    stop_marker_path: Path | None = None,
+    deadline_minutes: int | None = None,
+) -> dict[str, Any]:
     """Runs (or resumes, or no-ops on, or re-arms) one queue. Returns a plain result dict; never
     raises for an ordinary cell failure (that's recorded in the state file) -- it DOES raise
     `QueueValidationError` for a malformed queue and `sweep.VRAMProfileRefused` for a mischosen
@@ -413,22 +414,22 @@ def run_queue(
 def _run_resolved_queue(
     resolved: ResolvedQueue,
     *,
-    state_path: Optional[Path] = None,
+    state_path: Path | None = None,
     dry_run: bool = False,
     re_arm: bool = False,
-    re_arm_cell_names: Optional[List[str]] = None,
-    cell_runner: Optional[Callable[["sweep.ScratchServerHandle", ResolvedCell], CellOutcome]] = None,
-    container_controller: Optional[ContainerController] = None,
-    hang_check_fn: Optional[Callable[[], Optional[str]]] = None,
-    now_fn: Optional[Callable[[], datetime]] = None,
-    vram_total_bytes_fn: Optional[Callable[[], int]] = None,
-    vram_used_bytes_fn: Optional[Callable[[], int]] = None,
-    scratch_server_fn: Optional[Callable[..., Any]] = None,
+    re_arm_cell_names: list[str] | None = None,
+    cell_runner: Callable[[sweep.ScratchServerHandle, ResolvedCell], CellOutcome] | None = None,
+    container_controller: ContainerController | None = None,
+    hang_check_fn: Callable[[], str | None] | None = None,
+    now_fn: Callable[[], datetime] | None = None,
+    vram_total_bytes_fn: Callable[[], int] | None = None,
+    vram_used_bytes_fn: Callable[[], int] | None = None,
+    scratch_server_fn: Callable[..., Any] | None = None,
     port: int = 8899,
     container: str = sweep.DEFAULT_CONTAINER_NAME,
-    stop_marker_path: Optional[Path] = None,
-    deadline_minutes: Optional[int] = None,
-) -> Dict[str, Any]:
+    stop_marker_path: Path | None = None,
+    deadline_minutes: int | None = None,
+) -> dict[str, Any]:
     """The once-loaded run core (WP-R1): everything `run_queue` used to do after its own
     `load_queue`/`resolve_queue_cells` calls, now driven from a single already-resolved
     `ResolvedQueue` so `run_queue` and `cmd_run` build cells, the effective VRAM profile/request
@@ -443,7 +444,7 @@ def _run_resolved_queue(
     effective_vram_profile = resolved.vram_profile
     effective_timeout = resolved.request_timeout_s
 
-    now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+    now_fn = now_fn or (lambda: datetime.now(UTC))
     vram_total_bytes_fn = vram_total_bytes_fn or sweep.read_vram_total_bytes
     vram_used_bytes_fn = vram_used_bytes_fn or sweep.read_vram_used_bytes
     cell_runner = cell_runner or default_cell_runner
@@ -472,7 +473,7 @@ def _run_resolved_queue(
     # before anything (container stop, first cell) happens.
     sweep.compute_vram_budget_bytes(effective_vram_profile, vram_total_bytes_fn, vram_used_bytes_fn)
 
-    restart_failure: Optional[Dict[str, Any]] = None
+    restart_failure: dict[str, Any] | None = None
     clear_restart_failure(state_path)
     if container_controller is not None:
         container_controller.stop()
@@ -570,11 +571,11 @@ def _run_resolved_queue(
 
 
 def _dry_run_report(
-    resolved_cells: List[ResolvedCell],
+    resolved_cells: list[ResolvedCell],
     vram_profile: str,
     vram_total_bytes_fn: Callable[[], int],
     vram_used_bytes_fn: Callable[[], int],
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """`batch run --dry-run`: resolves every cell and classifies its fit, without touching
     Docker, the state file, or the container. Same intent as `sweep.py --dry-run`, one level up
     (queue-level, not spec-level)."""
@@ -809,7 +810,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
     parser = build_arg_parser()

@@ -65,7 +65,7 @@ from __future__ import annotations
 import json
 import random
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # `run_harness` lives beside this file with no package `__init__.py` under `llama/` (the same
 # gotcha the gates section calls out for `unittest discover`) -- a plain top-level import here
@@ -145,9 +145,9 @@ from longcontext_tasks import (  # noqa: F401
 # ---------------------------------------------------------------------------------------------
 
 
-def _dry_run(target_tokens: int, seed: int) -> Dict[str, Any]:
+def _dry_run(target_tokens: int, seed: int) -> dict[str, Any]:
     manifest = load_corpus_manifest()
-    out: Dict[str, Any] = {"corpus_manifest_id": manifest.get("corpus_id"), "cells": []}
+    out: dict[str, Any] = {"corpus_manifest_id": manifest.get("corpus_id"), "cells": []}
     for task_name, task in TASKS.items():
         for position_fraction in POSITION_FRACTIONS:
             # `seed` folds into the derivation so the CLI's `--seed` flag is honored (default
@@ -166,7 +166,7 @@ def _dry_run(target_tokens: int, seed: int) -> Dict[str, Any]:
     return out
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(

@@ -27,9 +27,9 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 __all__ = [
     "GRACE_SECONDS",
@@ -110,14 +110,14 @@ REQUEST_SCHEMA_REJECTION = f"malformed: schema is not {SCHEMA_REQUEST}"
 def iso_z(dt: datetime) -> str:
     """`...Z`-suffixed UTC ISO-8601, matching the plan's own JSON examples and the
     `req-<UTCcompact>-...` id grammar's own timestamp convention (never `+00:00`)."""
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def utc_now_iso() -> str:
-    return iso_z(datetime.now(timezone.utc))
+    return iso_z(datetime.now(UTC))
 
 
-def parse_iso(value: Any) -> Optional[datetime]:
+def parse_iso(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
     text = value[:-1] + "+00:00" if value.endswith("Z") else value
@@ -126,7 +126,7 @@ def parse_iso(value: Any) -> Optional[datetime]:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -141,9 +141,9 @@ class IngestedRequest:
 
     request_id: str
     action: str
-    queue_stem: Optional[str]
-    minutes: Optional[int]
-    target_request_id: Optional[str]
+    queue_stem: str | None
+    minutes: int | None
+    target_request_id: str | None
     requested_at: str
 
 
@@ -153,15 +153,15 @@ class RequestValidation:
     `reject()` a reason and no request. Replaces the old `Tuple[Optional[IngestedRequest],
     Optional[str]]` return, where nothing but caller discipline said which half to read."""
 
-    request: Optional[IngestedRequest] = None
-    reason: Optional[str] = None
+    request: IngestedRequest | None = None
+    reason: str | None = None
 
     @classmethod
-    def accept(cls, request: IngestedRequest) -> "RequestValidation":
+    def accept(cls, request: IngestedRequest) -> RequestValidation:
         return cls(request=request, reason=None)
 
     @classmethod
-    def reject(cls, reason: str) -> "RequestValidation":
+    def reject(cls, reason: str) -> RequestValidation:
         return cls(request=None, reason=reason)
 
     @property

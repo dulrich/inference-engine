@@ -34,7 +34,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # Same "no package `__init__.py` under `llama/`" gotcha every other module here documents: a
 # plain top-level import works because the importer has already put this directory on sys.path.
@@ -55,27 +55,26 @@ from harness_fixture import (
 # ---------------------------------------------------------------------------------------------
 
 
-def _post_stream(url: str, payload: Dict[str, Any], timeout: float):
+def _post_stream(url: str, payload: dict[str, Any], timeout: float):
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url, data=data, headers={"Content-Type": "application/json"}, method="POST"
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        for raw_line in resp:
-            yield raw_line
+        yield from resp
 
 
 def _execute_streaming_request(
     base_url: str,
     alias: str,
-    messages: List[Dict[str, str]],
+    messages: list[dict[str, str]],
     max_tokens: int,
     timeout: float = 180,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    top_k: Optional[float] = None,
-    seed: Optional[int] = None,
-) -> Dict[str, Any]:
+    temperature: float | None = None,
+    top_p: float | None = None,
+    top_k: float | None = None,
+    seed: int | None = None,
+) -> dict[str, Any]:
     """Fires one streaming `/v1/chat/completions` request and independently timestamps every
     delta as it arrives (verified live against this repo's real router: urllib's chunked-transfer
     decoding delivers SSE lines incrementally, not buffered -- see WP-1 report for the probe).
@@ -117,15 +116,15 @@ def _execute_streaming_request(
 
     t0 = time.monotonic()
     t0_iso = _utc_now_iso()
-    first_delta_ts: Optional[float] = None
-    first_content_ts: Optional[float] = None
-    last_delta_ts: Optional[float] = None
-    content_parts: List[str] = []
-    reasoning_parts: List[str] = []
-    finish_reason: Optional[str] = None
-    usage: Optional[Dict[str, Any]] = None
-    timings: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
+    first_delta_ts: float | None = None
+    first_content_ts: float | None = None
+    last_delta_ts: float | None = None
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    finish_reason: str | None = None
+    usage: dict[str, Any] | None = None
+    timings: dict[str, Any] | None = None
+    error: str | None = None
 
     try:
         for raw_line in _post_stream(url, payload, timeout):
@@ -205,14 +204,14 @@ class ResidencyPoller:
         self._base_url = base_url
         self._alias = alias
         self._poll_interval = poll_interval
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._stop = threading.Event()
-        self._t_start: Optional[float] = None
+        self._t_start: float | None = None
         self._saw_unloaded = False
-        self._load_ready_ts: Optional[float] = None
+        self._load_ready_ts: float | None = None
         self._lock = threading.Lock()
 
-    def _poll_once(self) -> Optional[str]:
+    def _poll_once(self) -> str | None:
         try:
             req = urllib.request.Request(f"{self._base_url}/models", method="GET")
             with urllib.request.urlopen(req, timeout=5) as resp:
@@ -246,7 +245,7 @@ class ResidencyPoller:
         if self._thread is not None:
             self._thread.join(timeout=2)
 
-    def result(self) -> Optional[float]:
+    def result(self) -> float | None:
         with self._lock:
             if self._t_start is None or self._load_ready_ts is None:
                 return None
@@ -267,7 +266,7 @@ def run_round(
     max_tokens: int,
     timeout: float = 180,
     poll_for_load: bool = False,
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Executes one cold/warm/hot round of the fixed performance fixture. Never raises on a
     transport failure or a malformed response -- returns `success: false` on the sample instead,
     so a sweep can record a bad round without aborting the rest of the measurement run.
@@ -275,7 +274,7 @@ def run_round(
     Returns `(sample, completion)`: `sample` is the numeric record for `samples.jsonl`,
     `completion` carries the verbatim raw text for `completions.jsonl`.
     """
-    poller: Optional[ResidencyPoller] = None
+    poller: ResidencyPoller | None = None
     if poll_for_load:
         poller = ResidencyPoller(base_url, alias)
         poller.start()
@@ -284,7 +283,7 @@ def run_round(
         base_url, alias, _single_user_message(prompt), max_tokens, timeout=timeout
     )
 
-    model_load_seconds: Optional[float] = None
+    model_load_seconds: float | None = None
     if poller is not None:
         poller.stop()
         model_load_seconds = poller.result()
@@ -301,13 +300,13 @@ def run_round(
         cached_tokens / prompt_tokens if (cached_tokens is not None and prompt_tokens) else None
     )
 
-    cache_assertion_passed: Optional[bool] = None
+    cache_assertion_passed: bool | None = None
     if run_state == "warm":
         cache_assertion_passed = cache_hit_ratio is not None and cache_hit_ratio < 0.05
     elif run_state == "hot":
         cache_assertion_passed = cache_hit_ratio is not None and cache_hit_ratio > 0.90
 
-    def _ms(a: Optional[float], b: Optional[float]) -> Optional[float]:
+    def _ms(a: float | None, b: float | None) -> float | None:
         return (a - b) * 1000.0 if (a is not None and b is not None) else None
 
     first_generation_token_ms = _ms(result["first_delta_ts"], result["t0"])
@@ -378,8 +377,8 @@ def _novel_variant(base_text: str, round_index: int) -> str:
     return nonce + base_text
 
 
-def _summarize_sweep(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+def _summarize_sweep(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     for state in ("cold", "warm", "hot"):
         # round_index 0 is the hot phase's unrecorded priming call -- excluded from aggregates.
         state_samples = [
@@ -410,7 +409,7 @@ def run_sweep(
     output_tokens: int = FIXTURE_OUTPUT_TOKENS,
     timeout: float = 180,
     cold_precondition_hook=None,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     """Runs the fixed performance fixture through cold, then warm, then hot phases.
 
     `cold_precondition_hook`, if given, is called with no arguments immediately before EACH cold
@@ -435,8 +434,8 @@ def run_sweep(
     else:
         fixture = _build_filler_text(input_tokens_target, seed=FIXTURE_SEED) + FIXTURE_INSTRUCTION
 
-    samples: List[Dict[str, Any]] = []
-    completions: List[Dict[str, Any]] = []
+    samples: list[dict[str, Any]] = []
+    completions: list[dict[str, Any]] = []
 
     for i in range(cold_rounds):
         if cold_precondition_hook is not None:

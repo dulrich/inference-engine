@@ -11,7 +11,7 @@ import json
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 BAKEOFF_DIR = Path(__file__).resolve().parent.parent
@@ -143,19 +143,19 @@ class TestResolveQueueCells(unittest.TestCase):
 
 class TestDeadline(unittest.TestCase):
     def test_deadline_later_today_stays_today(self):
-        start = datetime(2026, 8, 23, 2, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 8, 23, 2, 0, tzinfo=UTC)
         deadline_dt = batch.compute_deadline_dt("07:00", start)
-        self.assertEqual(deadline_dt, datetime(2026, 8, 23, 7, 0, tzinfo=timezone.utc))
+        self.assertEqual(deadline_dt, datetime(2026, 8, 23, 7, 0, tzinfo=UTC))
 
     def test_deadline_already_passed_today_rolls_to_tomorrow(self):
-        start = datetime(2026, 8, 23, 23, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 8, 23, 23, 0, tzinfo=UTC)
         deadline_dt = batch.compute_deadline_dt("07:00", start)
-        self.assertEqual(deadline_dt, datetime(2026, 8, 24, 7, 0, tzinfo=timezone.utc))
+        self.assertEqual(deadline_dt, datetime(2026, 8, 24, 7, 0, tzinfo=UTC))
 
     def test_deadline_exactly_at_start_rolls_to_tomorrow(self):
-        start = datetime(2026, 8, 23, 7, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 8, 23, 7, 0, tzinfo=UTC)
         deadline_dt = batch.compute_deadline_dt("07:00", start)
-        self.assertEqual(deadline_dt, datetime(2026, 8, 24, 7, 0, tzinfo=timezone.utc))
+        self.assertEqual(deadline_dt, datetime(2026, 8, 24, 7, 0, tzinfo=UTC))
 
 
 class TestWp6CharsPerToken(unittest.TestCase):

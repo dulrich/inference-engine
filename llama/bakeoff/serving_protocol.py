@@ -37,9 +37,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 from control_protocol import iso_z, parse_iso
 
@@ -100,7 +101,7 @@ PRUNE_AGE_SECONDS = 30 * 24 * 3600
 CC_REQUIRES_GATEWAY_ID = "cc requires a gateway id"
 
 
-def canonical_consumers(values: Sequence[Any]) -> List[str]:
+def canonical_consumers(values: Sequence[Any]) -> list[str]:
     """Canonical order (`CONSUMERS`) and deduplicated. Anything outside the vocabulary is dropped
     -- callers that must REJECT an unknown consumer check for it first (`validate_request` does);
     this function is the normalizer, not the gate."""
@@ -108,7 +109,7 @@ def canonical_consumers(values: Sequence[Any]) -> List[str]:
     return [consumer for consumer in CONSUMERS if consumer in present]
 
 
-def declared_models(declaration: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def declared_models(declaration: dict[str, Any] | None) -> dict[str, Any] | None:
     """The `models` map of a `serving-visibility-v1` document, or `None` when the document is not
     one. Fail-closed and structural: a wrong schema literal, a missing/ill-typed `models` map, or
     ANY entry that is not `{gateway_id: str|null, consumers: [...]}` yields `None` for the whole
@@ -143,7 +144,7 @@ class ServingRequest:
     request_id: str
     action: str
     model_key: str
-    consumers: Tuple[str, ...]
+    consumers: tuple[str, ...]
     requested_at: str
 
 
@@ -152,15 +153,15 @@ class RequestValidation:
     """Exactly one of `request`/`reason` is set -- `control_protocol.RequestValidation`'s shape,
     restated here so this plane does not import the bake-off plane's `IngestedRequest` type."""
 
-    request: Optional[ServingRequest] = None
-    reason: Optional[str] = None
+    request: ServingRequest | None = None
+    reason: str | None = None
 
     @classmethod
-    def accept(cls, request: ServingRequest) -> "RequestValidation":
+    def accept(cls, request: ServingRequest) -> RequestValidation:
         return cls(request=request, reason=None)
 
     @classmethod
-    def reject(cls, reason: str) -> "RequestValidation":
+    def reject(cls, reason: str) -> RequestValidation:
         return cls(request=None, reason=reason)
 
     @property
@@ -169,7 +170,7 @@ class RequestValidation:
 
 
 def validate_request(
-    basename_id: str, data: bytes, declaration: Optional[Dict[str, Any]],
+    basename_id: str, data: bytes, declaration: dict[str, Any] | None,
 ) -> RequestValidation:
     """Fail-closed validation of one drop-box request body against the declaration.
 
@@ -235,8 +236,8 @@ def validate_request(
 
 
 def make_record(
-    request_id: str, state: str, reason: Optional[str], now: datetime,
-) -> Dict[str, Any]:
+    request_id: str, state: str, reason: str | None, now: datetime,
+) -> dict[str, Any]:
     """One terminal `recent[]` entry. `reason` is ALWAYS emitted, `null` on the happy path: the
     reader defaults it (`ServingRequestRecordSchema`'s `.default(null)`), but every canonical
     writer and every committed fixture spells it, so this one does too."""
@@ -249,10 +250,10 @@ def make_record(
 
 
 def compose_status(
-    declaration: Optional[Dict[str, Any]],
-    recent: Sequence[Dict[str, Any]],
+    declaration: dict[str, Any] | None,
+    recent: Sequence[dict[str, Any]],
     now: datetime,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """The whole `serving-status-v1` body, pure. `visibility` is the declaration's `models` map
     re-published verbatim (normalized through `canonical_consumers`, never re-derived from
     anything else -- it is the chips' only source of truth); `recent` is newest-first and bounded
@@ -276,7 +277,7 @@ def compose_status(
     }
 
 
-def _record_problem(record: Any) -> Optional[str]:
+def _record_problem(record: Any) -> str | None:
     if not isinstance(record, dict):
         return "record is not a JSON object"
     if not isinstance(record.get("request_id"), str):
@@ -291,7 +292,7 @@ def _record_problem(record: Any) -> Optional[str]:
     return None
 
 
-def validate_status_file(data: Optional[Dict[str, Any]]) -> Optional[str]:
+def validate_status_file(data: dict[str, Any] | None) -> str | None:
     """`None` when `data` is a well-formed `serving-status-v1` body, else a problem string. Used
     for the pass's own read-back of the previous status file (an unparseable/invalid one is
     treated as "no history", never partially trusted) and by the contract tests against the

@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Dict, List
+from typing import Any
 
 # -------------------------------------------------------------------------------------------
 # Sweep-cell normalization and deterministic IDs.
@@ -51,7 +51,7 @@ VALID_BATTERY_ITEMS = ("vram", "timing", "needle", "quality")
 _DEFAULT_SERVER_FLAGS = {"--host": "0.0.0.0", "-lv": 9, "-ctk": "f16", "-ctv": "f16", "-fa": "on", "-ngl": 99}
 
 
-def normalize_cell(raw: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_cell(raw: dict[str, Any]) -> dict[str, Any]:
     """Fills in defaults, validates required keys, and returns a plain-dict cell -- the shared
     normal form every other function in this module (`compute_cell_id`, `classify_fit`,
     `build_command`) expects. Never mutates `raw`.
@@ -74,7 +74,7 @@ def normalize_cell(raw: Dict[str, Any]) -> Dict[str, Any]:
     return cell
 
 
-def compute_cell_id(cell: Dict[str, Any]) -> str:
+def compute_cell_id(cell: dict[str, Any]) -> str:
     """Deterministic per-cell record ID -- a pure function of the cell's identity-bearing fields
     (never a timestamp or random value, so the same spec always reproduces the same IDs). Shape:
     `<alias>-ctk<ctk>-ctv<ctv>-fa<fa>-c<context>-<8-hex-digest>`, where the digest is a sha256 of
@@ -106,7 +106,7 @@ def compute_cell_id(cell: Dict[str, Any]) -> str:
 _FLAG_ORDER = ["-m", "--port", "-c", "-ctk", "-ctv", "-fa", "-ngl"]
 
 
-def _flag_args(key: str, value: Any) -> List[str]:
+def _flag_args(key: str, value: Any) -> list[str]:
     """Serializes one server flag for the argv. Booleans mean flag PRESENCE, not a literal
     argument: JSON `true` emits the bare flag (`--jinja`), `false`/`None` omits it entirely.
     WP-5 attended-validation finding #3: `str(True)` produced `--jinja True`, which llama-server
@@ -122,7 +122,7 @@ def _flag_args(key: str, value: Any) -> List[str]:
     return [key, str(value)]
 
 
-def build_command(cell: Dict[str, Any], port: int) -> List[str]:
+def build_command(cell: dict[str, Any], port: int) -> list[str]:
     """Builds the exact `llama-server` argv this cell would run, in a fixed, deterministic flag
     order (`_FLAG_ORDER` first, any remaining `server_flags` keys after, sorted) -- two calls on
     the same cell+port always produce byte-identical output. Boolean flag values are

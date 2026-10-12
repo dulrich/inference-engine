@@ -16,9 +16,17 @@ BAKEOFF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${BAKEOFF_DIR}/../.." && pwd)"
 
 # Pinned Pyright baseline: the number of errors `basic` reports over the production modules
-# today. The gate fails if the count RISES. See AGENTS.md "The Pyright ratchet" for why this
-# is a count rather than zero, and for the steps that retire it.
+# is 0: any error fails the gate. See AGENTS.md "The static-analysis ratchets" for the
+# remaining retirement steps (standard mode, then un-excluding tests/).
 PYRIGHT_BASELINE="${PYRIGHT_BASELINE:-0}"
+
+# Pinned per-family Ruff baselines for the PER-SITE, ONLY-WHEN-TOUCHED families that
+# pyproject.toml's lint.ignore defers. This script is the ONLY place these numbers live. The
+# gate fails if a count RISES, and prompts you to ratchet the pin down if it falls.
+RUFF_B905_BASELINE="${RUFF_B905_BASELINE:-7}"
+RUFF_SIM102_BASELINE="${RUFF_SIM102_BASELINE:-2}"
+RUFF_SIM105_BASELINE="${RUFF_SIM105_BASELINE:-8}"
+RUFF_SIM117_BASELINE="${RUFF_SIM117_BASELINE:-7}"
 
 fail=0
 step() { printf '\n=== %s ===\n' "$1"; }
@@ -44,9 +52,28 @@ cd "${BAKEOFF_DIR}"
 step "ruff"
 uv run ruff check . && echo "ruff: clean" || fail=1
 
+step "ruff deferred-family ratchet"
+# `--select` overrides lint.ignore, so this counts the findings the clean `ruff check .` above
+# skips. Ruff exits non-zero on findings; judge on the JSON count, never the exit status.
+for code in B905 SIM102 SIM105 SIM117; do
+    var="RUFF_${code}_BASELINE"
+    baseline="${!var}"
+    count="$(uv run ruff check . --select "${code}" --output-format json 2>/dev/null \
+        | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' || true)"
+    if [ -z "${count}" ]; then
+        echo "ruff ${code}: could not count findings"; fail=1; continue
+    fi
+    echo "ruff ${code}: ${count} (baseline ${baseline})"
+    if [ "${count}" -gt "${baseline}" ]; then
+        echo "ruff ${code} count ROSE above the pinned baseline -- fix the new finding, do not raise the baseline"
+        fail=1
+    elif [ "${count}" -lt "${baseline}" ]; then
+        echo "ruff ${code} count FELL -- ratchet it down: set ${var}=${count} in this script"
+    fi
+done
+
 step "pyright (production modules; ratchet baseline ${PYRIGHT_BASELINE})"
-# Pyright exits non-zero whenever it reports an error, which is the expected steady state
-# while the ratchet baseline is above zero -- so read the count out of its JSON and judge on
+# Pyright exits non-zero whenever it reports an error -- so read the count out of its JSON and judge on
 # that, never on its exit status. `|| true` keeps `set -o pipefail` from aborting the run here.
 pyright_json="$(uv run pyright --outputjson 2>/dev/null || true)"
 pyright_errors="$(printf '%s' "${pyright_json}" \

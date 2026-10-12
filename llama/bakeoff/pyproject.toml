@@ -34,30 +34,31 @@ extend-exclude = ["corpus", "examples", "queues", "records"]
 
 [tool.ruff.lint]
 select = ["F", "E", "W", "I", "B", "BLE", "SIM", "RUF"]
-# Deferred, with a ratchet -- NOT silenced findings. Each entry is a rule this codebase does
-# not yet satisfy, listed with its count at the baseline commit and the reason it is not part
-# of WP-R6. WP-R6 is a gates-and-closeout package; none of these can be cleared without a
-# behaviour or control-flow change, which belongs to a package authorised to make one.
-# The ratchet: clear a family, delete its line. Never add a line to make a new finding go away.
+# Two kinds of entry -- neither is a silenced finding.
+#   * PERMANENT: the rule is wrong for this codebase; the reason is recorded and the line stays.
+#   * PER-SITE, ONLY WHEN TOUCHED: each site needs its own behaviour judgement; fix a site when
+#     the surrounding code is next changed for its own reasons. These families are COUNT-RATCHETED
+#     in gates.sh (the only place their numbers live): a new finding fails the gate.
+# Never add a line to make a new finding go away.
 ignore = [
-    "E501",    # 315x line-too-long. Prose//data lines in docstrings and tables; the repo's
+    "E501",    # PERMANENT. line-too-long. Prose/data lines in docstrings and tables; the repo's
                # markdown contract is explicitly "never hard-wrap", and no formatter is
                # prescribed here, so a column limit would be churn with no defect value.
-    "B905",    # 5x zip-without-explicit-strict. Adding `strict=` is a REAL behaviour change
-               # (raises on length mismatch); each site needs its own judgement about whether
-               # a mismatch is a bug or tolerated.
-    "SIM102",  # 2x collapsible-if. Both sites carry an explanatory comment on the inner `if`
-    "SIM105",  # 9x try/except/pass -> contextlib.suppress. Rewrites exception handling in the
-               # control plane whose exception semantics WP-R4 just locked.
-    "SIM117",  # 2x nested `with`. Cosmetic; test-only.
-    "SIM905",  # 1x split-static-string. Its one site is a readable word list written as
-               # `"the a an of ...".split()`; expanding it to 15 quoted strings is strictly
+    "SIM905",  # PERMANENT. split-static-string. Its site is a readable word list written as
+               # `"the a an of ...".split()`; expanding it to quoted strings is strictly
                # worse to read and to extend.
-    "RUF022",  # 1x unsorted `__all__` in control_dispatcher.py. Its ordering is SEMANTIC --
+    "RUF022",  # PERMANENT. unsorted `__all__` in control_dispatcher.py. Its ordering is SEMANTIC --
                # the list is grouped under `# protocol` / `# store` / `# phases` comments that
                # mirror the WP-R4 split. Alphabetizing it silently leaves those comments
-               # attached to the wrong symbols, which is the exact class of structural
-               # regression this sprint existed to remove. Keep the grouping; keep this off.
+               # attached to the wrong symbols. Keep the grouping; keep this off.
+    "B905",    # PER-SITE, ONLY WHEN TOUCHED. zip-without-explicit-strict. Adding `strict=` is a
+               # REAL behaviour change (raises on length mismatch); each site needs its own
+               # judgement about whether a mismatch is a bug or tolerated.
+    "SIM102",  # PER-SITE, ONLY WHEN TOUCHED. collapsible-if. Sites carry an explanatory comment
+               # on the inner `if`.
+    "SIM105",  # PER-SITE, ONLY WHEN TOUCHED. try/except/pass -> contextlib.suppress. Rewrites
+               # exception handling in the control plane whose exception semantics WP-R4 locked.
+    "SIM117",  # PER-SITE, ONLY WHEN TOUCHED. nested `with`. Cosmetic; test-only.
 ]
 
 [tool.pyright]

@@ -193,10 +193,11 @@ def safe_read_request_bytes(path: Path, max_bytes: int = MAX_REQUEST_BYTES) -> O
 
 
 # -------------------------------------------------------------------------------------------
-# Locking -- non-blocking flock, used both for `dispatch.lock` (self-serialization) and for
-# probing `cron.lock` (admission probe -- acquire-then-immediately-release, never held by the
-# dispatcher itself; the honest at-most-once seam is `run-window.sh`'s own hold of this same
-# lock for the run's whole lifetime).
+# Locking -- non-blocking flock, used for `dispatch.lock` (self-serialization), for probing
+# `cron.lock` (start admission -- acquire-then-immediately-release; the honest at-most-once seam
+# is `run-window.sh`'s own hold of this same lock for the run's whole lifetime), and for HOLDING
+# `cron.lock` across the janitor's crash-recovery effects (`control_phases.janitor_phase` --
+# recovery is a GPU-ownership effect, so it is never a probe).
 # -------------------------------------------------------------------------------------------
 
 

@@ -12,7 +12,9 @@ consumer instead of living here.
 No live Docker/GPU execution anywhere in this suite -- `launch_fn`/`probe_cron_lock_fn`/
 `find_pid_fn`/`teardown_fn`/`router_start_fn`/`boot_id_fn`/`pgid_alive_fn`/`pid_alive_fn`/
 `now_fn` are always fakes; `dispatch_pass` never falls through to its real (process/Docker-
-touching) defaults in any test that imports from this module."""
+touching) defaults in any test that imports from this module. The one real seam is
+`acquire_cron_lock_fn`: a genuine non-blocking flock, but always on the tempdir's own
+`cron.lock`, never the real state dir."""
 
 import json
 import sys
@@ -24,6 +26,7 @@ if str(BAKEOFF_DIR) not in sys.path:
     sys.path.insert(0, str(BAKEOFF_DIR))
 
 import control_dispatcher as cd  # noqa: E402
+from control_store import flock_nonblocking_acquire  # noqa: E402
 
 BOOT_ID = "boot-aaaa-1111"
 
@@ -71,6 +74,7 @@ def _run_dispatch(paths, queues_dir, **overrides):
         find_pid_fn=lambda port, container=None: None,
         teardown_fn=lambda port, container=None: {},
         router_start_fn=lambda name: None,
+        acquire_cron_lock_fn=lambda: flock_nonblocking_acquire(paths.cron_lock),
     )
     kwargs.update(overrides)
     return cd.dispatch_pass(paths, queues_dir, **kwargs)

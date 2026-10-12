@@ -1080,7 +1080,11 @@ Operator-visible truth keys off **verified liveness first, queue state second** 
 state file happens to say (a `paused-resumable` queue with a verified-alive process group is
 still shown `running` -- liveness wins). A dead process group with `live.json` still present is
 recovered by the janitor -- surviving scratch-server workload torn down, router container
-restarted, then `last-run.json` composed `disposition:"crashed"` and `live.json` removed; the next
+restarted, then `last-run.json` composed `disposition:"crashed"` and `live.json` removed, all
+while holding `cron.lock` (the GPU-ownership lock a TTS window also holds); if that lock is busy
+the recovery is deferred to a later pass with `live.json` intact and a `recovery-deferred:
+cron.lock busy (<invocation>)` anomaly, so the janitor never starts the router on a GPU another
+owner holds; the next
 window's own interrupted-cell rule marks the in-flight cell `failed`/`interrupted` and NEVER
 silently re-runs it. A wrapper that dies while its `batch.py` child is still running is shown
 `running (wrapper lost)` -- an anomaly, not a crash; `stop` stays admissible since `batch.py`

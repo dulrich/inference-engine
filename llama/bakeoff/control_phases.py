@@ -26,13 +26,17 @@ orders them is in this same file -- `_act_stop`, `_act_cancel`, `_act_start`, `t
 The same reasoning keeps `janitor_phase`'s recovery sequence intact and local: orphan scratch
 teardown -> router restart -> compose `last-run.json` `disposition:"crashed"` -> remove
 `live.json`, in that order, so a crash mid-recovery re-runs a prefix of it rather than losing the
-evidence that a run died at all.
+evidence that a run died at all. That whole sequence runs under `cron.lock` -- the single
+GPU-ownership lock `run-window.sh` and the TTS window (`tts/tier/window.sh`) hold -- acquired
+non-blocking and held until `live.json` is gone; a busy lock defers recovery to a later pass with
+the evidence intact, so the janitor never `docker start`s llama on a GPU another owner holds.
 
 **No live operation happens unless a caller explicitly supplies live-capable collaborators.**
 `dispatch_pass`'s `launch_fn`/`find_pid_fn`/`teardown_fn`/`router_start_fn`/`boot_id_fn`/
 `pgid_alive_fn`/`pid_alive_fn` all default to real, Docker/process-touching implementations, and
 the test suite always injects fakes -- it never spawns a real process, never calls `docker`,
-never reads real `/proc`, and never leaves a tempdir.
+never reads real `/proc`, and never leaves a tempdir. `acquire_cron_lock_fn` defaults to a real
+non-blocking flock on `paths.cron_lock`; tests exercise it against a tempdir lock file only.
 """
 
 from __future__ import annotations
@@ -62,6 +66,8 @@ from control_store import (
     Paths,
     atomic_touch,
     atomic_write_json,
+    flock_nonblocking_acquire,
+    flock_release,
     probe_lock_free,
     read_json_safe,
     safe_read_request_bytes,
@@ -460,12 +466,22 @@ def compose_last_run(
     atomic_write_json(paths.last_run_path, newest)
 
 
+_LIVE_IDENTITY_KEYS = ("invocation_id", "request_id", "pid", "pgid", "pid_starttime", "boot_id")
+
+
+def _live_identity(live: Dict[str, Any]) -> Tuple[Any, ...]:
+    """The fields that name ONE invocation's process identity -- `phase` is excluded on purpose
+    (`set_live_phase` rewrites it in place during a healthy run)."""
+    return tuple(live.get(k) for k in _LIVE_IDENTITY_KEYS)
+
+
 def janitor_phase(
     paths: Paths, now_fn: Callable[[], datetime],
     boot_id_fn: Callable[[], str], pgid_alive_fn: Callable[[int], bool], pid_alive_fn: Callable[[Optional[int], Optional[str]], bool],
     find_pid_fn: Callable[..., Optional[int]], teardown_fn: Callable[..., Dict[str, Any]], router_start_fn: Callable[[str], None],
     port: int, scratch_container: str, router_container: str,
     late_launch_ids: Set[str],
+    acquire_cron_lock_fn: Optional[Callable[[], Optional[int]]] = None,
 ) -> List[str]:
     """Controller-liveness truth + workload-aware crash recovery. Wrapper-dead-but-group-alive is
     an anomaly only (stop stays admissible -- `batch.py`, the marker consumer, is the survivor);
@@ -477,7 +493,16 @@ def janitor_phase(
     control-flow purpose below but is ALSO counted as an `"unreadable-control-file: live.json"`
     anomaly. Matrix row 12: a verified-alive `live.json` naming a manual-start request id with no
     corresponding `claims/<id>.json` on disk is surfaced as a `"claim-live-id-mismatch: ..."`
-    anomaly -- liveness still wins for display, no disposition change."""
+    anomaly -- liveness still wins for display, no disposition change.
+
+    GPU ownership (review F1 of `reviews/2026-10-11-tn-code-review.md`): every recovery effect
+    runs while holding `cron.lock`, acquired non-blocking via `acquire_cron_lock_fn` (an open,
+    flocked fd, or `None` when busy) and released in `finally` only after `live.json` is gone.
+    Busy (a TTS window, or a fresh run that has not yet published its own `live.json`) defers the
+    whole recovery to a later pass with `live.json` and every piece of evidence intact, recorded
+    as a `"recovery-deferred: ..."` anomaly. Once held, `live.json` is re-read: if it no longer
+    names the same invocation (removed, unreadable, or replaced by a new run), nothing destructive
+    happens this pass. Never an acquire-then-release probe -- that reopens the race."""
     anomalies: List[str] = []
     live = read_json_safe(paths.live_path, anomalies=anomalies)
     if live is None:
@@ -505,37 +530,51 @@ def janitor_phase(
     # (`last-run.json`), and only THEN the removal of `live.json`. `live.json` is the one thing
     # that says "there was a run here at all", so it is removed last: a crash anywhere above
     # leaves it in place and the next pass re-runs the whole sequence from the top.
+    # All of it under `cron.lock`, held from before the first effect until after the unlink.
+    acquire = acquire_cron_lock_fn or (lambda: flock_nonblocking_acquire(paths.cron_lock))
+    lock_fd = acquire()
+    if lock_fd is None:
+        anomalies.append(f"recovery-deferred: cron.lock busy ({live.get('invocation_id')})")
+        return anomalies
     try:
-        found_pid = find_pid_fn(port, container=scratch_container)
-    except Exception:  # noqa: BLE001 -- a docker-touching seam must never abort the pass
-        found_pid = None
-    if found_pid is not None:
+        # Revalidate under the lock: the observation above was lock-free, so a new run may have
+        # replaced `live.json` (or another recoverer removed it) in between.
+        current = read_json_safe(paths.live_path)
+        if current is None or _live_identity(current) != _live_identity(live):
+            return anomalies
         try:
-            teardown_fn(port, container=scratch_container)
-        except Exception:  # noqa: BLE001
+            found_pid = find_pid_fn(port, container=scratch_container)
+        except Exception:  # noqa: BLE001 -- a docker-touching seam must never abort the pass
+            found_pid = None
+        if found_pid is not None:
+            try:
+                teardown_fn(port, container=scratch_container)
+            except Exception:  # noqa: BLE001
+                pass
+        # Never block recovery on a failed restart attempt -- but record it: the default
+        # `router_start_fn` is `subprocess.run([...], check=False)`, so failure arrives as a nonzero
+        # `returncode`, not an exception; a custom seam may raise instead. Both become one anomaly
+        # line and ride into `last-run.json` (plan restart-failure-surfacing WP-1).
+        restart_failed: Optional[str] = None
+        try:
+            started = router_start_fn(router_container)
+            returncode = getattr(started, "returncode", 0)
+            if isinstance(returncode, int) and returncode != 0:
+                restart_failed = f"docker start {router_container} exited {returncode}"
+        except Exception as exc:  # noqa: BLE001
+            restart_failed = f"docker start {router_container}: {type(exc).__name__}: {exc}"
+        if restart_failed is not None:
+            anomalies.append(f"router-restart-failed: {restart_failed}")
+        compose_last_run(
+            paths, now_fn, late_launch_ids,
+            janitor_crash_invocation_id=current.get("invocation_id"), janitor_restart_failed=restart_failed,
+        )
+        try:
+            paths.live_path.unlink()
+        except FileNotFoundError:
             pass
-    # Never block recovery on a failed restart attempt -- but record it: the default
-    # `router_start_fn` is `subprocess.run([...], check=False)`, so failure arrives as a nonzero
-    # `returncode`, not an exception; a custom seam may raise instead. Both become one anomaly
-    # line and ride into `last-run.json` (plan restart-failure-surfacing WP-1).
-    restart_failed: Optional[str] = None
-    try:
-        started = router_start_fn(router_container)
-        returncode = getattr(started, "returncode", 0)
-        if isinstance(returncode, int) and returncode != 0:
-            restart_failed = f"docker start {router_container} exited {returncode}"
-    except Exception as exc:  # noqa: BLE001
-        restart_failed = f"docker start {router_container}: {type(exc).__name__}: {exc}"
-    if restart_failed is not None:
-        anomalies.append(f"router-restart-failed: {restart_failed}")
-    compose_last_run(
-        paths, now_fn, late_launch_ids,
-        janitor_crash_invocation_id=live.get("invocation_id"), janitor_restart_failed=restart_failed,
-    )
-    try:
-        paths.live_path.unlink()
-    except FileNotFoundError:
-        pass
+    finally:
+        flock_release(lock_fd)
     return anomalies
 
 
@@ -714,6 +753,7 @@ def dispatch_pass(
     find_pid_fn: Optional[Callable[..., Optional[int]]] = None,
     teardown_fn: Optional[Callable[..., Dict[str, Any]]] = None,
     router_start_fn: Optional[Callable[[str], None]] = None,
+    acquire_cron_lock_fn: Optional[Callable[[], Optional[int]]] = None,
     port: int = DEFAULT_PORT,
     scratch_container: str = DEFAULT_SCRATCH_CONTAINER,
     router_container: str = DEFAULT_ROUTER_CONTAINER,
@@ -745,7 +785,7 @@ def dispatch_pass(
     janitor_anomalies = janitor_phase(
         paths, now_fn, boot_id_fn, pgid_alive_fn, pid_alive_fn,
         find_pid_fn, teardown_fn, router_start_fn, port, scratch_container, router_container,
-        late_launch_ids,
+        late_launch_ids, acquire_cron_lock_fn,
     )
     status = compose_status(paths, now_fn, ignored, term_anomalies + janitor_anomalies)
     prune_phase(paths, now_fn)

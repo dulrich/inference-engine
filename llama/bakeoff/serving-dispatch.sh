@@ -15,9 +15,52 @@
 # installed by the OPERATOR, never by an agent.
 set -euo pipefail
 
+# fleet-env cutover switch (plans/env-management.md). 0 = ON, 1 = OFF; exits loudly if
+# ON but the fleet-env binary is missing or the switch is malformed (never a silent
+# fallback to the legacy file).
+FLEET_ENV="${FLEET_ENV_BIN:-<code-root>/fleet-tools/fleet_env/bin/fleet-env}"
+fleet_env_on() {
+  local rc=0
+  if [[ ! -x "$FLEET_ENV" ]]; then
+    case "${FLEET_ENV_CUTOVER:-}" in
+      0) return 1 ;;
+      1) ;;
+      *) [[ -e "${FLEET_ENV_HOME:-$HOME/.config/fleet-env}/cutover" ]] || return 1 ;;
+    esac
+    printf '%s: fleet-env cutover is on but %s is missing; refusing the legacy env path\n' "$0" "$FLEET_ENV" >&2
+    exit 1
+  fi
+  fleet_env_exec enabled || rc=$?
+  if [[ $rc -gt 1 ]]; then
+    printf '%s: fleet-env enabled failed (exit %d)\n' "$0" "$rc" >&2
+    exit 1
+  fi
+  return "$rc"
+}
+# fleet-env is a node script and cron's PATH has no node: same nvm link as below, scoped to
+# the fleet-env call only so the OFF path's environment is unchanged.
+fleet_env_exec() {
+    if [ -x "$HOME/.nvm/current/bin/node" ]; then
+        PATH="$HOME/.nvm/current/bin:$PATH" "$FLEET_ENV" "$@"
+    else
+        "$FLEET_ENV" "$@"
+    fi
+}
+
+# Cutover ON: OPENWEBUI_URL/OPENWEBUI_API_KEY come from the fleet-env store -- re-exec this
+# wrapper under `fleet-env run serving-dispatch` (no file) and skip the legacy env file below.
+# OFF (default): the legacy ~/.config/inference-serving/env path, unchanged.
+under_fleet_env=0
+if [ "${FLEET_ENV_RUN:-}" = serving-dispatch ]; then
+    under_fleet_env=1
+elif fleet_env_on; then
+    if [ -x "$HOME/.nvm/current/bin/node" ]; then PATH="$HOME/.nvm/current/bin:$PATH"; export PATH; fi
+    exec "$FLEET_ENV" run serving-dispatch -- "$(readlink -f "$0")" "$@"
+fi
+
 ENV_FILE="${INFERENCE_SERVING_ENV:-$HOME/.config/inference-serving/env}"
 
-if [ -e "$ENV_FILE" ]; then
+if [ "$under_fleet_env" = 0 ] && [ -e "$ENV_FILE" ]; then
     if [ ! -f "$ENV_FILE" ]; then
         echo "serving-dispatch: $ENV_FILE is not a regular file; refusing to source it" >&2
         exit 2

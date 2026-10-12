@@ -44,12 +44,14 @@
 // Env: ROUTER_BASE_URL (default http://127.0.0.1:4813), ROUTER_ENV_FILE, GATEWAY_KEY,
 //      EFFORT_SAMPLES (default 2, floor 2).
 
+import { routerEnvFile } from "../../fleet-env.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
 const BASE_URL = (process.env.ROUTER_BASE_URL || "http://127.0.0.1:4813").replace(/\/$/, "");
-const ENV_FILE = process.env.ROUTER_ENV_FILE || "<code-root>/fleet-tools/.env";
+// ROUTER_ENV_FILE, else `fleet-env path router` under the fleet-env cutover, else the legacy file.
+const ENV_FILE = routerEnvFile();
 const SAMPLES = Math.max(2, Number(process.env.EFFORT_SAMPLES || 2));
 const MARGIN = 1.15;                 // medium median must exceed low median by >= 15%
 const MODEL = "claude-local/qwen38-27b-iq3s";

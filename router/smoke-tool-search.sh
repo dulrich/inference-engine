@@ -15,7 +15,8 @@
 #   <base-url>      mandatory, e.g. http://127.0.0.1:4813.
 #   <gateway-key>   x-gateway-key auth value; falls back to $GATEWAY_KEY, then to
 #                   INFERENCE_ROUTER_GATEWAY_KEY in $ROUTER_ENV_FILE
-#                   (default <code-root>/fleet-tools/.env) so the operator never has to
+#                   (default <code-root>/fleet-tools/.env, or the fleet-env
+#                   router projection under the cutover) so the operator never has to
 #                   put the secret on a command line. The key is never echoed.
 #   --local         the claude-local/* OpenAI-conversion leg. Unmetered (local GPU). DEFAULT
 #                   when no leg flag is given.
@@ -115,7 +116,11 @@ bad() {
 	fail=1
 }
 
-ROUTER_ENV_FILE="${ROUTER_ENV_FILE:-<code-root>/fleet-tools/.env}"
+# Default: the legacy fleet-tools/.env, or `fleet-env path router` when the fleet-env
+# cutover switch is on (router/fleet-env.mjs; fails closed, never a silent fallback).
+if [ -z "${ROUTER_ENV_FILE:-}" ]; then
+	ROUTER_ENV_FILE=$(node -e 'import(process.argv[1]).then((m) => console.log(m.routerEnvFile()))' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fleet-env.mjs") || exit 1
+fi
 if [ -z "$GATEWAY_KEY" ] && [ -r "$ROUTER_ENV_FILE" ]; then
 	GATEWAY_KEY=$(sed -n 's/^INFERENCE_ROUTER_GATEWAY_KEY=//p' "$ROUTER_ENV_FILE" | head -1)
 fi

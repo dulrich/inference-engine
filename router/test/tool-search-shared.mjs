@@ -5,13 +5,15 @@
 // Not a test file: the `*.test.mjs` glob does not load it. The method notes (bodies, token metric,
 // auth, fail-never-skip) live in the header of tool-search-conformance.test.mjs.
 
+import { routerEnvFile } from "../fleet-env.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
 const BASE_URL = (process.env.ROUTER_BASE_URL || "http://127.0.0.1:4813").replace(/\/$/, "");
-const ENV_FILE = process.env.ROUTER_ENV_FILE || "<code-root>/fleet-tools/.env";
+// ROUTER_ENV_FILE, else `fleet-env path router` under the fleet-env cutover, else the legacy file.
+const ENV_FILE = routerEnvFile();
 const CAPTURE_DIR = process.env.TOOL_SEARCH_CAPTURE_DIR || "/tmp/wp5-capture";
 // The engine's anthropic-type legs want *some* client bearer to build passthrough headers; the
 // provider's own apiKeyEnv replaces it before the upstream (smoke-router.sh checks 7 and 8).

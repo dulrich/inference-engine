@@ -17,7 +17,9 @@
 //
 // Usage:
 //   model-picker-lineup.mjs [--config <path>] [--visibility <path>] [--home <dir>]
-//                           [--env-file <path>]
+//                           [--env-file <path>]   (default: fleet-tools/.env; under the
+//                                                  fleet-env cutover, the environment via
+//                                                  `fleet-env run model-picker`)
 //                           [--check | --write [--launch-profile] [--canonicalize]]
 //
 // No mode flag prints the rows array as JSON to stdout.
@@ -26,6 +28,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { fleetEnvReexec } from "./fleet-env.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG = path.join(SCRIPT_DIR, "gateway.config.json");
@@ -130,7 +133,7 @@ function parseArgs(argv) {
     config: DEFAULT_CONFIG,
     visibility: DEFAULT_VISIBILITY,
     home: os.homedir(),
-    envFile: DEFAULT_ENV_FILE,
+    envFile: null, // null = default source (see gatewayKeySource)
     mode: "print",
     launchProfile: false,
     canonicalize: false,
@@ -434,6 +437,18 @@ function checkFailure(rows, parsed, launchProfile, gatewayKey, file) {
   return null;
 }
 
+// The gateway key for --launch-profile. An explicit --env-file always wins. Otherwise, with the
+// fleet-env cutover switch ON the script re-execs itself under `fleet-env run model-picker`
+// and reads the key from its environment (no file); OFF keeps the legacy DEFAULT_ENV_FILE.
+// Only --launch-profile needs the key, so a bare --write/--check never consults fleet-env.
+function gatewayKeySource(envFile) {
+  if (envFile) return readGatewayKey(envFile);
+  if (!fleetEnvReexec("model-picker")) return readGatewayKey(DEFAULT_ENV_FILE);
+  const value = (process.env[GATEWAY_KEY_VAR] || "").trim();
+  if (!value) die(`${GATEWAY_KEY_VAR} is missing or empty in the fleet-env environment`);
+  return value;
+}
+
 function main() {
   const opts = parseArgs(process.argv.slice(2));
   const config = readConfig(opts.config);
@@ -446,7 +461,7 @@ function main() {
   }
 
   const file = settingsPath(opts.home);
-  const gatewayKey = opts.launchProfile ? readGatewayKey(opts.envFile) : null;
+  const gatewayKey = opts.launchProfile ? gatewayKeySource(opts.envFile) : null;
 
   if (opts.mode === "check") {
     const drift = configDriftFailure(config, visibility, opts.config, opts.visibility);

@@ -12,6 +12,35 @@ PERSONAS=(codex-a codex-b)
 
 INSTALL_HOME="${SIDECAR_INSTALL_HOME:-$HOME}"
 
+# fleet-env cutover switch (plans/env-management.md). 0 = ON, 1 = OFF; exits loudly if
+# ON but the fleet-env binary is missing or the switch is malformed (never a silent
+# fallback to the legacy file).
+FLEET_ENV="${FLEET_ENV_BIN:-<code-root>/fleet-tools/fleet_env/bin/fleet-env}"
+fleet_env_on() {
+  local rc=0
+  if [[ ! -x "$FLEET_ENV" ]]; then
+    case "${FLEET_ENV_CUTOVER:-}" in
+      0) return 1 ;;
+      1) ;;
+      *) [[ -e "${FLEET_ENV_HOME:-$HOME/.config/fleet-env}/cutover" ]] || return 1 ;;
+    esac
+    printf '%s: fleet-env cutover is on but %s is missing; refusing the legacy env path\n' "$0" "$FLEET_ENV" >&2
+    exit 1
+  fi
+  "$FLEET_ENV" enabled || rc=$?
+  if [[ $rc -gt 1 ]]; then
+    printf '%s: fleet-env enabled failed (exit %d)\n' "$0" "$rc" >&2
+    exit 1
+  fi
+  return "$rc"
+}
+
+# Cutover ON: the unit reads the tmpfs projection %t/fleet-env/codex-sidecar.env, ordered
+# after fleet-env-project.service; the key lives only in the canonical store (no legacy env
+# file is created or touched, no key is ever printed). OFF (default): today's behaviour.
+FLEET_ENV_MODE=0
+if fleet_env_on; then FLEET_ENV_MODE=1; fi
+
 usage() {
   cat <<'USAGE'
 usage: install.sh [--home <dir>]
@@ -93,7 +122,20 @@ UNIT_FILE="$UNIT_DIR/$UNIT_NAME"
 CONF_DIR="$INSTALL_HOME/.config/codex-sidecar"
 ENV_FILE="$CONF_DIR/env"
 
+# @FLEET_ENV_UNIT@ is the template's sole ordering exception (see its header): rendered as
+# After=/Requires=fleet-env-project.service under the cutover, deleted otherwise so the
+# switch-off unit is byte-identical to the pre-cutover render.
+if [ "$FLEET_ENV_MODE" -eq 1 ]; then
+  UNIT_ENV_FILE='%t/fleet-env/codex-sidecar.env'
+  unit_deps=(-e 's|^@FLEET_ENV_UNIT@$|After=fleet-env-project.service\nRequires=fleet-env-project.service|')
+else
+  UNIT_ENV_FILE='%h/.config/codex-sidecar/env'
+  unit_deps=(-e '/^@FLEET_ENV_UNIT@$/d')
+fi
+
 rendered="$(sed \
+  "${unit_deps[@]}" \
+  -e "s|@ENV_FILE@|$UNIT_ENV_FILE|g" \
   -e "s|@NODE@|$NODE_BIN|g" \
   -e "s|@SIDECAR@|$SIDECAR_JS|g" \
   -e "s|@PATH@|$UNIT_PATH_VALUE|g" \
@@ -114,10 +156,20 @@ fi
 printf 'unit    %s (%s)\n' "$UNIT_FILE" "$unit_state"
 
 # --- config dir + env file ----------------------------------------------------
+generated_key=""
+if [ "$FLEET_ENV_MODE" -eq 1 ]; then
+  # The key is read only through the canonical store (`fleet-env run sidecar-install`), and
+  # only tested for presence -- never printed, never written to a file here.
+  # shellcheck disable=SC2016  # expanded by the child shell, not here
+  "$FLEET_ENV" run sidecar-install -- bash -c '[ -n "${CODEX_SIDECAR_KEY:-}" ]' \
+    || die "fleet-env cutover is on but CODEX_SIDECAR_KEY is not available from the store (fleet-env check)"
+  projection="$("$FLEET_ENV" path codex-sidecar)" || die "fleet-env path codex-sidecar failed"
+  [ -f "$projection" ] || die "fleet-env cutover is on but $projection is missing; run fleet-env project (or install fleet-env-project.service)"
+  printf 'env     %s (fleet-env projection; CODEX_SIDECAR_KEY from the canonical store, legacy %s not used)\n' "$projection" "$ENV_FILE"
+else
 mkdir -p -- "$CONF_DIR"
 chmod 0700 -- "$CONF_DIR"
 
-generated_key=""
 if [ -f "$ENV_FILE" ]; then
   chmod 0600 -- "$ENV_FILE"
   printf 'env     %s (unchanged; existing SIDECAR_KEY kept)\n' "$ENV_FILE"
@@ -130,6 +182,7 @@ else
   (umask 077; printf 'SIDECAR_KEY=%s\n' "$generated_key" > "$ENV_FILE")
   chmod 0600 -- "$ENV_FILE"
   printf 'env     %s (created; SIDECAR_KEY generated)\n' "$ENV_FILE"
+fi
 fi
 
 # --- daemon-reload (real home only) ------------------------------------------

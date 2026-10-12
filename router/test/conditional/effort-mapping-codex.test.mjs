@@ -44,6 +44,7 @@
 //      (default http://127.0.0.1:4813), ROUTER_ENV_FILE, GATEWAY_KEY,
 //      SIDECAR_LOG_DIR (default ~/.local/state/codex-sidecar/logs — the sidecar's own default).
 
+import { routerEnvFile } from "../../fleet-env.mjs";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -53,7 +54,8 @@ import test from "node:test";
 
 const METERED = process.env.CODEX_METERED === "1";
 const BASE_URL = (process.env.ROUTER_BASE_URL || "http://127.0.0.1:4813").replace(/\/$/, "");
-const ENV_FILE = process.env.ROUTER_ENV_FILE || "<code-root>/fleet-tools/.env";
+// ROUTER_ENV_FILE, else `fleet-env path router` under the fleet-env cutover, else the legacy file.
+const ENV_FILE = routerEnvFile();
 const LOG_DIR = process.env.SIDECAR_LOG_DIR
   || path.join(process.env.HOME || os.homedir(), ".local", "state", "codex-sidecar", "logs");
 // The cheapest family on the leg, and the one the per-turn effort measurement was taken on.

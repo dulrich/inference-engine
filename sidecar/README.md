@@ -156,7 +156,7 @@ sidecar/install.sh                 # renders ~/.config/systemd/user/codex-sideca
 sidecar/install.sh --home /tmp/x   # test render into a throwaway root; skips daemon-reload
 ```
 
-It resolves `node` (refuses below major 24) and both persona wrappers (`codex-a`, `codex-b`), creates `~/.config/codex-sidecar/` (`0700`) and `env` (`0600`), and generates a `SIDECAR_KEY` **only when the env file is absent** — an existing key is never overwritten. The generated key is printed exactly once, at generation; after that it lives only in the env file and is never echoed again. Nothing is enabled or started: the installer ends by printing the lines below for you to run.
+It resolves `node` (refuses below major 24) and both persona wrappers (`codex-a`, `codex-b`), creates `~/.config/codex-sidecar/` (`0700`) and `env` (`0600`), and generates a `SIDECAR_KEY` **only when the env file is absent** — an existing key is never overwritten. The generated key is printed exactly once, at generation; after that it lives only in the env file and is never echoed again. Nothing is enabled or started: the installer ends by printing the lines below for you to run. Under the fleet-env cutover switch (`fleet-env enabled`; transitional default off, which is everything above) the installer instead renders `EnvironmentFile=%t/fleet-env/codex-sidecar.env` with `After=`/`Requires=fleet-env-project.service`, checks `CODEX_SIDECAR_KEY` is present via `fleet-env run sidecar-install` (never printed) and the projection exists, and creates no legacy env file; `status.sh` reads `fleet-env path codex-sidecar`. Post-cutover the store is the only copy of the key.
 
 The fleet value for `SIDECAR_OUTBOX_PATH` is `<code-root>/fleet-tools/data/outbox/events.db`; it is added to `~/.config/codex-sidecar/env` by hand and takes effect on `systemctl --user restart codex-sidecar`.
 
@@ -186,4 +186,4 @@ systemctl --user start codex-sidecar
 
 Then update the compose-side value to match.
 
-**Compose side:** the router reaches the sidecar with the same shared key under the name `CODEX_SIDECAR_KEY` in the fleet-tools `.env` (`hold-for-user`: the user adds `CODEX_SIDECAR_KEY` to that `.env` before the router restart). WP-3 wires the provider entries and `extra_hosts`; until then the key is only consumed here.
+**Compose side:** the router reaches the sidecar with the same shared key under the name `CODEX_SIDECAR_KEY` in the fleet-tools `.env` (post-cutover: the fleet-env store, one copy for both sides) (`hold-for-user`: the user adds `CODEX_SIDECAR_KEY` to that `.env` before the router restart). WP-3 wires the provider entries and `extra_hosts`; until then the key is only consumed here.

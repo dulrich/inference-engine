@@ -269,6 +269,8 @@ def kv_bytes_per_token(
         raise ValueError(
             f"unknown KV cache type {exc}; known types: {sorted(KV_TYPE_BYTES_PER_ELEMENT)}"
         ) from exc
+    # `all(required)` above already raised on a missing/zero dimension.
+    assert key_length is not None and value_length is not None
     per_token_both = key_length * bpe_k + value_length * bpe_v
     if per_layer_kv:
         spec = swa_layer_spec if swa_layer_spec is not None else geometry.get("sliding_window_pattern")
@@ -276,7 +278,7 @@ def kv_bytes_per_token(
         if (
             context is not None
             and window is not None
-            and spec is not None
+            and isinstance(spec, (list, tuple))
             and len(spec) == len(head_count_kv)
         ):
             capped_tokens = min(context, window)
@@ -289,6 +291,8 @@ def kv_bytes_per_token(
         else:
             main_rate = float(sum(h * per_token_both for h in head_count_kv if h))
     else:
+        # Non-per-layer path: `required` included both, so `all(required)` guarantees them.
+        assert layers is not None and head_count_kv is not None
         main_rate = layers * head_count_kv * per_token_both
 
     if kv_indexer_geometry is None:

@@ -293,11 +293,20 @@ def _choose_sampling(
     goes out.
     """
     requested = cell.queue.sampling_arm
+    # The only caller runs `classify_sampling_arm` first, which rejects anything but
+    # "capability"/"production" -- so the arm is never None here.
+    assert requested is not None
     effective = requested
     fallback_reason: str | None = None
+    preset: dict[str, float | None]
     if requested == "production":
         try:
-            preset = production_sampling_fn(cell.model_family)
+            model_family = cell.model_family
+            if model_family is None:
+                raise sampling_table.MissingProductionSamplingError(
+                    "production sampling: cell has no model_family; falling back to 'capability'"
+                )
+            preset = dict(production_sampling_fn(model_family))
         except sampling_table.MissingProductionSamplingError as exc:
             effective = "capability"
             fallback_reason = str(exc)
@@ -473,7 +482,7 @@ def make_longcontext_cell_runner(
         except Exception as exc:  # noqa: BLE001  # pragma: no cover -- defensive: transport/battery
             # exception never propagates out and aborts the whole queue; it becomes an ordinary
             # failed-cell disposition, same as a health timeout.
-            detail = {"error": str(exc)}
+            detail: dict[str, Any] = {"error": str(exc)}
             if timing.detail is not None:
                 detail["timing"] = timing.detail
             return BATTERY_ERROR.with_detail(detail)

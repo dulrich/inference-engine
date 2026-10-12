@@ -465,6 +465,8 @@ def _run_resolved_queue(
     )
     if noop_result is not None:
         return noop_result
+    # `_load_or_init_state` contract: exactly one of the pair is not None.
+    assert state is not None
 
     apply_interrupted_rule(state)
     save_state(state_path, state)

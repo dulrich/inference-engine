@@ -18,7 +18,7 @@ REPO_ROOT="$(cd "${BAKEOFF_DIR}/../.." && pwd)"
 # Pinned Pyright baseline: the number of errors `basic` reports over the production modules
 # today. The gate fails if the count RISES. See AGENTS.md "The Pyright ratchet" for why this
 # is a count rather than zero, and for the steps that retire it.
-PYRIGHT_BASELINE="${PYRIGHT_BASELINE:-35}"
+PYRIGHT_BASELINE="${PYRIGHT_BASELINE:-0}"
 
 fail=0
 step() { printf '\n=== %s ===\n' "$1"; }

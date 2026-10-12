@@ -218,11 +218,15 @@ def _act_stop(
         live is not None and live.get("phase") == "running"
         and group_alive(live, boot_id_fn, pgid_alive_fn)
     )
-    if not admissible:
+    if live is None or not admissible:
         write_disposition(paths, req.request_id, "rejected", "no-live-run", now_fn)
         return
     target_inv = live.get("invocation_id")
     target_req = live.get("request_id")
+    if not isinstance(target_inv, str) or not target_inv:
+        # A live.json naming no invocation has no stop marker the wrapper would ever read.
+        write_disposition(paths, req.request_id, "rejected", "no-live-run", now_fn)
+        return
     # FIRST the action (evidence), THEN the marker (effect), THEN the disposition -- load-bearing
     # order (cycle-2 B2). Crash after line 1: the replay branch above recreates the marker from
     # the recorded target. Crash after line 2: the replay branch re-runs a no-op touch and then
@@ -280,7 +284,7 @@ def _act_cancel(paths: Paths, req: IngestedRequest, now_fn: Callable[[], datetim
         and target_body.get("action") == "start"
         and not target_terminal
     )
-    if not valid_target:
+    if not valid_target or target_request_id is None:  # `is None` is implied; restated to narrow
         write_disposition(paths, req.request_id, "rejected", "bad-target", now_fn)
         return
     # Same ordering as `_act_stop`: the action is durable BEFORE `_finish_cancel` writes either
@@ -479,7 +483,7 @@ def _live_identity(live: dict[str, Any]) -> tuple[Any, ...]:
 def janitor_phase(
     paths: Paths, now_fn: Callable[[], datetime],
     boot_id_fn: Callable[[], str], pgid_alive_fn: Callable[[int], bool], pid_alive_fn: Callable[[int | None, str | None], bool],
-    find_pid_fn: Callable[..., int | None], teardown_fn: Callable[..., dict[str, Any]], router_start_fn: Callable[[str], None],
+    find_pid_fn: Callable[..., int | None], teardown_fn: Callable[..., dict[str, Any]], router_start_fn: Callable[[str], object],
     port: int, scratch_container: str, router_container: str,
     late_launch_ids: set[str],
     acquire_cron_lock_fn: Callable[[], int | None] | None = None,
@@ -753,7 +757,7 @@ def dispatch_pass(
     launch_fn: Callable[[IngestedRequest], None] | None = None,
     find_pid_fn: Callable[..., int | None] | None = None,
     teardown_fn: Callable[..., dict[str, Any]] | None = None,
-    router_start_fn: Callable[[str], None] | None = None,
+    router_start_fn: Callable[[str], object] | None = None,
     acquire_cron_lock_fn: Callable[[], int | None] | None = None,
     port: int = DEFAULT_PORT,
     scratch_container: str = DEFAULT_SCRATCH_CONTAINER,
@@ -773,7 +777,11 @@ def dispatch_pass(
     launch_fn = launch_fn or (lambda req: default_launch(req, paths, queues_dir, run_window_path))
     find_pid_fn = find_pid_fn or sweep.find_host_pid_by_port
     teardown_fn = teardown_fn or sweep.teardown_scratch_server
-    router_start_fn = router_start_fn or (lambda name: subprocess.run(["docker", "start", name], check=False))
+    def _default_router_start(name: str) -> subprocess.CompletedProcess[bytes]:
+        # Return the CompletedProcess: janitor_phase reads its `returncode` to surface
+        # `router-restart-failed`.
+        return subprocess.run(["docker", "start", name], check=False)
+    router_start_fn = router_start_fn or _default_router_start
 
     paths.ensure_dirs()
     pending, ignored = ingest_pass(paths, queues_dir, now_fn)

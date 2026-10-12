@@ -200,6 +200,7 @@ def validate_queue(queue: dict[str, Any]) -> None:
         )
     models = queue.get("models")
     _validate_models(models)
+    assert isinstance(models, dict)  # `_validate_models` raised otherwise
     cells = queue.get("cells")
     if not isinstance(cells, list) or not cells:
         raise QueueValidationError("queue has no non-empty 'cells' list")

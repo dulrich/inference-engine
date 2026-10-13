@@ -1,17 +1,17 @@
 // outbox.test.mjs — the sidecar's half of the tracker event seam (plan
-// `fleet-tools/plans/tracker-event-seam.md`, WP-2). The reader lives in another repo, so
-// the schema string is pinned by byte equality against it, not by a shared import.
+// `fleet-tools/plans/tracker-event-seam.md`, WP-2; append log per
+// `fleet-tools/plans/outbox-append-log.md`, WP-2). The reader lives in another repo, so
+// the line format is pinned by byte equality against its `serializeRow`, not a shared import.
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { withSidecar, req, msgBody, SIMPLE_TURN } from "./helpers.mjs";
-import { SCHEMA_SQL } from "../outbox.mjs";
+import { createOutboxWriter, serializeRow, logDirFor } from "../outbox.mjs";
 
 const scenario = { defaultTurn: SIMPLE_TURN };
-const READER = "<code-root>/fleet-tools/scripts/outbox.mjs";
+const REFERENCE = "<code-root>/fleet-tools/scripts/outbox.mjs";
 
 // The billing line is the only wire witness of a subagent (see session.test.mjs).
 const billing = subagent =>
@@ -23,27 +23,42 @@ const agentBody = ({ sessionId, subagent = false, system = "You are a helpful co
     messages: [{ role: "user", content: subagent ? "audit this plan" : "orchestrate the plan" }],
   });
 
+// Every row of every day-file under the log dir derived from the outbox path.
 function readOutbox(file) {
-  const db = new DatabaseSync(file, { readOnly: true });
-  try {
-    return {
-      rows: db.prepare("SELECT * FROM events ORDER BY seq").all(),
-      userVersion: Number(db.prepare("PRAGMA user_version").get().user_version),
-      journalMode: String(db.prepare("PRAGMA journal_mode").get().journal_mode).toLowerCase(),
-    };
-  } finally {
-    db.close();
-  }
+  const dir = logDirFor(file);
+  return fs.readdirSync(dir).filter(n => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(n)).sort()
+    .flatMap(n => fs.readFileSync(path.join(dir, n), "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l)));
 }
 
-test("SCHEMA_SQL is byte-identical to the fleet-tools outbox library's export", () => {
-  const src = fs.readFileSync(READER, "utf8");
-  const m = /^export const SCHEMA_SQL = `([\s\S]*?)`;$/m.exec(src);
-  assert.ok(m, `no SCHEMA_SQL template literal in ${READER}`);
-  assert.equal(SCHEMA_SQL, m[1], "the writer and the reader must agree byte-for-byte");
+test("rows are byte-identical to the fleet-tools serializeRow, in a 0600 day-file", async t => {
+  const ref = await import(REFERENCE);
+  const events = [
+    { ts: "2026-10-13T01:02:03.456Z", kind: "turn.completed", session_id: "s1", leg: "codex-a",
+      payload: { stop_reason: "end_turn", model: "m" } },
+    { ts: "2026-10-13T23:59:59.999Z", kind: "child.spawned", session_id: "s2", leg: "codex-b",
+      agent_id: "0123456789abcdef", agent_type: "", payload: {} },
+    { ts: "2026-10-14T00:00:00.000Z", kind: "usage", session_id: "s3" },
+  ];
+  for (const e of events) assert.equal(serializeRow(e), ref.serializeRow({ ...e, harness: "codex-sidecar" }));
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-sidecar-outbox-"));
+  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } });
+  const file = path.join(dir, "outbox", "events.db");
+  const w = createOutboxWriter({ path: file });
+  for (const e of events) assert.ok(w.record(e));
+  const log = logDirFor(file);
+  assert.equal(fs.statSync(log).mode & 0o777, 0o700);
+  const day13 = path.join(log, "2026-10-13.jsonl");
+  assert.equal(fs.statSync(day13).mode & 0o777, 0o600);
+  assert.equal(fs.readFileSync(day13, "utf8"),
+    ref.serializeRow({ ...events[0], harness: "codex-sidecar" }) + ref.serializeRow({ ...events[1], harness: "codex-sidecar" }));
+  assert.equal(fs.readFileSync(path.join(log, "2026-10-14.jsonl"), "utf8"), ref.serializeRow({ ...events[2], harness: "codex-sidecar" }));
+  assert.equal(fs.existsSync(file), false, "the legacy events.db is never created");
+  assert.equal(w.record({ kind: "turn.completed", session_id: "s4", payload: { big: "x".repeat(70 * 1024) } }), null,
+    "an oversize row is dropped whole");
 });
 
-test("a parent turn writes one turn.completed row on a v1, rollback-journal outbox", async t => {
+test("a parent turn writes one turn.completed row to the day-file log", async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-sidecar-outbox-"));
   t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } });
   const file = path.join(dir, "outbox", "events.db");
@@ -54,9 +69,7 @@ test("a parent turn writes one turn.completed row on a v1, rollback-journal outb
   const r = await req(h, "/codex-a/v1/messages", { body: agentBody({ sessionId: sid }) });
   assert.equal(r.status, 200, r.text);
 
-  const { rows, userVersion, journalMode } = readOutbox(file);
-  assert.equal(userVersion, 1);
-  assert.equal(journalMode, "delete", "WAL is unreadable through the tracker's read-only mount");
+  const rows = readOutbox(file);
   assert.equal(rows.length, 1, JSON.stringify(rows));
   const [row] = rows;
   assert.equal(row.kind, "turn.completed");
@@ -64,7 +77,7 @@ test("a parent turn writes one turn.completed row on a v1, rollback-journal outb
   assert.equal(row.session_id, sid);
   assert.equal(row.agent_id, null, "a parent key carries no agent id");
   assert.equal(row.leg, "codex-a");
-  const payload = JSON.parse(row.payload);
+  const { payload } = row;
   assert.equal(payload.stop_reason, "end_turn");
   assert.equal(payload.model, "gpt-5.6-luna");
   assert.ok(payload.threadId, "the codex thread id rides along");
@@ -82,7 +95,7 @@ test("a subagent key writes child.spawned once, then its turns under an agent_id
   const body = agentBody({ sessionId: sid, subagent: true, system: "You are an adversarial plan auditor." });
   assert.equal((await req(h, "/codex-a/v1/messages", { body })).status, 200);
 
-  const { rows } = readOutbox(file);
+  const rows = readOutbox(file);
   assert.deepEqual(rows.map(r => r.kind), ["child.spawned", "turn.completed"]);
   const agentId = rows[0].agent_id;
   assert.match(agentId, /^[0-9a-f]{16}$/, "the subagent suffix is the discriminator hash");

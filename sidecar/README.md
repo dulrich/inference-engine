@@ -40,7 +40,7 @@ Claude Code ──► router :4813 ──► codex-sidecar :4877 ──► codex
 | `messages.mjs` | `POST /<persona>/v1/messages` as the explicit sequence normalization → session disposition → turn execution → outcome emission. |
 | `outbox-events.mjs` | The tracker rows one completed turn produces (`turn.completed`, `child.spawned`, `usage`, `rate_limit`). |
 | `http.mjs` | Auth, the closed route table, body reading and the bind-aware `/healthz` payload. |
-| `outbox.mjs` | The SQLite event-outbox writer itself. |
+| `outbox.mjs` | The event-outbox writer itself (appends JSONL day-files). |
 
 ## Routes
 
@@ -100,7 +100,7 @@ Spike-09 fixture task through the router at `:4813`, six metered `claude -p` run
 | `SIDECAR_LOG_DIR` | `~/.local/state/codex-sidecar/logs` | JSONL log directory (`0700`, files `0600`). |
 | `SIDECAR_LOG_KEEP_DAYS` | `14` | Log retention; pruned at startup and at each UTC day rollover. |
 | `SIDECAR_STATE_DIR` | `~/.local/state/codex-sidecar` | State root (holds `empty-cwd/`). |
-| `SIDECAR_OUTBOX_PATH` | *(unset)* | SQLite event outbox for the fleet-tools initiative tracker; unset = off. |
+| `SIDECAR_OUTBOX_PATH` | *(unset)* | Legacy event-outbox path for the fleet-tools initiative tracker; rows are appended to `<dirname>/log/<YYYY-MM-DD>.jsonl` day-files beside it (the `events.db` itself is never written). Unset = off. |
 | `SIDECAR_CONTEXT_WINDOW_TOKENS` | `258400` | Fallback window for the wire-usage clamp (catalog 272,000 at the 95% auto-compact scope limit). Used only when the app-server reports no `modelContextWindow` for the thread. |
 
 `ANTHROPIC_API_KEY` is never read, set or forwarded. The execution-boundary item filter and the pinned `features.*` flags have no environment override by design.

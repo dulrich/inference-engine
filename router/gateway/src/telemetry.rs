@@ -16,6 +16,12 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+mod record;
+pub mod sink;
+
+pub use record::{read_session_id, read_subagent_witness, JsonlTelemetry};
+pub use sink::{Sink, SinkOptions};
+
 pub struct RequestStart<'a> {
     pub request_id: &'a str,
     pub route: Route,
@@ -81,13 +87,21 @@ pub trait Telemetry: Send + Sync + 'static {
     fn request_start(&self, start: &RequestStart<'_>) -> Box<dyn RequestTelemetry>;
 }
 
-/// The delegate the composition point (`app.rs`) installs. WP-4 returns its sink here
-/// (reading the `ROUTER_TELEMETRY_*` knobs through `env`).
-pub fn delegate(_settings: &Settings, _env: Env) -> Arc<dyn Telemetry> {
-    Arc::new(NoopTelemetry)
+/// The delegate the composition point (`app.rs`) installs: the 0006 jsonl sink, or the no-op
+/// when `ROUTER_TELEMETRY_ENABLED` is false.
+pub fn delegate(_settings: &Settings, env: Env) -> Arc<dyn Telemetry> {
+    let (enabled, options) = sink::options_from_env(env);
+    if enabled {
+        Arc::new(JsonlTelemetry::new(Sink::new(
+            options,
+            sink::system_clock(),
+        )))
+    } else {
+        Arc::new(NoopTelemetry)
+    }
 }
 
-/// WP-2 no-op.
+/// The no-op (telemetry disabled).
 pub struct NoopTelemetry;
 
 struct NoopRequest;

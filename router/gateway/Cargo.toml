@@ -21,6 +21,10 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "s
 serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
 
+[dev-dependencies]
+# Paused-clock tests of the telemetry progress cadence (tests/telemetry.rs); no new crate.
+tokio = { version = "1", features = ["test-util"] }
+
 [profile.release]
 opt-level = 3
 lto = true

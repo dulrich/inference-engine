@@ -1,0 +1,4 @@
+[
+  { "name": "rrdiff-nocred", "type": "anthropic", "baseurl": "/v1", "models": ["rrdiff-nocred-model"], "consumers": { "rrdiff-nocred-model": ["router"] } },
+  { "name": "rrdiff-decide-nocred", "type": "systemone", "baseurl": "/api/v1", "models": ["rrdiff/decide-1"], "consumers": ["router"] }
+]

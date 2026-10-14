@@ -47,6 +47,10 @@
 #  10. (SMOKE_SYSTEMONE=1 only, metered: one OpenRouter decision call) POST /v1/systemone via
 #      openrouter-decide/typesafe/jev-1.13 with a synthetic state returns
 #      answers.wait.choice in {blocked, offer, none} (patch 0013). Default off.
+#  11. POST /v1/messages via openrouter/qwen/qwen3.8-flash is a 4xx protocol-mismatch refusal
+#      (plans/router-rust-gateway.md Decision 2: an OpenAI-protocol provider is never reached
+#      from Anthropic ingress; no upstream call, unbilled). The Node gateway converts and relays
+#      instead, so this check expects the Rust gateway (or-anthropic/* on /v1/messages relays).
 #
 # Exits non-zero on any check failure. Requires: curl, jq.
 set -u
@@ -307,6 +311,21 @@ if [ "${SMOKE_SYSTEMONE:-0}" = "1" ]; then
 	fi
 else
 	note "SMOKE_SYSTEMONE not set: SKIPPING the metered /v1/systemone probe (one OpenRouter decision call)."
+fi
+
+# ── 11. Decision 2: openrouter/* on Anthropic ingress is refused, never relayed ─────────────
+note "checking POST /v1/messages via openrouter/qwen/qwen3.8-flash is a 4xx refusal ..."
+or_out=$(curl -s --max-time 15 -w '\n%{http_code}' -X POST "$BASE_URL/v1/messages" \
+	-H 'Content-Type: application/json' \
+	-H "x-gateway-key: $GATEWAY_KEY" \
+	-d '{"model":"openrouter/qwen/qwen3.8-flash","max_tokens":1,"messages":[{"role":"user","content":"ping"}]}') || or_out=""
+or_status=$(printf '%s' "$or_out" | tail -n 1)
+or_body=$(printf '%s' "$or_out" | sed '$d')
+or_has_content=$(echo "$or_body" | jq -r 'if (.content | type) == "array" then "yes" else empty end' 2>/dev/null)
+if [ "${or_status:0:1}" = "4" ] && [ -z "$or_has_content" ]; then
+	pass "/v1/messages (openrouter/qwen/qwen3.8-flash) refused with $or_status and no assistant content"
+else
+	bad "/v1/messages (openrouter/qwen/qwen3.8-flash) expected a 4xx refusal, got status '$or_status'. Response: $or_body"
 fi
 
 echo

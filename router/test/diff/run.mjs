@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Differential contract harness runner (router/test/diff/README.md).
 //   node router/test/diff/run.mjs --target image:<tag>|bin:<path> [--impl node|rust]
-//        [--case <glob>] [--slow] [--config-source <path>] [--keep]
+//        [--case <glob>] [--slow] [--config-source <path>] [--keep] [--stub-image <tag>]
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -13,6 +13,7 @@ import { cases, OAUTH } from './cases.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRouter = path.resolve(here, '../..');
 export const GW_KEY = 'test-gw-key';
+const DEFAULT_RUST_STUB_IMAGE = 'node:24-slim';
 
 function parseArgs(argv) {
   const a = { impl: 'node', slow: false, keep: false, caseGlob: '*', configSource: path.join(repoRouter, 'gateway.config.json') };
@@ -24,10 +25,13 @@ function parseArgs(argv) {
     else if (k === '--config-source') a.configSource = path.resolve(argv[++i]);
     else if (k === '--slow') a.slow = true;
     else if (k === '--keep') a.keep = true;
+    else if (k === '--stub-image') a.stubImage = argv[++i];
     else throw new Error(`unknown argument ${k}`);
   }
   if (!/^(image|bin):.+/.test(a.target || '')) throw new Error('--target image:<tag> | bin:<path> is required');
   if (!['node', 'rust'].includes(a.impl)) throw new Error('--impl must be node or rust');
+  // The stub needs `node`; a scratch Rust image has none, so rust targets default to a pinned public node image.
+  if (!a.stubImage) a.stubImage = a.impl === 'node' && a.target.startsWith('image:') ? a.target.slice(6) : DEFAULT_RUST_STUB_IMAGE;
   return a;
 }
 
@@ -100,14 +104,14 @@ async function waitFor(url, ms, label) {
   }
 }
 
-async function startImage(tag, run, cleanups) {
+async function startImage(tag, stubImage, run, cleanups) {
   const id = run.id;
   const netName = `rrdiff-net-${id}`;
   docker('network', 'create', '--internal', netName);
   cleanups.push(() => docker('network', 'rm', netName));
   const stubName = `rrdiff-stub-${id}`;
   docker('run', '-d', '--name', stubName, '--network', netName, '--entrypoint', 'node',
-    '-v', `${here}:/diff:ro`, tag, '/diff/stub.mjs', '8080', '0.0.0.0');
+    '-v', `${here}:/diff:ro`, stubImage, '/diff/stub.mjs', '8080', '0.0.0.0');
   cleanups.push(() => docker('rm', '-f', stubName));
   const ip = (n) => docker('inspect', '-f', '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}', n);
   run.stubUrl = `http://${ip(stubName)}:8080`;
@@ -180,7 +184,7 @@ async function main() {
   let failed = 0;
   try {
     const [mode, ref] = [args.target.slice(0, args.target.indexOf(':')), args.target.slice(args.target.indexOf(':') + 1)];
-    if (mode === 'image') await startImage(ref, run, cleanups);
+    if (mode === 'image') await startImage(ref, args.stubImage, run, cleanups);
     else await startBin(ref, run, cleanups);
     const ctx = makeCtx(run);
     console.log(`TAP version 13\n1..${selected.length}`);

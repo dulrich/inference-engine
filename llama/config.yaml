@@ -228,16 +228,23 @@ macros:
   # replaces (crucible-embed-gpu / crucible-rerank-gpu). `--pooling` is DELIBERATELY absent from
   # every model's cmd: the GGUF metadata already carries the correct pooling mode, and
   # `--embeddings` / `--reranking` each imply their own pooling on top of that — do not add
-  # `--pooling` back in "to be explicit". `-ngl 99` offloads every layer to the GPU; the
-  # `-c/-b/-ub 8192` context/batch sizing matches what was already tuned and measured for these
-  # three models.
+  # `--pooling` back in "to be explicit". `-ngl 99` offloads every layer to the GPU. `-c 8192
+  # -b 8192` keep bge-m3's full context and logical batch, but `-ub` is 4096, not 8192
+  # (2026-10-14, fleet-tools plans/fleet-memory-crush.md WP-1): at `-ub 8192` one long input
+  # grows a compute buffer past the Vulkan device max buffer size, ggml_vulkan logs `Failed to
+  # allocate pinned memory`, and the buffer falls back to HOST RAM — measured 143 MiB → 6.96 GiB
+  # anonymous for bge-m3 after a single ~2.6k-token request; at `-ub 4096` the same load holds
+  # 184 MiB (cliff between 4096 and 6144; bulk embedding ~17% slower). Contract: a single embedding
+  # input, or a rerank query+document pair, must fit one ubatch, so it is capped at 4096 tokens — a
+  # longer input gets an error instead of the old success. Do not raise `-ub` back without
+  # re-measuring host anonymous memory (`/proc/<pid>/smaps_rollup` Pss_Anon).
   llama_server_common: >
     /usr/local/bin/llama-server
     --host 0.0.0.0 --port ${PORT}
-    -ngl 99 -c 8192 -b 8192 -ub 8192
+    -ngl 99 -c 8192 -b 8192 -ub 4096
 
   # Chat models get their OWN macro, deliberately not `llama_server_common` — do not "simplify"
-  # by reusing it. The retrieval macro's `-b/-ub 8192` was tuned for batch-embedding many chunks
+  # by reusing it. The retrieval macro's `-b 8192` / `-ub 4096` was tuned for batch-embedding many chunks
   # at once through two small models; for a chat model that ubatch size is pure VRAM cost with no
   # throughput benefit, because chat is single-conversation autoregressive decode after one
   # prefill. llama.cpp's own defaults are `-b 2048` (`--help`, `b10534`: "logical maximum batch

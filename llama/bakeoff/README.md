@@ -237,7 +237,7 @@ given), and the quality corpus, then writes
 `--gguf-host-path` takes a **real host filesystem path** (not the container-internal `/models/...`
 path baked into `llama/config.yaml`'s `cmd:` blocks) — this module deliberately does not hardcode
 the `/models` → host bind-mount mapping, since that mapping lives in
-`fleet-tools/compose.fleet.yml`, outside this repo's own contract. The caller (a later WP that
+`fleet-tools/fleet/compose.fleet.yml`, outside this repo's own contract. The caller (a later WP that
 already knows the host layout from its own download step) resolves it. When given, `file_size`
 and `sha256` are computed by reading the file directly (verified live during WP-1's dry run: a
 2.8 GB GGUF hashes in about 1.3s — cheap enough to always compute for real rather than fake).

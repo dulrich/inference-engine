@@ -21,7 +21,7 @@ import { projectRecipe } from "./recipe.ts";
 // `metadata:` block, never fetched live from the router's `GET /v1/models`. Two findings
 // ruled the live-fetch alternative out: (1) the brief's literal condition -- "can the API
 // container already reach :4811" -- is false by this fleet's own documented network fact
-// (`fleet-tools/compose.fleet.yml`'s Open WebUI comment block, verified live
+// (`fleet-tools/fleet/compose.fleet.yml`'s Open WebUI comment block, verified live
 // 2026-08-20): :4811 is `127.0.0.1`-bound on the HOST, and a socket bound to loopback never
 // accepts packets arriving from another container's bridge interface -- only the container
 // DNS name (`inference-engine-llama:4806`, reachable over the shared default compose

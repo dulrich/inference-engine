@@ -16,7 +16,7 @@ INSTALL_HOME="${SIDECAR_INSTALL_HOME:-$HOME}"
 # fleet-env cutover switch (plans/env-management.md). 0 = ON, 1 = OFF; exits loudly if
 # ON but the fleet-env binary is missing or the switch is malformed (never a silent
 # fallback to the legacy file).
-FLEET_ENV="${FLEET_ENV_BIN:-<code-root>/fleet-tools/fleet_env/bin/fleet-env}"
+FLEET_ENV="${FLEET_ENV_BIN:-<code-root>/fleet-tools/fleet/fleet_env/bin/fleet-env}"
 fleet_env_on() {
   local rc=0
   if [[ ! -x "$FLEET_ENV" ]]; then

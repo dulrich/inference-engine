@@ -14,6 +14,6 @@ The bake-off harness and queue control plane live in `llama/bakeoff/`; the Open 
 
 Consumers: **obsidian-crucible** (chat, embed, image, rerank), **news-ingestion** (embeddings + GLiNER2 extraction), **seven-afterlives** (local chat, conformance-validated optional backend), Open WebUI, and Claude Code via the router. The alias contract is append-only; the consumer registry lives in `llama/config.yaml`'s header.
 
-Service blocks live in `fleet-tools/compose.fleet.yml`; ports are registered in `fleet-tools/SERVICES.md` (4810 decade).
+Service blocks live in `fleet-tools/fleet/compose.fleet.yml`; ports are registered in `fleet-tools/fleet/SERVICES.md` (4810 decade).
 
 Start here: `AGENTS.md` (contract), then the area `AGENTS.md`/`README.md` for whichever tier you are touching.

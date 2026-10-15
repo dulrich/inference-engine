@@ -41,7 +41,7 @@ into the name so it's visible without opening the Dockerfile.
 
 The compose service itself (`crucible-inference`, port mapping, `/models` and `config.yaml`
 mounts, `/dev/dri` passthrough, `mem_limit`) lives in the fleet repo,
-`fleet-tools/compose.fleet.yml`.
+`fleet-tools/fleet/compose.fleet.yml`.
 
 ## Dual-use image, on purpose
 
@@ -437,7 +437,7 @@ started.
 ## Migration status
 
 **Cutover complete (2026-07-26).** `crucible-inference` is the live and only inference path:
-the compose service runs always-on in `fleet-tools/compose.fleet.yml`, Crucible's two
+the compose service runs always-on in `fleet-tools/fleet/compose.fleet.yml`, Crucible's two
 retrieval provider entries pointed at `127.0.0.1:4806` (repointed to `4811` on 2026-07-27,
 when the transitional 4806 publish was retired), and the smoke test plus the
 chat-evicts-retrieval interleave (two evict→reload cycles, byte-identical embeddings after each

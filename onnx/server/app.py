@@ -231,7 +231,8 @@ class ExtractHandler(BaseHTTPRequestHandler):
 
         started = time.time()
         try:
-            runtime = self.registry.runtime_for(alias)
+            lease = self.registry.lease(alias)
+            runtime = lease.__enter__()
         except UnknownModelError:  # pragma: no cover - guarded above
             self._error(404, "unknown_model", f"unknown model alias '{alias}'")
             return
@@ -239,14 +240,27 @@ class ExtractHandler(BaseHTTPRequestHandler):
             self._error(503, "model_unavailable",
                         f"model '{alias}' could not be loaded: {type(exc).__name__}: {exc}")
             return
+        try:  # the lease pins the runtime against idle unload until this request is done
+            results = self._extract_with(alias, runtime, schema, texts, threshold)
+            if results is None:
+                return
+        finally:
+            lease.__exit__(None, None, None)
 
+        elapsed = time.time() - started
+        _log(f"extract model={alias} texts={len(texts)} in {elapsed:.2f}s "
+             f"({elapsed / len(texts):.3f}s/text)")
+        self._send(200, {"model": alias, "results": results})
+
+    def _extract_with(self, alias, runtime, schema, texts, threshold) -> list | None:
+        """Run one extraction on a leased runtime. None means an error was already sent."""
         try:
             prepared = self.schema_cache.get_or_build(
                 alias, schema, lambda: runtime.prepare(schema)
             )
         except SchemaError as exc:
             self._error(400, "bad_schema", str(exc))
-            return
+            return None
         except Exception as exc:
             # Belt and braces. `compile_schema` is strict enough that this should be
             # unreachable, but an exception escaping do_POST is not a 500 — with
@@ -254,19 +268,14 @@ class ExtractHandler(BaseHTTPRequestHandler):
             # connection and the client gets NO response at all. That must be impossible.
             _log("schema compilation failed:", traceback.format_exc())
             self._error(500, "schema_failed", f"{type(exc).__name__}: {exc}")
-            return
+            return None
 
         try:
-            results = runtime.extract(texts, prepared, float(threshold))
+            return runtime.extract(texts, prepared, float(threshold))
         except Exception as exc:  # a genuine server fault — 5xx is correct here
             _log("extract failed:", traceback.format_exc())
             self._error(500, "extract_failed", f"{type(exc).__name__}: {exc}")
-            return
-
-        elapsed = time.time() - started
-        _log(f"extract model={alias} texts={len(texts)} in {elapsed:.2f}s "
-             f"({elapsed / len(texts):.3f}s/text)")
-        self._send(200, {"model": alias, "results": results})
+            return None
 
     def _classify(self, alias: str, payload: dict[str, Any]) -> None:
         try:
@@ -276,7 +285,8 @@ class ExtractHandler(BaseHTTPRequestHandler):
             return
         started = time.time()
         try:
-            runtime = self.registry.runtime_for(alias)
+            lease = self.registry.lease(alias)
+            runtime = lease.__enter__()
         except Exception as exc:
             self._error(503, "model_unavailable",
                         f"model '{alias}' could not be loaded: {type(exc).__name__}: {exc}")
@@ -287,6 +297,8 @@ class ExtractHandler(BaseHTTPRequestHandler):
             _log("classify failed:", traceback.format_exc())
             self._error(500, "classify_failed", f"{type(exc).__name__}: {exc}")
             return
+        finally:
+            lease.__exit__(None, None, None)
         elapsed = time.time() - started
         _log(f"classify model={alias} texts={len(texts)} in {elapsed:.2f}s")
         self._send(200, {"model": alias, "results": results})
@@ -296,6 +308,7 @@ def build_server(config_path: str, host: str, port: int, threads: int | None) ->
     registry = ModelRegistry.from_yaml(config_path, intra_op_threads=threads)
     _log(f"registry: {config_path} -> {registry.aliases}")
     registry.preload_all(log=_log)
+    registry.start_reaper(log=_log)
 
     handler = type("BoundExtractHandler", (ExtractHandler,), {
         "registry": registry,

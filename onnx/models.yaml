@@ -58,10 +58,12 @@
 #
 # ── Residency ─────────────────────────────────────────────────────────────────────────────────
 #
-# `preload: true` (the default) loads the model before the listener opens, so no request ever
-# eats a cold load. Nothing is ever unloaded: unlike the GPU tier next door, this tier's scarce
-# resource is cold-load latency, not memory. Set `preload: false` only for a model that is rare
-# enough that the first caller can afford the load — it is then resident forever after.
+# Hot models are `preload: true` (the default): loaded before the listener opens, resident, never
+# unloaded — no request to them ever eats a cold load. Rare models are `preload: false` plus
+# `idle_unload_seconds: N`: loaded on first request (cold load ~2-3.5 s, accepted for them) and
+# dropped after N s with no request in flight (gc + malloc_trim returns the RAM to the OS).
+# `idle_unload_seconds` on a preloaded model is a config error. Readiness (`/health` ok) means
+# every preload model is resident. compose `mem_limit` stays sized for every model loaded at once.
 # The compose healthcheck's start_period must cover the sum of the preloaded models' loads.
 
 models:
@@ -69,7 +71,8 @@ models:
     name: "GLiNER2 base v1 (English, DeBERTa-v3-base)"
     source_model: fastino/gliner2-base-v1
     path: /models/fastino/gliner2-base-v1-onnx
-    preload: true
+    preload: false
+    idle_unload_seconds: 900
     notes: >-
       Launch consumer: news-ingestion `enrich` (entity extraction + severity/event_type
       zero-shot classification over crisis24 rows). Counting layer count_lstm_v2.
@@ -78,7 +81,8 @@ models:
     name: "GLiNER2 privacy filter, PII multilingual (mDeBERTa-v3-base)"
     source_model: fastino/gliner2-privacy-filter-PII-multi
     path: /models/fastino/gliner2-privacy-filter-PII-multi-onnx
-    preload: true
+    preload: false
+    idle_unload_seconds: 900
     notes: >-
       Multilingual PII entity extraction. Different encoder (mdeberta, 250k vocab) and a
       different counting layer (count_lstm) from gliner2-base — configured at launch precisely

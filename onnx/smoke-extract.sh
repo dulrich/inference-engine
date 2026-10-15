@@ -109,18 +109,26 @@ health_ok=$(echo "$health_json" | jq -r '(.ok // empty) | if type == "boolean" t
 if [ "$health_ok" = "true" ]; then
 	pass "/health reports ok:true"
 elif [ "$health_ok" = "false" ]; then
-	bad "/health reports ok:false (a preloaded model is not resident). Response: $health_json"
+	bad "/health reports ok:false (a preload model is not resident). Response: $health_json"
 else
 	bad "/health did not return a boolean .ok. Response: $health_json"
 fi
 
 for model in $MODELS; do
-	loaded=$(echo "$health_json" | jq -r --arg m "$model" '.models[$m].loaded // empty' 2>/dev/null)
-	if [ "$loaded" = "true" ]; then
-		load_s=$(echo "$health_json" | jq -r --arg m "$model" '.models[$m].load_seconds // "n/a"')
+	entry=$(echo "$health_json" | jq -c --arg m "$model" '.models[$m] // empty' 2>/dev/null)
+	loaded=$(echo "$entry" | jq -r '.loaded | tostring' 2>/dev/null)
+	preload=$(echo "$entry" | jq -r '.preload | tostring' 2>/dev/null)
+	if [ -z "$entry" ]; then
+		bad "/health: model '$model' is absent from .models"
+	elif [ "$loaded" = "true" ]; then
+		load_s=$(echo "$entry" | jq -r '.load_seconds // "n/a"')
 		pass "/health: model '$model' loaded (cold load was ${load_s}s)"
+	elif [ "$preload" = "false" ] && [ "$loaded" = "false" ] && [ "$(echo "$entry" | jq -r '.error // empty')" = "" ]; then
+		# Lazy alias (preload:false, idle unload): cold is a valid state; the extract checks
+		# below load it on first request.
+		pass "/health: model '$model' is lazy and currently unloaded (loads on first request)"
 	else
-		bad "/health: model '$model' is not loaded. Entry: $(echo "$health_json" | jq -c --arg m "$model" '.models[$m] // "absent"')"
+		bad "/health: model '$model' is not loaded. Entry: ${entry}"
 	fi
 done
 

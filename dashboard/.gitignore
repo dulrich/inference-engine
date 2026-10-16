@@ -12,6 +12,9 @@ data/
 *.db-*
 *.log
 
+# black-box harness scratch (it uses /tmp/bd-harness-*; this is the repo-local fallback)
+harness/.tmp/
+
 # env
 .env
 .env.*

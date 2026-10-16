@@ -1,18 +1,20 @@
 //! `apps/api/src/app.ts` for the record-derived routes (WP-3): health, experiments, ladders,
 //! curves, serving timing and the capture export, then the JSON 404 under `/api/*` and the SPA
-//! fallback. The file-plane routes (serving, serving control, queue, control, router status)
-//! land in WP-4.
+//! fallback; and the file-plane routes (WP-4): serving, serving control, queue, bake-off
+//! control, router status. Registration order is irrelevant (no overlapping patterns).
 use crate::db::{CaptureRecord, ExperimentSummary};
 use crate::http::{internal_error, ok, reply, RouteError, Shared};
 use crate::jsrt;
-use crate::serving::read_served_models;
+use crate::serving::{read_served_models, read_serving_config};
 use crate::spa;
 use crate::wilson::{wilson_interval, Sided};
+use crate::{control, router_feeds};
 use axum::body::Body;
+use axum::body::Bytes;
 use axum::extract::{RawQuery, Request, State};
 use axum::http::{header, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use serde::Serialize;
 use serde_json::json;
@@ -37,6 +39,18 @@ pub fn router(state: Shared) -> Router {
         .route("/api/curves/{id}", get(curves))
         .route("/api/serving/timing", get(serving_timing))
         .route("/api/export/scoreboard-capture", get(capture_export))
+        .route("/api/serving", get(serving))
+        .route("/api/serving/status", get(serving_status))
+        .route("/api/serving/visibility", post(serving_visibility))
+        .route("/api/queue", get(queue))
+        .route("/api/control/arm", post(control_arm))
+        .route("/api/control/disarm", post(control_disarm))
+        .route("/api/control/stop", post(control_stop))
+        .route("/api/control/start", post(control_start))
+        .route("/api/control/cancel", post(control_cancel))
+        .route("/api/router/telemetry", get(router_telemetry))
+        .route("/api/router/slots", get(router_slots))
+        .route("/api/router/sidecar", get(router_sidecar))
         // A known path with an unrouted method falls through to Hono's `app.all("/api/*")`
         // JSON 404, not a 405.
         .method_not_allowed_fallback(fallback)
@@ -248,6 +262,171 @@ async fn capture_export(
             record_count: records.len(),
             records,
         }))
+    })
+    .await
+}
+
+// ---- WP-4: file planes -------------------------------------------------------------------
+
+/// `routes/serving.ts`: any failure (read or parse) is the 502 `{error}`.
+async fn serving(State(s): State<Shared>) -> Result<Response, RouteError> {
+    blocking(move || {
+        let body = read_serving_config(&s.cfg.llama_config_path).map_err(RouteError::BadGateway)?;
+        Ok(ok(&body))
+    })
+    .await
+}
+
+/// `routes/servingControl.ts` `GET /api/serving/status`: always 200.
+async fn serving_status(State(s): State<Shared>) -> Result<Response, RouteError> {
+    blocking(move || {
+        Ok(ok(&control::read_serving_status(
+            s.cfg.control_host_dir.as_deref(),
+            jsrt::now_ms(),
+        )))
+    })
+    .await
+}
+
+fn action_reply(r: control::ActionResult) -> Response {
+    reply(
+        StatusCode::from_u16(r.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        &r.body,
+    )
+}
+
+type Action = fn(
+    Option<&str>,
+    &serde_json::Value,
+    control::IdFactory,
+) -> Result<control::ActionResult, String>;
+
+/// A drop-box POST: `readJsonBody`, then the action against `CONTROL_REQUESTS_DIR`; a thrown
+/// write error is the plain 500.
+async fn drop_box(
+    s: Shared,
+    body: Bytes,
+    action: Action,
+    ids: fn() -> std::io::Result<String>,
+) -> Result<Response, RouteError> {
+    blocking(move || {
+        let parsed = control::read_json_body(&body);
+        let mut factory = ids;
+        let r = action(s.cfg.control_requests_dir.as_deref(), &parsed, &mut factory)?;
+        Ok(action_reply(r))
+    })
+    .await
+}
+
+async fn serving_visibility(State(s): State<Shared>, body: Bytes) -> Result<Response, RouteError> {
+    drop_box(
+        s,
+        body,
+        control::record_serving_visibility_action,
+        control::generate_serving_request_id,
+    )
+    .await
+}
+
+async fn control_start(State(s): State<Shared>, body: Bytes) -> Result<Response, RouteError> {
+    drop_box(
+        s,
+        body,
+        control::record_start_action,
+        control::generate_request_id,
+    )
+    .await
+}
+
+async fn control_cancel(State(s): State<Shared>, body: Bytes) -> Result<Response, RouteError> {
+    drop_box(
+        s,
+        body,
+        control::record_cancel_action,
+        control::generate_request_id,
+    )
+    .await
+}
+
+async fn simple(s: Shared, action: &'static str) -> Result<Response, RouteError> {
+    blocking(move || {
+        let mut factory = control::generate_request_id;
+        let r = control::record_simple_action(
+            s.cfg.control_requests_dir.as_deref(),
+            action,
+            &mut factory,
+        )?;
+        Ok(action_reply(r))
+    })
+    .await
+}
+
+async fn control_arm(State(s): State<Shared>) -> Result<Response, RouteError> {
+    simple(s, "arm").await
+}
+
+async fn control_disarm(State(s): State<Shared>) -> Result<Response, RouteError> {
+    simple(s, "disarm").await
+}
+
+async fn control_stop(State(s): State<Shared>) -> Result<Response, RouteError> {
+    simple(s, "stop").await
+}
+
+/// `routes/queue.ts`: `control` first (the ETA needs `control.live`), then the queue list.
+async fn queue(State(s): State<Shared>) -> Result<Response, RouteError> {
+    blocking(move || {
+        let control =
+            crate::queue::build_control_section(s.cfg.control_host_dir.as_deref(), jsrt::now_ms());
+        Ok(ok(&crate::queue::build_queue_list_response(
+            &s.cfg.queues_dir,
+            Some(&s.cfg.records_dir),
+            control,
+        )))
+    })
+    .await
+}
+
+/// `c.req.query("staleMs")` -> `parseStaleMsQuery`.
+fn stale_ms(q: Option<&str>) -> Option<f64> {
+    let first = jsrt::query_all(q, "staleMs").and_then(|v| v.into_iter().next());
+    router_feeds::parse_stale_ms_query(first.as_deref())
+}
+
+async fn router_telemetry(
+    State(s): State<Shared>,
+    RawQuery(q): RawQuery,
+) -> Result<Response, RouteError> {
+    blocking(move || {
+        Ok(ok(&router_feeds::build_router_telemetry_response(
+            s.cfg.router_telemetry_dir.as_deref(),
+            stale_ms(q.as_deref()),
+            jsrt::now_ms(),
+        )))
+    })
+    .await
+}
+
+async fn router_slots(
+    State(s): State<Shared>,
+    RawQuery(q): RawQuery,
+) -> Result<Response, RouteError> {
+    blocking(move || {
+        Ok(ok(&router_feeds::build_router_slots_response(
+            s.cfg.router_telemetry_dir.as_deref(),
+            stale_ms(q.as_deref()),
+            jsrt::now_ms(),
+        )))
+    })
+    .await
+}
+
+async fn router_sidecar(State(s): State<Shared>) -> Result<Response, RouteError> {
+    blocking(move || {
+        Ok(ok(&router_feeds::build_router_sidecar_response(
+            s.cfg.codex_sidecar_log_dir.as_deref(),
+            jsrt::now_ms(),
+        )))
     })
     .await
 }

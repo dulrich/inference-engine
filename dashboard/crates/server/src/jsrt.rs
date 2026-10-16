@@ -142,6 +142,311 @@ pub fn iso_from_ms(ms: i64) -> String {
     )
 }
 
+/// `Date.now()`.
+pub fn now_ms() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_millis() as f64)
+}
+
+/// Days since 1970-01-01 of a proleptic-Gregorian civil date (Hinnant's days_from_civil);
+/// an out-of-range day rolls over the way JSC's ISO parser lets `02-30` roll into March.
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// `Date.parse(s)` for the ISO-8601 family JSC accepts (measured against Bun 1.3 with
+/// `TZ=UTC`, the container's zone): `YYYY`, `±YYYYYY`, `-M[M]`, `-D[D]`, then `T`/`t`/space,
+/// `HH:mm[:ss[.fraction]]` (hour 24 allowed, second 60 not), `Z`/`z` or `±HH[:]mm`. A
+/// date-time without an offset is local time, which is UTC in the image. Leading/trailing
+/// whitespace, `,` fractions and JSC's non-ISO fallback forms ("Aug 24 2026") are NaN here
+/// (None); no reader in this API is fed the fallback forms.
+pub fn date_parse(s: &str) -> Option<f64> {
+    let b = s.as_bytes();
+    let mut i = 0;
+    let digits = |i: &mut usize, min: usize, max: usize| -> Option<i64> {
+        let start = *i;
+        while *i < b.len() && *i - start < max && b[*i].is_ascii_digit() {
+            *i += 1;
+        }
+        if *i - start < min {
+            return None;
+        }
+        s[start..*i].parse().ok()
+    };
+    let year = match b.first()? {
+        b'+' | b'-' => {
+            let neg = b[0] == b'-';
+            i = 1;
+            let y = digits(&mut i, 6, 6)?;
+            if neg {
+                -y
+            } else {
+                y
+            }
+        }
+        _ => digits(&mut i, 4, 4)?,
+    };
+    let (mut month, mut day) = (1, 1);
+    if b.get(i) == Some(&b'-') {
+        i += 1;
+        month = digits(&mut i, 1, 2)?;
+        if b.get(i) == Some(&b'-') {
+            i += 1;
+            day = digits(&mut i, 1, 2)?;
+        }
+    }
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let mut ms = days_from_civil(year, month, day) * 86_400_000;
+    if i == b.len() {
+        return Some(ms as f64);
+    }
+    if !matches!(b[i], b'T' | b't' | b' ') {
+        return None;
+    }
+    i += 1;
+    let hour = digits(&mut i, 2, 2)?;
+    if b.get(i) != Some(&b':') {
+        return None;
+    }
+    i += 1;
+    let minute = digits(&mut i, 2, 2)?;
+    let mut second = 0;
+    let mut millis = 0;
+    if b.get(i) == Some(&b':') {
+        i += 1;
+        second = digits(&mut i, 2, 2)?;
+        if b.get(i) == Some(&b'.') {
+            i += 1;
+            let start = i;
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i == start {
+                return None;
+            }
+            let frac = &s[start..i];
+            let three: String = frac.chars().chain("000".chars()).take(3).collect();
+            millis = three.parse::<i64>().ok()?;
+        }
+    }
+    if hour > 24 || minute > 59 || second > 59 || (hour == 24 && (minute | second | millis) != 0) {
+        return None;
+    }
+    ms += ((hour * 60 + minute) * 60 + second) * 1000 + millis;
+    match b.get(i) {
+        None => {}
+        Some(b'Z' | b'z') if i + 1 == b.len() => {}
+        Some(&sign @ (b'+' | b'-')) => {
+            i += 1;
+            let oh = digits(&mut i, 2, 2)?;
+            if b.get(i) == Some(&b':') {
+                i += 1;
+            }
+            let om = digits(&mut i, 2, 2)?;
+            if i != b.len() || oh > 23 || om > 59 {
+                return None;
+            }
+            let off = (oh * 60 + om) * 60_000;
+            ms += if sign == b'+' { -off } else { off };
+        }
+        _ => return None,
+    }
+    Some(ms as f64)
+}
+
+/// Bun's `JSON.parse` error message (JSC), for the malformed-file texts a reader surfaces as
+/// an entry's `error` (`routes/queue.ts` malformed queue/state files): a minimal JSON scan
+/// that names the first failure the way JSC does. Only called after serde rejected `text`.
+pub fn json_parse_error(text: &str) -> String {
+    let mut p = JscScan {
+        b: text.as_bytes(),
+        i: 0,
+    };
+    let msg = match p.value() {
+        Err(m) => m,
+        Ok(()) => {
+            p.ws();
+            if p.i < p.b.len() {
+                "Unable to parse JSON string".to_string()
+            } else {
+                "Unexpected EOF".to_string()
+            }
+        }
+    };
+    format!("JSON Parse error: {msg}")
+}
+
+struct JscScan<'a> {
+    b: &'a [u8],
+    i: usize,
+}
+
+impl JscScan<'_> {
+    fn ws(&mut self) {
+        while self.i < self.b.len() && matches!(self.b[self.i], b' ' | b'\t' | b'\n' | b'\r') {
+            self.i += 1;
+        }
+    }
+    fn peek(&self) -> Option<u8> {
+        self.b.get(self.i).copied()
+    }
+    fn string(&mut self) -> Result<(), String> {
+        self.i += 1;
+        while let Some(c) = self.peek() {
+            self.i += 1;
+            match c {
+                b'"' => return Ok(()),
+                b'\\' => self.i += 1,
+                _ => {}
+            }
+        }
+        Err("Unterminated string".into())
+    }
+    fn value(&mut self) -> Result<(), String> {
+        self.ws();
+        match self.peek() {
+            None => Err("Unexpected EOF".into()),
+            Some(b'{') => {
+                self.i += 1;
+                self.ws();
+                match self.peek() {
+                    Some(b'}') => {
+                        self.i += 1;
+                        return Ok(());
+                    }
+                    Some(b'"') => {}
+                    _ => return Err("Expected '}'".into()),
+                }
+                loop {
+                    self.string()?;
+                    self.ws();
+                    if self.peek() != Some(b':') {
+                        return Err(
+                            "Expected ':' before value in object property definition".into()
+                        );
+                    }
+                    self.i += 1;
+                    self.value()?;
+                    self.ws();
+                    match self.peek() {
+                        Some(b',') => {
+                            self.i += 1;
+                            self.ws();
+                            if self.peek() != Some(b'"') {
+                                return Err("Property name must be a string literal".into());
+                            }
+                        }
+                        Some(b'}') => {
+                            self.i += 1;
+                            return Ok(());
+                        }
+                        _ => return Err("Expected '}'".into()),
+                    }
+                }
+            }
+            Some(b'[') => {
+                self.i += 1;
+                self.ws();
+                if self.peek() == Some(b']') {
+                    self.i += 1;
+                    return Ok(());
+                }
+                loop {
+                    self.value()?;
+                    self.ws();
+                    match self.peek() {
+                        Some(b',') => self.i += 1,
+                        Some(b']') => {
+                            self.i += 1;
+                            return Ok(());
+                        }
+                        _ => return Err("Expected ']'".into()),
+                    }
+                }
+            }
+            Some(b'"') => self.string(),
+            Some(c) if c.is_ascii_alphabetic() => {
+                let start = self.i;
+                while self.peek().is_some_and(|c| c.is_ascii_alphanumeric()) {
+                    self.i += 1;
+                }
+                let word = String::from_utf8_lossy(&self.b[start..self.i]);
+                if matches!(&*word, "true" | "false" | "null") {
+                    Ok(())
+                } else {
+                    Err(format!("Unexpected identifier \"{word}\""))
+                }
+            }
+            Some(c) if c == b'-' || c.is_ascii_digit() => {
+                while self.peek().is_some_and(|c| {
+                    c.is_ascii_digit() || matches!(c, b'-' | b'+' | b'.' | b'e' | b'E')
+                }) {
+                    self.i += 1;
+                }
+                Ok(())
+            }
+            Some(_) => Err("Unable to parse JSON string".into()),
+        }
+    }
+}
+
+/// `JSON.parse(text)` with the JSC error text on failure.
+pub fn json_parse_js(text: &str) -> Result<Value, String> {
+    json_parse(text).map_err(|_| json_parse_error(text))
+}
+
+/// `Object.entries(obj)` order: array-index keys ascending, then the rest in insertion order.
+pub fn js_entries(map: &serde_json::Map<String, Value>) -> Vec<(&String, &Value)> {
+    let mut idx: Vec<(&String, &Value)> = map
+        .iter()
+        .filter(|(k, _)| bd_domain::jsout::is_array_index(k))
+        .collect();
+    idx.sort_by_key(|(k, _)| k.parse::<u64>().unwrap_or(0));
+    idx.extend(
+        map.iter()
+            .filter(|(k, _)| !bd_domain::jsout::is_array_index(k)),
+    );
+    idx
+}
+
+/// `n` random bytes from the kernel (`crypto.randomUUID`'s entropy source).
+pub fn random_bytes<const N: usize>() -> std::io::Result<[u8; N]> {
+    use std::io::Read;
+    let mut buf = [0u8; N];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut buf)?;
+    Ok(buf)
+}
+
+/// `crypto.randomUUID()`: a v4 UUID, lowercase hex.
+pub fn random_uuid() -> std::io::Result<String> {
+    let mut b = random_bytes::<16>()?;
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    Ok(format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    ))
+}
+
+/// `String(n)` for a JS number.
+pub fn num_str(n: f64) -> String {
+    bd_domain::jsout::number_to_string(n).unwrap_or_else(|| "NaN".into())
+}
+
 /// One `%XX`-escaped run decoded as UTF-8, or None (`URIError`).
 fn decode_escapes(s: &str, keep_reserved: bool) -> Option<String> {
     let b = s.as_bytes();
@@ -278,6 +583,90 @@ mod tests {
         assert_eq!(iso_from_ms(0), "1970-01-01T00:00:00.000Z");
         assert_eq!(iso_from_ms(1_709_210_096_789), "2024-02-29T12:34:56.789Z");
         assert_eq!(iso_from_ms(951_782_400_000), "2000-02-29T00:00:00.000Z");
+    }
+
+    /// Values measured with `TZ=UTC bun -e 'Date.parse(s)'` (Bun 1.3).
+    #[test]
+    fn date_parse_matches_jsc_on_iso_forms() {
+        let cases: &[(&str, Option<f64>)] = &[
+            (
+                "2026-08-24T20:00:00.000000+00:00",
+                Some(1_787_601_600_000.0),
+            ),
+            ("2026-08-24", Some(1_787_529_600_000.0)),
+            ("2026-08-24T20:00", Some(1_787_601_600_000.0)),
+            ("2026-08-24T20:00:00", Some(1_787_601_600_000.0)),
+            ("2026-08-24 20:00:00Z", Some(1_787_601_600_000.0)),
+            ("2026-8-24", Some(1_787_529_600_000.0)),
+            ("2026-08-24T24:00:00Z", Some(1_787_616_000_000.0)),
+            ("2026-02-30T00:00:00Z", Some(1_772_409_600_000.0)),
+            ("+002026-08-24T00:00:00Z", Some(1_787_529_600_000.0)),
+            ("2026-08-24T20:00:00.1Z", Some(1_787_601_600_100.0)),
+            ("2026-08-24T20:00Z", Some(1_787_601_600_000.0)),
+            ("2026", Some(1_767_225_600_000.0)),
+            ("2026-08", Some(1_785_542_400_000.0)),
+            ("2026-08-24t20:00:00z", Some(1_787_601_600_000.0)),
+            ("2026-08-24T20:00:00+0100", Some(1_787_598_000_000.0)),
+            ("not a date", None),
+            ("yesterday-ish", None),
+            ("not-a-date", None),
+            ("", None),
+            (" ", None),
+            (" 2026-08-24T20:00:00Z", None),
+            ("2026-08-24T20:00:00Z ", None),
+            ("2026-08-24T20:00:00,5Z", None),
+            ("2026-08-24T20:00:60Z", None),
+            ("13:00", None),
+        ];
+        for (s, want) in cases {
+            assert_eq!(date_parse(s), *want, "{s:?}");
+        }
+    }
+
+    /// Messages measured with `bun -e 'JSON.parse(s)'` (Bun 1.3).
+    #[test]
+    fn json_parse_error_matches_jsc() {
+        let cases = [
+            ("{ \"queue_format\": 1, \"cells\": [\n", "Unexpected EOF"),
+            (
+                "{ \"queue_state\": \"running\", \"cells\": {\n",
+                "Expected '}'",
+            ),
+            ("{", "Expected '}'"),
+            ("", "Unexpected EOF"),
+            ("not json", "Unexpected identifier \"not\""),
+            ("[1,", "Unexpected EOF"),
+            ("{\"a\":1}x", "Unable to parse JSON string"),
+            (
+                "{\"a\" 1}",
+                "Expected ':' before value in object property definition",
+            ),
+            ("\"abc", "Unterminated string"),
+            ("{,}", "Expected '}'"),
+            ("{\"a\":1,", "Property name must be a string literal"),
+            ("{\"a\":1", "Expected '}'"),
+            ("[1", "Expected ']'"),
+        ];
+        for (text, want) in cases {
+            assert_eq!(
+                json_parse_error(text),
+                format!("JSON Parse error: {want}"),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn js_entry_order_and_uuid() {
+        let m: serde_json::Map<String, Value> =
+            serde_json::from_str(r#"{"b":1,"10":2,"a":3,"2":4}"#).unwrap();
+        let keys: Vec<&str> = js_entries(&m)
+            .into_iter()
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert_eq!(keys, ["2", "10", "b", "a"]);
+        let u = random_uuid().unwrap();
+        assert_eq!((u.len(), &u[14..15]), (36, "4"));
     }
 
     #[test]

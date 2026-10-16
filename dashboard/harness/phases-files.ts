@@ -88,7 +88,20 @@ const ID_PATTERN = { req: /^req-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$/, srv: /^srv-[0
  * `<requestId>.json` (temp file unlinked), its bytes compared with `request_id`/`requested_at`
  * replaced by placeholders after their shape checks, and its parsed body pinned to `expected`.
  */
-async function post(pair: Pair, name: string, path: string, body: unknown, expected: Record<string, unknown> | null) {
+/**
+ * A 400 `{error}` body. routes/control.ts:136,156 and routes/servingControl.ts:86 answer
+ * `{error: parsed.error.issues.map((issue) => issue.message).join("; ")}`. Per the user decision of
+ * 2026-10-15 (plan Decision 4 exception) the zod DEFAULT issue messages ("Required", the min/max/int
+ * texts, "Expected …, received …") are runtime text and are not compared verbatim; the body must be
+ * exactly `{error: <non-empty string>}` and every domain-authored custom message the input
+ * triggers (`regex_msg`/`.min(…, msg)` in shared/src/{control,servingRequest}.ts) is pinned verbatim
+ * through `custom` on the subject.
+ */
+const BAD_REQUEST_ERROR = "<400 issue messages>";
+const isBadRequestBody = (status: number, json: Json): boolean =>
+  status === 400 && json !== null && typeof json === "object" && Object.keys(json).length === 1 && typeof json.error === "string" && json.error.length > 0;
+
+async function post(pair: Pair, name: string, path: string, body: unknown, expected: Record<string, unknown> | null, custom: readonly string[] = []) {
   if (!routeIncluded(path)) {
     skip(name, `${path} outside --routes`);
     return;
@@ -111,13 +124,18 @@ async function post(pair: Pair, name: string, path: string, body: unknown, expec
       file = { shapeOk, bytes: text.replace(JSON.stringify(id), '"<request_id>"').replace(JSON.stringify(at), '"<requested_at>"') };
       if (twin === pair[0]) checkEqual(`${name}: request file body`, { ...parsed, request_id: "<id>", requested_at: "<at>" }, { ...expected, request_id: "<id>", requested_at: "<at>" });
     }
+    if (isBadRequestBody(reply.status, reply.json)) {
+      for (const message of custom) check(`${name}: ${twin === pair[0] ? "subject" : "reference"} 400 names "${message}"`, json.error.includes(message), json.error);
+      views.push({ status: reply.status, type: contentType(reply), body: { error: BAD_REQUEST_ERROR }, file });
+      continue;
+    }
     views.push({ status: reply.status, type: contentType(reply), body: normalizeResponse({ ...json, ...(typeof id === "string" ? { requestId: ID_PATTERN[kind].test(id) ? "<id>" : `bad:${id}` } : {}) }), file });
   }
   const d = diff(views[0], views[1]);
   check(`${name} [POST ${path}] response + drop-box match reference`, d === null, d ?? "");
   const v = views[0] as Json;
   if (expected) check(`${name}: 200 accepted, one well-formed file`, v.status === 200 && v.body?.accepted === true && v.file?.shapeOk === true, JSON.stringify(v).slice(0, 300));
-  else check(`${name}: 400 {error}, no file`, v.status === 400 && typeof v.body?.error === "string" && Array.isArray(v.file) && v.file.length === 0, JSON.stringify(v).slice(0, 300));
+  else check(`${name}: 400 {error}, no file`, v.status === 400 && v.body?.error === BAD_REQUEST_ERROR && Array.isArray(v.file) && v.file.length === 0, JSON.stringify(v).slice(0, 300));
 }
 
 export async function controlPhase(fx: Fx) {
@@ -136,20 +154,25 @@ export async function controlPhase(fx: Fx) {
     for (const [label, body, minutes] of [["valid", { queueStem: "contract-queue", minutes: 60 }, 60], ["min 15", { queueStem: "a", minutes: 15 }, 15], ["max 480", { queueStem: "q-1", minutes: 480 }, 480], ["extra key stripped", { queueStem: "contract-queue", minutes: 90, extra: true }, 90]] as const) {
       await post(pair, `control start ${label}`, "/api/control/start", body, { ...schema, action: "start", queue_stem: body.queueStem, minutes });
     }
-    for (const [label, body] of [["minutes 14", { queueStem: "q", minutes: 14 }], ["minutes 481", { queueStem: "q", minutes: 481 }], ["minutes 60.5", { queueStem: "q", minutes: 60.5 }], ["minutes string", { queueStem: "q", minutes: "60" }], ["stem upper", { queueStem: "Bad_Stem", minutes: 60 }], ["stem leading dash", { queueStem: "-q", minutes: 60 }], ["missing body", {}], ["non-JSON body", "not json"], ["both invalid", { queueStem: "", minutes: 0 }]] as const) {
-      await post(pair, `control start ${label}`, "/api/control/start", body, null);
+    // Third element: the domain-authored messages each input triggers (shared/src/control.ts).
+    const stemMessage = "queueStem must match ^[a-z0-9][a-z0-9-]*$";
+    for (const [label, body, custom] of [["minutes 14", { queueStem: "q", minutes: 14 }, []], ["minutes 481", { queueStem: "q", minutes: 481 }, []], ["minutes 60.5", { queueStem: "q", minutes: 60.5 }, []], ["minutes string", { queueStem: "q", minutes: "60" }, []], ["stem upper", { queueStem: "Bad_Stem", minutes: 60 }, [stemMessage]], ["stem leading dash", { queueStem: "-q", minutes: 60 }, [stemMessage]], ["missing body", {}, []], ["non-JSON body", "not json", []], ["both invalid", { queueStem: "", minutes: 0 }, [stemMessage]]] as const) {
+      await post(pair, `control start ${label}`, "/api/control/start", body, null, custom);
     }
     const target = "req-20260827T120000Z-00000000000000a1";
     await post(pair, "control cancel valid", "/api/control/cancel", { targetRequestId: target }, { ...schema, action: "cancel", target_request_id: target });
-    for (const [label, body] of [["nightly target", { targetRequestId: "nightly-20260827" }], ["uppercase hex", { targetRequestId: "req-20260827T120000Z-00000000000000A1" }], ["missing", {}]] as const) {
-      await post(pair, `control cancel ${label}`, "/api/control/cancel", body, null);
+    const targetMessage = "targetRequestId must match the request-id grammar";
+    for (const [label, body, custom] of [["nightly target", { targetRequestId: "nightly-20260827" }, [targetMessage]], ["uppercase hex", { targetRequestId: "req-20260827T120000Z-00000000000000A1" }, [targetMessage]], ["missing", {}, []]] as const) {
+      await post(pair, `control cancel ${label}`, "/api/control/cancel", body, null, custom);
     }
     const srv = { schema: "serving-request-v1", action: "set-visibility" };
     for (const [label, consumers] of [["both consumers", ["cc", "openwebui"]], ["none", []], ["reverse order kept", ["openwebui", "cc"]]] as const) {
       await post(pair, `serving visibility ${label}`, "/api/serving/visibility", { modelKey: "Qwen3.6-35B-A3B-UD-Q4_K_XL", consumers }, { ...srv, model_key: "Qwen3.6-35B-A3B-UD-Q4_K_XL", consumers });
     }
-    for (const [label, body] of [["empty modelKey", { modelKey: "", consumers: [] }], ["unknown consumer", { modelKey: "m", consumers: ["bogus"] }], ["consumers not array", { modelKey: "m", consumers: "cc" }], ["missing", {}], ["non-JSON", "{"]] as const) {
-      await post(pair, `serving visibility ${label}`, "/api/serving/visibility", body, null);
+    // shared/src/servingRequest.ts: the one custom message, `modelKey`'s `.min(1, …)`.
+    const modelKeyMessage = "modelKey must be a non-empty llama/config.yaml model key";
+    for (const [label, body, custom] of [["empty modelKey", { modelKey: "", consumers: [] }, [modelKeyMessage]], ["unknown consumer", { modelKey: "m", consumers: ["bogus"] }, []], ["consumers not array", { modelKey: "m", consumers: "cc" }, []], ["missing", {}, []], ["non-JSON", "{", []]] as const) {
+      await post(pair, `serving visibility ${label}`, "/api/serving/visibility", body, null, custom);
     }
 
     // Host status reads: GET /api/serving/status (routes/servingControl.ts readServingStatus) and

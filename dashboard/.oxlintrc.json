@@ -27,6 +27,7 @@
     "coverage",
     "data",
     "packages/signalworks",
-    "packages/webkit"
+    "packages/webkit",
+    "packages/shared/src/index.ts"
   ]
 }

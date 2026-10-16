@@ -1,10 +1,10 @@
 import {
+  ExperimentFullDetailSchema,
+  type ExperimentFullDetail,
   CurveSeriesSchema,
-  ExperimentDetailSchema,
   ExperimentSummarySchema,
   HealthResponseSchema,
   LadderRowSchema,
-  MetricRowSchema,
   QueueListResponseSchema,
   RouterSidecarResponseSchema,
   RouterSlotsResponseSchema,
@@ -12,7 +12,6 @@ import {
   ServingResponseSchema,
   ServingStatusResponseSchema,
   ServingTimingRowSchema,
-  TrialRowSchema,
   type ControlAcceptedResponse,
   type ControlCancelRequest,
   type ControlStartRequest,
@@ -29,7 +28,7 @@ import {
   type ServingTimingRow,
   type ServingVisibilityRequest,
 } from "@bench-dashboard/shared";
-import { z } from "zod";
+export type { ExperimentFullDetail };
 import { parseControlActionResponse } from "./lib/queue/control.ts";
 
 // The fetch seam for every view (WP-2 builds on top of the routes WP-1 already ships:
@@ -58,14 +57,7 @@ export function getExperiments(): Promise<ExperimentSummary[]> {
 }
 
 // `GET /api/experiments/:id` returns the summary plus every trial/metric row
-// (`apps/api/src/routes/experiments.ts`) -- a shape `ExperimentDetailSchema` alone doesn't
-// cover, so this extends it the same way the route itself builds the response object.
-const ExperimentFullDetailSchema = ExperimentDetailSchema.extend({
-  trials: TrialRowSchema.array(),
-  metrics: MetricRowSchema.array(),
-});
-export type ExperimentFullDetail = z.infer<typeof ExperimentFullDetailSchema>;
-
+// (`crates/server/src/app.rs`) -- the generated `ExperimentFullDetailSchema` carries that shape.
 export function getExperimentDetail(id: string): Promise<ExperimentFullDetail> {
   return getJson(`/api/experiments/${encodeURIComponent(id)}`, ExperimentFullDetailSchema);
 }

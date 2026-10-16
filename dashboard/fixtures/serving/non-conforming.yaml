@@ -1,9 +1,9 @@
-# Fixture config for `dashboard/scripts/check-serving-recipes.ts` (WP-1,
+# Fixture config for the `check-recipes` binary (`dashboard/crates/server/src/check_recipes.rs`) (WP-1,
 # `plans/bench-dashboard-serving-control.md`). NOT a copy of `llama/config.yaml` and never
 # loaded by any service. Every chat entry below carries EXACTLY ONE defect, named by its own
 # model key, so one run of the gate prints exactly one line per entry -- a gate that stops
 # reporting a rule, or that cascades one defect into several lines, fails the count assertion
-# in `apps/api/src/serving/checkRecipes.test.ts`. The embed entry is defect-ridden ON PURPOSE
+# in `crates/server/src/check_recipes_tests.rs`. The embed entry is defect-ridden ON PURPOSE
 # and must stay silent: non-chat entries are out of the gate's scope.
 # `cmd:` lines follow the shape of the real config's chat entries (shared macro + per-entry
 # `-m`/`-c`/flags); the model paths are fictional.

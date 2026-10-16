@@ -62,7 +62,7 @@ __all__ = [
 # .md`'s "Request schema and lifecycle" section. Only `SCHEMA_REQUEST` is a WIRE requirement: the
 # CONTAINER-written request file carries `"schema": "control-request-v1"` (WP-4's
 # `ControlRequestFileV1`, and now `ControlRequestFileSchema` in
-# `dashboard/packages/shared/src/control.ts`), and `validate_request_body` REQUIRES it. The other
+# `dashboard/packages/shared/src/index.ts`), and `validate_request_body` REQUIRES it. The other
 # four name host-written shapes that this module's writers stamp implicitly; none of those files
 # embed a literal `schema` field, matching the plan's own JSON examples exactly.
 # -------------------------------------------------------------------------------------------

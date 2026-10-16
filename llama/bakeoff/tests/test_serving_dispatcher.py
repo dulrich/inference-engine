@@ -9,8 +9,8 @@ must agree with the committed dashboard fixtures), never written, and the real
 are never touched at all (the wrapper tests point `HOME` and `INFERENCE_SERVING_ENV` at a tempdir).
 
 The contract cases read the SAME BYTES the TypeScript side parses
-(`dashboard/apps/api/fixtures/serving/contract-v1/`, validated there by
-`dashboard/packages/shared/src/servingRequest.ts`'s Zod schemas) rather than a copy, so the two
+(`dashboard/fixtures/serving/contract-v1/`, validated there by
+`dashboard/packages/shared/src/index.ts`'s generated validators) rather than a copy, so the two
 validators cannot drift apart silently.
 """
 
@@ -34,7 +34,7 @@ import serving_dispatcher as sd  # noqa: E402
 import serving_protocol as sp  # noqa: E402
 from control_store import flock_nonblocking_acquire, flock_release  # noqa: E402
 
-FIXTURES = REPO_ROOT / "dashboard" / "apps" / "api" / "fixtures" / "serving" / "contract-v1"
+FIXTURES = REPO_ROOT / "dashboard" / "fixtures" / "serving" / "contract-v1"
 DECLARATION_PATH = REPO_ROOT / "router" / "visibility.json"
 # A FROZEN copy of the declaration, committed beside the dashboard fixtures. The status fixture is
 # pinned to THIS, never to the live `router/visibility.json`, so a live visibility toggle is a
@@ -157,7 +157,7 @@ class _TmpCase(unittest.TestCase):
 
 
 class TestCrossLanguageContract(unittest.TestCase):
-    """The committed fixture bytes, parsed by this plane's Python validator exactly as the Zod
+    """The committed fixture bytes, parsed by this plane's Python validator exactly as the generated
     schemas parse them on the TypeScript side."""
 
     def test_both_valid_request_fixtures_validate_against_the_real_declaration(self):

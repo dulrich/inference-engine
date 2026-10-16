@@ -3,8 +3,8 @@
 // decision 2026-09-13: option (b)).
 //
 // Why it exists on the HOST and not in the dashboard API: the dashboard API makes zero
-// outbound HTTP calls, a locked decision recorded at `apps/api/src/serving/llamaConfig.ts:
-// 18-33` and in `dashboard/AGENTS.md`. Option (b) preserves that decision — this unit runs
+// outbound HTTP calls, a locked decision recorded in `dashboard/AGENTS.md`
+// (the server crate has no HTTP client). Option (b) preserves that decision — this unit runs
 // as the user's own systemd `--user` service, writes `slots-YYYY-MM-DD.jsonl` beside the
 // router's telemetry sink, and the container reads that file read-only. It is a FILE
 // WRITER with no listener, so the plan's "no new port and no new network service"

@@ -14,15 +14,6 @@
         "typescript": "^5.6.0",
       },
     },
-    "apps/api": {
-      "name": "@bench-dashboard/api",
-      "version": "0.1.0",
-      "dependencies": {
-        "@bench-dashboard/shared": "workspace:*",
-        "hono": "^4.13.7",
-        "zod": "^3.23.0",
-      },
-    },
     "apps/web": {
       "name": "@bench-dashboard/web",
       "version": "0.1.0",
@@ -31,7 +22,6 @@
         "@fleet-tools/signalworks": "workspace:*",
         "lucide-svelte": "^0.468.0",
         "uplot": "^1.6.31",
-        "zod": "^3.23.0",
       },
       "devDependencies": {
         "svelte": "^5.46.4",
@@ -40,9 +30,6 @@
     "packages/shared": {
       "name": "@bench-dashboard/shared",
       "version": "0.1.0",
-      "dependencies": {
-        "zod": "^3.23.0",
-      },
     },
     "packages/signalworks": {
       "name": "@fleet-tools/signalworks",
@@ -66,8 +53,6 @@
     },
   },
   "packages": {
-    "@bench-dashboard/api": ["@bench-dashboard/api@workspace:apps/api"],
-
     "@bench-dashboard/shared": ["@bench-dashboard/shared@workspace:packages/shared"],
 
     "@bench-dashboard/web": ["@bench-dashboard/web@workspace:apps/web"],
@@ -210,8 +195,6 @@
 
     "fdir": ["fdir@6.5.0", "", { "peerDependencies": { "picomatch": "^3 || ^4" }, "optionalPeers": ["picomatch"] }, "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg=="],
 
-    "hono": ["hono@4.13.8", "", {}, "sha512-/Gng7NfoykZl2pjukW5Z6+8Yxm3BPRf86GTbQnt0SbySkvax4fyL4H3HhY1cCpBGmiW9XDRFzRV+CXK2W8QudQ=="],
-
     "is-reference": ["is-reference@3.0.3", "", { "dependencies": { "@types/estree": "^1.0.6" } }, "sha512-ixkJoqQvAP88E6wLydLGGqCJsrFUnqoH6HnaczB8XmDH1oaWU+xxdptvikTgaEhtZ53Ky6YXiBuUI2WXLMCwjw=="],
 
     "locate-character": ["locate-character@3.0.0", "", {}, "sha512-SW13ws7BjaeJ6p7Q6CO2nchbYEc3X3J6WrmTTDto7yMPqVSZTUyY5Tjbid+Ab8gLnATtygYtiDIJGQRRn2ZOiA=="],
@@ -243,7 +226,5 @@
     "uplot": ["uplot@1.6.32", "", {}, "sha512-KIMVnG68zvu5XXUbC4LQEPnhwOxBuLyW1AHtpm6IKTXImkbLgkMy+jabjLgSLMasNuGGzQm/ep3tOkyTxpiQIw=="],
 
     "zimmerframe": ["zimmerframe@1.1.5", "", {}, "sha512-msJxIvYDYcoNL+PJsu+7qmpDWsYmAxTY+2TNYXXF0hzBzBk0BMecOqDOG/EckUoKCuKwObfbugIl8QpqHDXeFA=="],
-
-    "zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
   }
 }

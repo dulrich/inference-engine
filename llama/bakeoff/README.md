@@ -986,8 +986,8 @@ elapsed time; (4) **liveness/janitor** -- process-group truth (a wrapper pid alo
 liveness; `batch.py` survives as a detached child by design), with workload-aware crash recovery
 (orphan scratch-server teardown, then router restart, then `last-run.json` composed `crashed`,
 then `live.json` removed); (5) **publish `status.json`** (atomic temp+rename) -- the exact shape
-is pinned by the LANDED dashboard API reader (`dashboard/apps/api/src/routes/queue.ts`
-`buildControlSection` + `dashboard/packages/shared/src/control.ts`); (6) **prune** -- drop-box
+is pinned by the LANDED dashboard API reader (`dashboard/crates/server/src/queue.rs`
+`build_control_section` + `dashboard/packages/shared/src/index.ts`); (6) **prune** -- drop-box
 requests/results/actions older than 30 days, and stop markers naming no-longer-live invocations;
 `claims/` and `dispositions/` are retained forever (the audit record).
 

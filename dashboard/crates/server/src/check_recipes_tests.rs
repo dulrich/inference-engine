@@ -4,7 +4,7 @@ use super::*;
 
 fn fixture(name: &str) -> String {
     format!(
-        "{}/../../apps/api/fixtures/serving/{name}",
+        "{}/../../fixtures/serving/{name}",
         env!("CARGO_MANIFEST_DIR")
     )
 }

@@ -1,4 +1,4 @@
-# Fixture config for `dashboard/scripts/check-serving-recipes.ts` (WP-1,
+# Fixture config for the `check-recipes` binary (`dashboard/crates/server/src/check_recipes.rs`) (WP-1,
 # `plans/bench-dashboard-serving-control.md`). NOT a copy of `llama/config.yaml` and never
 # loaded by any service -- the entries below are hand-authored to be CONFORMING under every
 # rule the gate enforces, so a regression in the gate shows up as a false positive here.

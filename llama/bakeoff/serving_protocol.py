@@ -16,10 +16,10 @@ constants are re-declared here rather than imported and overloaded. The one thin
 is timestamp spelling: `control_protocol.iso_z`/`parse_iso`, so both planes' files carry the same
 `...Z` UTC ISO-8601 convention.
 
-The wire shapes are fixed by the LANDED TypeScript side (`dashboard/packages/shared/src/
-servingRequest.ts`) and by the committed cross-language fixture bytes under
-`dashboard/apps/api/fixtures/serving/contract-v1/`, which `tests/test_serving_dispatcher.py`
-parses with the validators below -- the same bytes the Zod schemas parse. Neither side is
+The wire shapes are fixed by the generated contract (`dashboard/packages/shared/src/index.ts`,
+`gen-ts` output of `dashboard/crates/domain`) and by the committed cross-language fixture bytes under
+`dashboard/fixtures/serving/contract-v1/`, which `tests/test_serving_dispatcher.py`
+parses with the validators below -- the same bytes the generated validators parse. Neither side is
 renegotiable here.
 
 Two rejection reasons are load-bearing prose, not incidental strings:
@@ -88,7 +88,7 @@ REQUEST_ID_RE = re.compile(r"^srv-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$")
 REQUEST_BASENAME_RE = re.compile(r"^srv-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}\.json$")
 
 # The closed consumer vocabulary IN CANONICAL ORDER -- this tuple's order IS the canonical
-# order (`dashboard/packages/shared/src/servingRequest.ts`'s `SERVING_CONSUMER_ORDER`), which is
+# order (`dashboard/packages/shared/src/index.ts`'s `SERVING_CONSUMER_ORDER`), which is
 # why `canonical_consumers` can sort by it directly. Append-only, like the alias contract.
 CONSUMERS = ("cc", "openwebui")
 ACTIONS = ("set-visibility",)

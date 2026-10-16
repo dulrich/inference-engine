@@ -1,4 +1,4 @@
-// Fixtures: the committed apps/api/fixtures tree copied into per-run temp dirs (never mounted
+// Fixtures: the committed fixtures/ tree copied into per-run temp dirs (never mounted
 // directly), plus clock-relative files written at run start, the compose-shaped subject env, the
 // ingest seed, and the pre-ALTER `experiments` DB for db-compat. No live data.
 import { Database } from "bun:sqlite";
@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { check, execIngest, work, type AppSpec, type Instance, type Pair } from "./lib.ts";
 
 /** The one fixture-root constant (WP-6 `git mv`s the tree to dashboard/fixtures/). */
-export const FIXTURE_ROOT = join(import.meta.dir, "../apps/api/fixtures");
+export const FIXTURE_ROOT = join(import.meta.dir, "../fixtures");
 
 /**
  * Run-start clock. Fresh/stale verdicts are placed an hour either side of it so they sit far from

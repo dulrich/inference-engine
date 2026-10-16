@@ -5,7 +5,7 @@ import { cp, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { dumpOf, ISO_8601 } from "./dump.ts";
 import { buildPreAlter, composeSpec, degradedSpec, RECONCILED, seedPair, type Fx } from "./fixtures.ts";
-import { both, check, checkEqual, contentType, diff, execIngest, expectStatus, pin, request, routeIncluded, skip, startPair, stopPair, work, type Json, type Pair } from "./lib.ts";
+import { both, check, checkEqual, contentType, diff, execIngest, expectStatus, pin, request, routeIncluded, run, skip, startPair, stopPair, work, type Json, type Pair } from "./lib.ts";
 
 /** Every GET read route against a seeded pair (the shared battery of routes and db-compat). */
 export async function readBattery(pair: Pair, label: string) {
@@ -98,25 +98,44 @@ export async function routesPhase(main: Pair, fx: Fx) {
 
 export async function spaPhase(pair: Pair) {
   const sha = (b: Uint8Array) => new Bun.CryptoHasher("sha256").update(b).digest("hex");
-  const view = async (path: string) => {
+  const view = async (path: string, refPath = path) => {
     if (!routeIncluded(path)) {
       skip(`spa ${path}`, "outside --routes");
       return null;
     }
-    const [s, r] = [await request(pair[0], "GET", path), await request(pair[1], "GET", path)];
-    const facts = (x: typeof s) => ({ status: x.status, type: contentType(x), cache: x.headers.get("cache-control"), sha: sha(x.bytes) });
+    const [s, r] = [await request(pair[0], "GET", path), await request(pair[1], "GET", refPath)];
+    // Status + headers are compared to the reference twin; body bytes are NOT. Plan WP-6's
+    // required apps/web/src/api.ts edit (and the generated shared module) changed the web bundle
+    // bytes and hashed asset names, while the reference (--db-image inference-dashboard:bun-dev,
+    // kept through WP-7) was built pre-edit. SPA content is instead checked against the subject
+    // image's own /web tree below.
+    const facts = (x: typeof s) => ({ status: x.status, type: contentType(x), cache: x.headers.get("cache-control") });
     const d = diff(facts(s), facts(r));
-    check(`spa GET ${path} matches reference`, d === null, d ?? "");
+    check(`spa GET ${path} matches reference${refPath === path ? "" : ` (${refPath})`}`, d === null, d ?? "");
     return s;
   };
+  const webDir = join(work, "subject-web");
+  // Web root inside the subject image: /web (Rust image) or /app/apps/web/dist (Bun image).
+  await run(["docker", "cp", `${pair[0].name}:/web`, webDir], true);
+  if (!(await Bun.file(join(webDir, "index.html")).exists())) {
+    await run(["docker", "cp", `${pair[0].name}:/app/apps/web/dist`, webDir]);
+  }
+  const onDisk = async (rel: string) => new Uint8Array(await Bun.file(join(webDir, rel)).arrayBuffer());
   const index = await view("/");
   if (!index) return;
+  check("spa / body == subject /web/index.html", sha(index.bytes) === sha(await onDisk("index.html")), `${index.bytes.length} bytes`);
   check("spa /: html, no-cache", index.status === 200 && contentType(index) === "text/html" && index.headers.get("cache-control") === "no-cache" && index.text.includes("<html"), `${index.status} ${index.headers.get("cache-control")}`);
   const assets = [...index.text.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1]!);
   check("spa index references hashed assets", assets.length > 0, index.text.slice(0, 300));
-  for (const asset of assets) {
-    const reply = await view(asset);
+  // Hashed names differ between the bundles, so each subject asset is paired with the reference
+  // index's asset at the same position (same build layout, different content hash).
+  const refIndex = await request(pair[1], "GET", "/");
+  const refAssets = [...refIndex.text.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1]!);
+  check("spa index asset count matches reference", refAssets.length === assets.length, `${assets.length} vs ${refAssets.length}`);
+  for (const [i, asset] of assets.entries()) {
+    const reply = await view(asset, refAssets[i] ?? asset);
     if (reply) check(`spa ${asset}: 200 immutable`, reply.status === 200 && reply.headers.get("cache-control") === "public, max-age=31536000, immutable" && reply.bytes.length > 0, `${reply.status} ${reply.headers.get("cache-control")}`);
+    if (reply) check(`spa ${asset} body == subject /web${asset}`, (await Bun.file(join(webDir, asset)).exists()) && sha(reply.bytes) === sha(await onDisk(asset.slice(1))), `${reply.bytes.length} bytes`);
   }
   // app.ts spaResponse: anything not on disk inside the web root falls back to index.html, no-cache.
   for (const path of ["/runs", "/serving/some-model", "/assets/missing-0000.js", "/..%2f..%2f..%2fetc%2fpasswd", "/%2e%2e%2fpackage.json", "/assets/..%2f..%2f..%2fpackage.json"]) {

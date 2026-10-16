@@ -67,11 +67,11 @@ JSON writing in bash) is the sole writer of `results/<inv-id>.json` and `live.js
 
 **Wire-state precedence** (`status.json.requests[].state`, pinned enum `pending | claimed |
 running | done | rejected | canceled | launch-failed`): disposition -> live -> claim -> pending.
-`status.json` itself is read by the LANDED WP-4 API (`dashboard/apps/api/src/routes/queue.ts`
-`buildControlSection` + `dashboard/packages/shared/src/control.ts`) -- its exact snake_case shape
+`status.json` itself is read by the LANDED WP-4 API (`dashboard/crates/server/src/queue.rs`
+`build_control_section` + `dashboard/packages/shared/src/index.ts`) -- its exact snake_case shape
 (every listed key present, explicit `null` never omitted) is pinned by that reader, not
 renegotiable here, and by the committed cross-language fixtures under
-`dashboard/apps/api/fixtures/control/contract-v1/`.
+`dashboard/fixtures/control/contract-v1/`.
 """
 
 from __future__ import annotations

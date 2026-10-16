@@ -1,5 +1,5 @@
 //! `apps/api/src/serving/recipe.test.ts` resolver cases and `servingTiming*.test.ts` recipe-join
-//! edges, over synthetic configs and the committed `apps/api/fixtures/llama-config.yaml`.
+//! edges, over synthetic configs and the committed `fixtures/llama-config.yaml`.
 use super::*;
 
 const CONFIG: &str = r#"
@@ -75,7 +75,7 @@ fn parses_models_in_order_with_macro_expansion() {
 #[test]
 fn committed_fixture_config_parses() {
     let path = format!(
-        "{}/../../apps/api/fixtures/llama-config.yaml",
+        "{}/../../fixtures/llama-config.yaml",
         env!("CARGO_MANIFEST_DIR")
     );
     let models = read_served_models(&path).unwrap();

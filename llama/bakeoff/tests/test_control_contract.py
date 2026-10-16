@@ -2,8 +2,8 @@
 `plans/repository-tooling-structural-remediation.md`; review finding F4 -- boundary type
 contracts).
 
-This suite and `dashboard/apps/api/src/routes/controlContract.test.ts` read **the same committed
-bytes** under `dashboard/apps/api/fixtures/control/`. Python is the WRITER of `status.json` and
+This suite and `dashboard/crates/server` (Rust contract tests) read **the same committed
+bytes** under `dashboard/fixtures/control/`. Python is the WRITER of `status.json` and
 the VALIDATOR of `requests/*.json`; TypeScript is the READER of `status.json` and the PRODUCER of
 `requests/*.json`. Pinning both ends against one fixture tree is what makes the disk wire an
 actual contract rather than two hand-synchronized guesses.
@@ -43,7 +43,7 @@ import queue_file  # noqa: E402
 import queue_state  # noqa: E402
 
 REPO_ROOT = BAKEOFF_DIR.parent.parent
-FIXTURES = REPO_ROOT / "dashboard/apps/api/fixtures/control"
+FIXTURES = REPO_ROOT / "dashboard/fixtures/control"
 CONTRACT = FIXTURES / "contract-v1"
 
 BOOT_ID = "boot-contract-v1"
@@ -179,9 +179,9 @@ class TestSchemaVersionEnforcement(unittest.TestCase):
 
     def test_python_and_typescript_name_the_same_schema_string(self):
         # The TypeScript producer's copy of this constant lives in
-        # `dashboard/packages/shared/src/control.ts` as `CONTROL_REQUEST_SCHEMA_V1`; this asserts
+        # `dashboard/packages/shared/src/index.ts` as `CONTROL_REQUEST_SCHEMA_V1`; this asserts
         # the two spellings have not drifted without reimplementing a TS parser here.
-        shared = (REPO_ROOT / "dashboard/packages/shared/src/control.ts").read_text(encoding="utf-8")
+        shared = (REPO_ROOT / "dashboard/packages/shared/src/index.ts").read_text(encoding="utf-8")
         self.assertIn(f'export const CONTROL_REQUEST_SCHEMA_V1 = "{cd.SCHEMA_REQUEST}"', shared)
 
 
@@ -301,7 +301,7 @@ class TestQueueAndQueueStateContractFixtures(unittest.TestCase):
             self.assertEqual(state["cells"][cell.cell_id]["alias"], cell.identity.alias)
 
     def test_the_state_fixture_only_uses_vocabulary_the_dashboard_can_render(self):
-        # The TypeScript reader drops any cell/queue state outside its Zod enums, so a fixture
+        # The TypeScript reader drops any cell/queue state outside its contract enums, so a fixture
         # carrying an unrenderable value would silently join as `null` on the wire.
         state = queue_state.load_state(self.state_path)
         self.assertEqual(state["queue_state"], "paused-resumable")

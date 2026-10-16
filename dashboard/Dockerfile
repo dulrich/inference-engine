@@ -1,53 +1,44 @@
-# Single-process deploy: Bun serves the API + the built Svelte SPA on one port
-# (model_scoreboard exemplar — plan bench-results-db-and-dashboard WP-3). The DB is
-# derived state on the /data volume; the source of truth (llama/bakeoff/records/,
-# llama/config.yaml) is bind-mounted read-only by compose.fleet.yml.
-FROM oven/bun:1.3 AS build
+FROM rust:1.99.0-alpine3.24 AS rust-base
+RUN apk add --no-cache musl-dev \
+ && cargo install cargo-auditable --locked --version 0.7.7
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+RUN cargo fetch --locked
+
+FROM rust-base AS rust-build
+RUN cargo auditable build --release --locked -p bench-dashboard-server --bin inference-dashboard \
+ && cp target/release/inference-dashboard /inference-dashboard
+
+FROM oven/bun:1.3 AS web
 WORKDIR /app
 COPY package.json bun.lock tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/signalworks/package.json packages/signalworks/
 COPY packages/webkit/package.json packages/webkit/
-COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 RUN bun install --frozen-lockfile
-COPY . .
+COPY packages packages
+COPY apps/web apps/web
 RUN bun run --filter '@bench-dashboard/web' build
 
-# ---- prod-deps: production-only dependency tree (no svelte-check/typescript/oxlint/biome/etc.) ----
-FROM oven/bun:1.3 AS prod-deps
-WORKDIR /app
-COPY package.json bun.lock tsconfig.base.json ./
-COPY packages/shared/package.json packages/shared/
-COPY packages/signalworks/package.json packages/signalworks/
-COPY packages/webkit/package.json packages/webkit/
-COPY apps/api/package.json apps/api/
-COPY apps/web/package.json apps/web/
-RUN bun install --frozen-lockfile --production
-
-FROM oven/bun:1.3-slim
-# Source commit baked in so the fleet view can compute how many commits behind
-# master this running image is (see command_center fleet/status engine).
+FROM alpine:3.24
+# Source commit baked in so the fleet view can compute commits-behind-master. Declared before the
+# apk layer so a new commit re-runs `apk upgrade` instead of serving a stale cached layer.
 ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.revision=${GIT_SHA}
-WORKDIR /app
-# Base images lag debian point releases; this upgrade layer picks up published
-# security fixes at build time (pairs with compose `pull: true`, so a rebuild
-# always starts from the freshest base digest too).
-RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
-COPY --from=prod-deps /app /app
-COPY --from=build /app/apps/api apps/api
-COPY --from=build /app/packages packages
-COPY --from=build /app/apps/web/dist apps/web/dist
-ENV PORT=4810
-ENV APP_DB_PATH=/data/bench.db
+# No ca-certificates: the API makes no outbound connection (plan Decision 8).
+# /data must exist app-owned BEFORE the VOLUME is first materialized: a named volume initializes
+# from this directory's content and ownership (a root-owned mount point leaves SQLite unable to
+# create /data/bench.db).
+RUN apk upgrade --no-cache \
+ && addgroup -g 1001 app && adduser -D -u 1001 -G app app \
+ && mkdir -p /data && chown app:app /data
+COPY --from=rust-build /inference-dashboard /inference-dashboard
+COPY --from=web /app/apps/web/dist /web
+ENV PORT=4810 APP_DB_PATH=/data/bench.db APP_WEB_DIR=/web
 EXPOSE 4810
 VOLUME ["/data"]
-RUN groupadd -g 1001 app && useradd -m -u 1001 -g app app \
-  # /data must exist app-owned BEFORE the VOLUME is first materialized: a named volume
-  # initializes from this directory's content AND ownership, and a root-owned mount
-  # point leaves bun:sqlite unable to create /data/bench.db (SQLITE_CANTOPEN, observed
-  # live at first bring-up).
-  && mkdir -p /data && chown app:app /data
 USER app
-CMD ["bun", "run", "apps/api/src/index.ts"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/inference-dashboard","--healthcheck"]
+CMD ["/inference-dashboard"]

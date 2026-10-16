@@ -1,14 +1,11 @@
 //! `apps/api/src/ingest/{record,legacyTiming}.test.ts` cases, over the committed
-//! `apps/api/fixtures` tree, plus per-field projection and invalid-reason cases the black-box
+//! `fixtures/` tree, plus per-field projection and invalid-reason cases the black-box
 //! fixtures do not reach.
 use super::*;
 use serde_json::json;
 
 pub(crate) fn fixtures(set: &str) -> String {
-    jsrt::path_join(
-        env!("CARGO_MANIFEST_DIR"),
-        &format!("../../apps/api/fixtures/{set}"),
-    )
+    jsrt::path_join(env!("CARGO_MANIFEST_DIR"), &format!("../../fixtures/{set}"))
 }
 
 fn v2(dir: &str) -> NormalizedRecord {

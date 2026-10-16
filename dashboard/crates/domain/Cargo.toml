@@ -1,0 +1,26 @@
+[package]
+name = "bench-dashboard-domain"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "bench-dashboard domain: contract tree + validation, gen-ts. No I/O."
+
+[lib]
+name = "bd_domain"
+
+[[bin]]
+name = "gen-ts"
+path = "src/bin/gen_ts.rs"
+
+[[bin]]
+name = "contract-check"
+path = "src/bin/contract_check.rs"
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["derive", "std"] }
+serde_json = { version = "1", default-features = false, features = ["std", "preserve_order"] }
+# Shortest round-trip float digits with ECMA-262's round-half-even tie break (jsout.rs).
+ryu = "1"
+# `.regex(...)` checks (ASCII-only JS patterns, compiled with Unicode off to keep `\d` ASCII).
+regex = { version = "1", default-features = false, features = ["std", "perf"] }

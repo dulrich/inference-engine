@@ -22,6 +22,9 @@
     "test:theme": "bun packages/signalworks/scripts/check-contrast.mjs --signalworks packages/signalworks/css apps/web/src",
     "design:verify": "bash <code-root>/fleet-tools/signalworks/install.sh --verify --dest .",
     "webkit:verify": "bash <code-root>/fleet-tools/webkit/install.sh --verify --dest .",
+    "test:rust": "cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
+    "audit:rust": "cargo audit",
+    "test:contract-agreement": "bun test --preload ./crates/domain/agreement/record-corpus.ts packages/shared/src/schema.test.ts && bun test ./crates/domain/agreement",
     "test:security": "trivy fs --scanners vuln,misconfig --include-dev-deps --skip-db-update --skip-check-update --exit-code 1 --severity CRITICAL,HIGH ."
   },
   "devDependencies": {

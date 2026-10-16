@@ -26,3 +26,6 @@ harness/.tmp/
 *.swo
 *~
 .DS_Store
+
+# Rust workspace build output
+target/

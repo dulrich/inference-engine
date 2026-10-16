@@ -1,6 +1,7 @@
 //! bench-dashboard server: the Bun API's Rust replacement (plans/bench-dashboard-rust-port.md
 //! WP-3..WP-5).
 pub mod app;
+pub mod check_recipes;
 pub mod config;
 pub mod control;
 pub mod db;

@@ -13,6 +13,10 @@ name = "bd_server"
 name = "inference-dashboard"
 path = "src/main.rs"
 
+[[bin]]
+name = "check-recipes"
+path = "src/bin/check-recipes.rs"
+
 [dependencies]
 bench-dashboard-domain = { path = "../domain" }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
@@ -25,6 +29,8 @@ serde_json = { version = "1", default-features = false, features = ["std", "pres
 icu_collator = { version = "2", default-features = false, features = ["compiled_data"] }
 # `llama/config.yaml` (plan Spike 1: order-preserving, values equal to `Bun.YAML.parse`).
 yaml-rust2 = { version = "0.13", default-features = false }
+# `new URL(url)` in `check:recipes`' source-url rule (WHATWG parsing, same spec as Bun).
+url = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }

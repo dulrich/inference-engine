@@ -464,7 +464,8 @@ fn decode_escapes(s: &str, keep_reserved: bool) -> Option<String> {
             if !h.iter().all(u8::is_ascii_hexdigit) || b[at] != b'%' {
                 return None;
             }
-            u8::from_str_radix(std::str::from_utf8(h).ok()?, 16).ok()
+            let nib = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+            Some(nib(h[0])? * 16 + nib(h[1])?)
         };
         let first = byte(i)?;
         let len = match first {

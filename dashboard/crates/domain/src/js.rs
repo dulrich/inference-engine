@@ -21,6 +21,28 @@ pub fn trim(s: &str) -> &str {
     s.trim_matches(is_js_space)
 }
 
+/// The value of `c` as a digit of `radix` (2..=36), or None. Signs are never digits (X1).
+fn digit(c: u8, radix: u32) -> Option<u32> {
+    let v = match c {
+        b'0'..=b'9' => u32::from(c - b'0'),
+        b'a'..=b'z' => u32::from(c - b'a') + 10,
+        b'A'..=b'Z' => u32::from(c - b'A') + 10,
+        _ => return None,
+    };
+    (v < radix).then_some(v)
+}
+
+/// The value of a `0x`/`0o`/`0b` literal body as JS computes it: every byte must be a digit
+/// of `radix` (no sign), accumulated in f64 so wide literals stay finite.
+fn radix_literal(digits: &str, radix: u32) -> f64 {
+    digits
+        .bytes()
+        .try_fold(0f64, |acc, b| {
+            digit(b, radix).map(|d| acc * f64::from(radix) + f64::from(d))
+        })
+        .unwrap_or(f64::NAN)
+}
+
 /// Percent-decoding (`decodeURIComponent`): None on invalid UTF-8 or a malformed escape.
 pub fn percent_decode(value: &str) -> Option<String> {
     let bytes = value.as_bytes();
@@ -28,8 +50,10 @@ pub fn percent_decode(value: &str) -> Option<String> {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' {
-            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
-            out.push(u8::from_str_radix(hex, 16).ok()?);
+            // Validate each hex digit first: a sign is never a digit (X1, `%+1` fails).
+            let hi = digit(*bytes.get(i + 1)?, 16)?;
+            let lo = digit(*bytes.get(i + 2)?, 16)?;
+            out.push((hi * 16 + lo) as u8);
             i += 3;
         } else {
             out.push(bytes[i]);
@@ -76,6 +100,16 @@ mod tests {
     }
 
     #[test]
+    fn radix_digits_are_validated_and_wide_literals_stay_finite() {
+        assert_eq!(percent_decode("%+1"), None);
+        assert_eq!(percent_decode("%2B"), Some("+".into()));
+        assert!(number("0x+f").is_nan());
+        assert!(number("0X-1").is_nan());
+        assert!(number("0b+1").is_nan());
+        assert_eq!(number("0x10000000000000000"), 18_446_744_073_709_552_000.0);
+    }
+
+    #[test]
     fn trims() {
         assert_eq!(trim("\u{FEFF} a\u{3000}\n"), "a");
     }
@@ -113,7 +147,7 @@ pub fn number(s: &str) -> f64 {
         let digits = s.get(2..).unwrap_or("");
         if s.len() > 2 && s.as_bytes()[..2].eq_ignore_ascii_case(p.as_bytes()) && !digits.is_empty()
         {
-            Some(u64::from_str_radix(digits, r).map_or(f64::NAN, |v| v as f64))
+            Some(radix_literal(digits, r))
         } else {
             None
         }

@@ -113,16 +113,26 @@ fn push_str_json(s: &str, out: &mut String) {
     out.push_str(&serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into()));
 }
 
+const SAFE_LIMIT: u64 = 1 << 53;
+
 fn write_json(value: &serde_json::Value, out: &mut String) {
     use serde_json::Value;
     match value {
         Value::Null => out.push_str("null"),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         Value::Number(n) => {
+            // Integers beyond 2^53 print as JS prints the nearest double (Decision 3).
+            let wide = |s: String, mag: u64, f: f64| {
+                if mag > SAFE_LIMIT {
+                    number_to_string(f).unwrap_or(s)
+                } else {
+                    s
+                }
+            };
             if let Some(i) = n.as_i64() {
-                out.push_str(&i.to_string());
+                out.push_str(&wide(i.to_string(), i.unsigned_abs(), i as f64));
             } else if let Some(u) = n.as_u64() {
-                out.push_str(&u.to_string());
+                out.push_str(&wide(u.to_string(), u, u as f64));
             } else {
                 let s = n.as_f64().and_then(number_to_string);
                 out.push_str(s.as_deref().unwrap_or("null"));
@@ -168,6 +178,24 @@ fn write_json(value: &serde_json::Value, out: &mut String) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn wide_integers_print_as_js() {
+        assert_eq!(
+            stringify(&json!(9_007_199_254_740_992_u64)),
+            "9007199254740992"
+        );
+        assert_eq!(
+            stringify(&json!(9_007_199_254_740_993_u64)),
+            "9007199254740992"
+        );
+        assert_eq!(stringify(&json!(i64::MAX)), "9223372036854776000");
+        assert_eq!(stringify(&json!(u64::MAX)), "18446744073709552000");
+        assert_eq!(
+            stringify(&json!(-9_007_199_254_740_991_i64)),
+            "-9007199254740991"
+        );
+    }
 
     /// JSON numbers format as JS `Number#toString` does: shortest round-trip, integral floats
     /// without `.0`, exponent form only outside [1e-7, 1e21).

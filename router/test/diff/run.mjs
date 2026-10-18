@@ -57,12 +57,18 @@ export function generateConfig(sourceText, stubBase) {
   return out;
 }
 
-const fakeEnv = (telemetryDir) => ({
+// The Rust gateway's auth is always on (x-gateway-key, raw key); the Node rollback image still
+// needs its AUTH_* knobs to behave the same way.
+const NODE_AUTH_ENV = {
   AUTH_ENABLED: 'true',
   AUTH_MODE: 'static_api_key',
   AUTH_REQUIRED: 'true',
   AUTH_STATIC_API_KEY_HEADER: 'x-gateway-key',
   AUTH_STATIC_API_KEY_BEARER_ONLY: 'false',
+};
+
+const fakeEnv = (telemetryDir, impl) => ({
+  ...(impl === 'node' ? NODE_AUTH_ENV : {}),
   AUTH_STATIC_API_KEYS: GW_KEY,
   OPENROUTER_API_KEY: 'test-or-key',
   CODEX_SIDECAR_KEY: 'test-codex-key',
@@ -118,7 +124,7 @@ async function startImage(tag, stubImage, run, cleanups) {
   await waitFor(`${run.stubUrl}/_log`, 20000, 'stub');
   fs.writeFileSync(run.configPath, generateConfig(fs.readFileSync(run.configSource, 'utf8'), `http://${stubName}:8080`));
   const gwName = `rrdiff-gw-${id}`;
-  const envArgs = Object.entries(fakeEnv('/var/log/inference-router')).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
+  const envArgs = Object.entries(fakeEnv('/var/log/inference-router', run.impl)).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
   docker('run', '-d', '--name', gwName, '--network', netName, '--user', `${process.getuid()}:${process.getgid()}`,
     '-v', `${run.configPath}:/app/gateway.config.json:ro`, '-v', `${run.telemetryDir}:/var/log/inference-router`,
     ...envArgs, tag);
@@ -147,7 +153,7 @@ async function startBin(binPath, run, cleanups) {
   const gwPort = await freePort();
   const gw = spawn(path.resolve(binPath), [], {
     stdio: ['ignore', process.env.RRDIFF_GW_LOG ? fs.openSync(process.env.RRDIFF_GW_LOG, 'w') : 'ignore', 'inherit'],
-    env: { PATH: process.env.PATH, HOST: '127.0.0.1', PORT: String(gwPort), GATEWAY_CONFIG_PATH: run.configPath, ...fakeEnv(run.telemetryDir) },
+    env: { PATH: process.env.PATH, HOST: '127.0.0.1', PORT: String(gwPort), GATEWAY_CONFIG_PATH: run.configPath, ...fakeEnv(run.telemetryDir, run.impl) },
   });
   cleanups.push(() => gw.kill('SIGTERM'));
   run.gwUrl = `http://127.0.0.1:${gwPort}`;
@@ -162,7 +168,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const id = `${process.pid}-${Math.random().toString(36).slice(2, 7)}`;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rrdiff-'));
-  const run = { id, configSource: args.configSource, configPath: path.join(tmp, 'gateway.config.json'), telemetryDir: path.join(tmp, 'telemetry') };
+  const run = { id, impl: args.impl, configSource: args.configSource, configPath: path.join(tmp, 'gateway.config.json'), telemetryDir: path.join(tmp, 'telemetry') };
   fs.mkdirSync(run.telemetryDir, { mode: 0o777 });
   const cleanups = [];
   let cleaned = false;

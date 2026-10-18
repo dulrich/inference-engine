@@ -63,7 +63,8 @@ async function streamCase(ctx, model, provider, expectPath) {
 const LOCAL = 'claude-local/qwen38-27b-iq3s';
 // Measured on Node: a bare model id resolves to the deduped provider TYPE list
 // [openai -> claude-local, anthropic -> anthropic], never by searching models[]; a prefixed
-// id is a single target. Multi-target over named providers needs x-target-providers.
+// id is a single target. Multi-target over named providers needs x-target-providers, which only
+// the Node baseline reads (WP-R4 dropped it from the Rust gateway; crate tests cover multi-target).
 const CODEX_BOTH = { 'x-target-providers': 'codex-a,codex-b' };
 
 export const cases = [
@@ -94,6 +95,15 @@ export const cases = [
       assert.equal(r.status, 401, r.text);
       await none(ctx);
     } },
+  ...[['x-api-key', (k) => k], ['authorization', (k) => `Bearer ${k}`], ['api-key', (k) => k], ['x-goog-api-key', (k) => k]].map(([h, v]) => ({
+    id: `auth-key-in-${h}-refused`, tags: ['changed'], script: { anthropic: OK('claude-opus-5-5') },
+    async run(ctx) {
+      // WP-R4 (Q-A): only x-gateway-key is read; a valid key in any other header is a 401.
+      const r = await ctx.req('/v1/messages', { auth: 'none', headers: { [h]: v(ctx.gwKey) }, body: MSG('claude-opus-5-5') });
+      assert.equal(r.status, 401, r.text);
+      assert.equal(JSON.parse(r.text).error.message, 'Missing auth token header: x-gateway-key');
+      await none(ctx);
+    } })),
   { id: 'auth-oauth-bearer-is-not-gateway-key', tags: ['parity'], script: { anthropic: OK('claude-opus-5-5') },
     async run(ctx) {
       const r = await ctx.req('/v1/messages', { auth: 'none', headers: { authorization: `Bearer ${OAUTH}` }, body: MSG('claude-opus-5-5') });
@@ -237,7 +247,7 @@ export const cases = [
     } },
 
   // ---- E3(a) multi-target fallthrough --------------------------------------------------------
-  { id: 'fallthrough-codex-bare-5xx', tags: ['parity'],
+  { id: 'fallthrough-codex-bare-5xx', tags: ['baseline'],
     script: { 'codex-a': { status: 500, body: 'david down (must not reach client)' }, 'codex-b': OK('gpt-6-luna', 'from-b') },
     async run(ctx) {
       const r = await ctx.req('/v1/messages', { headers: CODEX_BOTH, body: MSG('gpt-6-luna') });
@@ -247,7 +257,7 @@ export const cases = [
       const log = await ctx.upstream();
       assert.deepEqual(log.map((x) => `${x.provider}${x.url}`), ['codex-a/codex-a/v1/messages', 'codex-b/codex-b/v1/messages']);
     } },
-  { id: 'fallthrough-codex-bare-4xx', tags: ['parity'],
+  { id: 'fallthrough-codex-bare-4xx', tags: ['baseline'],
     script: { 'codex-a': { status: 429, body: 'rate limited' }, 'codex-b': OK('gpt-6-luna', 'from-b') },
     async run(ctx) {
       const r = await ctx.req('/v1/messages', { headers: CODEX_BOTH, body: MSG('gpt-6-luna') });
@@ -265,17 +275,15 @@ export const cases = [
       // upstream/client.ts: a thrown fetch is retried once on the same target (2 attempts), then falls through.
       assert.deepEqual(log.map((x) => x.provider), ['codex-a', 'codex-a', 'codex-b']);
     } },
-  { id: 'fallthrough-codex-reset-after-write-not-retried', tags: ['changed'],
-    script: { 'codex-a': { destroy: true }, 'codex-b': OK('gpt-6-luna', 'from-b') },
+  { id: 'reset-after-write-not-retried-single-target', tags: ['changed'],
+    script: { 'codex-a': { destroy: true } },
     async run(ctx) {
-      const r = await ctx.req('/v1/messages', { headers: CODEX_BOTH, body: MSG('gpt-6-luna') });
-      assert.equal(r.status, 200, r.text);
-      assert.equal(JSON.parse(r.text).content[0].text, 'from-b');
-      const log = await ctx.upstream();
-      // WP-R2 (S2): the request reached codex-a before the reset, so it is not retried; falls through.
-      assert.deepEqual(log.map((x) => x.provider), ['codex-a', 'codex-b']);
+      const r = await ctx.req('/v1/messages', { body: MSG('codex-a/gpt-6-luna') });
+      assert.ok(r.status >= 500, `${r.status} ${r.text}`);
+      // WP-R2 (S2): the request reached codex-a before the reset, so it is not retried.
+      await one(ctx, 'codex-a');
     } },
-  { id: 'fallthrough-codex-both-fail-final-relay', tags: ['parity'],
+  { id: 'fallthrough-codex-both-fail-final-relay', tags: ['baseline'],
     script: { 'codex-a': { status: 500, body: 'david down' }, 'codex-b': { status: 502, headers: { 'content-type': 'text/plain' }, body: 'b down' } },
     async run(ctx) {
       const r = await ctx.req('/v1/messages', { headers: CODEX_BOTH, body: MSG('gpt-6-luna') });
@@ -299,13 +307,14 @@ export const cases = [
       const log = await ctx.upstream();
       assert.deepEqual(log.map((x) => `${x.provider}${x.url}`), ['openrouter/api/v1/chat/completions', 'or-anthropic/api/v1/messages']);
     } },
-  { id: 'fallthrough-qwen-flash-same-protocol-only', tags: ['changed'],
-    script: { openrouter: { status: 500, body: 'or down' }, 'or-anthropic': OK('qwen/qwen3.8-flash', 'from-or-anthropic') },
+  { id: 'target-providers-header-ignored', tags: ['changed'],
+    script: { 'codex-a': OK('gpt-6-luna', 'from-david'), 'codex-b': OK('gpt-6-luna', 'from-b') },
     async run(ctx) {
-      const r = await ctx.req('/v1/messages', { headers: { 'x-target-providers': 'openrouter,or-anthropic' }, body: MSG('qwen/qwen3.8-flash') });
+      // WP-R4 (Q-B): x-target-providers / x-target-provider are not read; the prefix alone routes.
+      const r = await ctx.req('/v1/messages', { headers: { 'x-target-providers': 'codex-b', 'x-target-provider': 'nope' }, body: MSG('codex-a/gpt-6-luna') });
       assert.equal(r.status, 200, r.text);
-      const log = await ctx.upstream();
-      assert.deepEqual(log.map((x) => `${x.provider}${x.url}`), ['or-anthropic/api/v1/messages']);
+      assert.equal(JSON.parse(r.text).content[0].text, 'from-david');
+      await one(ctx, 'codex-a');
     } },
 
   // ---- E3(c) client disconnect mid-stream -------------------------------------------------

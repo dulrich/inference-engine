@@ -42,11 +42,11 @@ pub struct Attempt {
 }
 
 /// One target in Node's ordered route list: either ready to call or already failed (model
-/// validation / selector conflict) — a failed one still counts as "a next target exists".
+/// validation) — a failed one still counts as "a next target exists".
 pub struct Target {
     pub provider: Arc<Provider>,
-    /// Named explicitly (model prefix or provider-name header) vs a default/type route; Node
-    /// lists only explicit ones in `target_provider_names`.
+    /// Named explicitly by a model prefix vs a default route; Node lists only explicit ones in
+    /// `target_provider_names`.
     pub explicit: bool,
     pub plan: Result<Candidate, Attempt>,
 }
@@ -56,17 +56,6 @@ pub enum Resolved {
     Targets(Vec<Target>),
     /// The model resolves only to providers that do not speak this ingress protocol.
     Mismatch { model: String, provider: String },
-    /// Node `resolveTargetProviders` 400s (bad / conflicting selector headers).
-    BadRequest(String),
-}
-
-/// Client routing headers (Node `handler.ts:5408-5450`).
-#[derive(Default, Clone, Copy)]
-pub struct Selectors<'a> {
-    /// `x-target-providers`: comma list of provider names or `openai`/`anthropic`.
-    pub providers: Option<&'a str>,
-    /// `x-target-provider`: one provider name or type.
-    pub provider: Option<&'a str>,
 }
 
 fn leg_for(p: &Provider, ingress: Ingress) -> Option<Leg> {
@@ -78,30 +67,19 @@ fn leg_for(p: &Provider, ingress: Ingress) -> Option<Leg> {
     }
 }
 
-/// Provider by name (case-insensitive) → explicit; else `openai`/`anthropic` → the first
-/// provider of that kind as a type route (Node `parseProviderRoute` `handler.ts:5654`).
-fn route_by(s: &Settings, sel: &str) -> Option<(Arc<Provider>, bool)> {
+/// Provider by name, case-insensitive (Node `parseProviderRoute` `handler.ts:5654`, without
+/// the `openai`/`anthropic` type routes).
+fn route_by(s: &Settings, sel: &str) -> Option<Arc<Provider>> {
     let sel = sel.trim();
-    if let Some(p) = s
-        .providers
-        .iter()
-        .find(|p| !sel.is_empty() && p.name.eq_ignore_ascii_case(sel))
-    {
-        return Some((p.clone(), true));
-    }
-    let kind = match sel.to_ascii_lowercase().as_str() {
-        "anthropic" => Kind::Anthropic,
-        "openai" => Kind::OpenAiChat,
-        _ => return None,
-    };
     s.providers
         .iter()
-        .find(|p| p.kind == kind)
-        .map(|p| (p.clone(), false))
+        .find(|p| !sel.is_empty() && p.name.eq_ignore_ascii_case(sel))
+        .cloned()
 }
 
-/// Node `parseModelReference`: `(provider prefix route, model)`.
-fn model_ref(s: &Settings, raw: &str) -> (Option<(Arc<Provider>, bool)>, String) {
+/// Node `parseModelReference`: `(provider prefix, model)`; a prefix naming no provider leaves
+/// the whole string as a bare model.
+fn model_ref(s: &Settings, raw: &str) -> (Option<Arc<Provider>>, String) {
     if let Some((hint, model)) = raw
         .split_once('/')
         .filter(|(h, m)| !h.trim().is_empty() && !m.trim().is_empty())
@@ -126,57 +104,16 @@ fn default_routes(s: &Settings) -> Vec<(Arc<Provider>, bool)> {
     out
 }
 
-fn allowed(s: &Settings) -> String {
-    let mut v = vec!["openai".to_string(), "anthropic".to_string()];
-    v.extend(s.providers.iter().map(|p| p.name.clone()));
-    v.join(", ")
-}
-
 fn validates(p: &Provider, model: &str) -> bool {
     p.models.is_empty() || p.models.iter().any(|m| m == model)
 }
 
-pub fn resolve(s: &Settings, ingress: Ingress, requested: &str, sel: Selectors<'_>) -> Resolved {
+pub fn resolve(s: &Settings, ingress: Ingress, requested: &str) -> Resolved {
     let requested = requested.trim();
     let (mref, model) = model_ref(s, requested);
-    let mref = mref.map(|(p, _)| p);
-    let conflicts = |p: &Arc<Provider>| mref.as_ref().is_some_and(|m| !Arc::ptr_eq(m, p));
-    let routes = if let Some(list) = sel.providers {
-        let mut r: Vec<(Arc<Provider>, bool)> = Vec::new();
-        for (p, explicit) in list.split(',').filter_map(|i| route_by(s, i)) {
-            if !r.iter().any(|(q, _)| Arc::ptr_eq(q, &p)) {
-                r.push((p, explicit));
-            }
-        }
-        if r.is_empty() {
-            return Resolved::BadRequest(format!(
-                "x-target-providers must include at least one valid provider: {}",
-                allowed(s)
-            ));
-        }
-        if mref.is_some() && r.iter().all(|(p, _)| conflicts(p)) {
-            return Resolved::BadRequest(format!(
-                "Model selector \"{requested}\" conflicts with x-target-providers."
-            ));
-        }
-        r
-    } else if let Some(one) = sel.provider {
-        let Some(r) = route_by(s, one) else {
-            return Resolved::BadRequest(format!(
-                "x-target-provider must be one of: {}",
-                allowed(s)
-            ));
-        };
-        if conflicts(&r.0) {
-            return Resolved::BadRequest(format!(
-                "Model selector \"{requested}\" conflicts with x-target-provider."
-            ));
-        }
-        vec![r]
-    } else if let Some(p) = &mref {
-        vec![(p.clone(), true)]
-    } else {
-        default_routes(s)
+    let routes = match mref {
+        Some(p) => vec![(p, true)],
+        None => default_routes(s),
     };
     let mut targets = Vec::new();
     let mut mismatch = None;
@@ -194,12 +131,7 @@ pub fn resolve(s: &Settings, ingress: Ingress, requested: &str, sel: Selectors<'
             status: Some(400),
             details: None,
         };
-        let plan = if conflicts(&p) {
-            Err(fail(format!(
-                "model \"{requested}\" conflicts with target provider {}.",
-                p.name
-            )))
-        } else if validates(&p, &model) {
+        let plan = if validates(&p, &model) {
             Ok(Candidate {
                 provider: p.clone(),
                 model: model.clone(),
@@ -268,7 +200,8 @@ mod tests {
 
     fn settings() -> Settings {
         let text = include_str!("../../gateway.config.json");
-        from_json(&serde_json::from_str(text).unwrap(), &|_| None).unwrap()
+        let env = |k: &str| (k == "AUTH_STATIC_API_KEYS").then(|| "gk".to_string());
+        from_json(&serde_json::from_str(text).unwrap(), &env).unwrap()
     }
 
     fn ok(r: &Resolved) -> Vec<(String, String, Leg)> {
@@ -285,7 +218,7 @@ mod tests {
     #[test]
     fn selection_order_and_protocol_filter() {
         let s = settings();
-        let n = |i, m| ok(&resolve(&s, i, m, Selectors::default()));
+        let n = |i, m| ok(&resolve(&s, i, m));
         let own = |a: &str, b: &str, l| vec![(a.to_string(), b.to_string(), l)];
         assert_eq!(
             n(Ingress::Messages, "claude-opus-5-5"),
@@ -318,40 +251,14 @@ mod tests {
         // Bare multi-provider id: the default list is first-provider-per-kind, so neither
         // openrouter nor or-anthropic is a bare-id target.
         assert!(n(Ingress::Messages, "qwen/qwen3.8-flash").is_empty());
-        // Fallthrough across same-model providers only via x-target-providers.
-        let sel = Selectors {
-            providers: Some("codex-a, codex-b,nope"),
-            provider: None,
-        };
-        let got = ok(&resolve(&s, Ingress::Messages, "gpt-6-luna", sel));
+        // A prefix naming no provider (incl. the removed `openai`/`anthropic` type routes) is
+        // part of a bare model id.
+        assert!(n(Ingress::Messages, "nope/claude-opus-5-5").is_empty());
+        assert!(n(Ingress::Chat, "openai/qwen36-a3b").is_empty());
         assert_eq!(
-            got.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(),
-            ["codex-a", "codex-b"]
+            n(Ingress::Messages, "codex-b/gpt-6-luna"),
+            own("codex-b", "gpt-6-luna", Leg::Anthropic)
         );
-        assert!(matches!(
-            resolve(
-                &s,
-                Ingress::Messages,
-                "codex-b/gpt-6-luna",
-                Selectors {
-                    providers: Some("codex-a"),
-                    provider: None
-                }
-            ),
-            Resolved::BadRequest(_)
-        ));
-        assert!(matches!(
-            resolve(
-                &s,
-                Ingress::Messages,
-                "m",
-                Selectors {
-                    providers: Some("nope"),
-                    provider: None
-                }
-            ),
-            Resolved::BadRequest(_)
-        ));
     }
 
     #[test]
@@ -365,15 +272,12 @@ mod tests {
             (Ingress::CountTokens, "openrouter/qwen/qwen3.8-flash"),
         ] {
             assert!(
-                matches!(
-                    resolve(&s, i, m, Selectors::default()),
-                    Resolved::Mismatch { .. }
-                ),
+                matches!(resolve(&s, i, m), Resolved::Mismatch { .. }),
                 "{m}"
             );
         }
         assert!(matches!(
-            resolve(&s, Ingress::Messages, "no-such-model", Selectors::default()),
+            resolve(&s, Ingress::Messages, "no-such-model"),
             Resolved::Targets(_)
         ));
     }
@@ -381,8 +285,7 @@ mod tests {
     #[test]
     fn envelope_matches_node_shape() {
         let s = settings();
-        let Resolved::Targets(t) = resolve(&s, Ingress::Messages, "no-such", Selectors::default())
-        else {
+        let Resolved::Targets(t) = resolve(&s, Ingress::Messages, "no-such") else {
             panic!()
         };
         let attempts: Vec<Attempt> = t

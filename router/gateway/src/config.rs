@@ -75,21 +75,13 @@ pub struct Provider {
     pub max_output_tokens: MaxOutputTokens,
 }
 
-#[derive(Clone, Debug)]
-pub struct AuthConfig {
-    pub enabled: bool,
-    pub required: bool,
-    pub keys: Vec<String>,
-    pub header: String,
-    pub bearer_only: bool,
-}
-
 #[derive(Debug)]
 pub struct Settings {
     pub host: String,
     pub port: u16,
     pub providers: Vec<Arc<Provider>>,
-    pub auth: AuthConfig,
+    /// `AUTH_STATIC_API_KEYS`, never empty: client auth is always on (`auth.rs`).
+    pub gateway_keys: Vec<String>,
     pub body_limit: usize,
     /// 0 = no timeout.
     pub upstream_timeout_ms: u64,
@@ -127,13 +119,6 @@ struct FileProvider {
     /// Read by `router/model-picker-lineup.mjs`; the gateway ignores it.
     #[serde(rename = "consumers")]
     _consumers: Option<IgnoredAny>,
-}
-
-/// Client-auth bool (WP-R4 removes the auth env block): unrecognised → `fallback`.
-fn env_bool(raw: Option<String>, fallback: bool) -> bool {
-    read_str(raw)
-        .and_then(|s| envp::parse_bool(&s))
-        .unwrap_or(fallback)
 }
 
 fn list(raw: Option<String>) -> Vec<String> {
@@ -226,49 +211,25 @@ pub fn from_json(raw: &Value, env: Env) -> Result<Settings, String> {
         .or(file.port)
         .unwrap_or(3000);
     let body_limit = match envp::integer::<usize>(env, "GATEWAY_BODY_LIMIT_BYTES")? {
-        Some(n) => Some(("GATEWAY_BODY_LIMIT_BYTES", n)),
-        None => envp::integer::<usize>(env, "BODY_LIMIT_BYTES")?.map(|n| ("BODY_LIMIT_BYTES", n)),
-    };
-    let body_limit = match body_limit {
-        Some((name, 0)) => return Err(format!("{name}=0 is not a valid body limit (>= 1)")),
-        Some((_, n)) => n,
+        Some(0) => {
+            return Err("GATEWAY_BODY_LIMIT_BYTES=0 is not a valid body limit (>= 1)".into())
+        }
+        Some(n) => n,
         None => DEFAULT_BODY_LIMIT,
     };
     let upstream_timeout_ms = envp::integer::<u64>(env, "UPSTREAM_TIMEOUT_MS")?.unwrap_or(0);
-    let mut keys = list(env("AUTH_STATIC_API_KEYS").or_else(|| env("AUTH_STATIC_API_KEY")));
-    let key_env = read_str(env("AUTH_STATIC_API_KEY_ENV"))
-        .or_else(|| read_str(env("AUTH_STATIC_API_KEYS_ENV")));
-    for k in key_env.map(|e| list(env(&e))).unwrap_or_default() {
-        if !keys.contains(&k) {
-            keys.push(k);
-        }
+    let gateway_keys = list(env("AUTH_STATIC_API_KEYS"));
+    if gateway_keys.is_empty() {
+        return Err(
+            "AUTH_STATIC_API_KEYS is empty or unset; client auth is always on, configure at least one gateway key"
+                .into(),
+        );
     }
-    let auth_enabled = env_bool(env("AUTH_ENABLED"), false);
-    let mode = read_str(env("AUTH_MODE")).unwrap_or_default();
-    if auth_enabled
-        && !matches!(
-            mode.to_ascii_lowercase().replace('-', "_").as_str(),
-            "static_api_key" | "static_api_keys" | "static" | "api_key"
-        )
-    {
-        return Err(format!(
-            "AUTH_MODE {mode:?} is not supported; only static_api_key is."
-        ));
-    }
-    let auth = AuthConfig {
-        enabled: auth_enabled,
-        required: env_bool(env("AUTH_REQUIRED"), true),
-        keys,
-        header: read_str(env("AUTH_STATIC_API_KEY_HEADER"))
-            .unwrap_or_else(|| "authorization".into())
-            .to_ascii_lowercase(),
-        bearer_only: env_bool(env("AUTH_STATIC_API_KEY_BEARER_ONLY"), true),
-    };
     Ok(Settings {
         host,
         port,
         providers,
-        auth,
+        gateway_keys,
         body_limit,
         upstream_timeout_ms,
         anthropic_version: read_str(env("ANTHROPIC_VERSION"))
@@ -297,8 +258,12 @@ mod tests {
         move |k| m.get(k).cloned()
     }
 
+    const KEYS: (&str, &str) = ("AUTH_STATIC_API_KEYS", "gk");
+
     fn err_of(raw: Value, env: &[(&str, &str)]) -> String {
-        from_json(&raw, &env_of(env)).unwrap_err()
+        let mut env = env.to_vec();
+        env.push(KEYS);
+        from_json(&raw, &env_of(&env)).unwrap_err()
     }
 
     fn one(p: Value) -> Value {
@@ -314,11 +279,7 @@ mod tests {
             ("HOST", "127.0.0.1"),
             ("PORT", "4999"),
             ("OR_KEY", "k1"),
-            ("AUTH_STATIC_API_KEYS", "a, b"),
-            ("AUTH_STATIC_API_KEY_HEADER", "X-Gateway-Key"),
-            ("AUTH_STATIC_API_KEY_BEARER_ONLY", "false"),
-            ("AUTH_ENABLED", "true"),
-            ("AUTH_MODE", "static_api_key"),
+            ("AUTH_STATIC_API_KEYS", "a, b, a"),
         ]);
         let s = from_json(&raw, &env).unwrap();
         assert_eq!((s.host.as_str(), s.port), ("127.0.0.1", 4999));
@@ -326,21 +287,18 @@ mod tests {
         assert_eq!(s.providers[0].apikey.as_deref(), Some("k1"));
         assert_eq!(s.providers[0].baseurl.as_deref(), Some("https://x/v1"));
         assert_eq!(s.providers[1].apikey, None);
-        assert_eq!(s.auth.keys, vec!["a", "b"]);
-        assert_eq!(s.auth.header, "x-gateway-key");
-        assert!(!s.auth.bearer_only && s.auth.enabled && s.auth.required);
+        assert_eq!(s.gateway_keys, vec!["a", "b"]);
         assert_eq!((s.body_limit, s.upstream_timeout_ms), (50 * 1024 * 1024, 0));
-        let s = from_json(&raw, &env_of(&[])).unwrap();
+        let s = from_json(&raw, &env_of(&[KEYS])).unwrap();
         assert_eq!((s.host.as_str(), s.port), ("0.0.0.0", 4813));
         assert_eq!(s.providers[0].apikey, None);
-        assert!(!s.auth.enabled && s.auth.bearer_only);
     }
 
     #[test]
     fn production_config_loads_under_the_strict_loader() {
         let text = include_str!("../../gateway.config.json");
         let raw: Value = serde_json::from_str(text).unwrap();
-        let s = from_json(&raw, &env_of(&[])).unwrap();
+        let s = from_json(&raw, &env_of(&[KEYS])).unwrap();
         let local = s
             .providers
             .iter()
@@ -394,9 +352,12 @@ mod tests {
             let e = err_of(raw.clone(), &[("PORT", bad)]);
             assert!(e.starts_with("PORT="), "{e}");
         }
-        let e = err_of(raw.clone(), &[("BODY_LIMIT_BYTES", "0")]);
-        assert!(e.starts_with("BODY_LIMIT_BYTES=0"), "{e}");
-        let s = from_json(&raw, &env_of(&[("PORT", "")])).unwrap();
+        let e = err_of(raw.clone(), &[("GATEWAY_BODY_LIMIT_BYTES", "0")]);
+        assert!(e.starts_with("GATEWAY_BODY_LIMIT_BYTES=0"), "{e}");
+        // The removed alias is not read.
+        let s = from_json(&raw, &env_of(&[KEYS, ("BODY_LIMIT_BYTES", "0")])).unwrap();
+        assert_eq!(s.body_limit, DEFAULT_BODY_LIMIT);
+        let s = from_json(&raw, &env_of(&[KEYS, ("PORT", "")])).unwrap();
         assert_eq!(s.port, 3000);
     }
 
@@ -417,5 +378,21 @@ mod tests {
             &[],
         );
         assert!(e.contains("ANTHROPIC_API_KEY"), "{e}");
+    }
+
+    #[test]
+    fn refuses_to_start_without_gateway_keys() {
+        let raw = json!({"providers": []});
+        for env in [
+            vec![],
+            vec![("AUTH_STATIC_API_KEYS", " , ")],
+            vec![("AUTH_STATIC_API_KEY", "gk"), ("AUTH_ENABLED", "false")],
+        ] {
+            let e = from_json(&raw, &env_of(&env)).unwrap_err();
+            assert!(
+                e.starts_with("AUTH_STATIC_API_KEYS is empty or unset"),
+                "{e}"
+            );
+        }
     }
 }

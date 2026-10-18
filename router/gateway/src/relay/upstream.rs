@@ -185,11 +185,10 @@ pub(crate) fn upstream_headers(
         copy(&mut h, "openai-organization");
         copy(&mut h, "openai-project");
     } else {
-        let version =
-            match fwd(inbound, "anthropic-version").or(fwd(inbound, "x-anthropic-version")) {
-                Some(v) => v.clone(),
-                None => config_value(p, "anthropic version", &st.settings.anthropic_version)?,
-            };
+        let version = match fwd(inbound, "anthropic-version") {
+            Some(v) => v.clone(),
+            None => config_value(p, "anthropic version", &st.settings.anthropic_version)?,
+        };
         h.insert("anthropic-version", version);
         copy(&mut h, "anthropic-beta");
         if route == Route::Messages || p.credential == Credential::CallerOauthPassthrough {

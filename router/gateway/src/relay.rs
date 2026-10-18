@@ -5,11 +5,11 @@ use crate::app::AppState;
 use crate::auth;
 use crate::config::Kind;
 use crate::local_leg::{self, LocalLegContext};
-use crate::routing::{self, Attempt, Candidate, Ingress, Leg, Resolved, Selectors, Target};
+use crate::routing::{self, Attempt, Candidate, Ingress, Leg, Resolved, Target};
 use crate::telemetry::{Outcome, OutcomeKind, RequestStart, RequestTelemetry, Resolution};
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use futures_util::Stream;
@@ -211,13 +211,6 @@ fn refuse(guard: &mut Guard, status: u16, stage: &str, body: &Value) -> Response
     json_response(status, body)
 }
 
-fn selectors(h: &HeaderMap) -> Selectors<'_> {
-    Selectors {
-        providers: hdr(h, "x-target-providers"),
-        provider: hdr(h, "x-target-provider"),
-    }
-}
-
 /// Parsed failure details as Node's `readUpstreamPayload`: JSON, else `{raw}`, empty → `{}`.
 fn details(raw: &[u8]) -> Value {
     if raw.is_empty() {
@@ -313,7 +306,7 @@ fn preamble(
     raw: &Bytes,
     route: Route,
 ) -> Result<Value, Response> {
-    if let Err(m) = auth::check(&st.settings.auth, headers) {
+    if let Err(m) = auth::check(&st.settings.gateway_keys, headers) {
         return Err(json_response(401, &error_body(&m)));
     }
     let parsed = serde_json::from_slice::<Value>(raw)
@@ -354,16 +347,14 @@ fn resolve(
     guard: &mut Guard,
     ingress: Ingress,
     requested: &str,
-    inbound: &HeaderMap,
 ) -> Result<Vec<Target>, Response> {
-    match routing::resolve(&st.settings, ingress, requested, selectors(inbound)) {
+    match routing::resolve(&st.settings, ingress, requested) {
         Resolved::Mismatch { model, provider } => Err(refuse(
             guard,
             400,
             "protocol",
             &mismatch_body(&model, &provider, ingress),
         )),
-        Resolved::BadRequest(msg) => Err(refuse(guard, 400, "target_selection", &error_body(&msg))),
         Resolved::Targets(t) => Ok(t),
     }
 }
@@ -390,7 +381,7 @@ async fn fallthrough(
     body: Value,
 ) -> Response {
     let mut guard = start(st, route, &body);
-    let targets = match resolve(st, &mut guard, ingress, &requested_model(&body), inbound) {
+    let targets = match resolve(st, &mut guard, ingress, &requested_model(&body)) {
         Ok(t) => t,
         Err(r) => return r,
     };
@@ -489,7 +480,7 @@ pub async fn count_tokens(State(st): St, headers: HeaderMap, raw: Bytes) -> Resp
     };
     let mut guard = start(&st, Route::CountTokens, &body);
     let requested = requested_model(&body);
-    let candidate = match resolve(&st, &mut guard, Ingress::CountTokens, &requested, &headers) {
+    let candidate = match resolve(&st, &mut guard, Ingress::CountTokens, &requested) {
         Ok(t) => t
             .into_iter()
             .find_map(|t| t.plan.ok())
@@ -553,25 +544,13 @@ pub async fn systemone(State(st): St, headers: HeaderMap, raw: Bytes) -> Respons
 }
 
 /// Node `routes.ts:69` (`buildGatewayModelListEntries` `:340`, format `:271`).
-pub async fn models(State(st): St, headers: HeaderMap, uri: Uri) -> Response {
-    if let Err(m) = auth::check(&st.settings.auth, &headers) {
+pub async fn models(State(st): St, headers: HeaderMap) -> Response {
+    if let Err(m) = auth::check(&st.settings.gateway_keys, &headers) {
         return json_response(401, &error_body(&m));
     }
-    let query_fmt = uri.query().unwrap_or_default().split('&').find_map(|kv| {
-        let (k, v) = kv.split_once('=')?;
-        (k == "format" || k == "protocol").then(|| v.to_ascii_lowercase())
-    });
-    let fmt = query_fmt
-        .or_else(|| hdr(&headers, "x-gateway-model-list-format").map(str::to_ascii_lowercase))
-        .filter(|f| matches!(f.as_str(), "anthropic" | "claude" | "openai"));
-    let anthropic = match fmt.as_deref() {
-        Some("openai") => false,
-        Some(_) => true,
-        None => {
-            hdr(&headers, "anthropic-version").is_some()
-                || hdr(&headers, "anthropic-beta").is_some()
-        }
-    };
+    // Claude Code sends `anthropic-version`/`anthropic-beta`; anything else gets the OpenAI list.
+    let anthropic =
+        hdr(&headers, "anthropic-version").is_some() || hdr(&headers, "anthropic-beta").is_some();
     let mut ids: Vec<(String, String, String)> = Vec::new();
     for p in &st.settings.providers {
         for m in p.models.iter().filter(|m| !m.is_empty()) {

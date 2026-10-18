@@ -91,11 +91,7 @@ async fn gateway(up: &Stub, extra_env: &[(&str, &str)]) -> String {
         {"name": "decide-nocred", "type": "systemone", "baseurl": format!("{base}/x/v1"), "models": ["m"]}
     ]});
     let env: HashMap<String, String> = [
-        ("AUTH_ENABLED", "true"),
-        ("AUTH_MODE", "static_api_key"),
         ("AUTH_STATIC_API_KEYS", KEY),
-        ("AUTH_STATIC_API_KEY_HEADER", "x-gateway-key"),
-        ("AUTH_STATIC_API_KEY_BEARER_ONLY", "false"),
         ("OR_KEY", "or-secret"),
         ("SIDE_KEY", "side-secret"),
         ("ANTHROPIC_API_KEY", "must-never-be-read"),
@@ -128,6 +124,10 @@ async fn post(
     let r = req.send().await.unwrap();
     let (s, h) = (r.status().as_u16(), r.headers().clone());
     (s, h, r.text().await.unwrap())
+}
+
+fn keys_env(k: &str) -> Option<String> {
+    (k == "AUTH_STATIC_API_KEYS").then(|| KEY.to_string())
 }
 
 fn h<'a>(s: &'a Seen, k: &str) -> Option<&'a str> {
@@ -266,7 +266,10 @@ async fn fallthrough_then_final_error_relay() {
     let up = stub(script).await;
     let gw = gateway(&up, &[]).await;
     let oauth = [("authorization", "Bearer t")];
-    // Bare "shared" → [claude-local, anthropic] (first provider per kind, config order).
+    // Bare "shared" → [claude-local, anthropic] (first provider per kind, config order). This
+    // two-target resolution is unreachable from the production config (no bare id is listed by
+    // two default-route providers there); this test is what keeps the non-final-attempt path
+    // (next target on 5xx, then the 0003 final-attempt relay) covered.
     let (s, _, b) = post(&gw, "/v1/messages", &oauth, json!({"model": "shared"})).await;
     assert_eq!((s, b.as_str()), (200, "{\"ok\":true}"));
     let paths: Vec<_> = up.seen().into_iter().map(|s| s.path).collect();
@@ -569,7 +572,7 @@ async fn telemetry_finalizes_once_on_success_and_client_disconnect() {
         {"name": "codex-a", "type": "anthropic", "apikey": "k", "baseurl": format!("http://{}/codex-a", up.addr), "models": ["gpt-x"]},
         {"name": "anthropic", "type": "anthropic", "credential": "caller-oauth-passthrough", "baseurl": format!("http://{}/anthropic", up.addr), "models": ["claude-x"]}]});
     let log: Arc<Mutex<Vec<String>>> = Arc::default();
-    let settings = config::from_json(&raw, &|_| None).unwrap();
+    let settings = config::from_json(&raw, &keys_env).unwrap();
     let state = app::state_with(settings, Arc::new(Recorder(log.clone()))).unwrap();
     let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
@@ -577,6 +580,7 @@ async fn telemetry_finalizes_once_on_success_and_client_disconnect() {
     let c = reqwest::Client::new();
     let ok = c
         .post(format!("{gw}/v1/messages"))
+        .header("x-gateway-key", KEY)
         .header("authorization", "Bearer t")
         .body("{\"model\":\"anthropic/claude-x\"}")
         .send()
@@ -585,6 +589,7 @@ async fn telemetry_finalizes_once_on_success_and_client_disconnect() {
     assert_eq!(ok.text().await.unwrap(), "{\"ok\":true}");
     let dropped = c
         .post(format!("{gw}/v1/messages"))
+        .header("x-gateway-key", KEY)
         .timeout(Duration::from_millis(300))
         .body("{\"model\":\"codex-a/gpt-x\"}")
         .send()
@@ -606,34 +611,64 @@ async fn telemetry_finalizes_once_on_success_and_client_disconnect() {
 }
 
 #[tokio::test]
-async fn target_providers_header_selects_and_rejects() {
+async fn removed_mimic_surfaces_are_ignored() {
     let up = stub(Script::new()).await;
     let gw = gateway(&up, &[]).await;
-    let sel = [
+    // x-target-providers / x-target-provider are not read: "shared" routes as if absent.
+    let hdrs = [
         ("authorization", "Bearer t"),
         ("x-target-providers", "anthropic"),
+        ("x-target-provider", "nope"),
     ];
-    let (s, rh, _) = post(&gw, "/v1/messages", &sel, json!({"model": "shared"})).await;
+    let (s, rh, _) = post(&gw, "/v1/messages", &hdrs, json!({"model": "shared"})).await;
     assert_eq!(s, 200);
     assert_eq!(
         rh.get("x-gateway-target-provider-name").unwrap(),
-        "anthropic"
+        "claude-local"
     );
-    let paths: Vec<_> = up.seen().into_iter().map(|s| s.path).collect();
-    assert_eq!(paths, ["/anthropic/v1/messages"]);
-    let (s, _, b) = post(
+    // A type-route prefix is no longer a route: "anthropic" is matched only as a provider name.
+    let (s, _, _) = post(
         &gw,
         "/v1/messages",
-        &[("x-target-providers", "nope")],
-        json!({"model": "shared"}),
+        &[
+            ("authorization", "Bearer t"),
+            ("x-anthropic-version", "2099-01-01"),
+        ],
+        json!({"model": "anthropic/claude-x"}),
     )
     .await;
-    assert_eq!(s, 400, "{b}");
-    assert!(
-        b.contains("x-target-providers must include at least one valid provider"),
-        "{b}"
-    );
-    assert_eq!(up.seen().len(), 1);
+    assert_eq!(s, 200);
+    let seen = up.seen();
+    let paths: Vec<_> = seen.iter().map(|s| s.path.as_str()).collect();
+    assert_eq!(paths, ["/local/v1/messages", "/anthropic/v1/messages"]);
+    // The x-anthropic-version alias is not forwarded; only the config default is sent.
+    assert_eq!(h(&seen[1], "anthropic-version"), Some("2023-06-01"));
+    // A valid gateway key in any header other than x-gateway-key is a 401.
+    let c = reqwest::Client::new();
+    for (k, v) in [
+        ("x-api-key", KEY.to_string()),
+        ("authorization", format!("Bearer {KEY}")),
+    ] {
+        let r = c
+            .post(format!("{gw}/v1/messages"))
+            .header(k, v)
+            .body(json!({"model": "shared"}).to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::UNAUTHORIZED, "{k}");
+    }
+    // The /v1/models query and override header are not read.
+    let r = c
+        .get(format!("{gw}/v1/models?format=anthropic"))
+        .header("x-gateway-key", KEY)
+        .header("x-gateway-model-list-format", "anthropic")
+        .send()
+        .await
+        .unwrap();
+    let v: Value = serde_json::from_str(&r.text().await.unwrap()).unwrap();
+    assert_eq!(v["object"], "list");
+    assert_eq!(up.seen().len(), 2);
 }
 
 #[tokio::test]
@@ -644,7 +679,7 @@ async fn connect_error_is_retried_once_after_150ms() {
     drop(reserved);
     let raw = json!({"host": "127.0.0.1", "port": 0, "providers": [
         {"name": "side", "type": "anthropic", "apikey": "k", "baseurl": format!("http://{addr}/cd"), "models": ["gpt-x"]}]});
-    let settings = config::from_json(&raw, &|_| None).unwrap();
+    let settings = config::from_json(&raw, &keys_env).unwrap();
     let state = app::state(settings, &|_| None).unwrap();
     let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
@@ -660,6 +695,7 @@ async fn connect_error_is_retried_once_after_150ms() {
     let t0 = std::time::Instant::now();
     let r = reqwest::Client::new()
         .post(format!("{gw}/v1/messages"))
+        .header("x-gateway-key", KEY)
         .body(r#"{"model":"side/gpt-x"}"#)
         .send()
         .await
@@ -764,13 +800,14 @@ async fn reset_after_request_written_is_not_retried() {
     });
     let raw = json!({"host": "127.0.0.1", "port": 0, "providers": [
         {"name": "side", "type": "anthropic", "apikey": "k", "baseurl": format!("http://{addr}/cd"), "models": ["gpt-x"]}]});
-    let settings = config::from_json(&raw, &|_| None).unwrap();
+    let settings = config::from_json(&raw, &keys_env).unwrap();
     let state = app::state(settings, &|_| None).unwrap();
     let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
     let gw = format!("http://{}", rx.await.unwrap());
     let r = reqwest::Client::new()
         .post(format!("{gw}/v1/messages"))
+        .header("x-gateway-key", KEY)
         .body(r#"{"model":"side/gpt-x"}"#)
         .send()
         .await

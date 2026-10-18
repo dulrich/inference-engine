@@ -4,7 +4,7 @@
 use axum::body::{Body, Bytes};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::Response;
-use inference_router::{app, config, healthcheck, local_leg, telemetry};
+use inference_router::{app, config, healthcheck, telemetry};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -568,12 +568,7 @@ async fn telemetry_finalizes_once_on_success_and_client_disconnect() {
         {"name": "anthropic", "type": "anthropic", "baseurl": format!("http://{}/anthropic", up.addr), "models": ["claude-x"]}]});
     let log: Arc<Mutex<Vec<String>>> = Arc::default();
     let settings = config::from_json(&raw, &|_| None).unwrap();
-    let state = app::state_with(
-        settings,
-        Arc::new(local_leg::NoopLocalLeg),
-        Arc::new(Recorder(log.clone())),
-    )
-    .unwrap();
+    let state = app::state_with(settings, Arc::new(Recorder(log.clone()))).unwrap();
     let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
     let gw = format!("http://{}", rx.await.unwrap());

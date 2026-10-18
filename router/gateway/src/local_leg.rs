@@ -1,18 +1,18 @@
-//! Local-leg delegate: the `claude-local` native-messages leg (WP-3).
+//! The `claude-local` native-messages leg.
 //!
 //! Invoked only for `claude-local`-style providers (`localLeg: "native-messages"`) on
 //! Anthropic-Messages ingress: `/v1/messages` and `/v1/messages/count_tokens`
 //! (`ctx.route` tells them apart). Chat-completions ingress to the same provider never calls it.
 
-use crate::config::{Env, Provider, Settings};
-use crate::relay::{ByteStream, PendingUpstream, Route};
+use crate::config::Provider;
+use crate::relay::{ByteStream, Route};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Everything the delegate may read about the request. Owned, so stream layers can keep it.
+/// Everything the leg may read about the request. Owned, so stream layers can keep it.
 #[derive(Clone, Debug)]
 pub struct LocalLegContext {
     /// The resolved provider; `effort_kwargs` / `max_output_tokens` are its raw config values.
@@ -24,92 +24,36 @@ pub struct LocalLegContext {
     pub streaming: bool,
 }
 
-/// Whether the gateway waits for the upstream response head before answering the client.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HeaderMode {
-    /// Node behaviour: relay the upstream status/headers once they arrive, then
-    /// `wrap_stream` the body. Upstream errors keep the normal 0003 relay.
-    Hold,
-    /// Answer `200` + SSE headers immediately and let `early_stream` produce the whole body
-    /// (it owns surfacing a late upstream error in-stream). Only honoured for streaming
-    /// `/v1/messages`; ignored elsewhere.
-    Early,
-}
-
-pub trait LocalLeg: Send + Sync + 'static {
-    /// The upstream body to send, given the client body with `model` already rewritten.
-    fn transform_body(&self, body: Value, ctx: &LocalLegContext) -> Value;
-
-    fn header_mode(&self, ctx: &LocalLegContext) -> HeaderMode;
-
-    /// `Hold` mode, successful upstream: wraps the (telemetry-tapped) upstream body. May inject
-    /// bytes (e.g. `event: ping`); must otherwise pass bytes through unchanged.
-    fn wrap_stream(&self, upstream: ByteStream, ctx: &LocalLegContext) -> ByteStream;
-
-    /// `Early` mode: the client body, given the in-flight upstream call. The upstream body
-    /// inside `pending` is already telemetry-tapped.
-    fn early_stream(&self, pending: PendingUpstream, ctx: &LocalLegContext) -> ByteStream;
-}
-
-/// The delegate the composition point (`app.rs`) installs.
-pub fn delegate(_settings: &Settings, _env: Env) -> Arc<dyn LocalLeg> {
-    Arc::new(NativeMessagesLeg::default())
-}
-
 /// The exact keepalive frame 0002 emits (`preStartSafeAnthropicPingFrame`).
 pub const PING_FRAME: &[u8] = b"event: ping\ndata: {\"type\":\"ping\"}\n\n";
 /// Byte silence after which a ping is injected (0002's interval).
 pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
-/// The `claude-local` native-messages leg (Decision 3).
-///
-/// * Body: system-message merge (`merge_system_messages`), effort map (0007 + 0009,
-///   `apply_effort_kwargs`) and, on `/v1/messages` only, the max-tokens clamp (0010,
-///   `apply_max_tokens_clamp`). `count_tokens` gets the merge and the effort map so it
-///   counts the same render the turn sends.
-/// * Header mode: always `Hold` (Node behaviour). Upstream error statuses keep the normal
-///   0003 verbatim relay rather than being re-encoded as an in-stream `event: error` behind a
-///   `200`; pings start once the upstream head arrives and repeat on every 15 s of silence.
-pub struct NativeMessagesLeg {
-    pub keepalive: Duration,
+/// The upstream body to send, given the client body with `model` already rewritten:
+/// system-message merge, effort map (0007 + 0009) and, on `/v1/messages` only, the
+/// max-tokens clamp (0010). `count_tokens` gets the merge and the effort map so it counts the
+/// same render the turn sends.
+pub fn transform_body(mut body: Value, ctx: &LocalLegContext) -> Value {
+    if !body.is_object() {
+        return body;
+    }
+    merge_system_messages(&mut body);
+    apply_effort_kwargs(&mut body, &ctx.provider.effort_kwargs, &ctx.model);
+    if ctx.route == Route::Messages {
+        apply_max_tokens_clamp(&mut body, &ctx.provider.max_output_tokens, &ctx.model);
+    }
+    body
 }
 
-impl Default for NativeMessagesLeg {
-    fn default() -> Self {
-        Self {
-            keepalive: KEEPALIVE_INTERVAL,
-        }
+/// Wraps the (telemetry-tapped) successful upstream body. The gateway always holds the client
+/// response until the upstream head arrives, so upstream error statuses keep the normal 0003
+/// verbatim relay; on streaming `/v1/messages` pings start once the head arrives and repeat on
+/// every 15 s of silence. Everything else passes through unchanged.
+pub fn wrap_stream(upstream: ByteStream, ctx: &LocalLegContext) -> ByteStream {
+    if ctx.route != Route::Messages || !ctx.streaming {
+        return upstream;
     }
-}
-
-impl LocalLeg for NativeMessagesLeg {
-    fn transform_body(&self, mut body: Value, ctx: &LocalLegContext) -> Value {
-        if !body.is_object() {
-            return body;
-        }
-        merge_system_messages(&mut body);
-        apply_effort_kwargs(&mut body, &ctx.provider.effort_kwargs, &ctx.model);
-        if ctx.route == Route::Messages {
-            apply_max_tokens_clamp(&mut body, &ctx.provider.max_output_tokens, &ctx.model);
-        }
-        body
-    }
-
-    fn header_mode(&self, _ctx: &LocalLegContext) -> HeaderMode {
-        HeaderMode::Hold
-    }
-
-    fn wrap_stream(&self, upstream: ByteStream, ctx: &LocalLegContext) -> ByteStream {
-        if ctx.route != Route::Messages || !ctx.streaming {
-            return upstream;
-        }
-        keepalive(upstream, self.keepalive)
-    }
-
-    fn early_stream(&self, pending: PendingUpstream, ctx: &LocalLegContext) -> ByteStream {
-        // Never selected (`header_mode` is always `Hold`); kept a plain relay.
-        NoopLocalLeg.early_stream(pending, ctx)
-    }
+    keepalive(upstream, KEEPALIVE_INTERVAL)
 }
 
 /// Injects `PING_FRAME` after every `interval` of byte silence, until the upstream ends.
@@ -325,33 +269,5 @@ pub fn apply_max_tokens_clamp(body: &mut Value, max_output_tokens: &Value, model
     };
     if clamp {
         body["max_tokens"] = cap_v;
-    }
-}
-
-/// WP-2 no-op: plain relay.
-pub struct NoopLocalLeg;
-
-impl LocalLeg for NoopLocalLeg {
-    fn transform_body(&self, body: Value, _ctx: &LocalLegContext) -> Value {
-        body
-    }
-
-    fn header_mode(&self, _ctx: &LocalLegContext) -> HeaderMode {
-        HeaderMode::Hold
-    }
-
-    fn wrap_stream(&self, upstream: ByteStream, _ctx: &LocalLegContext) -> ByteStream {
-        upstream
-    }
-
-    fn early_stream(&self, pending: PendingUpstream, _ctx: &LocalLegContext) -> ByteStream {
-        Box::pin(
-            futures_util::stream::once(pending).flat_map(|r| -> ByteStream {
-                match r {
-                    Ok(resp) => resp.body,
-                    Err(_) => Box::pin(futures_util::stream::empty()),
-                }
-            }),
-        )
     }
 }

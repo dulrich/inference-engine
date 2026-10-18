@@ -1,4 +1,4 @@
-//! Telemetry delegate seam (WP-4 fills this file in with the 0006 sink; WP-2 ships the no-op).
+//! Telemetry: the 0006 jsonl sink behind a trait whose disabled no-op allocates no record.
 //!
 //! Lifecycle per proxied request (every route but `/health`/`/v1/models`):
 //! 1. `Telemetry::request_start` at request start, before target resolution and before any
@@ -9,9 +9,8 @@
 //! 4. `RequestTelemetry::finalize` exactly once: success end-of-stream, upstream error,
 //!    timeout, gateway refusal, or client disconnect (driven by `Drop` of the gateway's guard).
 
-use crate::config::{Env, Settings};
+use crate::config::Env;
 use crate::relay::Route;
-use axum::http::HeaderMap;
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -27,9 +26,6 @@ pub struct RequestStart<'a> {
     pub route: Route,
     /// Client-requested model string, verbatim (`None` when absent / not a string).
     pub requested_model: Option<&'a str>,
-    /// Ingress headers (for `metadata.user_id`-adjacent derivation; contains credentials —
-    /// the sink must allowlist, never dump).
-    pub headers: &'a HeaderMap,
     /// The parsed client body (`metadata.user_id`, first `system` block for `cc_is_subagent`).
     /// `None` on `/v1/systemone`, whose `state`/`questions` must never reach the sink.
     pub body: Option<&'a Value>,
@@ -87,9 +83,8 @@ pub trait Telemetry: Send + Sync + 'static {
     fn request_start(&self, start: &RequestStart<'_>) -> Box<dyn RequestTelemetry>;
 }
 
-/// The delegate the composition point (`app.rs`) installs: the 0006 jsonl sink, or the no-op
-/// when `ROUTER_TELEMETRY_ENABLED` is false.
-pub fn delegate(_settings: &Settings, env: Env) -> Arc<dyn Telemetry> {
+/// The 0006 jsonl sink, or the zero-cost no-op when `ROUTER_TELEMETRY_ENABLED` is false.
+pub fn from_env(env: Env) -> Arc<dyn Telemetry> {
     let (enabled, options) = sink::options_from_env(env);
     if enabled {
         Arc::new(JsonlTelemetry::new(Sink::new(

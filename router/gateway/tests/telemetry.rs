@@ -1,6 +1,5 @@
 //! 0006-parity tests for the telemetry sink (src/telemetry/). Temp dirs only.
 
-use axum::http::{HeaderMap, HeaderValue};
 use inference_router::relay::Route;
 use inference_router::telemetry::sink::{self, iso8601, utc_day, Clock};
 use inference_router::telemetry::{
@@ -81,24 +80,11 @@ fn body() -> Value {
     })
 }
 
-fn headers() -> HeaderMap {
-    let mut h = HeaderMap::new();
-    h.insert(
-        "authorization",
-        HeaderValue::from_str(&format!("Bearer {BEARER}")).unwrap(),
-    );
-    h.insert("x-gateway-key", HeaderValue::from_static(GATEWAY_KEY));
-    h.insert("x-api-key", HeaderValue::from_static(GATEWAY_KEY));
-    h
-}
-
 fn start(t: &JsonlTelemetry, b: &Value, streaming: bool) -> Box<dyn RequestTelemetry> {
-    let h = headers();
     t.request_start(&RequestStart {
         request_id: "req-telemetry-1",
         route: Route::Messages,
         requested_model: b.get("model").and_then(Value::as_str),
-        headers: &h,
         body: Some(b),
         streaming,
         started_at: Instant::now(),
@@ -518,12 +504,10 @@ fn systemone_body_is_never_read() {
     let d = TempDir::new();
     let s = Sink::new(opts(&d.0, 1 << 20, 14), sink::system_clock());
     let t = JsonlTelemetry::new(s.clone());
-    let h = headers();
     let r = t.request_start(&RequestStart {
         request_id: "r1",
         route: Route::Systemone,
         requested_model: None,
-        headers: &h,
         body: None,
         streaming: false,
         started_at: Instant::now(),

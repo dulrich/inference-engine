@@ -1,8 +1,6 @@
-//! The single composition point: state assembly + route table. WP-3/WP-4 change only their
-//! own module's `delegate()` factory, never this file.
+//! The single composition point: state assembly + route table.
 
 use crate::config::{Env, Settings};
-use crate::local_leg::{self, LocalLeg};
 use crate::relay;
 use crate::telemetry::{self, Telemetry};
 use axum::extract::DefaultBodyLimit;
@@ -15,7 +13,6 @@ use std::time::Duration;
 pub struct AppState {
     pub settings: Settings,
     pub client: reqwest::Client,
-    pub local_leg: Arc<dyn LocalLeg>,
     pub telemetry: Arc<dyn Telemetry>,
 }
 
@@ -31,21 +28,18 @@ fn client(settings: &Settings) -> Result<reqwest::Client, String> {
 
 pub fn state_with(
     settings: Settings,
-    local_leg: Arc<dyn LocalLeg>,
     telemetry: Arc<dyn Telemetry>,
 ) -> Result<Arc<AppState>, String> {
     Ok(Arc::new(AppState {
         client: client(&settings)?,
         settings,
-        local_leg,
         telemetry,
     }))
 }
 
 pub fn state(settings: Settings, env: Env) -> Result<Arc<AppState>, String> {
-    let local = local_leg::delegate(&settings, env);
-    let tel = telemetry::delegate(&settings, env);
-    state_with(settings, local, tel)
+    let tel = telemetry::from_env(env);
+    state_with(settings, tel)
 }
 
 pub fn router(state: Arc<AppState>) -> Router {

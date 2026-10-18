@@ -6,7 +6,8 @@ use futures_util::StreamExt;
 use inference_router::config::{Kind, Provider};
 use inference_router::local_leg::{
     apply_effort_kwargs, apply_max_tokens_clamp, derive_effort_level, keepalive,
-    merge_system_messages, HeaderMode, LocalLeg, LocalLegContext, NativeMessagesLeg, PING_FRAME,
+    merge_system_messages, transform_body, wrap_stream, LocalLegContext, KEEPALIVE_INTERVAL,
+    PING_FRAME,
 };
 use inference_router::relay::{ByteStream, Route};
 use serde_json::{json, Value};
@@ -392,30 +393,24 @@ fn a_body_without_inner_system_messages_is_untouched() {
     assert_eq!(merged(b.clone()), b);
 }
 
-// ---- delegate wiring -------------------------------------------------------------------------
+// ---- body transform --------------------------------------------------------------------------
 
 #[test]
-fn delegate_applies_merge_effort_and_clamp_on_messages() {
-    let leg = NativeMessagesLeg::default();
+fn transform_applies_merge_effort_and_clamp_on_messages() {
     let b = json!({"model": M, "max_tokens": 64000, "output_config": {"effort": "max"}, "messages": [{"role": "user", "content": "q"}, {"role": "system", "content": "s"}]});
-    let out = leg.transform_body(b, &ctx(Route::Messages, false));
+    let out = transform_body(b, &ctx(Route::Messages, false));
     assert_eq!(out["max_tokens"], 32000);
     assert_eq!(
         out["chat_template_kwargs"],
         json!({"reasoning_effort": "xhigh"})
     );
     assert_eq!(out["messages"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        leg.header_mode(&ctx(Route::Messages, true)),
-        HeaderMode::Hold
-    );
 }
 
 #[test]
 fn count_tokens_gets_merge_and_effort_but_not_the_clamp() {
-    let leg = NativeMessagesLeg::default();
     let b = json!({"model": M, "thinking": {"type": "disabled"}, "messages": [{"role": "user", "content": "q"}, {"role": "system", "content": "s"}]});
-    let out = leg.transform_body(b, &ctx(Route::CountTokens, false));
+    let out = transform_body(b, &ctx(Route::CountTokens, false));
     assert!(out.get("max_tokens").is_none());
     assert_eq!(
         out["chat_template_kwargs"],
@@ -437,8 +432,7 @@ async fn keepalive_pings_after_silence_repeating_and_passes_bytes_through() {
         Ok(Bytes::from_static(b"b"))
     });
     let upstream: ByteStream = Box::pin(a.chain(b));
-    let leg = NativeMessagesLeg { keepalive: tick };
-    let s = leg.wrap_stream(upstream, &ctx(Route::Messages, true));
+    let s = keepalive(upstream, tick);
     let got: Vec<Bytes> = s.map(|r| r.unwrap()).collect().await;
     let ping = Bytes::from_static(PING_FRAME);
     let want = vec![
@@ -449,17 +443,13 @@ async fn keepalive_pings_after_silence_repeating_and_passes_bytes_through() {
     ];
     assert_eq!(got, want);
     assert_eq!(PING_FRAME, b"event: ping\ndata: {\"type\":\"ping\"}\n\n");
-    assert_eq!(
-        NativeMessagesLeg::default().keepalive,
-        Duration::from_secs(15)
-    );
+    assert_eq!(KEEPALIVE_INTERVAL, Duration::from_secs(15));
     // Non-streaming and count_tokens are never wrapped.
     let quiet: ByteStream = Box::pin(futures_util::stream::once(async move {
         tokio::time::sleep(tick * 2).await;
         Ok(Bytes::from_static(b"z"))
     }));
-    let n = leg
-        .wrap_stream(quiet, &ctx(Route::Messages, false))
+    let n = wrap_stream(quiet, &ctx(Route::Messages, false))
         .count()
         .await;
     assert_eq!(n, 1);

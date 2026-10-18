@@ -4,7 +4,7 @@
 use crate::app::AppState;
 use crate::auth;
 use crate::config::{Kind, Provider};
-use crate::local_leg::{HeaderMode, LocalLegContext};
+use crate::local_leg::{self, LocalLegContext};
 use crate::routing::{self, Attempt, Candidate, Ingress, Leg, Resolved, Selectors};
 use crate::telemetry::{Outcome, OutcomeKind, RequestStart, RequestTelemetry, Resolution};
 use axum::body::Body;
@@ -14,11 +14,10 @@ use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use serde_json::{json, Value};
-use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -35,9 +34,6 @@ pub struct UpstreamFailure {
     pub timeout: bool,
     pub message: String,
 }
-
-pub type PendingUpstream =
-    Pin<Box<dyn Future<Output = Result<UpstreamResponse, UpstreamFailure>> + Send>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Route {
@@ -104,34 +100,27 @@ impl Drop for Guard {
 }
 
 static REQ_SEQ: AtomicU64 = AtomicU64::new(0);
+static REQ_PREFIX: OnceLock<u64> = OnceLock::new();
 
+/// `<process-random 16 hex>-<sequence 16 hex>`; the telemetry `reqId` schema is a free string.
 fn request_id() -> String {
-    use std::hash::{BuildHasher, Hasher};
+    let prefix = *REQ_PREFIX.get_or_init(|| {
+        use std::hash::{BuildHasher, Hasher};
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u32(std::process::id());
+        h.finish()
+    });
     let seq = REQ_SEQ.fetch_add(1, Ordering::Relaxed);
-    let mut a = std::collections::hash_map::RandomState::new().build_hasher();
-    a.write_u64(seq);
-    let x = a.finish();
-    let mut b = std::collections::hash_map::RandomState::new().build_hasher();
-    b.write_u64(x ^ seq.rotate_left(17));
-    let y = b.finish();
-    format!(
-        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
-        x >> 32,
-        (x >> 16) & 0xffff,
-        x & 0xfff,
-        ((y >> 48) & 0x3fff) | 0x8000,
-        y & 0xffff_ffff_ffff
-    )
+    format!("{prefix:016x}-{seq:016x}")
 }
 
-fn start(st: &AppState, route: Route, headers: &HeaderMap, body: &Value) -> Guard {
+fn start(st: &AppState, route: Route, body: &Value) -> Guard {
     let id = request_id();
     let started = Instant::now();
     let handle = st.telemetry.request_start(&RequestStart {
         request_id: &id,
         route,
         requested_model: body.get("model").and_then(Value::as_str),
-        headers,
         body: (route != Route::Systemone).then_some(body),
         streaming: is_streaming(body),
         started_at: started,
@@ -410,7 +399,7 @@ fn prepare(
     out["model"] = Value::String(c.model.clone());
     let local = (c.leg == Leg::LocalMessages).then(|| local_ctx(c, route, body));
     if let Some(ctx) = &local {
-        out = st.local_leg.transform_body(out, ctx);
+        out = local_leg::transform_body(out, ctx);
     }
     Ok(Prepared {
         url,
@@ -461,7 +450,6 @@ fn into_upstream(resp: reqwest::Response) -> UpstreamResponse {
 
 /// Relay a live upstream response: status + headers + tapped (and local-wrapped) body.
 fn relay_stream(
-    st: &AppState,
     up: UpstreamResponse,
     mut guard: Guard,
     local: Option<&LocalLegContext>,
@@ -476,7 +464,7 @@ fn relay_stream(
         ok,
     });
     if let Some(ctx) = local {
-        body = st.local_leg.wrap_stream(body, ctx);
+        body = local_leg::wrap_stream(body, ctx);
     }
     let mut r = Response::new(Body::from_stream(body));
     *r.status_mut() = up.status;
@@ -546,7 +534,7 @@ async fn fallthrough(
     inbound: &HeaderMap,
     body: Value,
 ) -> Response {
-    let mut guard = start(st, route, inbound, &body);
+    let mut guard = start(st, route, &body);
     let requested = body
         .get("model")
         .and_then(Value::as_str)
@@ -586,13 +574,6 @@ async fn fallthrough(
         };
         guard.resolved(c, &prepared.url, i);
         upstream_called = true;
-        if let Some(ctx) = prepared.local.as_ref().filter(|ctx| {
-            route == Route::Messages
-                && ctx.streaming
-                && st.local_leg.header_mode(ctx) == HeaderMode::Early
-        }) {
-            return early(st, prepared.clone_parts(), guard, ctx.clone());
-        }
         let resp = match send(st, &prepared).await {
             Ok(r) => r,
             Err(f) => {
@@ -611,13 +592,7 @@ async fn fallthrough(
             }
         };
         if resp.status().is_success() {
-            return relay_stream(
-                st,
-                into_upstream(resp),
-                guard,
-                prepared.local.as_ref(),
-                Some(c),
-            );
+            return relay_stream(into_upstream(resp), guard, prepared.local.as_ref(), Some(c));
         }
         let status = resp.status();
         let content_type = resp.headers().get("content-type").cloned();
@@ -669,73 +644,9 @@ async fn fallthrough(
     json_response(status, &payload)
 }
 
-impl Prepared {
-    fn clone_parts(&self) -> Prepared {
-        Prepared {
-            url: self.url.clone(),
-            headers: self.headers.clone(),
-            body: self.body.clone(),
-            local: self.local.clone(),
-        }
-    }
-}
-
-/// Local-leg `HeaderMode::Early`: answer 200 + SSE headers now; the delegate owns the body.
-fn early(
-    st: &Arc<AppState>,
-    prepared: Prepared,
-    mut guard: Guard,
-    ctx: LocalLegContext,
-) -> Response {
-    let st2 = st.clone();
-    let pending: PendingUpstream = Box::pin(async move {
-        match send(&st2, &prepared).await {
-            Ok(resp) => {
-                let up = into_upstream(resp);
-                guard.headers_after = Some(guard.started.elapsed());
-                guard.status = up.status.as_u16();
-                let ok = up.status.is_success();
-                Ok(UpstreamResponse {
-                    status: up.status,
-                    headers: up.headers,
-                    body: Box::pin(Tap {
-                        inner: up.body,
-                        guard,
-                        ok,
-                    }),
-                })
-            }
-            Err(f) => {
-                let kind = if f.timeout {
-                    OutcomeKind::Timeout
-                } else {
-                    OutcomeKind::UpstreamError
-                };
-                guard.headers_after = Some(guard.started.elapsed());
-                guard.finish(
-                    kind,
-                    200,
-                    Some(("upstream_connect".into(), f.message.clone())),
-                );
-                Err(f)
-            }
-        }
-    });
-    let body = st.local_leg.early_stream(pending, &ctx);
-    let mut r = Response::new(Body::from_stream(body));
-    put(
-        r.headers_mut(),
-        "content-type",
-        "text/event-stream; charset=utf-8",
-    );
-    put(r.headers_mut(), "cache-control", "no-cache, no-transform");
-    put(r.headers_mut(), "x-accel-buffering", "no");
-    r
-}
-
 pub async fn count_tokens(State(st): St, headers: HeaderMap, raw: Bytes) -> Response {
     let body = preamble!(st, headers, raw);
-    let mut guard = start(&st, Route::CountTokens, &headers, &body);
+    let mut guard = start(&st, Route::CountTokens, &body);
     let requested = body
         .get("model")
         .and_then(Value::as_str)
@@ -781,13 +692,7 @@ pub async fn count_tokens(State(st): St, headers: HeaderMap, raw: Bytes) -> Resp
     };
     guard.resolved(&c, &prepared.url, 0);
     match send(&st, &prepared).await {
-        Ok(resp) => relay_stream(
-            &st,
-            into_upstream(resp),
-            guard,
-            prepared.local.as_ref(),
-            None,
-        ),
+        Ok(resp) => relay_stream(into_upstream(resp), guard, prepared.local.as_ref(), None),
         Err(f) => {
             let kind = if f.timeout {
                 OutcomeKind::Timeout
@@ -815,7 +720,7 @@ pub async fn systemone(State(st): St, headers: HeaderMap, raw: Bytes) -> Respons
             &json!({"error": {"message": "Request body must be a JSON object.", "type": "invalid_request_error"}}),
         );
     };
-    let mut guard = start(&st, Route::Systemone, &headers, &body);
+    let mut guard = start(&st, Route::Systemone, &body);
     let requested = body.get("model").and_then(Value::as_str);
     let target = requested
         .map(str::trim)
@@ -857,7 +762,7 @@ pub async fn systemone(State(st): St, headers: HeaderMap, raw: Bytes) -> Respons
         local: None,
     };
     match send(&st, &prepared).await {
-        Ok(resp) => relay_stream(&st, into_upstream(resp), guard, None, None),
+        Ok(resp) => relay_stream(into_upstream(resp), guard, None, None),
         Err(f) => {
             let kind = if f.timeout {
                 OutcomeKind::Timeout
@@ -922,28 +827,7 @@ pub async fn health() -> Response {
 }
 
 fn iso_now() -> String {
-    let d = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = d.as_secs() as i64;
-    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    // Howard Hinnant's civil_from_days.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
-        rem / 3600,
-        rem % 3600 / 60,
-        rem % 60,
-        d.subsec_millis()
-    )
+    crate::telemetry::sink::iso8601(SystemTime::now())
 }
 
 #[cfg(test)]
@@ -959,7 +843,9 @@ mod tests {
 
     #[test]
     fn request_ids_are_distinct() {
-        assert_ne!(request_id(), request_id());
-        assert_eq!(request_id().len(), 36);
+        let (a, b) = (request_id(), request_id());
+        assert_ne!(a, b);
+        assert_eq!(a.len(), 33);
+        assert_eq!(a[..17], b[..17]);
     }
 }

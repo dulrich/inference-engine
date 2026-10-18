@@ -20,7 +20,7 @@ fn client(settings: &Settings) -> Result<reqwest::Client, String> {
     // No auto-decompression features are compiled in, so bytes relay verbatim; no proxy env.
     let mut b = reqwest::Client::builder().no_proxy();
     if settings.upstream_timeout_ms > 0 {
-        // Node's undici dispatcher applies the one timeout to headers and to body idle gaps.
+        // The one timeout bounds the wait for headers and every idle gap in the body.
         b = b.read_timeout(Duration::from_millis(settings.upstream_timeout_ms));
     }
     b.build().map_err(|e| format!("http client: {e}"))

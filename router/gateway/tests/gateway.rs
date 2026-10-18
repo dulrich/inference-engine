@@ -306,7 +306,7 @@ async fn fallthrough_then_final_error_relay() {
     )
     .await;
     assert_eq!((s, b.as_str()), (500, "local boom"));
-    // Chat ingress keeps Node's envelope (0003 is Anthropic-source only).
+    // Chat ingress keeps the fallthrough envelope (0003 is Anthropic-source only).
     let (s, _, b) = post(
         &gw,
         "/v1/chat/completions",

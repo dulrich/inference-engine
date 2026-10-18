@@ -17,9 +17,9 @@ use tokio::time::Instant;
 
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(1000);
 const MAX_PROGRESS_RECORDS: u64 = 3600;
-/// A single SSE data line longer than this is not parsed (0006 `MAX_PARSED_SSE_LINE_BYTES`).
+/// A single SSE data line longer than this is not parsed (0006).
 const MAX_PARSED_LINE: usize = 64 * 1024;
-/// Carry-over cap for a partial SSE line (0006 `MAX_SSE_RESIDUAL_BYTES`).
+/// Carry-over cap for a partial SSE line (0006).
 const MAX_RESIDUAL: usize = 256 * 1024;
 /// Buffered (non-SSE) JSON bodies larger than this are not parsed.
 const MAX_JSON_BODY: usize = 8 * 1024 * 1024;

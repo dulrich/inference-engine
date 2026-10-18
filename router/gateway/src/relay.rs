@@ -1,5 +1,5 @@
 //! Route handlers and the same-protocol relay. No protocol conversion exists here: a request
-//! reaches only providers that speak its ingress protocol (Decision 2).
+//! reaches only providers that speak its ingress protocol (a request never crosses protocols).
 
 use crate::app::AppState;
 use crate::auth;
@@ -211,7 +211,7 @@ fn refuse(guard: &mut Guard, status: u16, stage: &str, body: &Value) -> Response
     json_response(status, body)
 }
 
-/// Parsed failure details as Node's `readUpstreamPayload`: JSON, else `{raw}`, empty → `{}`.
+/// Parsed upstream failure details: JSON, else `{raw}`, empty → `{}`.
 fn details(raw: &[u8]) -> Value {
     if raw.is_empty() {
         return json!({});
@@ -543,7 +543,7 @@ pub async fn systemone(State(st): St, headers: HeaderMap, raw: Bytes) -> Respons
     relay_one(&st, guard, &c, Route::Systemone, &headers, &body).await
 }
 
-/// Node `routes.ts:69` (`buildGatewayModelListEntries` `:340`, format `:271`).
+/// `/v1/models`: every `provider/model` id once, Anthropic or OpenAI list format.
 pub async fn models(State(st): St, headers: HeaderMap) -> Response {
     if let Err(m) = auth::check(&st.settings.gateway_keys, &headers) {
         return json_response(401, &error_body(&m));
@@ -573,7 +573,7 @@ pub async fn models(State(st): St, headers: HeaderMap) -> Response {
     json_response(200, &body)
 }
 
-/// Unauthenticated liveness, Node `index.ts:178`.
+/// Unauthenticated liveness.
 pub async fn health() -> Response {
     json_response(200, &json!({"status": "ok", "timestamp": iso_now()}))
 }

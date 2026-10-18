@@ -3,10 +3,10 @@
 //!
 //! Inbound header policy (B4): a header the gateway *forwards* is copied as its raw
 //! `HeaderValue`, so forwarding cannot fail and nothing is dropped. A header the gateway must
-//! *read as text* (selectors, the OAuth bearer, the model-list format) is read through
+//! *read as text* (the OAuth bearer, `anthropic-version`/`anthropic-beta`) is read through
 //! [`hdr`], where a value that is not visible ASCII counts as absent — that is the one explicit
-//! skip, and it only ever turns a request into the absent-header case (default routing, or the
-//! documented 401 when no caller credential exists).
+//! skip, and it only ever turns a request into the absent-header case (the OpenAI model list,
+//! or the documented 401 when no caller credential exists).
 
 use super::Route;
 use crate::app::AppState;

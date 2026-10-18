@@ -37,7 +37,7 @@ pub struct RequestStart<'a> {
 pub struct Resolution<'a> {
     /// Provider `name` (0006 `leg`).
     pub provider_name: &'a str,
-    /// Node provider token: `anthropic` | `openai` | `systemone`.
+    /// Provider kind token: `anthropic` | `openai` | `systemone`.
     pub provider_kind: &'a str,
     /// Bare upstream model id.
     pub model: &'a str,

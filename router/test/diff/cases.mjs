@@ -64,11 +64,12 @@ const LOCAL = 'claude-local/qwen38-27b-iq3s';
 // Measured on Node: a bare model id resolves to the deduped provider TYPE list
 // [openai -> claude-local, anthropic -> anthropic], never by searching models[]; a prefixed
 // id is a single target. Multi-target over named providers needs x-target-providers, which only
-// the Node baseline reads (WP-R4 dropped it from the Rust gateway; crate tests cover multi-target).
+// the Node baseline reads (the Rust gateway does not read it; crate tests cover multi-target).
 const CODEX_BOTH = { 'x-target-providers': 'codex-a,codex-b' };
 
 export const cases = [
-  // ---- auth matrix -----------------------------------------------------------------
+  // ---- auth matrix: Rust reads only the raw x-gateway-key value (always on); the ----
+  // ---- Node baseline needed AUTH_STATIC_API_KEY_BEARER_ONLY=false for the same. --------
   { id: 'auth-missing', tags: ['parity'], script: { anthropic: OK('claude-opus-5-5') },
     async run(ctx) {
       const r = await ctx.req('/v1/messages', { auth: 'none', body: MSG('claude-opus-5-5') });
@@ -98,7 +99,7 @@ export const cases = [
   ...[['x-api-key', (k) => k], ['authorization', (k) => `Bearer ${k}`], ['api-key', (k) => k], ['x-goog-api-key', (k) => k]].map(([h, v]) => ({
     id: `auth-key-in-${h}-refused`, tags: ['changed'], script: { anthropic: OK('claude-opus-5-5') },
     async run(ctx) {
-      // WP-R4 (Q-A): only x-gateway-key is read; a valid key in any other header is a 401.
+      // Only x-gateway-key is read; a valid key in any other header is a 401.
       const r = await ctx.req('/v1/messages', { auth: 'none', headers: { [h]: v(ctx.gwKey) }, body: MSG('claude-opus-5-5') });
       assert.equal(r.status, 401, r.text);
       assert.equal(JSON.parse(r.text).error.message, 'Missing auth token header: x-gateway-key');
@@ -280,7 +281,7 @@ export const cases = [
     async run(ctx) {
       const r = await ctx.req('/v1/messages', { body: MSG('codex-a/gpt-6-luna') });
       assert.ok(r.status >= 500, `${r.status} ${r.text}`);
-      // WP-R2 (S2): the request reached codex-a before the reset, so it is not retried.
+      // The request reached codex-a before the reset, so it is not retried.
       await one(ctx, 'codex-a');
     } },
   { id: 'fallthrough-codex-both-fail-final-relay', tags: ['baseline'],
@@ -310,7 +311,7 @@ export const cases = [
   { id: 'target-providers-header-ignored', tags: ['changed'],
     script: { 'codex-a': OK('gpt-6-luna', 'from-david'), 'codex-b': OK('gpt-6-luna', 'from-b') },
     async run(ctx) {
-      // WP-R4 (Q-B): x-target-providers / x-target-provider are not read; the prefix alone routes.
+      // x-target-providers / x-target-provider are not read; the prefix alone routes.
       const r = await ctx.req('/v1/messages', { headers: { 'x-target-providers': 'codex-b', 'x-target-provider': 'nope' }, body: MSG('codex-a/gpt-6-luna') });
       assert.equal(r.status, 200, r.text);
       assert.equal(JSON.parse(r.text).content[0].text, 'from-david');

@@ -1,7 +1,6 @@
-//! Model → ordered targets, following Node `resolveTargetProviders`
-//! (`src/gateway/handler.ts:5394`), `parseModelReference` (`:5725`), `validateModelForTarget`
-//! (`:5528`) and `resolveDefaultTargetProviders` (`src/config.ts:4930`), then filtered to the
-//! providers that speak the ingress protocol (Decision 2).
+//! Model → ordered targets: an explicit `provider/model` prefix, else the `default_routes`,
+//! each validated against the provider's model list, then filtered to the providers that
+//! speak the ingress protocol (a request never crosses protocols).
 
 use crate::config::{Kind, Provider, Settings};
 use serde_json::{json, Map, Value};
@@ -18,7 +17,8 @@ pub enum Ingress {
 pub enum Leg {
     /// Anthropic-protocol provider (`anthropic`, `or-anthropic`, `codex-*`).
     Anthropic,
-    /// `openai_chat_completions` provider with the native-messages selector, on Messages ingress.
+    /// `openai_chat_completions` provider with the native-messages selector, on Messages or
+    /// CountTokens ingress.
     LocalMessages,
     /// OpenAI chat provider on chat ingress.
     OpenAiChat,
@@ -31,7 +31,7 @@ pub struct Candidate {
     pub leg: Leg,
 }
 
-/// One failed attempt, rendered into Node's `All target providers failed.` envelope.
+/// One failed attempt, rendered into the `All target providers failed.` envelope.
 #[derive(Clone, Debug)]
 pub struct Attempt {
     pub provider: Arc<Provider>,
@@ -41,12 +41,12 @@ pub struct Attempt {
     pub details: Option<Value>,
 }
 
-/// One target in Node's ordered route list: either ready to call or already failed (model
+/// One target in the ordered route list: either ready to call or already failed (model
 /// validation) — a failed one still counts as "a next target exists".
 pub struct Target {
     pub provider: Arc<Provider>,
-    /// Named explicitly by a model prefix vs a default route; Node lists only explicit ones in
-    /// `target_provider_names`.
+    /// Named explicitly by a model prefix vs a default route; only explicit ones are listed
+    /// in `target_provider_names`.
     pub explicit: bool,
     pub plan: Result<Candidate, Attempt>,
 }
@@ -67,8 +67,8 @@ fn leg_for(p: &Provider, ingress: Ingress) -> Option<Leg> {
     }
 }
 
-/// Provider by name, case-insensitive (Node `parseProviderRoute` `handler.ts:5654`, without
-/// the `openai`/`anthropic` type routes).
+/// Provider by name, case-insensitive (names only; there are no `openai`/`anthropic` type
+/// routes).
 fn route_by(s: &Settings, sel: &str) -> Option<Arc<Provider>> {
     let sel = sel.trim();
     s.providers
@@ -77,7 +77,7 @@ fn route_by(s: &Settings, sel: &str) -> Option<Arc<Provider>> {
         .cloned()
 }
 
-/// Node `parseModelReference`: `(provider prefix, model)`; a prefix naming no provider leaves
+/// Split a model reference into `(provider prefix, model)`; a prefix naming no provider leaves
 /// the whole string as a bare model.
 fn model_ref(s: &Settings, raw: &str) -> (Option<Arc<Provider>>, String) {
     if let Some((hint, model)) = raw
@@ -159,8 +159,8 @@ pub fn resolve(s: &Settings, ingress: Ingress, requested: &str) -> Resolved {
     }
 }
 
-/// Node `buildFallbackErrorPayload` (`handler.ts:6261`); `undefined` fields are omitted as
-/// `JSON.stringify` does.
+/// The `All target providers failed.` fallback payload; absent fields are omitted, never
+/// serialized as `null`.
 pub fn envelope(targets: &[Target], attempts: &[Attempt]) -> (u16, Value) {
     let status = attempts
         .last()

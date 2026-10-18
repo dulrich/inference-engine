@@ -1,4 +1,4 @@
-//! WP-3 local leg: ports of the 0007/0009/0010 vitest cases, the system-merge edge cases, and
+//! Local leg: the 0007/0009/0010 cases, the system-merge edge cases, and
 //! a paused-time keepalive test. Pure delegate tests; no network.
 
 use bytes::Bytes;
@@ -432,8 +432,8 @@ fn count_tokens_gets_merge_and_effort_but_not_the_clamp() {
 
 // ---- keepalive -------------------------------------------------------------------------------
 
-// Real time with a scaled-down interval: tokio's paused clock needs the `test-util` feature,
-// and Cargo.toml is out of this WP's scope. 15 s itself is pinned by the harness case.
+// Real time with a scaled-down interval (tokio `test-util` is a dev-dependency, but this test
+// keeps the real clock). 15 s itself is pinned by the harness case.
 #[tokio::test]
 async fn keepalive_pings_after_silence_repeating_and_passes_bytes_through() {
     let tick = Duration::from_millis(100);

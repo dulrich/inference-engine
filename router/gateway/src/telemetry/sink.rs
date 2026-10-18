@@ -12,7 +12,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// Flush threshold for the pending whole-line buffer, and the per-line cap (0006 `FLUSH_BUFFER_BYTES`).
+/// Flush threshold for the pending whole-line buffer, and the per-line cap (0006).
 pub const LINE_CAP_BYTES: usize = 64 * 1024;
 const DEFAULT_DIR: &str = "/var/log/inference-router";
 const DEFAULT_MAX_BYTES: u64 = 16 * 1024 * 1024;
@@ -142,7 +142,7 @@ impl Sink {
         let _ = self.tx.send(Msg::Line(line));
     }
 
-    /// Block until every line queued before this call has been attempted (tests, shutdown).
+    /// Block until every line queued before this call has been attempted (tests; nothing calls it at shutdown).
     pub fn flush(&self) {
         let (ack, done) = mpsc::channel();
         if self.tx.send(Msg::Flush(ack)).is_ok() {

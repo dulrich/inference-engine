@@ -82,7 +82,7 @@ async fn gateway(up: &Stub, extra_env: &[(&str, &str)]) -> String {
         {"name": "claude-local", "type": "openai_chat_completions", "localLeg": "native-messages",
          "apikey": "local-dummy", "baseurl": format!("{base}/local/v1"), "models": ["qwen", "shared"],
          "effortKwargs": {"qwen": {"low": {"reasoning_effort": "low"}}}, "maxOutputTokens": {"qwen": 32000}},
-        {"name": "anthropic", "type": "anthropic", "baseurl": format!("{base}/anthropic"), "models": ["claude-x", "shared"]},
+        {"name": "anthropic", "type": "anthropic", "credential": "caller-oauth-passthrough", "baseurl": format!("{base}/anthropic"), "models": ["claude-x", "shared"]},
         {"name": "openrouter", "type": "openai_chat_completions", "apiKeyEnv": "OR_KEY", "baseurl": format!("{base}/or/v1"), "models": ["qwen/q"]},
         {"name": "or-anthropic", "type": "anthropic", "apiKeyEnv": "OR_KEY", "baseurl": format!("{base}/or"), "models": ["qwen/q"]},
         {"name": "codex-a", "type": "anthropic", "apiKeyEnv": "SIDE_KEY", "baseurl": format!("{base}/codex-a"), "models": ["gpt-x"]},
@@ -567,7 +567,7 @@ async fn telemetry_finalizes_once_on_success_and_client_disconnect() {
     let up = stub(script).await;
     let raw = json!({"host": "127.0.0.1", "port": 0, "providers": [
         {"name": "codex-a", "type": "anthropic", "apikey": "k", "baseurl": format!("http://{}/codex-a", up.addr), "models": ["gpt-x"]},
-        {"name": "anthropic", "type": "anthropic", "baseurl": format!("http://{}/anthropic", up.addr), "models": ["claude-x"]}]});
+        {"name": "anthropic", "type": "anthropic", "credential": "caller-oauth-passthrough", "baseurl": format!("http://{}/anthropic", up.addr), "models": ["claude-x"]}]});
     let log: Arc<Mutex<Vec<String>>> = Arc::default();
     let settings = config::from_json(&raw, &|_| None).unwrap();
     let state = app::state_with(settings, Arc::new(Recorder(log.clone()))).unwrap();

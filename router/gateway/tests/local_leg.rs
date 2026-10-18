@@ -3,7 +3,7 @@
 
 use bytes::Bytes;
 use futures_util::StreamExt;
-use inference_router::config::{Kind, Provider};
+use inference_router::config::{Credential, EffortKwargs, Kind, MaxOutputTokens, Provider};
 use inference_router::local_leg::{
     apply_effort_kwargs, apply_max_tokens_clamp, derive_effort_level, keepalive,
     merge_system_messages, transform_body, wrap_stream, LocalLegContext, KEEPALIVE_INTERVAL,
@@ -17,27 +17,31 @@ use std::time::Duration;
 
 const M: &str = "qwen38-27b-iq3s";
 
-fn four_rows() -> Value {
-    json!({ M: {
+fn typed(v: Value) -> EffortKwargs {
+    serde_json::from_value(v).unwrap()
+}
+
+fn four_rows() -> EffortKwargs {
+    typed(json!({ M: {
         "low": {"reasoning_effort": "low"},
         "medium": {"reasoning_effort": "medium"},
         "high": {"reasoning_effort": "high"},
         "disabled": {"enable_thinking": false}
-    }})
+    }}))
 }
 
-fn six_rows() -> Value {
-    json!({ M: {
+fn six_rows() -> EffortKwargs {
+    typed(json!({ M: {
         "low": {"reasoning_effort": "low"},
         "medium": {"reasoning_effort": "low"},
         "high": {"reasoning_effort": "medium"},
         "xhigh": {"reasoning_effort": "xhigh"},
         "max": {"reasoning_effort": "xhigh"},
         "disabled": {"enable_thinking": false}
-    }})
+    }}))
 }
 
-fn effort(map: &Value, body: Value) -> Value {
+fn effort(map: &EffortKwargs, body: Value) -> Value {
     let mut b = body;
     apply_effort_kwargs(&mut b, map, M);
     b
@@ -45,7 +49,11 @@ fn effort(map: &Value, body: Value) -> Value {
 
 fn clamp(body: Value, cap: Value) -> Value {
     let mut b = body;
-    apply_max_tokens_clamp(&mut b, &json!({ M: cap }), M);
+    apply_max_tokens_clamp(
+        &mut b,
+        &MaxOutputTokens::from([(M.into(), cap.as_u64().unwrap())]),
+        M,
+    );
     b
 }
 
@@ -54,12 +62,13 @@ fn ctx(route: Route, streaming: bool) -> LocalLegContext {
         provider: Arc::new(Provider {
             name: "claude-local".into(),
             kind: Kind::OpenAiChat,
+            credential: Credential::ProviderKey,
             apikey: None,
             baseurl: None,
             models: vec![M.into()],
             native_messages: true,
             effort_kwargs: six_rows(),
-            max_output_tokens: json!({ M: 32000 }),
+            max_output_tokens: MaxOutputTokens::from([(M.into(), 32000)]),
         }),
         model: M.into(),
         route,
@@ -160,17 +169,17 @@ fn leaves_the_rest_of_the_body_including_the_model_id_untouched() {
 #[test]
 fn is_a_no_op_without_a_map_for_an_unmapped_model_and_for_an_omitted_level() {
     let b = eff("low");
-    assert_eq!(effort(&Value::Null, b.clone()), b);
+    assert_eq!(effort(&EffortKwargs::new(), b.clone()), b);
     let mut c = b.clone();
     apply_effort_kwargs(&mut c, &four_rows(), "other-model");
     assert_eq!(c, b);
-    let partial = json!({ M: {"high": {"reasoning_effort": "high"}}});
+    let partial = typed(json!({ M: {"high": {"reasoning_effort": "high"}}}));
     assert_eq!(effort(&partial, b.clone()), b);
 }
 
 #[test]
 fn lets_keys_already_on_the_body_win_deeply() {
-    let m = json!({ M: {"low": {"reasoning_effort": "low", "nested": {"a": 1, "b": 2}}}});
+    let m = typed(json!({ M: {"low": {"reasoning_effort": "low", "nested": {"a": 1, "b": 2}}}}));
     let b = json!({"output_config": {"effort": "low"}, "chat_template_kwargs": {"reasoning_effort": "medium", "nested": {"b": 9}}});
     assert_eq!(
         effort(&m, b)["chat_template_kwargs"],
@@ -180,7 +189,9 @@ fn lets_keys_already_on_the_body_win_deeply() {
 
 #[test]
 fn uses_the_exact_xhigh_and_max_rows_when_the_model_declares_them() {
-    let m = json!({ M: {"high": {"reasoning_effort": "high"}, "xhigh": {"reasoning_effort": "xhigh"}, "max": {"reasoning_effort": "max"}}});
+    let m = typed(
+        json!({ M: {"high": {"reasoning_effort": "high"}, "xhigh": {"reasoning_effort": "xhigh"}, "max": {"reasoning_effort": "max"}}}),
+    );
     assert_eq!(
         effort(&m, eff("xhigh"))["chat_template_kwargs"]["reasoning_effort"],
         "xhigh"
@@ -206,7 +217,7 @@ fn falls_back_to_the_high_row_for_xhigh_max_on_a_map_that_declares_neither() {
 
 #[test]
 fn never_falls_back_for_a_level_that_is_not_xhigh_max() {
-    let m = json!({ M: {"high": {"reasoning_effort": "high"}}});
+    let m = typed(json!({ M: {"high": {"reasoning_effort": "high"}}}));
     for l in ["low", "medium"] {
         assert!(effort(&m, eff(l)).get("chat_template_kwargs").is_none());
     }
@@ -217,7 +228,7 @@ fn never_falls_back_for_a_level_that_is_not_xhigh_max() {
 
 #[test]
 fn is_still_a_passthrough_for_xhigh_max_when_the_map_declares_no_high_row_either() {
-    let m = json!({ M: {"low": {"reasoning_effort": "low"}}});
+    let m = typed(json!({ M: {"low": {"reasoning_effort": "low"}}}));
     assert_eq!(effort(&m, eff("max")), eff("max"));
 }
 
@@ -300,9 +311,9 @@ fn clamp_is_idempotent_and_leaves_other_keys_untouched() {
 fn clamp_is_a_no_op_without_a_map_or_for_an_omitted_model() {
     let b = json!({"max_tokens": 64000});
     let mut c = b.clone();
-    apply_max_tokens_clamp(&mut c, &Value::Null, M);
+    apply_max_tokens_clamp(&mut c, &MaxOutputTokens::new(), M);
     assert_eq!(c, b);
-    apply_max_tokens_clamp(&mut c, &json!({"other": 10}), M);
+    apply_max_tokens_clamp(&mut c, &MaxOutputTokens::from([("other".into(), 10)]), M);
     assert_eq!(c, b);
 }
 

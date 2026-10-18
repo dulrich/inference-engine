@@ -3,6 +3,7 @@
 pub mod app;
 pub mod auth;
 pub mod config;
+pub mod env;
 pub mod healthcheck;
 pub mod local_leg;
 pub mod relay;

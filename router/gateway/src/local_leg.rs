@@ -4,7 +4,7 @@
 //! Anthropic-Messages ingress: `/v1/messages` and `/v1/messages/count_tokens`
 //! (`ctx.route` tells them apart). Chat-completions ingress to the same provider never calls it.
 
-use crate::config::Provider;
+use crate::config::{EffortKwargs, MaxOutputTokens, Provider};
 use crate::relay::{ByteStream, Route};
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -15,7 +15,7 @@ use std::time::Duration;
 /// Everything the leg may read about the request. Owned, so stream layers can keep it.
 #[derive(Clone, Debug)]
 pub struct LocalLegContext {
-    /// The resolved provider; `effort_kwargs` / `max_output_tokens` are its raw config values.
+    /// The resolved provider; `effort_kwargs` / `max_output_tokens` are its typed config maps.
     pub provider: Arc<Provider>,
     /// The resolved bare upstream model id (already written into the body's `model`).
     pub model: String,
@@ -200,20 +200,6 @@ pub fn derive_effort_level(body: &Value) -> Option<&'static str> {
     None
 }
 
-fn model_entry<'a>(map: &'a Value, model: &str) -> Option<&'a Value> {
-    let map = map.as_object()?;
-    let key = model.trim();
-    if key.is_empty() {
-        return None;
-    }
-    map.get(key).or_else(|| {
-        let k = key.to_lowercase();
-        map.iter()
-            .find(|(c, _)| c.trim().to_lowercase() == k)
-            .map(|(_, v)| v)
-    })
-}
-
 /// Deep merge with keys already on `existing` winning.
 fn merge_kwargs(configured: &Map<String, Value>, existing: Option<&Value>) -> Value {
     let Some(Value::Object(existing)) = existing else {
@@ -232,21 +218,21 @@ fn merge_kwargs(configured: &Map<String, Value>, existing: Option<&Value>) -> Va
 
 /// Merges the model's row for the derived level into `chat_template_kwargs`: the exact row,
 /// else (`xhigh`/`max` only) the `high` row, else a no-op. Never emits an unmapped level.
-pub fn apply_effort_kwargs(body: &mut Value, effort_kwargs: &Value, model: &str) {
-    let Some(levels) = model_entry(effort_kwargs, model).filter(|v| v.is_object()) else {
+pub fn apply_effort_kwargs(body: &mut Value, effort_kwargs: &EffortKwargs, model: &str) {
+    let Some(levels) = effort_kwargs.get(model) else {
         return;
     };
     let Some(level) = derive_effort_level(body) else {
         return;
     };
-    let row = levels.get(level).filter(|r| r.is_object()).or_else(|| {
+    let row = levels.get(level).or_else(|| {
         if matches!(level, "xhigh" | "max") {
-            levels.get("high").filter(|r| r.is_object())
+            levels.get("high")
         } else {
             None
         }
     });
-    let Some(Value::Object(row)) = row else {
+    let Some(row) = row else {
         return;
     };
     let merged = merge_kwargs(row, body.get("chat_template_kwargs"));
@@ -255,19 +241,17 @@ pub fn apply_effort_kwargs(body: &mut Value, effort_kwargs: &Value, model: &str)
 
 // ---- max-tokens clamp (0010) ------------------------------------------------------------
 
-/// Downward only; absent/null → the cap; present but not a positive finite number → untouched.
-pub fn apply_max_tokens_clamp(body: &mut Value, max_output_tokens: &Value, model: &str) {
-    let Some(cap_v) = model_entry(max_output_tokens, model).cloned() else {
-        return;
-    };
-    let Some(cap) = cap_v.as_f64().filter(|c| c.is_finite() && *c > 0.0) else {
+/// Downward only; absent/null → the cap; present but not a finite number → untouched. The cap
+/// map is validated positive at load.
+pub fn apply_max_tokens_clamp(body: &mut Value, max_output_tokens: &MaxOutputTokens, model: &str) {
+    let Some(&cap) = max_output_tokens.get(model) else {
         return;
     };
     let clamp = match body.get("max_tokens") {
         None | Some(Value::Null) => true,
-        Some(v) => v.as_f64().is_some_and(|n| n.is_finite() && n > cap),
+        Some(v) => v.as_f64().is_some_and(|n| n.is_finite() && n > cap as f64),
     };
     if clamp {
-        body["max_tokens"] = cap_v;
+        body["max_tokens"] = Value::from(cap);
     }
 }

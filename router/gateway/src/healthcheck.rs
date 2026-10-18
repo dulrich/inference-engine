@@ -47,8 +47,8 @@ pub async fn check(
 }
 
 pub async fn run(env: Env<'_>) -> Result<(), String> {
-    let port = env("PORT")
-        .and_then(|p| p.trim().parse::<u16>().ok())
+    // Same strict `PORT` parse as the server: an invalid value fails the check loudly.
+    let port = crate::env::integer::<u16>(env, "PORT")?
         .or_else(|| config::load(env).ok().map(|s| s.port))
         .unwrap_or(3000);
     let sidecar = env(SIDECAR_URL_ENV)

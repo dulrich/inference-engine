@@ -11,7 +11,7 @@
 use super::Route;
 use crate::app::AppState;
 use crate::auth;
-use crate::config::Provider;
+use crate::config::{Credential, Provider};
 use crate::local_leg::{self, LocalLegContext};
 use crate::routing::{Attempt, Candidate, Leg};
 use crate::telemetry::OutcomeKind;
@@ -192,12 +192,25 @@ pub(crate) fn upstream_headers(
             };
         h.insert("anthropic-version", version);
         copy(&mut h, "anthropic-beta");
-        if route == Route::Messages || p.apikey.is_none() {
+        if route == Route::Messages || p.credential == Credential::CallerOauthPassthrough {
             copy(&mut h, "user-agent");
         }
     }
-    match (&p.apikey, c.leg) {
-        (Some(key), leg) => {
+    match (&p.apikey, p.credential) {
+        (None, Credential::CallerOauthPassthrough) if c.leg == Leg::Anthropic => {
+            if let Some(key) = fwd(inbound, "x-api-key") {
+                h.insert("x-api-key", key.clone());
+                h.insert("authorization", bearer_of(key.as_bytes()));
+            } else if let Some(token) = hdr(inbound, "authorization").and_then(auth::bearer) {
+                // 0001: an OAuth passthrough bearer is sent as `authorization` alone.
+                h.insert("authorization", bearer_of(token.as_bytes()));
+            } else {
+                // Pin 9: refuse clearly with 401, no upstream call.
+                return Err(attempt(p, NO_CALLER_CRED_STAGE, 401, NO_CALLER_CRED.into()));
+            }
+        }
+        (Some(key), Credential::ProviderKey) => {
+            let leg = c.leg;
             h.insert(
                 "authorization",
                 config_value(p, "credential", &format!("Bearer {key}"))?,
@@ -206,19 +219,8 @@ pub(crate) fn upstream_headers(
                 h.insert("x-api-key", config_value(p, "credential", key)?);
             }
         }
-        (None, Leg::Anthropic) if p.name == "anthropic" => {
-            if let Some(key) = fwd(inbound, "x-api-key") {
-                h.insert("x-api-key", key.clone());
-                h.insert("authorization", bearer_of(key.as_bytes()));
-            } else if let Some(token) = hdr(inbound, "authorization").and_then(auth::bearer) {
-                // 0001: an OAuth passthrough bearer is sent as `authorization` alone.
-                h.insert("authorization", bearer_of(token.as_bytes()));
-            } else {
-                // Pin 9: refuse clearly with 401, no upstream call (Node's 400 is not kept).
-                return Err(attempt(p, NO_CALLER_CRED_STAGE, 401, NO_CALLER_CRED.into()));
-            }
-        }
-        (None, _) => return Err(no_credential(p)),
+        // Unkeyed provider-key legs (and, unreachably, a keyed passthrough: refused at load).
+        _ => return Err(no_credential(p)),
     }
     Ok(h)
 }

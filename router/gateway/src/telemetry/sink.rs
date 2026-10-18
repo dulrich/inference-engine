@@ -2,7 +2,7 @@
 //! size rotation to `router-YYYY-MM-DD.N.jsonl`, `keepFiles` retention, and fail-open (a sink
 //! error disables the sink with one warning; it never fails or delays a request).
 
-use crate::config::Env;
+use crate::env::{self, Env};
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -31,35 +31,20 @@ pub fn system_clock() -> Clock {
     Arc::new(SystemTime::now)
 }
 
-fn env_flag(v: Option<String>, fallback: bool) -> bool {
-    match v.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
-        Some("1" | "true" | "yes" | "on") => true,
-        Some("0" | "false" | "no" | "off") => false,
-        _ => fallback,
-    }
-}
-
-fn env_int(v: Option<String>, fallback: u64) -> u64 {
-    v.and_then(|s| s.trim().parse::<i64>().ok())
-        .filter(|n| *n > 0)
-        .map_or(fallback, |n| n as u64)
-}
-
-/// `ROUTER_TELEMETRY_{ENABLED,DIR,MAX_BYTES,KEEP_FILES}` with the 0006 defaults.
+/// `ROUTER_TELEMETRY_{ENABLED,DIR,MAX_BYTES,KEEP_FILES}` with the 0006 defaults. Invalid values
+/// warn once and take the default (the sink is fail-open).
 pub fn options_from_env(env: Env) -> (bool, SinkOptions) {
-    let dir = env("ROUTER_TELEMETRY_DIR")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| DEFAULT_DIR.to_string());
+    let dir = env::string(env, "ROUTER_TELEMETRY_DIR").unwrap_or_else(|| DEFAULT_DIR.to_string());
     (
-        env_flag(env("ROUTER_TELEMETRY_ENABLED"), true),
+        env::flag_or_warn(env, "ROUTER_TELEMETRY_ENABLED", true),
         SinkOptions {
             dir: PathBuf::from(dir),
-            max_bytes: env_int(env("ROUTER_TELEMETRY_MAX_BYTES"), DEFAULT_MAX_BYTES),
-            keep_files: env_int(
-                env("ROUTER_TELEMETRY_KEEP_FILES"),
-                DEFAULT_KEEP_FILES as u64,
-            ) as usize,
+            max_bytes: env::positive_or_warn(env, "ROUTER_TELEMETRY_MAX_BYTES", DEFAULT_MAX_BYTES),
+            keep_files: env::positive_or_warn(
+                env,
+                "ROUTER_TELEMETRY_KEEP_FILES",
+                DEFAULT_KEEP_FILES,
+            ),
         },
     )
 }

@@ -255,7 +255,7 @@ export const cases = [
       assert.equal(JSON.parse(r.text).content[0].text, 'from-b');
       assert.equal((await ctx.upstream()).length, 2);
     } },
-  { id: 'fallthrough-codex-bare-connect-error', tags: ['parity'],
+  { id: 'fallthrough-codex-bare-connect-error', tags: ['baseline'],
     script: { 'codex-a': { destroy: true }, 'codex-b': OK('gpt-6-luna', 'from-b') },
     async run(ctx) {
       const r = await ctx.req('/v1/messages', { headers: CODEX_BOTH, body: MSG('gpt-6-luna') });
@@ -264,6 +264,16 @@ export const cases = [
       const log = await ctx.upstream();
       // upstream/client.ts: a thrown fetch is retried once on the same target (2 attempts), then falls through.
       assert.deepEqual(log.map((x) => x.provider), ['codex-a', 'codex-a', 'codex-b']);
+    } },
+  { id: 'fallthrough-codex-reset-after-write-not-retried', tags: ['changed'],
+    script: { 'codex-a': { destroy: true }, 'codex-b': OK('gpt-6-luna', 'from-b') },
+    async run(ctx) {
+      const r = await ctx.req('/v1/messages', { headers: CODEX_BOTH, body: MSG('gpt-6-luna') });
+      assert.equal(r.status, 200, r.text);
+      assert.equal(JSON.parse(r.text).content[0].text, 'from-b');
+      const log = await ctx.upstream();
+      // WP-R2 (S2): the request reached codex-a before the reset, so it is not retried; falls through.
+      assert.deepEqual(log.map((x) => x.provider), ['codex-a', 'codex-b']);
     } },
   { id: 'fallthrough-codex-both-fail-final-relay', tags: ['parity'],
     script: { 'codex-a': { status: 500, body: 'david down' }, 'codex-b': { status: 502, headers: { 'content-type': 'text/plain' }, body: 'b down' } },

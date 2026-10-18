@@ -3,16 +3,16 @@
 
 use crate::app::AppState;
 use crate::auth;
-use crate::config::{Kind, Provider};
+use crate::config::Kind;
 use crate::local_leg::{self, LocalLegContext};
-use crate::routing::{self, Attempt, Candidate, Ingress, Leg, Resolved, Selectors};
+use crate::routing::{self, Attempt, Candidate, Ingress, Leg, Resolved, Selectors, Target};
 use crate::telemetry::{Outcome, OutcomeKind, RequestStart, RequestTelemetry, Resolution};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
-use futures_util::{Stream, StreamExt};
+use futures_util::Stream;
 use serde_json::{json, Value};
 use std::io;
 use std::pin::Pin;
@@ -21,19 +21,14 @@ use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime};
 
+mod upstream;
+
+use upstream::{
+    attempt, hdr, into_upstream, is_streaming, prepare, send, Prepared, NO_CALLER_CRED_STAGE,
+};
+pub use upstream::{UpstreamFailure, UpstreamResponse};
+
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>>;
-
-pub struct UpstreamResponse {
-    pub status: StatusCode,
-    pub headers: HeaderMap,
-    pub body: ByteStream,
-}
-
-#[derive(Clone, Debug)]
-pub struct UpstreamFailure {
-    pub timeout: bool,
-    pub message: String,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Route {
@@ -182,10 +177,6 @@ impl Stream for Tap {
 
 // ---------------------------------------------------------------- helpers
 
-fn is_streaming(body: &Value) -> bool {
-    body.get("stream") == Some(&Value::Bool(true))
-}
-
 fn json_response(status: u16, body: &Value) -> Response {
     let mut r = (
         StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
@@ -203,6 +194,14 @@ fn error_body(message: &str) -> Value {
     json!({"error": {"message": message}})
 }
 
+fn typed_error(message: &str, kind: &str, code: Option<&str>) -> Value {
+    let mut e = json!({"message": message, "type": kind});
+    if let Some(code) = code {
+        e["code"] = json!(code);
+    }
+    json!({ "error": e })
+}
+
 fn refuse(guard: &mut Guard, status: u16, stage: &str, body: &Value) -> Response {
     let msg = body["error"]["message"]
         .as_str()
@@ -212,53 +211,10 @@ fn refuse(guard: &mut Guard, status: u16, stage: &str, body: &Value) -> Response
     json_response(status, body)
 }
 
-fn hdr<'a>(h: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    h.get(name)
-        .and_then(|v| v.to_str().ok())
-        .filter(|v| !v.is_empty())
-}
-
-fn put(h: &mut HeaderMap, name: &'static str, value: &str) {
-    if let Ok(v) = HeaderValue::from_str(value) {
-        h.insert(name, v);
-    }
-}
-
-const HOP_BY_HOP: [&str; 9] = [
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-    "content-length",
-];
-
-fn relay_headers(src: &HeaderMap) -> HeaderMap {
-    let mut out = HeaderMap::new();
-    for (k, v) in src {
-        if !HOP_BY_HOP.contains(&k.as_str()) && k.as_str() != "host" {
-            out.append(k.clone(), v.clone());
-        }
-    }
-    out
-}
-
-fn io_err(e: reqwest::Error) -> io::Error {
-    let kind = if e.is_timeout() {
-        io::ErrorKind::TimedOut
-    } else {
-        io::ErrorKind::Other
-    };
-    io::Error::new(kind, e.to_string())
-}
-
-fn failure(e: reqwest::Error) -> UpstreamFailure {
-    UpstreamFailure {
-        timeout: e.is_timeout(),
-        message: format!("Failed to reach upstream provider: {e}"),
+fn selectors(h: &HeaderMap) -> Selectors<'_> {
+    Selectors {
+        providers: hdr(h, "x-target-providers"),
+        provider: hdr(h, "x-target-provider"),
     }
 }
 
@@ -270,181 +226,11 @@ fn details(raw: &[u8]) -> Value {
     serde_json::from_slice(raw).unwrap_or_else(|_| json!({"raw": String::from_utf8_lossy(raw)}))
 }
 
-pub(crate) fn upstream_url(c: &Candidate, route: Route) -> Option<String> {
-    let base = c.provider.baseurl.as_deref()?.trim_end_matches('/');
-    let v1 = if base.ends_with("/v1") {
-        base.to_string()
-    } else {
-        format!("{base}/v1")
-    };
-    Some(match (c.leg, route) {
-        (Leg::OpenAiChat, _) => format!("{base}/chat/completions"),
-        (_, Route::CountTokens) => format!("{v1}/messages/count_tokens"),
-        (Leg::LocalMessages, _) => format!("{base}/messages"),
-        (Leg::Anthropic, _) => format!("{base}/v1/messages"),
-    })
-}
-
-fn attempt(p: &Arc<Provider>, stage: &'static str, status: u16, message: String) -> Attempt {
-    Attempt {
-        provider: p.clone(),
-        stage,
-        message,
-        status: Some(status),
-        details: None,
-    }
-}
-
-/// Upstream header set, built from scratch (Node `buildAnthropicHeaders` `common.ts:46`,
-/// `buildOpenAIHeaders` `:12`, `applyProviderCredentials` `handler.ts:7879`, 0001).
-#[allow(clippy::result_large_err)] // internal, cold path; Attempt mirrors Node 1:1
-pub(crate) fn upstream_headers(
-    st: &AppState,
-    c: &Candidate,
-    route: Route,
-    inbound: &HeaderMap,
-) -> Result<HeaderMap, Attempt> {
-    let p = &c.provider;
-    let mut h = HeaderMap::new();
-    put(&mut h, "content-type", "application/json");
-    if c.leg == Leg::OpenAiChat {
-        for name in ["openai-organization", "openai-project"] {
-            if let Some(v) = hdr(inbound, name) {
-                put(&mut h, name, v);
-            }
-        }
-    } else {
-        let version = hdr(inbound, "anthropic-version").or(hdr(inbound, "x-anthropic-version"));
-        put(
-            &mut h,
-            "anthropic-version",
-            version.unwrap_or(&st.settings.anthropic_version),
-        );
-        if let Some(beta) = hdr(inbound, "anthropic-beta") {
-            put(&mut h, "anthropic-beta", beta);
-        }
-        if route == Route::Messages || p.apikey.is_none() {
-            if let Some(ua) = hdr(inbound, "user-agent") {
-                put(&mut h, "user-agent", ua);
-            }
-        }
-    }
-    match (&p.apikey, c.leg) {
-        (Some(key), Leg::Anthropic) => {
-            put(&mut h, "x-api-key", key);
-            put(&mut h, "authorization", &format!("Bearer {key}"));
-        }
-        (Some(key), _) => put(&mut h, "authorization", &format!("Bearer {key}")),
-        (None, Leg::Anthropic) if p.name == "anthropic" => {
-            if let Some(key) = hdr(inbound, "x-api-key") {
-                put(&mut h, "x-api-key", key);
-                put(&mut h, "authorization", &format!("Bearer {key}"));
-            } else if let Some(token) = hdr(inbound, "authorization").and_then(auth::bearer) {
-                // 0001: an OAuth passthrough bearer is sent as `authorization` alone.
-                put(&mut h, "authorization", &format!("Bearer {token}"));
-            } else {
-                // Pin 9: refuse clearly with 401, no upstream call (Node's 400 is not kept).
-                return Err(attempt(p, NO_CALLER_CRED_STAGE, 401, NO_CALLER_CRED.into()));
-            }
-        }
-        (None, _) => {
-            return Err(attempt(
-                p,
-                "provider_config",
-                503,
-                format!("Provider {} has no configured credential; the caller's credential is never forwarded.", p.name),
-            ))
-        }
-    }
-    Ok(h)
-}
-
-const NO_CALLER_CRED_STAGE: &str = "caller_credential";
-const NO_CALLER_CRED: &str = "No caller credential for the anthropic provider.";
-
-fn local_ctx(c: &Candidate, route: Route, body: &Value) -> LocalLegContext {
-    LocalLegContext {
-        provider: c.provider.clone(),
-        model: c.model.clone(),
-        route,
-        streaming: is_streaming(body),
-    }
-}
-
-struct Prepared {
-    url: String,
-    headers: HeaderMap,
-    body: Bytes,
-    local: Option<LocalLegContext>,
-}
-
-#[allow(clippy::result_large_err)]
-fn prepare(
-    st: &AppState,
-    c: &Candidate,
-    route: Route,
-    inbound: &HeaderMap,
-    body: &Value,
-) -> Result<Prepared, Attempt> {
-    let url = upstream_url(c, route).ok_or_else(|| {
-        attempt(
-            &c.provider,
-            "provider_config",
-            503,
-            format!("Provider {} has no baseurl.", c.provider.name),
-        )
-    })?;
-    let headers = upstream_headers(st, c, route, inbound)?;
-    let mut out = body.clone();
-    out["model"] = Value::String(c.model.clone());
-    let local = (c.leg == Leg::LocalMessages).then(|| local_ctx(c, route, body));
-    if let Some(ctx) = &local {
-        out = local_leg::transform_body(out, ctx);
-    }
-    Ok(Prepared {
-        url,
-        headers,
-        body: Bytes::from(out.to_string()),
-        local,
-    })
-}
-
-async fn send_once(st: &AppState, p: &Prepared) -> Result<reqwest::Response, reqwest::Error> {
-    st.client
-        .post(&p.url)
-        .headers(p.headers.clone())
-        .body(p.body.clone())
-        .send()
-        .await
-}
-
-/// One retry on the same target after 150 ms when the request fails before any response
-/// arrives (refused, reset, socket destroyed) but not on a timeout (Node
-/// `upstream/client.ts:114-115`, catch at `:241`). No status code is ever retried.
-async fn send(st: &AppState, p: &Prepared) -> Result<reqwest::Response, UpstreamFailure> {
-    match send_once(st, p).await {
-        Err(e) if !e.is_timeout() => {
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            send_once(st, p).await.map_err(failure)
-        }
-        r => r.map_err(failure),
-    }
-}
-
-fn selectors(h: &HeaderMap) -> Selectors<'_> {
-    Selectors {
-        providers: hdr(h, "x-target-providers"),
-        provider: hdr(h, "x-target-provider"),
-    }
-}
-
-fn into_upstream(resp: reqwest::Response) -> UpstreamResponse {
-    let status = resp.status();
-    let headers = relay_headers(resp.headers());
-    UpstreamResponse {
-        status,
-        headers,
-        body: Box::pin(resp.bytes_stream().map(|r| r.map_err(io_err))),
+/// Gateway-set informational response header. A configured provider name that is not a valid
+/// header value only omits this header; the relayed response is otherwise unaffected.
+fn tag(r: &mut Response, name: &'static str, value: &str) {
+    if let Ok(v) = HeaderValue::from_str(value) {
+        r.headers_mut().insert(name, v);
     }
 }
 
@@ -470,38 +256,78 @@ fn relay_stream(
     *r.status_mut() = up.status;
     *r.headers_mut() = up.headers;
     if let Some(c) = extra {
-        put(
-            r.headers_mut(),
-            "x-gateway-target-provider",
-            c.provider.kind.token(),
-        );
-        put(
-            r.headers_mut(),
-            "x-gateway-target-provider-name",
-            &c.provider.name,
-        );
+        tag(&mut r, "x-gateway-target-provider", c.provider.kind.token());
+        tag(&mut r, "x-gateway-target-provider-name", &c.provider.name);
     }
     r
 }
 
-// ---------------------------------------------------------------- handlers
-
-fn parse_object(raw: &Bytes) -> Option<Value> {
-    serde_json::from_slice::<Value>(raw)
-        .ok()
-        .filter(Value::is_object)
+/// The shared send step: record the resolution, send (with the connect-only retry), and on
+/// failure classify it once into (telemetry kind, stage, message).
+async fn dispatch(
+    st: &AppState,
+    guard: &mut Guard,
+    c: &Candidate,
+    attempt_no: usize,
+    prepared: &Prepared,
+) -> Result<reqwest::Response, (OutcomeKind, &'static str, String)> {
+    guard.resolved(c, &prepared.url, attempt_no);
+    send(st, prepared).await.map_err(|f| {
+        let (kind, stage) = f.classify();
+        (kind, stage, f.message)
+    })
 }
 
-macro_rules! preamble {
-    ($st:expr, $headers:expr, $raw:expr) => {{
-        if let Err(m) = auth::check(&$st.settings.auth, &$headers) {
-            return json_response(401, &error_body(&m));
+/// Single-target relay (count_tokens, systemone): prepare, send, relay status + body verbatim.
+async fn relay_one(
+    st: &AppState,
+    mut guard: Guard,
+    c: &Candidate,
+    route: Route,
+    inbound: &HeaderMap,
+    body: &Value,
+) -> Response {
+    let prepared = match prepare(st, c, route, inbound, body) {
+        Ok(p) => p,
+        Err(a) => {
+            let status = a.status.unwrap_or(400);
+            return refuse(&mut guard, status, a.stage, &error_body(&a.message));
         }
-        match parse_object(&$raw) {
-            Some(v) => v,
-            None => return json_response(400, &error_body("Request body must be a JSON object.")),
+    };
+    match dispatch(st, &mut guard, c, 0, &prepared).await {
+        Ok(resp) => relay_stream(into_upstream(resp), guard, prepared.local.as_ref(), None),
+        Err((kind, stage, message)) => {
+            guard.finish(kind, 502, Some((stage.into(), message.clone())));
+            json_response(502, &typed_error(&message, "api_error", None))
         }
-    }};
+    }
+}
+
+// ---------------------------------------------------------------- handlers
+
+/// Client auth, then the body as a JSON object; the `Err` is the finished 401/400 response.
+#[allow(clippy::result_large_err)]
+fn preamble(
+    st: &AppState,
+    headers: &HeaderMap,
+    raw: &Bytes,
+    route: Route,
+) -> Result<Value, Response> {
+    if let Err(m) = auth::check(&st.settings.auth, headers) {
+        return Err(json_response(401, &error_body(&m)));
+    }
+    let parsed = serde_json::from_slice::<Value>(raw)
+        .ok()
+        .filter(Value::is_object);
+    parsed.ok_or_else(|| {
+        let msg = "Request body must be a JSON object.";
+        let body = if route == Route::Systemone {
+            typed_error(msg, "invalid_request_error", None)
+        } else {
+            error_body(msg)
+        };
+        json_response(400, &body)
+    })
 }
 
 fn mismatch_body(model: &str, provider: &str, ingress: Ingress) -> Value {
@@ -510,21 +336,50 @@ fn mismatch_body(model: &str, provider: &str, ingress: Ingress) -> Value {
     } else {
         "Anthropic Messages"
     };
-    json!({"error": {
-        "message": format!("Model \"{model}\" resolves to provider {provider}, which does not speak the {proto} protocol of this route; the gateway never converts protocols."),
-        "type": "invalid_request_error",
-        "code": "protocol_mismatch",
-    }})
+    let msg = format!("Model \"{model}\" resolves to provider {provider}, which does not speak the {proto} protocol of this route; the gateway never converts protocols.");
+    typed_error(&msg, "invalid_request_error", Some("protocol_mismatch"))
+}
+
+fn requested_model(body: &Value) -> String {
+    body.get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Ordered target resolution shared by the Messages-family and chat routes.
+#[allow(clippy::result_large_err)]
+fn resolve(
+    st: &AppState,
+    guard: &mut Guard,
+    ingress: Ingress,
+    requested: &str,
+    inbound: &HeaderMap,
+) -> Result<Vec<Target>, Response> {
+    match routing::resolve(&st.settings, ingress, requested, selectors(inbound)) {
+        Resolved::Mismatch { model, provider } => Err(refuse(
+            guard,
+            400,
+            "protocol",
+            &mismatch_body(&model, &provider, ingress),
+        )),
+        Resolved::BadRequest(msg) => Err(refuse(guard, 400, "target_selection", &error_body(&msg))),
+        Resolved::Targets(t) => Ok(t),
+    }
 }
 
 pub async fn messages(State(st): St, headers: HeaderMap, raw: Bytes) -> Response {
-    let body = preamble!(st, headers, raw);
-    fallthrough(&st, Route::Messages, Ingress::Messages, &headers, body).await
+    match preamble(&st, &headers, &raw, Route::Messages) {
+        Ok(body) => fallthrough(&st, Route::Messages, Ingress::Messages, &headers, body).await,
+        Err(r) => r,
+    }
 }
 
 pub async fn chat_completions(State(st): St, headers: HeaderMap, raw: Bytes) -> Response {
-    let body = preamble!(st, headers, raw);
-    fallthrough(&st, Route::ChatCompletions, Ingress::Chat, &headers, body).await
+    match preamble(&st, &headers, &raw, Route::ChatCompletions) {
+        Ok(body) => fallthrough(&st, Route::ChatCompletions, Ingress::Chat, &headers, body).await,
+        Err(r) => r,
+    }
 }
 
 async fn fallthrough(
@@ -535,59 +390,30 @@ async fn fallthrough(
     body: Value,
 ) -> Response {
     let mut guard = start(st, route, &body);
-    let requested = body
-        .get("model")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let targets = match routing::resolve(&st.settings, ingress, &requested, selectors(inbound)) {
-        Resolved::Mismatch { model, provider } => {
-            return refuse(
-                &mut guard,
-                400,
-                "protocol",
-                &mismatch_body(&model, &provider, ingress),
-            )
-        }
-        Resolved::BadRequest(msg) => {
-            return refuse(&mut guard, 400, "target_selection", &error_body(&msg))
-        }
-        Resolved::Targets(t) => t,
+    let targets = match resolve(st, &mut guard, ingress, &requested_model(&body), inbound) {
+        Ok(t) => t,
+        Err(r) => return r,
     };
     let mut attempts: Vec<Attempt> = Vec::new();
     let mut upstream_called = false;
     for (i, t) in targets.iter().enumerate() {
         let last = i + 1 == targets.len();
-        let c = match &t.plan {
-            Ok(c) => c,
-            Err(a) => {
-                attempts.push(a.clone());
-                continue;
-            }
+        let planned = match &t.plan {
+            Ok(c) => prepare(st, c, route, inbound, &body).map(|p| (c, p)),
+            Err(a) => Err(a.clone()),
         };
-        let prepared = match prepare(st, c, route, inbound, &body) {
-            Ok(p) => p,
+        let (c, prepared) = match planned {
+            Ok(cp) => cp,
             Err(a) => {
                 attempts.push(a);
                 continue;
             }
         };
-        guard.resolved(c, &prepared.url, i);
         upstream_called = true;
-        let resp = match send(st, &prepared).await {
+        let resp = match dispatch(st, &mut guard, c, i, &prepared).await {
             Ok(r) => r,
-            Err(f) => {
-                let kind = f.timeout;
-                attempts.push(attempt(
-                    &c.provider,
-                    if kind {
-                        "upstream_timeout"
-                    } else {
-                        "upstream_connect"
-                    },
-                    502,
-                    f.message,
-                ));
+            Err((_, stage, message)) => {
+                attempts.push(attempt(&c.provider, stage, 502, message));
                 continue;
             }
         };
@@ -596,7 +422,19 @@ async fn fallthrough(
         }
         let status = resp.status();
         let content_type = resp.headers().get("content-type").cloned();
-        let raw = resp.bytes().await.unwrap_or_default();
+        let raw = match resp.bytes().await {
+            Ok(raw) => raw,
+            Err(e) => {
+                let message = format!("Upstream error body could not be read: {e}");
+                attempts.push(attempt(
+                    &c.provider,
+                    "upstream_response",
+                    status.as_u16(),
+                    message,
+                ));
+                continue;
+            }
+        };
         if last && ingress == Ingress::Messages && !raw.is_empty() {
             // 0003: final-attempt upstream error body, byte-verbatim.
             guard.chunk(&raw);
@@ -645,34 +483,18 @@ async fn fallthrough(
 }
 
 pub async fn count_tokens(State(st): St, headers: HeaderMap, raw: Bytes) -> Response {
-    let body = preamble!(st, headers, raw);
+    let body = match preamble(&st, &headers, &raw, Route::CountTokens) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
     let mut guard = start(&st, Route::CountTokens, &body);
-    let requested = body
-        .get("model")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let candidate = match routing::resolve(
-        &st.settings,
-        Ingress::CountTokens,
-        &requested,
-        selectors(&headers),
-    ) {
-        Resolved::Mismatch { model, provider } => {
-            return refuse(
-                &mut guard,
-                400,
-                "protocol",
-                &mismatch_body(&model, &provider, Ingress::CountTokens),
-            )
-        }
-        Resolved::BadRequest(msg) => {
-            return refuse(&mut guard, 400, "target_selection", &error_body(&msg))
-        }
-        Resolved::Targets(t) => t
+    let requested = requested_model(&body);
+    let candidate = match resolve(&st, &mut guard, Ingress::CountTokens, &requested, &headers) {
+        Ok(t) => t
             .into_iter()
             .find_map(|t| t.plan.ok())
             .filter(|c| !c.model.is_empty()),
+        Err(r) => return r,
     };
     let Some(c) = candidate else {
         let shown = if requested.is_empty() {
@@ -680,45 +502,18 @@ pub async fn count_tokens(State(st): St, headers: HeaderMap, raw: Bytes) -> Resp
         } else {
             &requested
         };
-        let b = json!({"error": {"message": format!("Model not found for /v1/messages/count_tokens: {shown}"), "type": "invalid_request_error", "code": "model_not_found"}});
+        let msg = format!("Model not found for /v1/messages/count_tokens: {shown}");
+        let b = typed_error(&msg, "invalid_request_error", Some("model_not_found"));
         return refuse(&mut guard, 404, "model_resolution", &b);
     };
-    let prepared = match prepare(&st, &c, Route::CountTokens, &headers, &body) {
-        Ok(p) => p,
-        Err(a) => {
-            let status = a.status.unwrap_or(400);
-            return refuse(&mut guard, status, a.stage, &error_body(&a.message));
-        }
-    };
-    guard.resolved(&c, &prepared.url, 0);
-    match send(&st, &prepared).await {
-        Ok(resp) => relay_stream(into_upstream(resp), guard, prepared.local.as_ref(), None),
-        Err(f) => {
-            let kind = if f.timeout {
-                OutcomeKind::Timeout
-            } else {
-                OutcomeKind::UpstreamError
-            };
-            guard.finish(
-                kind,
-                502,
-                Some(("upstream_connect".into(), f.message.clone())),
-            );
-            json_response(502, &error_body(&f.message))
-        }
-    }
+    relay_one(&st, guard, &c, Route::CountTokens, &headers, &body).await
 }
 
 /// 0013: strict allowlist, provider-credential-only bearer, verbatim relay.
 pub async fn systemone(State(st): St, headers: HeaderMap, raw: Bytes) -> Response {
-    if let Err(m) = auth::check(&st.settings.auth, &headers) {
-        return json_response(401, &error_body(&m));
-    }
-    let Some(body) = parse_object(&raw) else {
-        return json_response(
-            400,
-            &json!({"error": {"message": "Request body must be a JSON object.", "type": "invalid_request_error"}}),
-        );
+    let body = match preamble(&st, &headers, &raw, Route::Systemone) {
+        Ok(b) => b,
+        Err(r) => return r,
     };
     let mut guard = start(&st, Route::Systemone, &body);
     let requested = body.get("model").and_then(Value::as_str);
@@ -736,47 +531,25 @@ pub async fn systemone(State(st): St, headers: HeaderMap, raw: Bytes) -> Respons
         });
     let Some((p, model)) = target else {
         let shown = requested.filter(|m| !m.is_empty()).unwrap_or("(none)");
-        let b = json!({"error": {"message": format!("Model not found for /v1/systemone: {shown}"), "type": "invalid_request_error", "code": "model_not_found"}});
+        let msg = format!("Model not found for /v1/systemone: {shown}");
+        let b = typed_error(&msg, "invalid_request_error", Some("model_not_found"));
         return refuse(&mut guard, 404, "model_resolution", &b);
     };
-    let (Some(base), Some(key)) = (p.baseurl.as_deref(), p.apikey.as_deref()) else {
-        let b = json!({"error": {"message": format!("Provider {} is not configured with a baseurl and credential.", p.name), "type": "api_error", "code": "provider_not_configured"}});
+    if p.baseurl.is_none() || p.apikey.is_none() {
+        let msg = format!(
+            "Provider {} is not configured with a baseurl and credential.",
+            p.name
+        );
+        let b = typed_error(&msg, "api_error", Some("provider_not_configured"));
         return refuse(&mut guard, 503, "provider_config", &b);
-    };
-    let url = format!("{}/systemone", base.trim_end_matches('/'));
-    let mut h = HeaderMap::new();
-    put(&mut h, "content-type", "application/json");
-    put(&mut h, "authorization", &format!("Bearer {key}"));
-    let mut out = body.clone();
-    out["model"] = Value::String(model.clone());
+    }
+    // The leg is unused: `Route::Systemone` has its own URL and header case in `upstream`.
     let c = Candidate {
-        provider: p.clone(),
+        provider: p,
         model,
         leg: Leg::OpenAiChat,
     };
-    guard.resolved(&c, &url, 0);
-    let prepared = Prepared {
-        url,
-        headers: h,
-        body: Bytes::from(out.to_string()),
-        local: None,
-    };
-    match send(&st, &prepared).await {
-        Ok(resp) => relay_stream(into_upstream(resp), guard, None, None),
-        Err(f) => {
-            let kind = if f.timeout {
-                OutcomeKind::Timeout
-            } else {
-                OutcomeKind::UpstreamError
-            };
-            guard.finish(
-                kind,
-                502,
-                Some(("upstream_connect".into(), f.message.clone())),
-            );
-            json_response(502, &error_body(&f.message))
-        }
-    }
+    relay_one(&st, guard, &c, Route::Systemone, &headers, &body).await
 }
 
 /// Node `routes.ts:69` (`buildGatewayModelListEntries` `:340`, format `:271`).

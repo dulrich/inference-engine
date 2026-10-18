@@ -16,6 +16,7 @@ struct Seen {
     path: String,
     headers: HeaderMap,
     body: Value,
+    raw: Bytes,
 }
 
 type Script = HashMap<&'static str, (u16, &'static str, &'static str)>;
@@ -40,6 +41,7 @@ async fn stub(script: Script) -> Stub {
                 path: path.clone(),
                 headers,
                 body: serde_json::from_slice(&body).unwrap_or(Value::Null),
+                raw: body,
             });
             let (status, ct, text) = script.get(uri.path()).copied().unwrap_or((
                 200,
@@ -665,4 +667,119 @@ async fn connect_error_is_retried_once_after_150ms() {
     assert_eq!(r.status().as_u16(), 200);
     assert_eq!(r.text().await.unwrap(), r#"{"ok":true}"#);
     assert!(t0.elapsed() >= Duration::from_millis(150));
+}
+
+#[tokio::test]
+async fn systemone_forwards_no_caller_header() {
+    let up = stub(Script::new()).await;
+    let gw = gateway(&up, &[]).await;
+    let inbound = [
+        ("openai-organization", "org-1"),
+        ("openai-project", "proj-1"),
+        ("anthropic-beta", "b1"),
+        ("user-agent", "caller-ua"),
+        ("x-api-key", "caller-key"),
+    ];
+    let body = json!({"model": "openrouter-decide/typesafe/jev", "state": "s"});
+    let (s, _, _) = post(&gw, "/v1/systemone", &inbound, body).await;
+    assert_eq!(s, 200);
+    let seen = up.seen();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(h(&seen[0], "content-type"), Some("application/json"));
+    assert_eq!(h(&seen[0], "authorization"), Some("Bearer or-secret"));
+    for (name, _) in inbound {
+        assert_eq!(h(&seen[0], name), None, "{name} leaked upstream");
+    }
+    for name in ["anthropic-version", "x-gateway-key"] {
+        assert_eq!(h(&seen[0], name), None, "{name} leaked upstream");
+    }
+}
+
+#[tokio::test]
+async fn relayed_number_spelling_is_kept_and_local_clamp_still_applies() {
+    let up = stub(Script::new()).await;
+    let gw = gateway(&up, &[]).await;
+    let send = |path: &'static str, body: &'static str| {
+        let gw = gw.clone();
+        async move {
+            reqwest::Client::new()
+                .post(format!("{gw}{path}"))
+                .header("x-gateway-key", KEY)
+                .body(body)
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16()
+        }
+    };
+    let raw = r#"{"model":"openrouter/qwen/q","max_tokens":100,"t":0.10,"n":-0,"big":18446744073709551616}"#;
+    assert_eq!(send("/v1/chat/completions", raw).await, 200);
+    let local = r#"{"model":"claude-local/qwen","max_tokens":100000,"t":0.10,"messages":[]}"#;
+    assert_eq!(send("/v1/messages", local).await, 200);
+    let seen = up.seen();
+    assert_eq!(seen.len(), 2);
+    let relayed = std::str::from_utf8(&seen[0].raw).unwrap();
+    for spelled in [
+        r#""model":"qwen/q""#,
+        r#""max_tokens":100"#,
+        r#""t":0.10"#,
+        r#""n":-0"#,
+        r#""big":18446744073709551616"#,
+    ] {
+        assert!(relayed.contains(spelled), "{spelled} not in {relayed}");
+    }
+    assert_eq!(
+        seen[1].body["max_tokens"],
+        json!(32000),
+        "clamp still clamps"
+    );
+    assert!(std::str::from_utf8(&seen[1].raw)
+        .unwrap()
+        .contains(r#""t":0.10"#));
+}
+
+#[tokio::test]
+async fn reset_after_request_written_is_not_retried() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::AsyncReadExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let count = accepted.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            count.fetch_add(1, Ordering::SeqCst);
+            let (mut buf, mut got) = (vec![0u8; 8192], Vec::new());
+            while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                got.extend_from_slice(&buf[..n]);
+            }
+            drop(sock); // the request reached upstream; close without any response
+        }
+    });
+    let raw = json!({"host": "127.0.0.1", "port": 0, "providers": [
+        {"name": "side", "type": "anthropic", "apikey": "k", "baseurl": format!("http://{addr}/cd"), "models": ["gpt-x"]}]});
+    let settings = config::from_json(&raw, &|_| None).unwrap();
+    let state = app::state(settings, &|_| None).unwrap();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
+    let gw = format!("http://{}", rx.await.unwrap());
+    let r = reqwest::Client::new()
+        .post(format!("{gw}/v1/messages"))
+        .body(r#"{"model":"side/gpt-x"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 502);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        accepted.load(Ordering::SeqCst),
+        1,
+        "a written request is never retried"
+    );
 }

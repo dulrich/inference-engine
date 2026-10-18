@@ -5,7 +5,7 @@ Runs one gateway (the Node image or a host binary) against a recording stub upst
 ## Run
 
 ```
-node router/test/diff/run.mjs --target image:fleet-tools-inference-engine-router:latest --impl node
+node router/test/diff/run.mjs --target image:inference-engine-router:node-final --impl node
 node router/test/diff/run.mjs --target bin:router/gateway/target/release/inference-router --impl rust
 ```
 

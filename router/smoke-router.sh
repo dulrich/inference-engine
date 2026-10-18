@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# router/smoke-router.sh — probe an ai-gateway instance (the WP-1 transient build, or the
-# resident :4813 service) by response body, never status code alone (repo quirk: "a healthy
+# router/smoke-router.sh — probe a router gateway instance (the resident :4813 Rust gateway, or a
+# throwaway/shadow instance) by response body, never status code alone (repo quirk: "a healthy
 # service has told you nothing" — llvmpipe-style, HTTP-200-but-wrong-answer failures are the
 # family this guards against).
 #
@@ -49,8 +49,8 @@
 #      answers.wait.choice in {blocked, offer, none} (patch 0013). Default off.
 #  11. POST /v1/messages via openrouter/qwen/qwen3.8-flash is a 4xx protocol-mismatch refusal
 #      (plans/router-rust-gateway.md Decision 2: an OpenAI-protocol provider is never reached
-#      from Anthropic ingress; no upstream call, unbilled). The Node gateway converts and relays
-#      instead, so this check expects the Rust gateway (or-anthropic/* on /v1/messages relays).
+#      from Anthropic ingress; no upstream call, unbilled). Rollback caveat: the Node image
+#      (inference-engine-router:node-final) converts and relays instead, so check 11 fails there.
 #
 # Exits non-zero on any check failure. Requires: curl, jq.
 set -u

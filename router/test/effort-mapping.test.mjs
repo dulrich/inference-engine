@@ -32,8 +32,8 @@
 // Whether the model actually FOLLOWS the ladder (medium thinks longer than low) is the live
 // generation gate conditional/effort-ladder.test.mjs, run per router/AGENTS.md's trigger table.
 //
-// Oracle selection (explicit, never sniffed): ROUTER_IMPL=node|rust, default node until the
-// WP-6 cutover (plans/router-rust-gateway.md, audit E1).
+// Oracle selection (explicit, never sniffed): ROUTER_IMPL=node|rust, default rust since the
+// WP-6 cutover (plans/router-rust-gateway.md, audit E1); node is for the node-final rollback image.
 //   node — the upstream-direct oracle is llama's OpenAI `/v1/chat/completions` `prompt_tokens`,
 //          because the Node gateway converts Anthropic → chat-completions for the local leg.
 //   rust — the upstream-direct oracle is llama's NATIVE `/v1/messages` at max_tokens:1 with the
@@ -45,7 +45,7 @@
 // Auth. The gateway key comes from $GATEWAY_KEY or $ROUTER_ENV_FILE (default
 // <code-root>/fleet-tools/.env) and is never printed. The upstream needs no key.
 //
-// Env: ROUTER_IMPL (node|rust, default node), ROUTER_BASE_URL (default http://127.0.0.1:4813), ROUTER_ENV_FILE, GATEWAY_KEY,
+// Env: ROUTER_IMPL (node|rust, default rust), ROUTER_BASE_URL (default http://127.0.0.1:4813), ROUTER_ENV_FILE, GATEWAY_KEY,
 //      LLAMA_UPSTREAM_URL (default http://127.0.0.1:4811 — the host port of the llama container),
 //      EFFORT_UPSTREAM_MODEL (default: the single model keyed in claude-local's effortKwargs).
 
@@ -55,7 +55,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 const BASE_URL = (process.env.ROUTER_BASE_URL || "http://127.0.0.1:4813").replace(/\/$/, "");
-const ROUTER_IMPL = process.env.ROUTER_IMPL || "node";
+const ROUTER_IMPL = process.env.ROUTER_IMPL || "rust";
 if (!["node", "rust"].includes(ROUTER_IMPL)) throw new Error(`ROUTER_IMPL must be node or rust, got ${ROUTER_IMPL}`);
 const UPSTREAM_URL = (process.env.LLAMA_UPSTREAM_URL || "http://127.0.0.1:4811").replace(/\/$/, "");
 // ROUTER_ENV_FILE, else `fleet-env path router` under the fleet-env cutover, else the legacy file.

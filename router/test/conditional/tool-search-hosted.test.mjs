@@ -5,7 +5,7 @@
 //
 // CONDITIONAL — lives in router/test/conditional/, outside the per-commit
 // `node --test router/test/*.test.mjs` glob. Trigger surface (router/AGENTS.md "Gates" trigger
-// table): router/gateway.config.json providers; any router patch; router/Dockerfile; this file
+// table): router/gateway.config.json providers; any change under router/gateway/**; this file
 // (plus `router/smoke-tool-search.sh` default and `--passthrough`).
 //
 // Credential. The passthrough leg forwards the caller's own OAuth bearer, so its token-gate cell

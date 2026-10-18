@@ -85,3 +85,7 @@ The built engine also has a **raw-trace spool**: `RAW_TRACE_ENABLED` (default of
 5. **Replacing the engine still forfeits `0001`–`0004`, `0006` and `0007`**, none of which upstream has adopted.
 
 Both patches keep the no-op invariant absolute — `0009` by falling back to the `high` row only for the two levels that previously folded onto it, `0010` by clamping downward only and never rewriting an unreadable budget. Per `router/Dockerfile`'s header clause, the next semantic patch after `0010`, or the first nontrivial pin-upgrade rebase, re-triggers this spike.
+
+### Closing entry — 2026-10-18: replaced
+
+**The vendored engine was replaced by the owned Rust gateway** (`router/gateway/`, plan `plans/router-rust-gateway.md`, cut over on 2026-10-18). This ends the replace-vs-integrate series: there is no vendored engine left to re-spike. The skipped fourth spike that `0013` owed is superseded, not owed. The sink this document motivated survives as the Rust `telemetry` module, and its deviations are recorded in `router/AGENTS.md`.

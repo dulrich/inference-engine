@@ -196,12 +196,16 @@ const LEGS = [
     label: "local OpenAI-conversion",
     pick: ids => resolveModel(ids, { preferred: "claude-local/qwen38-27b-iq3s", prefix: "claude-local/" }),
     off: 15394, on: 8238,
+    // Synthetic-body floor on the eager/deferred tools-only ratio (measured 2.28x, 2026-10-19).
+    synthMinRatio: 2.0,
   },
   {
     cell: "codex",
     label: "codex sidecar",
     pick: ids => resolveModel(ids, { preferred: "codex-b/gpt-5.6-luna", prefix: "codex-b/" }),
     off: 14549, on: 7875,
+    // Synthetic-body floor on the eager/deferred tools-only ratio (measured 3.62x, 2026-10-19).
+    synthMinRatio: 3.2,
   },
 ];
 
@@ -295,6 +299,16 @@ export function registerLegTests(leg) {
     }
     assert.ok(offToolsOnly > onToolsOnly, `${leg.label}: the eager tool block (${offToolsOnly}) did not exceed the deferred `
       + `one (${onToolsOnly}); deferral is not reducing the tool block at all.`);
+    // Plain ordering only proves deferral saves *something*. On the synthetic bodies, with the
+    // exact model the floor was measured on, require the measured saving (~10% slack) so a
+    // partial eager expansion of the deferred tools also fails. Legs without a floor (the hosted
+    // leg, unmeasured) keep plain ordering.
+    if (!replayed && exact && leg.synthMinRatio) {
+      const ratio = offToolsOnly / onToolsOnly;
+      assert.ok(ratio >= leg.synthMinRatio, `${leg.label}: the eager/deferred tool-block ratio is ${ratio.toFixed(2)}x `
+        + `(${offToolsOnly}/${onToolsOnly}), below the synthetic-body floor ${leg.synthMinRatio}x — deferral saves less than `
+        + "measured; part of the deferred catalogue is being counted eagerly, or the synthetic bodies changed.");
+    }
   });
 }
 

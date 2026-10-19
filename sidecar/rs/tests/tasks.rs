@@ -1,4 +1,4 @@
-//! E3 (plans/codex-sidecar-js-residue-cleanup.md WP-R2): the live Tokio task count stays
+//! E3: the live Tokio task count stays
 //! flat across a ~2,000-delta SSE turn under the fake app-server — no task per frame.
 
 use codex_sidecar::config::{read_config, Pinned};

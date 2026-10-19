@@ -1,7 +1,7 @@
-//! outbox.mjs — the sidecar's WRITE half of the tracker event seam: rows appended to JSONL
+//! The sidecar's WRITE half of the tracker event seam: rows appended to JSONL
 //! day-files shared with the Claude Code hooks (`fleet-tools/scripts/outbox.mjs` copy).
 //!
-//! Invariants (see the Node file): pinned, byte-identical line format; one day-file per UTC date
+//! Invariants (shared with that writer): pinned, byte-identical line format; one day-file per UTC date
 //! of the row's `ts` under `<dirname(path)>/log/`; dir 0700, files 0600; one append per row; a
 //! row over `LINE_MAX_BYTES` dropped whole; no message content; fail-open; an empty path opens
 //! nothing.
@@ -32,7 +32,7 @@ fn text(v: Option<&Value>) -> Option<&str> {
 }
 
 /// The pinned line, in its byte order (struct field order is the key order; `None` is `null`
-/// except where skipped, as `JSON.stringify` omits `undefined`).
+/// except where skipped, i.e. omitted).
 #[derive(Serialize)]
 struct Line<'a, S: Serialize, K: Serialize, P: Serialize> {
     v: i64,
@@ -64,7 +64,7 @@ pub struct Row<'a, P: Serialize> {
     pub payload: P,
 }
 
-/// `serializeRow(event)`: the pinned line format, trailing newline included, and the `ts`
+/// The pinned line format, trailing newline included, and the `ts`
 /// written. A key the event lacks (`session_id`, `kind`) is omitted.
 fn serialize_value(event: &Value) -> (String, String) {
     let g = |k: &str| event.get(k);
@@ -85,12 +85,12 @@ fn serialize_value(event: &Value) -> (String, String) {
     (ts, line)
 }
 
-/// `serializeRow(event)`: the pinned line format, trailing newline included.
+/// The pinned line format, trailing newline included.
 pub fn serialize_row(event: &Value) -> String {
     serialize_value(event).1
 }
 
-/// `openOutbox(path)`: creates the log dir (0700) if needed.
+/// Opens the outbox; creates the log dir (0700) if needed.
 pub fn open_outbox(path: &str) -> std::io::Result<PathBuf> {
     let dir = log_dir_for(path);
     let existed = dir.is_dir();

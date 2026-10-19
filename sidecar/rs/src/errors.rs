@@ -1,4 +1,4 @@
-//! errors.mjs — the sidecar's error taxonomy and the upstream -> Anthropic mapping.
+//! The sidecar's error taxonomy and the upstream -> Anthropic mapping.
 //!
 //! One owner for "what does the client see when something fails": the `SidecarError` value,
 //! the CodexErrorInfo/TurnError translation, and the rate-limit reading that turns an account
@@ -60,8 +60,8 @@ impl fmt::Display for SidecarError {
 
 impl std::error::Error for SidecarError {}
 
-/// `asSidecarError`: any non-SidecarError failure becomes a 502 `api_error` carrying its
-/// message (`String(e?.message || e || "sidecar failure")`).
+/// Any failure that is not already a `SidecarError` becomes a 502 `api_error` carrying its
+/// message (`"sidecar failure"` when the message is empty).
 pub fn as_sidecar_error(message: &str) -> SidecarError {
     let m = if message.is_empty() {
         "sidecar failure"
@@ -166,12 +166,12 @@ fn invalid_api_key(s: &str) -> bool {
     })
 }
 
-/// ASCII-only case folding: JS `/i` without `u` never folds non-ASCII onto ASCII.
+/// ASCII-only case folding: the match never folds non-ASCII onto ASCII.
 fn ascii_lower(s: &str) -> String {
     s.chars().map(|c| c.to_ascii_lowercase()).collect()
 }
 
-/// `mapUpstreamError(err, ctxLabel = "app-server")`: an app-server JSON-RPC error / TurnError
+/// An app-server JSON-RPC error / TurnError
 /// onto an Anthropic error shape.
 pub fn map_upstream_error(err: &Value, ctx_label: &str) -> SidecarError {
     let obj = err.as_object();
@@ -241,7 +241,7 @@ pub fn map_upstream_error(err: &Value, ctx_label: &str) -> SidecarError {
     SidecarError::new(502, "api_error", full)
 }
 
-/// `retryAfterSeconds(resetsAt, now)`: RateLimitWindow.resetsAt is an absolute int64; tolerate
+/// Seconds until a rate-limit window resets: RateLimitWindow.resetsAt is an absolute int64; tolerate
 /// s or ms epochs. A past reset still asks for one second.
 pub fn retry_after_seconds(resets_at: Option<&Value>, now_ms: f64) -> Option<f64> {
     let r = resets_at?.as_f64().filter(|f| f.is_finite())?;
@@ -256,7 +256,7 @@ pub struct Exhaustion {
     pub retry_after: Option<f64>,
 }
 
-/// `rateLimitExhaustion(snapshot)`: exhausted when a window is at/over 100 % or a reached-type
+/// A rate-limit snapshot is exhausted when a window is at/over 100 % or a reached-type
 /// is set.
 pub fn rate_limit_exhaustion(snapshot: Option<&Value>, now_ms: f64) -> Option<Exhaustion> {
     let s = snapshot.filter(|v| v.is_object() || v.is_array())?;

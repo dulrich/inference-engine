@@ -1,5 +1,4 @@
-//! `sinks.mjs` / `http.mjs` pure pieces: the `wireModelId` assertions of `unit.test.mjs`
-//! test 5, the message envelope, header redaction and the dot-segment 404 rule.
+//! `sinks` / `http` pure pieces: the wire model id re-prefix, the message envelope, header redaction and the dot-segment 404 rule.
 
 use codex_sidecar::http::has_dot_segment;
 use codex_sidecar::logging::redact_headers;

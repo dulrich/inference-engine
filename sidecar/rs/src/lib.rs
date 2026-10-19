@@ -1,7 +1,8 @@
-//! codex-sidecar (Rust port, plans/codex-sidecar-rust-port.md). One module per Node file in
-//! `sidecar/`, named alike (`sidecar` is `codex-sidecar.mjs`, the composition root); `js`
-//! holds the JavaScript-semantics helpers (`Number()`, `JSON.stringify`, truthiness, UTF-16
-//! lengths) the port needs for byte/behaviour parity.
+//! codex-sidecar: an Anthropic-Messages front end over `codex app-server`, one child per
+//! persona. `sidecar` is the composition root; `messages` is the request path (with
+//! `request`, `disposition`, `turn` and `emission` as its phases); `persona` and `session`
+//! own the app-server child and its threads; `codex` and `protocol` are the two wire
+//! boundaries. The module map with one line per owner is in `sidecar/README.md`.
 
 pub mod codex;
 pub mod config;

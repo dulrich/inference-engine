@@ -1,4 +1,4 @@
-//! request.mjs — phase 1 of the request path: what IS this request, and what should happen to
+//! Phase 1 of the request path: what IS this request, and what should happen to
 //! the session it names?
 //!
 //!   Request::parse()     the body parsed once into typed form (malformed shapes are a 400)
@@ -31,7 +31,7 @@ fn keep_content<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Content>, D::E
     Value::deserialize(d).map(|v| Some(Content::from_value(v)))
 }
 
-/// `stream`: a boolean; any other JSON value is read as the JS harness would test it.
+/// `stream`: a boolean; any other JSON value is read by truthiness (null, 0 and "" are false).
 fn flag<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
     Ok(match Value::deserialize(d)? {
         Value::Null => false,
@@ -125,7 +125,7 @@ impl Message {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
 
-    /// `blocksOf(content)`: the array's blocks; a string content is one text block.
+    /// The content's blocks: the array's blocks; a string content is one text block.
     pub fn blocks(&self) -> Vec<ContentBlock> {
         self.content
             .as_ref()
@@ -366,8 +366,7 @@ impl Request {
 
 // --------------------------------------------------------------- digests ----
 
-/// `canon(v)`: object keys sorted, arrays kept, numbers compared by value the way
-/// `JSON.stringify` spelled them (`1.0` is `1`, `-0` is `0`, integers past 2^53 round).
+/// Canonical form: object keys sorted, arrays kept, numbers compared by value (`1.0` is `1`, `-0` is `0`, integers past 2^53 round).
 pub fn canon(v: &Value) -> Value {
     match v {
         Value::Array(a) => Value::Array(a.iter().map(canon).collect()),
@@ -389,7 +388,7 @@ fn canon_digest(v: &Value) -> String {
     protocol::sha256_hex(&canon(v).to_string())
 }
 
-/// `undecorateBlock`: drop `cache_control` from an object block.
+/// Drop `cache_control` from an object block.
 fn undecorate_block(mut b: Value) -> Value {
     if let Value::Object(m) = &mut b {
         m.shift_remove("cache_control");
@@ -397,7 +396,7 @@ fn undecorate_block(mut b: Value) -> Value {
     b
 }
 
-/// `undecorateMessage`: drop `cache_control`, and `text` blocks after a `tool_result` in a
+/// Drop `cache_control`, and `text` blocks after a `tool_result` in a
 /// user message.
 fn undecorate_message(m: &Message) -> Value {
     let mut v = m.to_value();
@@ -420,7 +419,7 @@ fn undecorate_message(m: &Message) -> Value {
     v
 }
 
-/// The `requestDigest` input; `None` fields are omitted from the JSON.
+/// The request digest's input; `None` fields are omitted from the JSON.
 #[derive(Debug, Default, Clone)]
 pub struct DigestFields<'a> {
     pub model: Option<&'a Value>,
@@ -430,7 +429,7 @@ pub struct DigestFields<'a> {
     pub messages: Option<&'a [Message]>,
 }
 
-/// `requestDigest(fields)`: SHA-256 hex of the canonical, undecorated fields.
+/// SHA-256 hex of the canonical, undecorated fields.
 pub fn request_digest(f: &DigestFields<'_>) -> String {
     let mut m = Map::new();
     if let Some(v) = f.model {
@@ -458,14 +457,14 @@ pub fn request_digest(f: &DigestFields<'_>) -> String {
     canon_digest(&Value::Object(m))
 }
 
-/// `messageDigests(msgs)`: per-message digests of the undecorated conversation.
+/// Per-message digests of the undecorated conversation.
 pub fn message_digests(msgs: &[Message]) -> Vec<String> {
     msgs.iter()
         .map(|m| canon_digest(&undecorate_message(m)))
         .collect()
 }
 
-/// `shortDigest(d)`: the first 12 hex chars.
+/// The first 12 hex chars.
 pub fn short_digest(d: &str) -> String {
     d.chars().take(12).collect()
 }
@@ -500,7 +499,7 @@ impl From<Mode> for Value {
     }
 }
 
-/// The request, read once (`normalizeRequest`).
+/// The request, read once.
 #[derive(Debug, Clone)]
 pub struct Normalized {
     /// The typed request; its `messages` are moved into `msgs` / `other_msgs`.
@@ -565,7 +564,7 @@ pub struct Identity {
     pub scope: Scope,
 }
 
-/// `resolveIdentity(norm)`: model, effort and session key; the 400 for an unknown model id.
+/// Model, effort and session key; the 400 for an unknown model id.
 pub fn resolve_identity(norm: &Normalized) -> Result<Identity, SidecarError> {
     let model = norm.req.model_text();
     let Some(parsed) = protocol::parse_model_id(&model) else {
@@ -597,7 +596,7 @@ pub fn resolve_identity(norm: &Normalized) -> Result<Identity, SidecarError> {
     })
 }
 
-/// One request's identity and diagnostics (`requestToken`).
+/// One request's identity and diagnostics.
 #[derive(Debug, Clone)]
 pub struct Token {
     pub req_id: String,
@@ -639,7 +638,7 @@ fn block_shape(b: &Value) -> Value {
     Value::Object(m)
 }
 
-/// `requestToken({reqId, mode, norm, ident})`.
+/// Builds the request's token.
 pub fn request_token(req_id: String, mode: Mode, norm: &Normalized, ident: &Identity) -> Token {
     let model = norm.req.model.as_ref();
     let empty = Value::Array(Vec::new());
@@ -704,7 +703,7 @@ pub fn request_token(req_id: String, mode: Mode, norm: &Normalized, ident: &Iden
     }
 }
 
-/// `msgDiff(a, b)`: up to four indices where two `msg_shape` summaries differ.
+/// Up to four indices where two `msg_shape` summaries differ.
 pub fn msg_diff(a: Option<&Value>, b: Option<&Value>) -> Option<Value> {
     let a = a?.as_array()?;
     let bv = b.filter(|v| !v.is_null())?.as_array();
@@ -780,7 +779,7 @@ pub fn disposition_of<'a>(sess: &'a Session, token: &Token) -> Disposition<'a> {
 
 // ------------------------------------------------------------- turn input ----
 
-/// `rendersTranscript(mode, msgs)`: a new thread opening mid-conversation.
+/// Whether the turn renders a transcript: a new thread opening mid-conversation.
 pub fn renders_transcript(mode: Mode, msgs: &[Message]) -> bool {
     mode.is_new_thread() && msgs.iter().any(|m| m.role() == Some("assistant"))
 }
@@ -845,7 +844,7 @@ pub fn elision_marker(omitted: usize) -> String {
     format!("[{omitted} earlier message(s) omitted: transcript capped at {TRANSCRIPT_MAX_CHARS} characters]")
 }
 
-/// `renderTranscript(msgs)`: the conversation, role-labeled, bounded by
+/// The conversation, role-labeled, bounded by
 /// [`TRANSCRIPT_MAX_CHARS`] chars. Under budget the output is the whole
 /// transcript, unchanged. Over budget the wrapper, the elision marker and the final message
 /// are reserved first, then prior messages are admitted newest-first into what remains (so
@@ -891,7 +890,7 @@ pub fn render_transcript(msgs: &[Message]) -> String {
     wrap(&body.join("\n\n"))
 }
 
-/// `turnInputText(mode, msgs, last, lastBlocks)`: the text one turn carries.
+/// The text one turn carries.
 pub fn turn_input_text(mode: Mode, msgs: &[Message]) -> String {
     let text = if renders_transcript(mode, msgs) {
         render_transcript(msgs)

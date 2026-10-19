@@ -1,6 +1,6 @@
-//! codex-sidecar entry point (`codex-sidecar.mjs`'s `isMain` block): boot, print the
+//! codex-sidecar entry point: boot, print the
 //! listening line, and shut down gracefully on SIGTERM/SIGINT (a second signal, or a
-//! shutdown hung past 5 s, exits at once). Any boot failure exits 1, as Node's catch does.
+//! shutdown hung past 5 s, exits at once). Any boot failure exits 1.
 
 use codex_sidecar::config::{self, Pinned};
 use codex_sidecar::sidecar;

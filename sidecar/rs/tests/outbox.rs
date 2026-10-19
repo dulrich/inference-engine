@@ -1,7 +1,7 @@
-//! The `serializeRow` byte-equality case of sidecar/test/outbox.test.mjs ("rows are
-//! byte-identical to the fleet-tools serializeRow, in a 0600 day-file"). The reference bytes
-//! were captured once by running `<code-root>/fleet-tools/scripts/outbox.mjs`
-//! `serializeRow({...e, harness: "codex-sidecar"})` under Node on these three events.
+//! Row byte-equality: rows are byte-identical to the fleet-tools writer's, in a 0600
+//! day-file. The reference bytes were captured once from
+//! `<code-root>/fleet-tools/scripts/outbox.mjs` (each event with
+//! `harness: "codex-sidecar"`) on these three events.
 
 use codex_sidecar::outbox::{log_dir_for, serialize_row, OutboxWriter};
 use serde_json::{json, Value};

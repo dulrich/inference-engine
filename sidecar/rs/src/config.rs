@@ -1,4 +1,4 @@
-//! config.mjs — the process's pinned inputs and its environment reading.
+//! The process's pinned inputs and its environment reading.
 //!
 //! Two kinds of value live here and the distinction is the point: the PINNED ones (preamble,
 //! thread config, the in-band item-type allowlist) are contract and deliberately NOT
@@ -79,7 +79,7 @@ impl Pinned {
     }
 }
 
-/// `readConfig(env)`'s result.
+/// The environment, read once at startup.
 #[derive(Clone)]
 pub struct Config {
     /// Required by the server; never logged (redacted from `Debug`).
@@ -167,10 +167,10 @@ fn int<T: std::str::FromStr>(env: &HashMap<String, String>, k: &str, d: T) -> Re
         .map_err(|_| format!("{k}: integer out of range {raw:?}"))
 }
 
-/// `readConfig(env)`.
+/// Reads the environment; an invalid integer knob is an error naming the variable.
 pub fn read_config(env: &HashMap<String, String>) -> Result<Config, String> {
     let get = |k: &str| env.get(k).map(String::as_str);
-    // `env.X || d`: unset and empty both take the default.
+    // Unset and empty both take the default.
     let or = |k: &str, d: String| get(k).filter(|s| !s.is_empty()).map_or(d, str::to_string);
     #[allow(deprecated)]
     let os_home = || {
@@ -215,7 +215,7 @@ pub fn read_config(env: &HashMap<String, String>) -> Result<Config, String> {
     })
 }
 
-/// `resolveCwd(config, logger, rawCwd)`: the client's own working directory when it names a
+/// The thread's cwd: the client's own working directory when it names a
 /// real one, else the configured fallback, else an empty directory created on demand so no
 /// stray AGENTS.md is loaded from somebody else's tree.
 pub fn resolve_cwd(

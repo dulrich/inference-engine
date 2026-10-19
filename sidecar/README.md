@@ -24,24 +24,30 @@ Claude Code ──► router :4813 ──► codex-sidecar :4877 ──► codex
 
 ## Modules
 
-`rs/src/main.rs` is the entry point and `rs/src/sidecar.rs` the composition root: it reads the config, builds the process-wide state (`World`), constructs one `Persona` per configured name, binds the servers and owns shutdown — it holds no request logic. `rs/src/js.rs` makes the JavaScript semantics the wire contract inherited explicit. Everything else is a focused owner under `rs/src/`:
+All modules live under `rs/src/`. `main.rs` is the entry point and `sidecar.rs` the composition root; it holds no request logic. Everything else is a focused owner:
 
 | Module | Owns |
 | --- | --- |
-| `rs/src/config.rs` | The pinned inputs (`preamble.txt`, `thread-config.json`, the in-band item-type allowlist) and the environment reading, plus the thread's cwd resolution. |
-| `rs/src/errors.rs` | `SidecarError` and the upstream `CodexErrorInfo` / `TurnError` / rate-limit-snapshot mapping onto Anthropic error shapes. |
-| `rs/src/logging.rs` | The day-rolled JSONL log, its retention prune, and the header-redaction rule. |
-| `rs/src/protocol.rs` | The Anthropic wire boundary as pure functions: model/effort identity, message and system-prompt reading, the session key, the title signature, the codex → Anthropic usage projection and its window clamp. |
-| `rs/src/sinks.rs` | The two response transports (`BufferSink`, `SseSink`) and the one-shot JSON/error writers. Nothing else writes to a client socket. |
-| `rs/src/session.rs` | One codex thread's state — thread/turn ids, parked calls, delivered ids, joiners, replayable last outcome, token figures — and the outcome protocol (`waitOutcome` / `settle` / `drain`) the request path awaits. |
-| `rs/src/persona.rs` | The app-server child: spawn, the newline-framed JSON-RPC codec, pending requests, the thread bus, rate-limit posture, the `tripBoundary` security response, and backoff restart. |
-| `rs/src/thread_config.rs` | Whether the thread the app-server actually started is the one declared: the instruction-source trim and the declared-vs-reported feature comparison. |
-| `rs/src/request.rs` | Phase 1–2 of the request path, all pure: `normalizeRequest`, `resolveIdentity`, `requestToken` (the digest that is a request's identity) and `dispositionOf` — the single decision site returning `replay`, `join` or `drive`. |
-| `rs/src/turn.rs` | Phase 3: `startThread` (with its fail-closed verification), `deliverToolResults`, `startTurn`. |
-| `rs/src/messages.rs` | `POST /<persona>/v1/messages` as the explicit sequence normalization → session disposition → turn execution → outcome emission. |
-| `rs/src/outbox_events.rs` | The tracker rows one completed turn produces (`turn.completed`, `child.spawned`, `usage`, `rate_limit`). |
-| `rs/src/http.rs` | Auth, the closed route table, body reading and the bind-aware `/healthz` payload. |
-| `rs/src/outbox.rs` | The event-outbox writer itself (appends JSONL day-files). |
+| `codex` | The typed codex app-server boundary: ids, the usage figure and the frames the sidecar consumes, normalized once at the frame edge (off-schema ids stringified, bad counts read as 0). |
+| `config` | The pinned inputs (`preamble.txt`, `thread-config.json`, the in-band item-type allowlist), the strict environment reading, and the thread's cwd resolution. |
+| `disposition` | Phase 2 of the request path: classify the request against the persona's sessions, re-key or fork when the history allows, else open a new session. |
+| `emission` | Phase 4: the client-facing blocks and finish, the stored last outcome, and the one `http`/`http-error` row per request with its outbox rows. |
+| `errors` | `SidecarError` and the upstream `CodexErrorInfo` / `TurnError` / rate-limit-snapshot mapping onto Anthropic error shapes. |
+| `http` | Auth (before any body byte is read), the closed route table, the 32 MiB body cap, the bind-aware `/healthz` payload, and the close guard that fires a sink's close hook. |
+| `lib` | The crate root: declares the modules. |
+| `logging` | The day-rolled JSONL log, its retention prune, and the header-redaction rule. |
+| `main` | The binary: boot, print the listening line, graceful shutdown on SIGTERM/SIGINT; any boot failure exits 1. |
+| `messages` | `POST /<persona>/v1/messages` as the explicit sequence normalization → session disposition → turn execution → outcome emission, plus the owner/joiner close handling. |
+| `outbox` | The event-outbox writer itself: the pinned line format, appended to JSONL day-files. |
+| `outbox_events` | The tracker rows one completed turn produces (`turn.completed`, `child.spawned`, `usage`, `rate_limit`). |
+| `persona` | The app-server child: spawn, the newline-framed JSON-RPC codec, pending requests, the thread bus, the sessions map, rate-limit posture, the `trip_boundary` security response, and backoff restart. |
+| `protocol` | The Anthropic wire boundary as pure functions: model/effort identity, message and system-prompt reading, the session key, the title signature, the codex → Anthropic usage projection and its window clamp. |
+| `request` | Phase 1, all pure: the typed request parse (malformed shapes are a 400), `normalize_request`, `request_token` (the digest that is a request's identity), `disposition_of` (the single `replay` / `join` / `drive` decision site), and the transcript rendering. |
+| `session` | One codex thread's state — thread/turn ids, parked calls, delivered ids, joiners, replayable last outcome, token figures — and the outcome protocol (`wait_outcome` / `settle` / `drain`) the request path awaits. |
+| `sidecar` | The composition root: the process-wide `World` behind one mutex, boot (one `Persona` per configured name), the two binds with the docker0 retry budget, and shutdown. |
+| `sinks` | The response transport (`Sink`, buffered or SSE), the message envelope and the one-shot writers. Nothing else writes to a client. |
+| `thread_config` | Whether the thread the app-server actually started is the one declared: the instruction-source trim and the declared-vs-reported feature comparison. |
+| `turn` | Phase 3: `start_thread` (with its fail-closed verification), `deliver_tool_results`, `start_turn`, and the `still_mine` supersession check. |
 
 ## Routes
 
@@ -78,7 +84,7 @@ Usage on the wire is **this turn's context occupancy, never cumulative spend** (
 
 ## Measured (WP-4)
 
-Spike-09 fixture task through the router at `:4813`, six metered `claude -p` runs on 2026-09-12, fixture reset before each: **six green gates**, zero `security-event`, zero `config-unverified`, one locally-answered title query per session (all `envelope: "pinned"`). Detail and caveats: `../docs/tool-calling-gateway/codex-sidecar.md` "Measured"; raw evidence in `../runs/dispatch/codex-appserver-sidecar-wp-4b-report.md`.
+Spike-09 fixture task through the router at `:4813`, six metered `claude -p` runs on 2026-09-12, fixture reset before each: **six green gates**, zero `security-event`, zero `config-unverified`, one locally-answered title query per session (all `envelope: "pinned"`). Detail, caveats and evidence: `../docs/tool-calling-gateway/codex-sidecar.md` "Measured".
 
 | run | model | effort | gate | turns | tool calls | codex cumulative input | output (sidecar / Claude Code) | security-event | config-unverified | title-local | wall |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -201,4 +207,4 @@ systemctl --user start codex-sidecar
 
 Then update the compose-side value to match.
 
-**Compose side:** the router reaches the sidecar with the same shared key under the name `CODEX_SIDECAR_KEY` in the fleet-tools `.env` (post-cutover: the fleet-env store, one copy for both sides) (`hold-for-user`: the user adds `CODEX_SIDECAR_KEY` to that `.env` before the router restart). WP-3 wires the provider entries and `extra_hosts`; until then the key is only consumed here.
+**Compose side:** the router reaches the sidecar with the same shared key under the name `CODEX_SIDECAR_KEY` in the fleet-tools `.env` (post-cutover: the fleet-env store, one copy for both sides) (`hold-for-user`: the user adds `CODEX_SIDECAR_KEY` to that `.env` before the router restart). The router's provider entries (`router/gateway.config.json`) and the compose `extra_hosts` consume it.

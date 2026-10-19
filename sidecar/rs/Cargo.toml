@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 publish = false
-description = "Anthropic-Messages front end over codex app-server, one child per persona (plans/codex-sidecar-rust-port.md)."
+description = "codex-sidecar: an Anthropic-Messages front end over codex app-server, one child per codex persona."
 
 [lib]
 name = "codex_sidecar"

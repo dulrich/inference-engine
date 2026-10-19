@@ -2,7 +2,7 @@
 //! consumes. Everything codex sends is read here, once; the rest of the crate sees types.
 //!
 //! Normalization (off-schema frames only; the app-server schema sends strings and integers):
-//! - an id that is a number is stringified once, here (JS `String(n)` text); an empty string
+//! - an id that is a number is stringified once, here (integral text, no fraction); an empty string
 //!   or any other type reads as absent;
 //! - a usage count that is missing, null, negative or non-numeric reads as 0;
 //! - a field of the wrong shape reads as absent rather than failing the whole frame, so an
@@ -12,7 +12,7 @@ use serde::de::{DeserializeOwned, Deserializer};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-/// A JSON number as JS `String(n)` spells it for the ids codex sends: integral values (within
+/// A JSON number spelled as an id for the ids codex sends: integral values (within
 /// 2^53) without a fraction.
 fn number_text(n: &serde_json::Number) -> String {
     match n.as_f64() {
@@ -79,7 +79,7 @@ codex_id!(
     ItemId
 );
 
-/// `Option<Value>` that keeps a present `null` as `Some(Null)` (JS `!== undefined`).
+/// `Option<Value>` that keeps a present `null` as `Some(Null)` (present-but-null is distinct from absent).
 fn present<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Value>, D::Error> {
     Value::deserialize(d).map(Some)
 }

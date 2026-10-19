@@ -1,12 +1,12 @@
-//! thread-config.mjs — is the thread the app-server actually started the one we declared?
+//! Is the thread the app-server actually started the one we declared?
 //!
 //! The instruction-source trim, and the declared-vs-reported feature comparison against the
 //! app-server's own flag oracle. A declared key the oracle does not report is *unknown*, not a
-//! mismatch. CONFIG drift detection only; `Persona.tripBoundary` is the runtime line.
+//! mismatch. CONFIG drift detection only; `persona::trip_boundary` is the runtime line.
 
 use serde_json::{Map, Value};
 
-/// `verifyInstructionSources(sources)`: `None` when the trim held, else the problem string.
+/// The instruction-source check: `None` when the trim held, else the problem string.
 pub fn verify_instruction_sources(sources: Option<&Value>) -> Option<String> {
     let list: &[Value] = sources.and_then(Value::as_array).map_or(&[], Vec::as_slice);
     if list.len() > 1 {
@@ -28,7 +28,7 @@ pub fn verify_instruction_sources(sources: Option<&Value>) -> Option<String> {
     ))
 }
 
-/// `unified_exec` is pinned true by the model catalog's `shell_type` (WP-1 measurement,
+/// `unified_exec` is pinned true by the model catalog's `shell_type` (measured
 /// 2026-09-14) — exempt.
 pub const FEATURE_VERIFY_EXEMPT: &[&str] = &["unified_exec"];
 
@@ -48,7 +48,7 @@ pub struct FeatureReadings {
     pub mismatches: Vec<Mismatch>,
 }
 
-/// `featureReadings(declared, reported)`.
+/// Each declared feature flag read against the app-server's reported value.
 pub fn feature_readings(declared: Option<&Value>, reported: Option<&Value>) -> FeatureReadings {
     let mut by_name: Vec<(&str, &Value)> = Vec::new();
     for e in reported.and_then(Value::as_array).into_iter().flatten() {
@@ -91,7 +91,7 @@ pub fn feature_readings(declared: Option<&Value>, reported: Option<&Value>) -> F
     out
 }
 
-/// `verifyFeatures(declared, reported)`: `None` when the effective flags match.
+/// The declared-vs-reported feature check: `None` when the effective flags match.
 pub fn verify_features(declared: Option<&Value>, reported: Option<&Value>) -> Option<String> {
     let r = feature_readings(declared, reported);
     if r.mismatches.is_empty() {

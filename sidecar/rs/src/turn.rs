@@ -1,4 +1,4 @@
-//! `turn.mjs` — phase 3 of the request path: `start_thread` (open a thread and VERIFY it,
+//! Phase 3 of the request path: `start_thread` (open a thread and VERIFY it,
 //! fail closed), `deliver_tool_results` (answer parked calls), `start_turn` (run a turn).
 //! `still_mine` is the supersession check after every await.
 

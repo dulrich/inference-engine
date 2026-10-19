@@ -1,6 +1,6 @@
-//! `session.mjs` — one codex thread's state, and the outcome protocol over it
+//! One codex thread's state, and the outcome protocol over it
 //! (`wait_outcome` / `settle` / `drain`). Sessions live in `World::sessions` by id; every
-//! method takes the world because, as in Node, a session reaches into its persona.
+//! method takes the world because a session reaches into its persona.
 
 use crate::codex::{
     CallId, CodexUsage, ItemId, Note, ThreadId, TokenUsage, ToolCall, TurnId, Usage,
@@ -26,7 +26,7 @@ pub enum Outcome {
     EndTurn,
 }
 
-/// The request currently driving a session (Node compares tokens by identity: `id`).
+/// The request currently driving a session (tokens compare by identity: `id`).
 pub struct OwnerTok {
     pub id: u64,
     pub token: Token,
@@ -52,7 +52,7 @@ pub enum JoinOutcome {
 }
 
 pub struct Joiner {
-    /// The owner request token id this joiner joined (`ownerToken`).
+    /// The owner request token id this joiner joined.
     pub owner: u64,
     pub sink: u64,
     pub settled: bool,
@@ -91,7 +91,7 @@ pub struct Session {
     pub sink: Option<u64>,
     pub owner: Option<OwnerTok>,
     pub owner_gone: bool,
-    /// Joiner ids, in insertion order (a JS `Set`).
+    /// Joiner ids, in insertion order (no duplicates).
     pub joiners: Vec<u64>,
     pub turn_text: Vec<String>,
     pub last_outcome: Option<LastOutcome>,
@@ -161,7 +161,7 @@ impl Session {
         self.owner.as_ref().map(|o| o.id)
     }
 
-    /// `reconcile()`: the latest `tokenUsage.last` (zero before any).
+    /// The latest `tokenUsage.last` (zero before any).
     pub fn reconcile(&self) -> Usage {
         self.usage_last
             .as_ref()
@@ -179,7 +179,7 @@ impl Session {
     }
 }
 
-/// `joinersOf(owner)`.
+/// The joiners of `owner`'s turn.
 pub fn joiners_of(w: &World, sid: u64, owner: Option<u64>) -> Vec<u64> {
     let Some(owner) = owner else {
         return Vec::new();
@@ -227,7 +227,7 @@ pub fn detach(w: &mut World, sid: u64, sink: Option<u64>) {
     }
 }
 
-/// `emitText(t)`: to the owner's sink, every joiner of the current owner, and `turnText`.
+/// Text out: to the owner's sink, every joiner of the current owner, and the turn's text.
 pub fn emit_text(w: &mut World, sid: u64, t: &str) {
     if t.is_empty() {
         return;
@@ -270,7 +270,7 @@ fn turn_timed_out() -> Outcome {
     ))
 }
 
-/// `waitOutcome(timeoutMs)`, first half: park the request; `await_outcome` is the wait.
+/// Waiting for the outcome, first half: park the request; `await_outcome` is the wait.
 pub fn wait_outcome(w: &mut World, sid: u64) -> oneshot::Receiver<Outcome> {
     let (tx, rx) = oneshot::channel();
     let Some(s) = w.sessions.get_mut(&sid) else {
@@ -282,7 +282,7 @@ pub fn wait_outcome(w: &mut World, sid: u64) -> oneshot::Receiver<Outcome> {
     rx
 }
 
-/// `waitOutcome(timeoutMs)`, second half: the outcome, or the turn timeout. On timeout the
+/// Waiting for the outcome, second half: the outcome, or the turn timeout. On timeout the
 /// parked resolver is withdrawn, unless an outcome landed in the same instant.
 pub async fn await_outcome(
     me: &Shared,
@@ -406,7 +406,7 @@ fn keep_turn(s: &mut Session, t: Option<TurnId>) {
     }
 }
 
-/// `onFrame(ev)`: every app-server frame for this thread.
+/// Every app-server frame for this thread.
 pub fn on_frame(w: &mut World, sid: u64, ev: Frame) {
     let Some(s) = w.sessions.get_mut(&sid) else {
         return;
@@ -509,7 +509,7 @@ pub fn on_frame(w: &mut World, sid: u64, ev: Frame) {
     }
 }
 
-/// `answerParked(callId, text, success)`.
+/// Answers a parked tool call; false when there is none to answer.
 pub fn answer_parked(w: &mut World, sid: u64, call: &CallId, text: &str, success: bool) -> bool {
     let Some(s) = w.sessions.get_mut(&sid) else {
         return false;
@@ -528,7 +528,7 @@ pub fn answer_parked(w: &mut World, sid: u64, call: &CallId, text: &str, success
     true
 }
 
-/// `abandonDelivered(reason)`: only calls the client has already been shown.
+/// Abandons parked calls — only calls the client has already been shown.
 pub fn abandon_delivered(w: &mut World, sid: u64, reason: &str) {
     let calls: Vec<CallId> = match w.sessions.get(&sid) {
         Some(s) => s

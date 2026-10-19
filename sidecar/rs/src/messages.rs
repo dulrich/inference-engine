@@ -1,4 +1,4 @@
-//! `messages.mjs` — POST /<persona>/v1/messages as the explicit four-phase sequence:
+//! POST /<persona>/v1/messages as the explicit four-phase sequence:
 //! normalization, session disposition (replay | join | drive), turn execution, outcome
 //! emission. Every exit writes one `http` (or `http-error`) row and settles every attached
 //! connection.
@@ -381,7 +381,7 @@ async fn run_as_joiner(me: &Shared, rc: &Rc, owner: u64, owner_req: Value) {
     w.gc_sessions();
 }
 
-/// `onJoinerClose`.
+/// A joiner's response closed.
 pub fn on_joiner_close(w: &mut World, sid: u64, jid: u64, sink: u64, pi: usize) {
     if sinks::sink_done(w, sink) {
         return;
@@ -427,7 +427,7 @@ fn supersede(w: &mut World, rc: &Rc, old_id: u64, old: &Token) {
     session::preempt(w, rc.sid, superseded());
 }
 
-/// `onClose` for the owner's response.
+/// The owner's response closed.
 pub fn on_owner_close(w: &mut World, sid: u64, token: u64, sink: u64, pi: usize) {
     if sinks::sink_done(w, sink) {
         return;
@@ -493,7 +493,7 @@ fn take_joiners(w: &mut World, sid: u64, token_id: u64) -> Vec<u64> {
     js
 }
 
-/// The try-block of `runAsOwner`; `Ok(())` covers both emission and the silent client abort.
+/// The owner's request path; `Ok(())` covers both emission and the silent client abort.
 async fn drive(
     me: &Shared,
     rc: &Rc,

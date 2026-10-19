@@ -1,4 +1,4 @@
-//! logging.mjs — the durable JSONL request log.
+//! The durable JSONL request log.
 //!
 //! One day-rolled file per process under a 0700 directory, each file 0600, pruned past the
 //! retention window. `write` is deliberately total: logging must never break a request, so
@@ -30,7 +30,7 @@ impl Logger {
         }
     }
 
-    /// `Logger.dayOf()` — today's UTC `YYYY-MM-DD`.
+    /// Today's UTC `YYYY-MM-DD`.
     pub fn day_of() -> String {
         iso_now()[..10].to_string()
     }
@@ -91,8 +91,8 @@ impl Logger {
         }
     }
 
-    /// One row: `{ts, kind, ...obj}` (an `obj` key named `ts`/`kind` overrides in place, as the
-    /// JS spread does). Never fails.
+    /// One row: `{ts, kind, ...obj}` (an `obj` key named `ts`/`kind` overrides in place, keeping its
+    /// position). Never fails.
     pub fn write(&mut self, kind: &str, obj: &Map<String, Value>) {
         let mut row = Map::new();
         row.insert("ts".into(), Value::from(iso_now()));
@@ -126,7 +126,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 }
 
 /// `YYYY-MM-DD` as milliseconds at 00:00Z: month 1-12, day 1-31 (an overflowing day rolls
-/// into the next month, as the Node sidecar's `Date.parse` did); anything else `None`.
+/// into the next month, the reading the retention prune has always used); anything else `None`.
 pub fn day_ms(day: &str) -> Option<f64> {
     let b = day.as_bytes();
     let shaped = b.len() == 10
@@ -179,7 +179,7 @@ pub fn iso_now() -> String {
     iso_from_ms(now_ms())
 }
 
-/// `redactHeaders(headers)`: the four credential headers become `<redacted>`, order kept.
+/// The four credential headers become `<redacted>`, order kept.
 /// A repeated header logs its values joined with `, `.
 pub fn redact_headers(headers: &HeaderMap) -> Map<String, Value> {
     let mut out = Map::new();
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn day_parse_and_iso_format() {
-        // Node: Date.parse("2021-02-30T00:00:00Z") === 1614643200000 (the day rolls over)
+        // 2021-02-30 reads as 2021-03-02 = 1614643200000 ms (the day rolls over)
         assert_eq!(day_ms("2021-02-30"), Some(1_614_643_200_000.0));
         assert_eq!(day_ms("2020-02-29"), Some(1_582_934_400_000.0));
         for bad in [

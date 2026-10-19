@@ -1,10 +1,10 @@
-//! `http.mjs` — the HTTP surface: auth (before any body byte is read), the closed route
+//! The HTTP surface: auth (before any body byte is read), the closed route
 //! table, the 32 MiB body cap, and bind-aware `/healthz`.
 //!
-//! Each request runs as its own task (Node's handler keeps running after the client goes);
+//! Each request runs as its own task, so it keeps running after the client goes;
 //! the axum handler only waits for the head (`sinks::Reply`). A `CloseGuard` travels with
 //! the response — dropped with the handler future, or with the streamed body — and fires
-//! the `res.on("close")` hook, as Node's `close` event does.
+//! the sink's close hook.
 
 use crate::config::{BODY_LIMIT, VERSION};
 use crate::errors::{as_sidecar_error, SidecarError};
@@ -28,7 +28,7 @@ pub fn router(world: Shared) -> Router {
     Router::new().fallback(handler).with_state(world)
 }
 
-/// `healthBody(ctx)`.
+/// The `/healthz` payload.
 pub fn health_body(w: &World) -> Value {
     let mut personas = Map::new();
     let mut degraded = false;
@@ -72,7 +72,7 @@ impl Drop for CloseGuard {
     }
 }
 
-/// Node's `res` `close` event.
+/// The response's close event.
 fn sink_closed(w: &mut World, id: u64) {
     match sinks::closed(w, id) {
         Some(CloseHook::Owner {

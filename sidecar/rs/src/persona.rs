@@ -1,4 +1,4 @@
-//! `persona.mjs` — one `<persona> app-server` child and everything spoken over its stdio:
+//! One `<persona> app-server` child and everything spoken over its stdio:
 //! spawn, the newline-framed JSON-RPC codec, the pending-request table, the thread bus, the
 //! sessions map, rate-limit posture, the security boundary (`trip_boundary`) and the backoff
 //! restart. One reader task per child; every frame is handled under the world lock.
@@ -171,7 +171,7 @@ pub fn ensure(
     }
 }
 
-/// `setInit(boot())`, or the restart path's delayed boot.
+/// Starts the boot (now, or after the restart path's delay) and records it as pending.
 fn set_init(w: &mut World, pi: usize, delay_ms: Option<u64>) {
     let gen = w.id();
     w.personas[pi].init = InitSlot::Pending(gen);

@@ -1,4 +1,4 @@
-//! `sinks.mjs` — the two response transports (`BufferSink`, `SseSink`), the message envelope
+//! The response transport (`Sink`, buffered or SSE), the message envelope
 //! they share, and the one-shot writers. A sink is the only thing that writes to a client.
 //!
 //! A `Sink` owns its response: the head goes to the waiting HTTP handler as a `Reply` (a
@@ -31,7 +31,7 @@ pub enum Reply {
 }
 
 impl Reply {
-    /// A JSON body (`sendJson(res, status, obj, headers)`).
+    /// A JSON body with its status and headers.
     pub fn json(status: u16, obj: &Value, extra: Headers) -> Self {
         let mut hs = json_headers();
         for (k, v) in extra {
@@ -44,7 +44,7 @@ impl Reply {
             body: Some(obj.to_string()),
         }
     }
-    /// `sendError(res, err)`.
+    /// An error as its Anthropic error body.
     pub fn error(err: &SidecarError) -> Self {
         Reply::json(err.status, &err.body(), retry_after_header(err))
     }
@@ -60,7 +60,7 @@ impl Reply {
     }
 }
 
-/// What `res.on("close", fn)` registered (messages.mjs `onClose` / `onJoinerClose`).
+/// What runs when a response closes (`messages::on_owner_close` / `on_joiner_close`).
 #[derive(Clone)]
 pub enum CloseHook {
     Owner {
@@ -103,7 +103,7 @@ fn retry_after_header(err: &SidecarError) -> Headers {
     }
 }
 
-/// `wireModelId(personaName, requested)`: re-prefix the persona the router stripped.
+/// The wire model id: re-prefix the persona the router stripped.
 pub fn wire_model_id(persona: &str, requested: &str) -> String {
     let id = requested.to_string();
     if id.contains('/') {
@@ -125,7 +125,7 @@ pub fn message_skeleton(model: &str) -> Value {
     })
 }
 
-/// `{...msg, k: v}` — spread then override, JS key order.
+/// `msg` with keys set: an existing key is overwritten in place, a new one appended.
 pub fn with_keys(msg: &Value, kv: Vec<(&str, Value)>) -> Value {
     let mut m: Map<String, Value> = msg.as_object().cloned().unwrap_or_default();
     for (k, v) in kv {
@@ -215,8 +215,7 @@ impl Sink {
             },
         )
     }
-    /// The client is gone or the response already ended (Node `res.writableEnded ||
-    /// res.destroyed`).
+    /// The client is gone or the response already ended.
     fn gone(&self) -> bool {
         self.ended
             || self.destroyed
@@ -226,7 +225,7 @@ impl Sink {
                 .as_ref()
                 .is_some_and(mpsc::UnboundedSender::is_closed)
     }
-    /// `writeHead(status, headers)` + `end(body)`.
+    /// A whole response: head and body at once.
     fn full(&mut self, reply: Reply) {
         if let Some(tx) = self.reply.take() {
             let _ = tx.send(reply);
@@ -234,7 +233,7 @@ impl Sink {
         self.ended = true;
         self.body = None;
     }
-    /// `writeHead(status, headers)` for a streamed body.
+    /// The head of a streamed body.
     fn stream_head(&mut self, status: u16, headers: Headers) {
         if let Some(tx) = self.reply.take() {
             let (btx, rx) = mpsc::unbounded_channel();
@@ -281,7 +280,7 @@ fn frame(t: &str, obj: &Value) -> String {
     format!("event: {t}\ndata: {obj}\n\n")
 }
 
-/// `SseSink.#raw(text)`.
+/// Writes raw SSE text to a streaming sink.
 fn raw(w: &mut World, id: u64, text: String) -> bool {
     let Some(s) = w.sinks.get_mut(&id) else {
         return false;
@@ -487,7 +486,7 @@ fn close_text(w: &mut World, id: u64) {
     );
 }
 
-/// `toolUse(block)`; `block` is `{type, id, name, input}` with absent keys omitted.
+/// A tool-use block; `block` is `{type, id, name, input}` with absent keys omitted.
 pub fn tool_use(w: &mut World, id: u64, block: &Value) {
     let Some(s) = w.sinks.get_mut(&id) else {
         return;

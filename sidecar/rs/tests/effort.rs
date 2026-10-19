@@ -1,4 +1,4 @@
-//! Port of sidecar/test/effort.test.mjs, case for case: suffix -> output_config.effort ->
+//! Effort resolution: suffix -> output_config.effort ->
 //! thinking disabled -> family default, and never an error.
 
 use codex_sidecar::protocol::{parse_model_id, resolve_effort, Effort, EffortSource};

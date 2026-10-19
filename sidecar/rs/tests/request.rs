@@ -59,7 +59,7 @@ fn request_and_message_digests_are_stable() {
 }
 
 #[test]
-fn subagent_session_key_and_token_estimate_match_node() {
+fn subagent_session_key_and_token_estimate() {
     let billing = "x-anthropic-billing-header: cc_version=1; cc_is_subagent=true;";
     let body = Request::parse(json!({
         "system": [{"type": "text", "text": billing}, {"type": "text", "text": "S"}],
@@ -73,7 +73,7 @@ fn subagent_session_key_and_token_estimate_match_node() {
     assert_eq!(count_tokens_estimate(&body, &body.messages), 31);
 }
 
-// ---------------------------------------------------- rehydration cap (WP-3) ----
+// ---------------------------------------------------------- rehydration cap ----
 
 fn text_msg(role: &str, t: &str) -> Message {
     typed(vec![
@@ -184,7 +184,7 @@ fn transcript_cap_counts_chars_not_utf16_units() {
     assert!(chars(&out) <= TRANSCRIPT_MAX_CHARS);
 }
 
-/// E2: numbers digest by value, as `JSON.stringify` spelled them on the Node sidecar
+/// E2: numbers digest by value
 /// (measured on bfb0a27's `message_digests`: `1`≡`1.0`, `0`≡`-0`≡`-0.0`, 2^53+1≡2^53,
 /// `1e21`≡`10^21`; each class distinct from the others).
 #[test]

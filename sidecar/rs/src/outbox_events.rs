@@ -1,4 +1,4 @@
-//! outbox-events.mjs — the sidecar's rows in the fleet-tools initiative tracker.
+//! The sidecar's rows in the fleet-tools initiative tracker.
 //!
 //! Every call is fail-open (the writer swallows). Never any message content — only identity,
 //! model/effort and token totals.
@@ -15,7 +15,7 @@ pub struct OutboxKey {
     pub agent_id: Option<String>,
 }
 
-/// `outboxKeyOf(key, weak)`: a parent's key is the bare session id, a subagent's is
+/// The tracker key: a parent's key is the bare session id, a subagent's is
 /// `<sid>:<suffix>`; a weak key is not attributable and writes nothing.
 pub fn outbox_key_of(key: &str, weak: bool) -> Option<OutboxKey> {
     if weak || key.is_empty() {
@@ -33,8 +33,7 @@ pub fn outbox_key_of(key: &str, weak: bool) -> Option<OutboxKey> {
     })
 }
 
-/// Everything `outboxTurn(ctx, persona, sess, {model, effort, stopReason})` reads, as explicit
-/// borrows.
+/// Everything the per-turn rows read, as explicit borrows.
 pub struct TurnRow<'a> {
     pub outbox: &'a mut OutboxWriter,
     /// `ctx.config.outboxPath` non-empty.
@@ -70,7 +69,7 @@ struct TurnPayload<'a> {
     stop_reason: &'a Value,
 }
 
-/// `outboxUsage(u)` — the codex cumulative total in the tracker's names.
+/// The codex cumulative total in the tracker's names.
 #[derive(Serialize)]
 struct UsagePayload<'a> {
     model: &'a str,
@@ -121,7 +120,7 @@ pub fn rate_limit_exhausted(
     outbox.record_row(&row(leg, key, "rate_limit", p));
 }
 
-/// `outboxTurn`: one `turn.completed` per completed turn, plus `child.spawned` the first time a
+/// One `turn.completed` per completed turn, plus `child.spawned` the first time a
 /// subagent key is seen, the thread's cumulative `usage` when reported, and the `rate_limit`
 /// recovery row that clears a persona-wide exhaustion.
 pub fn outbox_turn(t: TurnRow<'_>) {

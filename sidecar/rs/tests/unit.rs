@@ -1,5 +1,5 @@
-//! Port of sidecar/test/unit.test.mjs, case for case. The `wireModelId` assertions live in
-//! `sinks.mjs` (WP-3 scope) and are ported with that module, not here.
+//! Pure-function unit cases across the crate. The wire model id re-prefix cases are in
+//! `tests/sinks.rs`.
 
 use codex_sidecar::codex::{CallId, ThreadId, TokenUsage, ToolCall, Usage};
 use codex_sidecar::errors::{map_upstream_error, rate_limit_exhaustion, retry_after_seconds};

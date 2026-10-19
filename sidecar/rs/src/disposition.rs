@@ -20,7 +20,7 @@ enum Cls {
     },
 }
 
-/// `classifyAgainst(sess, digests, norm, ident)`.
+/// Classifies the request's history against one session's.
 fn classify_against(
     hist: &[String],
     digests: &[String],

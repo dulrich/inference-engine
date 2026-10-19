@@ -1,4 +1,4 @@
-//! protocol.mjs — the Anthropic wire boundary, as pure functions over one request body or one
+//! The Anthropic wire boundary, as pure functions over one request body or one
 //! usage figure: model/effort identity, message and system-prompt reading (session-key
 //! discriminator, title signature), and the codex -> Anthropic usage projection with its clamp.
 
@@ -101,7 +101,7 @@ pub struct ParsedModel {
     pub effort_source: EffortSource,
 }
 
-/// `parseModelId(raw)`: `gpt-5.6-luna`, `codex-a/gpt-5.6-luna`, or either with a
+/// A model id: `gpt-5.6-luna`, `codex-a/gpt-5.6-luna`, or either with a
 /// `-low|-medium|-high` suffix; anything else `None` (the caller answers 400).
 pub fn parse_model_id(raw: &str) -> Option<ParsedModel> {
     let id = raw.trim();
@@ -137,7 +137,7 @@ pub struct Effort {
     pub effort_source: EffortSource,
 }
 
-/// `resolveEffort(parsed, body)`: suffix -> `output_config.effort` -> `thinking.type ===
+/// The effort: suffix -> `output_config.effort` -> `thinking.type ===
 /// "disabled"` (low) -> family default. Never an error.
 pub fn resolve_effort(parsed: Option<&ParsedModel>, req: &Request) -> Effort {
     if let Some(p) = parsed.filter(|p| p.effort_source == EffortSource::Suffix) {
@@ -165,7 +165,7 @@ pub fn resolve_effort(parsed: Option<&ParsedModel>, req: &Request) -> Effort {
     }
 }
 
-/// `textOf(content)`: only text blocks survive, joined by `\n`.
+/// A content's text: only text blocks survive, joined by `\n`.
 pub fn text_of(content: Option<&Content>) -> String {
     content
         .map(Content::blocks)
@@ -191,7 +191,7 @@ fn system_block_text(b: &Value) -> String {
     }
 }
 
-/// `systemTextOf(body)`.
+/// The request's `system` as one text.
 pub fn system_text_of(req: &Request) -> String {
     match &req.system {
         Some(System::Text(s)) => s.clone(),
@@ -204,7 +204,7 @@ pub fn system_text_of(req: &Request) -> String {
     }
 }
 
-/// `interleavedSystemText(msgs)`: the text of interleaved role:"system" entries, in order.
+/// The text of interleaved role:"system" entries, in order.
 pub fn interleaved_system_text(msgs: &[Message]) -> String {
     msgs.iter()
         .filter(|m| m.role() == Some("system"))
@@ -214,7 +214,8 @@ pub fn interleaved_system_text(msgs: &[Message]) -> String {
         .join("\n\n")
 }
 
-/// `baseInstructionsOf(systemText, interleaved)` — `preamble` is `Pinned::preamble`.
+/// The thread's `baseInstructions`: preamble, then the system text and the interleaved
+/// system text — `preamble` is `Pinned::preamble`.
 pub fn base_instructions_of(preamble: &str, system_text: &str, interleaved: &str) -> String {
     let head = if system_text.is_empty() {
         "You are a coding assistant driven by an external harness."
@@ -228,7 +229,7 @@ pub fn base_instructions_of(preamble: &str, system_text: &str, interleaved: &str
         .join("\n\n")
 }
 
-/// `hasImageBlock(body)`: an image block in any message (or in a `tool_result`), or in
+/// Whether the request carries an image block in any message (or in a `tool_result`), or in
 /// `system`.
 pub fn has_image_block<'a>(req: &Request, msgs: impl IntoIterator<Item = &'a Message>) -> bool {
     for m in msgs {
@@ -270,7 +271,7 @@ fn cwd_in(text: &str) -> Option<String> {
     None
 }
 
-/// `extractCwd(allMsgs, systemText)`: the cwd, parsed before the system-role filter.
+/// The client's cwd, parsed before the system-role filter.
 pub fn extract_cwd(msgs: &[Message], system_text: &str) -> Option<String> {
     for m in msgs.iter().filter(|m| m.role() == Some("system")) {
         if let Some(c) = cwd_in(&text_of(m.content.as_ref())) {
@@ -280,7 +281,7 @@ pub fn extract_cwd(msgs: &[Message], system_text: &str) -> Option<String> {
     cwd_in(system_text)
 }
 
-/// `billingLineOf(body)`: the `x-anthropic-billing-header:` first line of `system`, or `""`.
+/// The `x-anthropic-billing-header:` first line of `system`, or `""`.
 pub fn billing_line_of(req: &Request) -> String {
     let head = match &req.system {
         Some(System::Text(s)) => s.as_str(),
@@ -313,7 +314,7 @@ pub fn is_subagent_request(req: &Request) -> bool {
     })
 }
 
-/// `systemTextWithoutBillingLine(body, systemText)`.
+/// The system text with the leading billing line removed.
 pub fn system_text_without_billing_line(req: &Request, system_text: &str) -> String {
     let line = billing_line_of(req);
     if line.is_empty() || !system_text.starts_with(&line) {
@@ -331,7 +332,7 @@ pub struct SessionKey {
     pub scope: Scope,
 }
 
-/// `sessionKeyOf(body, systemText, firstUserText, headers)`: one thread per (session_id,
+/// The session key: one thread per (session_id,
 /// agent scope); a missing session id falls back to a weak prompt hash.
 pub fn session_key_of(
     req: &Request,
@@ -393,7 +394,7 @@ pub fn session_key_of(
     }
 }
 
-/// `isTitleRequest(body, systemText, msgs)`: empty tools, short system carrying the naming
+/// A session-title query: empty tools, short system carrying the naming
 /// phrase, a single user message.
 pub fn is_title_request(req: &Request, system_text: &str, msgs: &[Message]) -> bool {
     if !req.tool_list().is_empty() {
@@ -408,7 +409,7 @@ pub fn is_title_request(req: &Request, system_text: &str, msgs: &[Message]) -> b
     msgs.len() == 1 && msgs[0].role() == Some("user")
 }
 
-/// `titleEnvelope(msgs)`: `"pinned"` when the user message opens with a `<session>` block.
+/// The title envelope label: `"pinned"` when the user message opens with a `<session>` block.
 pub fn title_envelope(msgs: &[Message]) -> &'static str {
     let t = text_of(msgs.first().and_then(|m| m.content.as_ref()));
     let pinned = t
@@ -429,7 +430,7 @@ fn schema_of(t: &Value) -> Option<&Value> {
         .find_map(|k| t.get(k).filter(|v| !v.is_null()))
 }
 
-/// `countTokensEstimate(body)`: chars / 4, rounded up, over the system text, every message
+/// The `count_tokens` estimate: chars / 4, rounded up, over the system text, every message
 /// block and the tool specs.
 pub fn count_tokens_estimate<'a>(
     req: &Request,
@@ -462,7 +463,7 @@ pub fn count_tokens_estimate<'a>(
     chars.div_ceil(4) as u64
 }
 
-/// `safeEqual(a, b)`: constant-time over equal lengths; empty never matches.
+/// Key comparison: constant-time over equal lengths; empty never matches.
 pub fn safe_equal(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.is_empty() || b.is_empty() || a.len() != b.len() {
@@ -471,7 +472,7 @@ pub fn safe_equal(a: &str, b: &str) -> bool {
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// `presentedKey(headers)`: `authorization` (`Bearer` optional), else `x-api-key`.
+/// The key a request presents: `authorization` (`Bearer` optional), else `x-api-key`.
 pub fn presented_key(headers: &HeaderMap) -> Option<String> {
     let text = |k: &str| {
         headers
@@ -501,7 +502,7 @@ pub fn presented_key(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-/// `toDynamicTools(tools)`: Anthropic tools -> app-server DynamicToolSpec (function variant);
+/// Anthropic tools -> app-server DynamicToolSpec (function variant);
 /// the description is cut at 4000 chars.
 pub fn to_dynamic_tools(tools: &[Value]) -> Vec<Value> {
     tools
@@ -529,7 +530,7 @@ pub fn to_dynamic_tools(tools: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-/// `usageOut(u)`: codex usage -> Anthropic usage; `input_tokens` is the uncached share,
+/// Codex usage -> Anthropic usage; `input_tokens` is the uncached share,
 /// clamped at 0.
 pub fn usage_out(u: Option<&Usage>) -> Value {
     let u = u.copied().unwrap_or_default();
@@ -541,7 +542,7 @@ pub fn usage_out(u: Option<&Usage>) -> Value {
     })
 }
 
-/// `clampUsage(raw, window)`: `None` when nothing needs clamping, else the RAW-units figure
+/// The usage clamp: `None` when nothing needs clamping, else the RAW-units figure
 /// whose projection's three input columns sum to exactly `window`.
 pub fn clamp_usage(raw: &Usage, window: u64) -> Option<Usage> {
     if window == 0 {

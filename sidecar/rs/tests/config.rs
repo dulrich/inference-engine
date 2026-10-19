@@ -1,4 +1,4 @@
-//! `readConfig`: every default from sidecar/README.md "Environment" / "Test seams", strict
+//! `read_config`: every default from sidecar/README.md "Environment" / "Test seams", strict
 //! integer knobs (an invalid value is an error naming the variable), and the unset-vs-empty
 //! SIDECAR_BIND_EXTRA.
 
@@ -13,7 +13,7 @@ fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
 }
 
 #[test]
-fn defaults_match_config_mjs() {
+fn defaults_match_readme_environment() {
     let c = read_config(&env(&[("HOME", "/home/u")])).unwrap();
     assert_eq!(c.key, "");
     assert_eq!(c.port, 4877);

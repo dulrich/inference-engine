@@ -1,10 +1,10 @@
-//! `codex-sidecar.mjs` — the composition root: the process-wide `ctx` (here `World`), boot,
+//! The composition root: the process-wide state (`World`), boot,
 //! the two binds with the docker0 retry budget, and shutdown.
 //!
-//! Node is single-threaded, so every piece of mutable state lives in ONE `World` behind one
-//! mutex, and every "synchronous JS section" is one critical section. Nothing awaits while
-//! holding the lock; an `await` in Node is a lock release here. Objects that Node shares by
-//! reference (sessions, sinks, joiners, response handles) live in id-keyed maps in `World`.
+//! Every piece of mutable state lives in ONE `World` behind one mutex, and every step that
+//! must not interleave with another is one critical section. Nothing awaits while holding the
+//! lock; every `await` is a lock release. Shared objects (sessions, sinks, joiners, response
+//! handles) live in id-keyed maps in `World` and are referenced by id.
 
 use crate::config::{Config, Pinned, VERSION};
 use crate::errors::SidecarError;
@@ -67,7 +67,7 @@ impl World {
     }
 
     /// Sessions nothing can reach any more (not keyed, not on a bus, no request driving or
-    /// joined to them) are dropped; Node's GC does this implicitly.
+    /// joined to them) are dropped.
     pub fn gc_sessions(&mut self) {
         let mut live: HashSet<u64> = HashSet::new();
         for p in &self.personas {
@@ -164,7 +164,7 @@ fn bind_of(l: &TcpListener) -> String {
     l.local_addr().map(|a| a.to_string()).unwrap_or_default()
 }
 
-/// `startSidecar(env)`.
+/// Boots the sidecar: personas, both binds, the shared state.
 pub async fn start(cfg: Config, pinned: Pinned) -> Result<Handle, String> {
     if cfg.key.is_empty() {
         return Err("SIDECAR_KEY is required".into());
@@ -294,7 +294,7 @@ pub async fn start(cfg: Config, pinned: Pinned) -> Result<Handle, String> {
 }
 
 impl Handle {
-    /// The stdout line `codex-sidecar.mjs` prints once both binds are up.
+    /// The stdout line printed once both binds are up.
     pub fn banner(&self) -> String {
         format!(
             "codex-sidecar {VERSION} listening on 127.0.0.1:{} personas={}\n",
@@ -333,7 +333,7 @@ fn lock_vec<T>(m: &Mutex<Vec<T>>) -> MutexGuard<'_, Vec<T>> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// `new SidecarError(...)` shorthand.
+/// `SidecarError` shorthand.
 pub fn err(status: u16, t: &str, m: impl Into<String>) -> SidecarError {
     SidecarError::new(status, t, m)
 }

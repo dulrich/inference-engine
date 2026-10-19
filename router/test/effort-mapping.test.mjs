@@ -29,8 +29,8 @@
 // Limit: xhigh (and max → xhigh) is the template DEFAULT, so it renders identically to absent
 // kwargs — this oracle cannot tell a delivered xhigh from a dropped one. Forwarding identity for
 // those two rows is owned by the build-stage `effort-kwargs.test.ts` vitest cases (audit M2).
-// Whether the model actually FOLLOWS the ladder (medium thinks longer than low) is the live
-// generation gate conditional/effort-ladder.test.mjs, run per router/AGENTS.md's trigger table.
+// Whether the model actually FOLLOWS the ladder (medium thinks longer than low) is not gated: the
+// live generation gate that tried flaked on identical code and was retired (router/AGENTS.md 0007).
 //
 // Oracle selection (explicit, never sniffed): ROUTER_IMPL=node|rust, default rust since the
 // WP-6 cutover (plans/router-rust-gateway.md, audit E1); node is for the node-final rollback image.

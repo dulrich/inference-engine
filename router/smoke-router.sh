@@ -25,8 +25,8 @@
 #      effort ids — still listed, no longer picker rows) and the hosted anthropic/* ids.
 #   2. POST /v1/messages via claude-local/qwen38-27b-iq3s with thinking:{"type":"disabled"}
 #      returns 2xx and NO thinking content block — the deterministic half of the router's
-#      effort mapping (patch 0007). The low-vs-medium token-delta gate is prompt-dependent and
-#      lives only in router/test/conditional/effort-ladder.test.mjs, never here.
+#      effort mapping (patch 0007). The low-vs-medium token delta is prompt- and slot-state-
+#      dependent, so no gate asserts it.
 #   3. A request with a missing gateway key, and one with a wrong gateway key, each return a
 #      401 error body (asserted on the body's error message, not just the status).
 #   4. One non-streamed chat completion via claude-local/qwen36-a3b returns non-empty content.
@@ -150,7 +150,7 @@ fi
 # (plans/router-effort-mapping-claude-local.md): thinking:{"type":"disabled"} becomes
 # enable_thinking:false for claude-local/qwen38-27b-iq3s. That is the one level whose effect is
 # deterministic on this template — the low-vs-medium token delta is prompt-dependent (measured)
-# and is gated in router/test/conditional/effort-ladder.test.mjs, never here. First request after a model
+# and slot-state-dependent, so it is not gated anywhere. First request after a model
 # switch may include a llama-swap load, hence the long timeout.
 note "checking POST /v1/messages (model=claude-local/qwen38-27b-iq3s, thinking disabled) ..."
 effort_status=$(curl -s --max-time 300 -o /tmp/smoke-router-effort-body.$$ -w '%{http_code}' \

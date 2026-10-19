@@ -1,6 +1,7 @@
 //! Port of sidecar/test/unit.test.mjs, case for case. The `wireModelId` assertions live in
 //! `sinks.mjs` (WP-3 scope) and are ported with that module, not here.
 
+use codex_sidecar::codex::{CallId, ThreadId, TokenUsage, ToolCall, Usage};
 use codex_sidecar::errors::{map_upstream_error, rate_limit_exhaustion, retry_after_seconds};
 use codex_sidecar::logging::Logger;
 use codex_sidecar::protocol::*;
@@ -335,14 +336,14 @@ fn usage_projects_into_anthropic_semantics() {
     let z = json!({"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0});
     assert_eq!(usage_out(None), z, "no usage yet");
     assert_eq!(
-        usage_out(Some(
-            &json!({"inputTokens": 6499, "cachedInputTokens": 0, "cacheWriteInputTokens": 0, "outputTokens": 0})
-        )),
+        usage_out(Some(&u(
+            json!({"inputTokens": 6499, "cachedInputTokens": 0, "cacheWriteInputTokens": 0, "outputTokens": 0})
+        ))),
         json!({"input_tokens": 6499, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0})
     );
-    let warm = usage_out(Some(
-        &json!({"inputTokens": 6463, "cachedInputTokens": 3840, "cacheWriteInputTokens": 0, "outputTokens": 12}),
-    ));
+    let warm = usage_out(Some(&u(
+        json!({"inputTokens": 6463, "cachedInputTokens": 3840, "cacheWriteInputTokens": 0, "outputTokens": 12}),
+    )));
     assert_eq!(
         warm,
         json!({"input_tokens": 2623, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 3840, "output_tokens": 12})
@@ -355,21 +356,86 @@ fn usage_projects_into_anthropic_semantics() {
         "a client summing the three input columns gets the prompt exactly once"
     );
     assert_eq!(
-        usage_out(Some(
-            &json!({"inputTokens": 10000, "cachedInputTokens": 6000, "cacheWriteInputTokens": 1500, "outputTokens": 40})
-        )),
+        usage_out(Some(&u(
+            json!({"inputTokens": 10000, "cachedInputTokens": 6000, "cacheWriteInputTokens": 1500, "outputTokens": 40})
+        ))),
         json!({"input_tokens": 2500, "cache_creation_input_tokens": 1500, "cache_read_input_tokens": 6000, "output_tokens": 40})
     );
     assert_eq!(
-        usage_out(Some(
-            &json!({"inputTokens": 128, "cachedInputTokens": 3840, "cacheWriteInputTokens": 0, "outputTokens": 7})
-        )),
+        usage_out(Some(&u(
+            json!({"inputTokens": 128, "cachedInputTokens": 3840, "cacheWriteInputTokens": 0, "outputTokens": 7})
+        ))),
         json!({"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 3840, "output_tokens": 7})
     );
     assert_eq!(
-        usage_out(Some(
-            &json!({"inputTokens": 0, "cachedInputTokens": 0, "cacheWriteInputTokens": 0, "outputTokens": 5418})
-        ))["output_tokens"],
+        usage_out(Some(&u(
+            json!({"inputTokens": 0, "cachedInputTokens": 0, "cacheWriteInputTokens": 0, "outputTokens": 5418})
+        )))["output_tokens"],
         5418
+    );
+}
+
+fn u(v: Value) -> Usage {
+    Usage::from_value(&v)
+}
+
+#[test]
+fn codex_usage_reads_missing_null_and_non_numeric_fields_as_zero() {
+    assert_eq!(
+        u(json!({"inputTokens": "12", "cachedInputTokens": null, "outputTokens": -3})),
+        Usage::default()
+    );
+    assert_eq!(
+        u(json!({"inputTokens": 7, "outputTokens": 2.0})),
+        Usage {
+            input: 7,
+            output: 2,
+            ..Usage::default()
+        }
+    );
+}
+
+#[test]
+fn codex_usage_keeps_the_raw_object_beside_the_typed_counts() {
+    let raw = json!({"inputTokens": 9, "cachedInputTokens": 4, "outputTokens": 3,
+                     "reasoningOutputTokens": 1, "totalTokens": 12});
+    let tu: TokenUsage = serde_json::from_value(json!({"total": raw, "last": 5})).unwrap();
+    let total = tu.total.unwrap();
+    assert_eq!(total.raw, raw, "every field codex sent, and only those");
+    assert_eq!(
+        total.usage,
+        Usage {
+            input: 9,
+            cached: 4,
+            cache_write: 0,
+            output: 3
+        }
+    );
+    assert!(tu.last.is_none(), "a non-object usage reads as absent");
+}
+
+#[test]
+fn non_string_codex_ids_normalize_at_the_frame_boundary() {
+    assert_eq!(
+        ThreadId::from_value(&json!(42)),
+        Some(ThreadId("42".into()))
+    );
+    assert_eq!(
+        ThreadId::from_value(&json!("t-1")),
+        Some(ThreadId("t-1".into()))
+    );
+    for v in [json!(""), json!(null), json!({"id": 1}), json!(true)] {
+        assert_eq!(ThreadId::from_value(&v), None, "{v} reads as absent");
+    }
+    let call = ToolCall::of(
+        &serde_json::from_value(json!({"id": 3, "method": "item/tool/call",
+            "params": {"threadId": 7, "callId": 9, "turnId": {"x": 1}, "tool": "t"}}))
+        .unwrap(),
+    );
+    assert_eq!(call.call_id(), CallId("9".into()));
+    assert_eq!(call.params.thread_id, Some(ThreadId("7".into())));
+    assert_eq!(
+        call.params.turn_id, None,
+        "a wrong-shape field never fails the frame"
     );
 }

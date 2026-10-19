@@ -3,9 +3,10 @@
 //! Every call is fail-open (the writer swallows). Never any message content — only identity,
 //! model/effort and token totals.
 
-use crate::js;
-use crate::outbox::OutboxWriter;
-use serde_json::{Map, Value};
+use crate::codex::{ThreadId, Usage};
+use crate::outbox::{OutboxWriter, Row};
+use serde::Serialize;
+use serde_json::Value;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,37 +33,8 @@ pub fn outbox_key_of(key: &str, weak: bool) -> Option<OutboxKey> {
     })
 }
 
-/// JS `a + b` for the two token counts (numbers add; a string operand concatenates).
-fn js_add(a: &Value, b: &Value) -> Value {
-    if a.is_string()
-        || b.is_string()
-        || a.is_object()
-        || a.is_array()
-        || b.is_object()
-        || b.is_array()
-    {
-        return Value::from(format!("{}{}", js::js_string(a), js::js_string(b)));
-    }
-    js::num(js::to_number(Some(a)) + js::to_number(Some(b)))
-}
-
-/// `outboxUsage(u)` — the codex cumulative total in the tracker's names.
-fn outbox_usage(u: Option<&Value>, into: &mut Map<String, Value>) {
-    let input = js::present(js::prop(u, "inputTokens"))
-        .cloned()
-        .unwrap_or(Value::from(0));
-    let output = js::present(js::prop(u, "outputTokens"))
-        .cloned()
-        .unwrap_or(Value::from(0));
-    let total = js_add(&input, &output);
-    into.insert("input".into(), input);
-    into.insert("output".into(), output);
-    into.insert("total".into(), total);
-}
-
 /// Everything `outboxTurn(ctx, persona, sess, {model, effort, stopReason})` reads, as explicit
-/// borrows (WP-3 owns the ctx/persona/session types). `None` for model/effort/stop_reason means
-/// JS `undefined` (key omitted); `Some(Value::Null)` is a written `null`.
+/// borrows.
 pub struct TurnRow<'a> {
     pub outbox: &'a mut OutboxWriter,
     /// `ctx.config.outboxPath` non-empty.
@@ -74,17 +46,79 @@ pub struct TurnRow<'a> {
     pub persona_rate_limited: &'a mut bool,
     pub sess_key: &'a str,
     pub outbox_key: Option<&'a OutboxKey>,
-    pub thread_id: Option<Value>,
-    pub usage_total: Option<&'a Value>,
-    pub model: Option<Value>,
-    pub effort: Option<Value>,
-    pub stop_reason: Option<Value>,
+    pub thread_id: Option<&'a ThreadId>,
+    /// The thread's cumulative codex usage, when reported.
+    pub usage_total: Option<&'a Usage>,
+    pub model: &'a str,
+    pub effort: Option<&'a str>,
+    pub stop_reason: &'a Value,
 }
 
-fn put(m: &mut Map<String, Value>, k: &str, v: &Option<Value>) {
-    if let Some(v) = v {
-        m.insert(k.into(), v.clone());
+#[derive(Serialize)]
+struct SpawnedPayload<'a> {
+    #[serde(rename = "threadId")]
+    thread_id: Option<&'a ThreadId>,
+}
+
+#[derive(Serialize)]
+struct TurnPayload<'a> {
+    model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<&'a str>,
+    #[serde(rename = "threadId")]
+    thread_id: Option<&'a ThreadId>,
+    stop_reason: &'a Value,
+}
+
+/// `outboxUsage(u)` — the codex cumulative total in the tracker's names.
+#[derive(Serialize)]
+struct UsagePayload<'a> {
+    model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<&'a str>,
+    input: u64,
+    output: u64,
+    total: u64,
+}
+
+#[derive(Serialize)]
+struct RateLimitPayload<'a> {
+    state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'a Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_after_s: Option<u64>,
+}
+
+fn row<'a, P: Serialize>(
+    leg: &'a str,
+    key: &'a OutboxKey,
+    kind: &'static str,
+    payload: P,
+) -> Row<'a, P> {
+    Row {
+        leg,
+        session_id: &key.session_id,
+        agent_id: key.agent_id.as_deref(),
+        kind,
+        payload,
     }
+}
+
+/// The persona-wide `rate_limit` exhaustion row for one session.
+pub fn rate_limit_exhausted(
+    outbox: &mut OutboxWriter,
+    leg: &str,
+    key: &OutboxKey,
+    reason: &Value,
+    retry_after_s: Option<u64>,
+) {
+    let p = RateLimitPayload {
+        state: "exhausted",
+        reason: Some(reason),
+        retry_after_s,
+    };
+    outbox.record_row(&row(leg, key, "rate_limit", p));
 }
 
 /// `outboxTurn`: one `turn.completed` per completed turn, plus `child.spawned` the first time a
@@ -95,43 +129,38 @@ pub fn outbox_turn(t: TurnRow<'_>) {
     if !t.outbox_configured {
         return;
     }
-    let base = |kind: &str, payload: Map<String, Value>| {
-        let mut m = Map::new();
-        m.insert("harness".into(), Value::from("codex-sidecar"));
-        m.insert("leg".into(), Value::from(t.persona_name));
-        m.insert("session_id".into(), Value::from(okey.session_id.as_str()));
-        m.insert(
-            "agent_id".into(),
-            okey.agent_id.as_deref().map_or(Value::Null, Value::from),
-        );
-        m.insert("agent_type".into(), Value::Null);
-        m.insert("kind".into(), Value::from(kind));
-        m.insert("payload".into(), Value::Object(payload));
-        Value::Object(m)
-    };
+    let leg = t.persona_name;
     if okey.agent_id.is_some() && !t.spawned.contains(t.sess_key) {
         t.spawned.insert(t.sess_key.to_string());
-        let mut p = Map::new();
-        put(&mut p, "threadId", &t.thread_id);
-        t.outbox.record(&base("child.spawned", p));
+        let p = SpawnedPayload {
+            thread_id: t.thread_id,
+        };
+        t.outbox.record_row(&row(leg, okey, "child.spawned", p));
     }
-    let mut p = Map::new();
-    put(&mut p, "model", &t.model);
-    put(&mut p, "effort", &t.effort);
-    put(&mut p, "threadId", &t.thread_id);
-    put(&mut p, "stop_reason", &t.stop_reason);
-    t.outbox.record(&base("turn.completed", p));
-    if js::truthy(t.usage_total) {
-        let mut p = Map::new();
-        put(&mut p, "model", &t.model);
-        put(&mut p, "effort", &t.effort);
-        outbox_usage(t.usage_total, &mut p);
-        t.outbox.record(&base("usage", p));
+    let p = TurnPayload {
+        model: t.model,
+        effort: t.effort,
+        thread_id: t.thread_id,
+        stop_reason: t.stop_reason,
+    };
+    t.outbox.record_row(&row(leg, okey, "turn.completed", p));
+    if let Some(u) = t.usage_total {
+        let p = UsagePayload {
+            model: t.model,
+            effort: t.effort,
+            input: u.input,
+            output: u.output,
+            total: u.input + u.output,
+        };
+        t.outbox.record_row(&row(leg, okey, "usage", p));
     }
     if *t.persona_rate_limited {
         *t.persona_rate_limited = false;
-        let mut p = Map::new();
-        p.insert("state".into(), Value::from("ok"));
-        t.outbox.record(&base("rate_limit", p));
+        let p = RateLimitPayload {
+            state: "ok",
+            reason: None,
+            retry_after_s: None,
+        };
+        t.outbox.record_row(&row(leg, okey, "rate_limit", p));
     }
 }

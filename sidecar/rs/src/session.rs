@@ -2,12 +2,14 @@
 //! (`wait_outcome` / `settle` / `drain`). Sessions live in `World::sessions` by id; every
 //! method takes the world because, as in Node, a session reaches into its persona.
 
+use crate::codex::{
+    CallId, CodexUsage, ItemId, Note, ThreadId, TokenUsage, ToolCall, TurnId, Usage,
+};
 use crate::config::INBAND_ITEM_TYPES;
 use crate::errors::{map_upstream_error, SidecarError};
 use crate::js;
 use crate::outbox_events::OutboxKey;
 use crate::persona;
-use crate::protocol::zero_usage;
 use crate::request::Token;
 use crate::sidecar::{err, lock, with_world, Shared, World};
 use crate::sinks;
@@ -20,8 +22,8 @@ use tokio::time::{Duration, Instant};
 #[derive(Debug, Clone)]
 pub enum Outcome {
     Error(SidecarError),
-    /// The batched `item/tool/call` request frames.
-    ToolUse(Vec<Value>),
+    /// The batched `item/tool/call` requests.
+    ToolUse(Vec<ToolCall>),
     EndTurn,
 }
 
@@ -32,11 +34,11 @@ pub struct OwnerTok {
 }
 
 pub struct LastOutcome {
-    pub req_id: Value,
+    pub req_id: String,
     pub digest: String,
     pub stop_reason: Value,
     pub tool_calls: Value,
-    pub usage: Value,
+    pub usage: Usage,
     pub blocks: Vec<Value>,
 }
 
@@ -46,7 +48,7 @@ pub enum JoinOutcome {
     Done {
         stop_reason: Value,
         tool_calls: Value,
-        usage: Value,
+        usage: Usage,
     },
 }
 
@@ -60,32 +62,32 @@ pub struct Joiner {
 
 pub enum Frame {
     ChildExit(SidecarError),
-    ToolCall(Value),
-    Note(Value),
+    ToolCall(ToolCall),
+    Note(Note),
 }
 
 pub struct Session {
     pub persona: usize,
     pub key: String,
-    pub thread_id: Option<Value>,
-    pub turn_id: Option<Value>,
+    pub thread_id: Option<ThreadId>,
+    pub turn_id: Option<TurnId>,
     pub model: Option<String>,
     pub last_effort: Option<Option<String>>,
-    /// callId -> JSON-RPC request id, in insertion order (a JS `Map`).
-    pub parked: Vec<(Value, Value)>,
+    /// callId -> JSON-RPC request id, in insertion order (abandonment answers in order).
+    pub parked: Vec<(CallId, Value)>,
     pub delivered: HashSet<String>,
     pub turn_open: bool,
-    pub batch: Vec<Value>,
+    pub batch: Vec<ToolCall>,
     /// The batch debounce: when the open batch settles (moved by each new call), and the
     /// one task that waits for it.
     pub batch_due: Option<Instant>,
     pub batch_timer: Option<AbortHandle>,
     pub msg_count: usize,
     pub hist: Vec<String>,
-    pub delta_items: Vec<Value>,
-    pub usage_last: Option<Value>,
-    pub usage_total: Option<Value>,
-    pub context_window: Option<Value>,
+    pub delta_items: HashSet<ItemId>,
+    pub usage_last: Option<CodexUsage>,
+    pub usage_total: Option<CodexUsage>,
+    pub context_window: Option<u64>,
     pub outbox_key: Option<OutboxKey>,
     pub sink: Option<u64>,
     pub owner: Option<OwnerTok>,
@@ -99,16 +101,7 @@ pub struct Session {
     pub closed: bool,
 }
 
-/// JS `SameValueZero` for the primitive ids a `Map`/`Set` is keyed by (objects never match).
-pub fn same_value(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Object(_), _) | (Value::Array(_), _) => false,
-        (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
-        _ => a == b,
-    }
-}
-
-/// The `delivered` key of an id (strings as-is; shared with `request::disposition_of`).
+/// The `delivered` key of a client-side id (strings as-is; shared with `request::disposition_of`).
 pub fn id_key(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -133,7 +126,7 @@ impl Session {
             batch_timer: None,
             msg_count: 0,
             hist: Vec::new(),
-            delta_items: Vec::new(),
+            delta_items: HashSet::new(),
             usage_last: None,
             usage_total: None,
             context_window: None,
@@ -154,27 +147,21 @@ impl Session {
         self.owner.as_ref().map(|o| o.id)
     }
 
-    /// `reconcile()`: the latest `tokenUsage.last`, each field `max(0, v ?? 0)`.
-    pub fn reconcile(&self) -> Value {
-        let z = zero_usage();
-        let mut out = serde_json::Map::new();
-        for (k, _) in z.as_object().into_iter().flatten() {
-            let v = js::present(js::prop(self.usage_last.as_ref(), k))
-                .cloned()
-                .unwrap_or(Value::from(0));
-            let n = js::to_number(Some(&v));
-            let r = if n.is_nan() { n } else { n.max(0.0) };
-            out.insert(k.clone(), js::num(r));
-        }
-        Value::Object(out)
+    /// `reconcile()`: the latest `tokenUsage.last` (zero before any).
+    pub fn reconcile(&self) -> Usage {
+        self.usage_last
+            .as_ref()
+            .map(|u| u.usage)
+            .unwrap_or_default()
     }
 
-    pub fn lag_usage(&self) -> Value {
-        self.usage_last.clone().unwrap_or_else(zero_usage)
+    /// The usage a late joiner / replay starts from (the latest `last`, else zero).
+    pub fn lag_usage(&self) -> Usage {
+        self.reconcile()
     }
 
-    pub fn parked_get(&self, call: &Value) -> Option<usize> {
-        self.parked.iter().position(|(k, _)| same_value(k, call))
+    pub fn parked_get(&self, call: &CallId) -> Option<usize> {
+        self.parked.iter().position(|(k, _)| k == call)
     }
 }
 
@@ -378,67 +365,31 @@ fn arm_batch(w: &mut World, sid: u64) {
     s.batch_timer = Some(task.abort_handle());
 }
 
-fn params_of(m: &Value) -> Value {
-    match js::prop(Some(m), "params") {
-        Some(p) if js::truthy(Some(p)) => p.clone(),
-        _ => json!({}),
-    }
-}
-
-fn truthy_or(v: Option<&Value>, prev: &Option<Value>) -> Option<Value> {
-    if js::truthy(v) {
-        v.cloned()
-    } else {
-        prev.clone()
-    }
-}
-
-fn nullish_or(v: Option<&Value>, prev: &Option<Value>) -> Option<Value> {
-    match v {
-        Some(x) if !x.is_null() => Some(x.clone()),
-        _ => prev.clone(),
-    }
-}
-
-/// codex's input-token fields: a usage figure whose every one of these is 0 (or absent) is
-/// a compaction interim, not a real occupancy reading.
-const INPUT_USAGE_FIELDS: &[&str] = &["inputTokens", "cachedInputTokens", "cacheWriteInputTokens"];
-
-fn input_is_zero(u: Option<&Value>) -> bool {
-    INPUT_USAGE_FIELDS.iter().all(|k| {
-        let v = js::present(js::prop(u, k))
-            .cloned()
-            .unwrap_or(Value::from(0));
-        let n = js::to_number(Some(&v));
-        n.is_nan() || n <= 0.0
-    })
-}
-
 /// A usage figure whose input fields are all zero never replaces a non-zero one: during a
 /// compaction codex emits such an interim, and reporting it would read as an empty context.
-fn usage_or_prev(v: Option<&Value>, prev: &Option<Value>) -> Option<Value> {
-    match v {
-        Some(x) if !x.is_null() => {
-            if input_is_zero(Some(x)) && prev.is_some() && !input_is_zero(prev.as_ref()) {
-                prev.clone()
-            } else {
-                Some(x.clone())
-            }
-        }
-        _ => prev.clone(),
+fn usage_or_prev(v: Option<CodexUsage>, prev: &mut Option<CodexUsage>) {
+    let Some(v) = v else { return };
+    let keep = v.usage.input_is_zero() && prev.as_ref().is_some_and(|p| !p.usage.input_is_zero());
+    if !keep {
+        *prev = Some(v);
     }
 }
 
-fn take_usage(s: &mut Session, tu: &Value) {
-    s.usage_last = usage_or_prev(tu.get("last"), &s.usage_last);
-    s.usage_total = usage_or_prev(tu.get("total"), &s.usage_total);
+fn take_usage(s: &mut Session, tu: TokenUsage) {
+    usage_or_prev(tu.last, &mut s.usage_last);
+    usage_or_prev(tu.total, &mut s.usage_total);
     // A zero window would clamp the projection to 0, so it never replaces a known one either.
-    s.context_window = match tu.get("modelContextWindow") {
-        Some(x) if js::to_number(Some(x)) == 0.0 && s.context_window.is_some() => {
-            s.context_window.clone()
-        }
-        v => nullish_or(v, &s.context_window),
-    };
+    match tu.model_context_window {
+        Some(0) if s.context_window.is_some() => {}
+        Some(n) => s.context_window = Some(n),
+        None => {}
+    }
+}
+
+fn keep_turn(s: &mut Session, t: Option<TurnId>) {
+    if t.is_some() {
+        s.turn_id = t;
+    }
 }
 
 /// `onFrame(ev)`: every app-server frame for this thread.
@@ -449,115 +400,82 @@ pub fn on_frame(w: &mut World, sid: u64, ev: Frame) {
     if s.closed {
         return;
     }
-    let m = match ev {
+    let note = match ev {
         Frame::ChildExit(e) => {
             settle(w, sid, Outcome::Error(e));
             return;
         }
-        Frame::ToolCall(rpc) => {
-            let p = params_of(&rpc);
-            s.turn_id = truthy_or(p.get("turnId"), &s.turn_id);
-            let call = p.get("callId").cloned().unwrap_or(Value::Null);
-            let id = rpc.get("id").cloned().unwrap_or(Value::Null);
-            match s.parked_get(&call) {
-                Some(i) => s.parked[i].1 = id,
-                None => s.parked.push((call, id)),
+        Frame::ToolCall(call) => {
+            keep_turn(s, call.params.turn_id.clone());
+            let key = call.call_id();
+            match s.parked_get(&key) {
+                Some(i) => s.parked[i].1 = call.rpc_id.clone(),
+                None => s.parked.push((key, call.rpc_id.clone())),
             }
-            s.batch.push(rpc);
+            s.batch.push(call);
             arm_batch(w, sid);
             return;
         }
-        Frame::Note(m) => m,
+        Frame::Note(n) => n,
     };
-    let p = params_of(&m);
-    let method = m.get("method").cloned().unwrap_or(Value::Null);
     let pi = s.persona;
-    match method.as_str().unwrap_or("") {
-        "turn/started" => {
-            s.turn_id = truthy_or(js::prop(p.get("turn"), "id"), &s.turn_id);
-        }
-        "item/started" => {
-            let ty = js::prop(p.get("item"), "type").cloned();
-            s.turn_id = truthy_or(p.get("turnId"), &s.turn_id);
-            if let Some(ty) = ty.filter(|t| js::truthy(Some(t))) {
+    match note {
+        Note::TurnStarted { turn_id } => keep_turn(s, turn_id),
+        Note::ItemStarted { turn_id, item_type } => {
+            keep_turn(s, turn_id);
+            if let Some(ty) = item_type.filter(|t| js::truthy(Some(t))) {
                 let inband = ty.as_str().is_some_and(|t| INBAND_ITEM_TYPES.contains(&t));
                 if !inband {
                     persona::trip_boundary(w, pi, ty, Some(sid));
                 }
             }
         }
-        "item/agentMessage/delta" => {
-            if let Some(d) = p
-                .get("delta")
-                .and_then(Value::as_str)
-                .filter(|d| !d.is_empty())
-            {
-                if let Some(item) = p.get("itemId").filter(|v| js::truthy(Some(v))) {
-                    if !s.delta_items.iter().any(|x| same_value(x, item)) {
-                        s.delta_items.push(item.clone());
-                    }
+        Note::AgentMessageDelta { item_id, delta } => {
+            if !delta.is_empty() {
+                if let Some(item) = item_id {
+                    s.delta_items.insert(item);
                 }
-                emit_text(w, sid, d);
+                emit_text(w, sid, &delta);
             }
         }
-        "item/completed" => {
-            let item = p.get("item");
-            let is_msg = js::prop(item, "type") == Some(&Value::from("agentMessage"));
-            let text = js::prop(item, "text")
-                .and_then(Value::as_str)
-                .filter(|t| !t.is_empty());
-            if let (true, Some(t)) = (is_msg, text) {
-                let id = js::prop(item, "id").cloned().unwrap_or(Value::Null);
-                let seen = !id.is_null() && s.delta_items.iter().any(|x| same_value(x, &id));
+        Note::ItemCompleted(item) => {
+            let is_msg = item.ty.as_ref().and_then(Value::as_str) == Some("agentMessage");
+            if let (true, Some(t)) = (is_msg, item.text.filter(|t| !t.is_empty())) {
+                let seen = item.id.is_some_and(|id| s.delta_items.contains(&id));
                 if !seen {
-                    emit_text(w, sid, t);
+                    emit_text(w, sid, &t);
                 }
             }
         }
-        "thread/tokenUsage/updated" => {
-            if let Some(tu) = p.get("tokenUsage").filter(|v| js::truthy(Some(v))) {
-                take_usage(s, tu);
-            }
-        }
-        "hook/started" | "mcpServer/startupStatus/updated" => {
-            let tid = s.thread_id.clone().unwrap_or(Value::Null);
+        Note::TokenUsage(tu) => take_usage(s, tu),
+        Note::ConfigEvent(method) => {
+            let tid = s.thread_id.clone();
             let name = w.personas[pi].name.clone();
             w.log(
                 "config-unverified",
                 json!({ "persona": name, "threadId": tid, "stage": "runtime", "method": method }),
             );
-            let msg = format!(
-                "thread config not honoured: unexpected {}",
-                method.as_str().unwrap_or("")
-            );
+            let msg = format!("thread config not honoured: unexpected {method}");
             settle(w, sid, Outcome::Error(err(502, "api_error", msg)));
         }
-        "error" => {
-            let e = match p.get("error") {
-                Some(v) if !v.is_null() => v.clone(),
-                _ => p.clone(),
-            };
+        Note::Error(e) => {
             settle(
                 w,
                 sid,
                 Outcome::Error(map_upstream_error(&e, "app-server error")),
             );
         }
-        "turn/completed" => {
-            let turn = match p.get("turn") {
-                Some(t) if js::truthy(Some(t)) => t.clone(),
-                _ => json!({}),
-            };
-            s.turn_id = truthy_or(turn.get("id"), &s.turn_id);
-            if let Some(tu) = p.get("tokenUsage").filter(|v| js::truthy(Some(v))) {
+        Note::TurnCompleted { turn, token_usage } => {
+            keep_turn(s, turn.id);
+            if let Some(tu) = token_usage {
                 take_usage(s, tu);
             }
-            let status = turn.get("status");
-            if status == Some(&Value::from("failed")) || js::truthy(turn.get("error")) {
-                let e = match turn.get("error") {
-                    Some(v) if !v.is_null() => v.clone(),
+            let failed = turn.status.as_deref() == Some("failed");
+            if failed || js::truthy(turn.error.as_ref()) {
+                let e = match turn.error {
+                    Some(v) if !v.is_null() => v,
                     _ => {
-                        let st = status.map_or("undefined".to_string(), js::js_string);
+                        let st = turn.status.as_deref().unwrap_or("undefined");
                         json!({ "message": format!("turn {st}") })
                     }
                 };
@@ -573,12 +491,12 @@ pub fn on_frame(w: &mut World, sid: u64, ev: Frame) {
             }
             settle(w, sid, Outcome::EndTurn);
         }
-        _ => {}
+        Note::Other => {}
     }
 }
 
 /// `answerParked(callId, text, success)`.
-pub fn answer_parked(w: &mut World, sid: u64, call: &Value, text: &str, success: bool) -> bool {
+pub fn answer_parked(w: &mut World, sid: u64, call: &CallId, text: &str, success: bool) -> bool {
     let Some(s) = w.sessions.get_mut(&sid) else {
         return false;
     };
@@ -598,11 +516,11 @@ pub fn answer_parked(w: &mut World, sid: u64, call: &Value, text: &str, success:
 
 /// `abandonDelivered(reason)`: only calls the client has already been shown.
 pub fn abandon_delivered(w: &mut World, sid: u64, reason: &str) {
-    let calls: Vec<Value> = match w.sessions.get(&sid) {
+    let calls: Vec<CallId> = match w.sessions.get(&sid) {
         Some(s) => s
             .parked
             .iter()
-            .filter(|(k, _)| s.delivered.contains(&id_key(k)))
+            .filter(|(k, _)| s.delivered.contains(k.as_str()))
             .map(|(k, _)| k.clone())
             .collect(),
         None => return,
@@ -613,7 +531,7 @@ pub fn abandon_delivered(w: &mut World, sid: u64, reason: &str) {
 }
 
 pub fn abandon_parked(w: &mut World, sid: u64, reason: &str) {
-    let calls: Vec<Value> = match w.sessions.get(&sid) {
+    let calls: Vec<CallId> = match w.sessions.get(&sid) {
         Some(s) => s.parked.iter().map(|(k, _)| k.clone()).collect(),
         None => return,
     };
@@ -649,6 +567,6 @@ pub fn close(w: &mut World, sid: u64, reason: &str) {
     };
     let (pi, tid) = (s.persona, s.thread_id.clone());
     if let Some(tid) = tid {
-        w.personas[pi].bus.retain(|(k, _)| !same_value(k, &tid));
+        w.personas[pi].bus.remove(&tid);
     }
 }

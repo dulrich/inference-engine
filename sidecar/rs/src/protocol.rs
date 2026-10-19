@@ -2,6 +2,7 @@
 //! usage figure: model/effort identity, message and system-prompt reading (session-key
 //! discriminator, title signature), and the codex -> Anthropic usage projection with its clamp.
 
+use crate::codex::Usage;
 use crate::js;
 use axum::http::HeaderMap;
 use serde_json::{json, Value};
@@ -546,75 +547,55 @@ pub fn to_dynamic_tools(tools: Option<&Value>) -> Vec<Value> {
         .collect()
 }
 
-pub fn zero_usage() -> Value {
-    json!({ "inputTokens": 0, "cachedInputTokens": 0, "cacheWriteInputTokens": 0, "outputTokens": 0 })
-}
-
-fn field_or_zero(u: Option<&Value>, k: &str) -> Value {
-    js::present(js::prop(u, k))
-        .cloned()
-        .unwrap_or(Value::from(0))
-}
-
-/// `usageOut(u)`: raw codex usage -> Anthropic usage; `input_tokens` is the uncached share,
+/// `usageOut(u)`: codex usage -> Anthropic usage; `input_tokens` is the uncached share,
 /// clamped at 0.
-pub fn usage_out(u: Option<&Value>) -> Value {
-    let cache_read = field_or_zero(u, "cachedInputTokens");
-    let cache_write = field_or_zero(u, "cacheWriteInputTokens");
-    let input = js::to_number(Some(&field_or_zero(u, "inputTokens")))
-        - js::to_number(Some(&cache_read))
-        - js::to_number(Some(&cache_write));
-    // Math.max(0, NaN) is NaN
-    let input = if input.is_nan() {
-        input
-    } else {
-        input.max(0.0)
-    };
+pub fn usage_out(u: Option<&Usage>) -> Value {
+    let u = u.copied().unwrap_or_default();
     json!({
-        "input_tokens": js::num(input),
-        "cache_creation_input_tokens": cache_write,
-        "cache_read_input_tokens": cache_read,
-        "output_tokens": field_or_zero(u, "outputTokens"),
+        "input_tokens": u.input.saturating_sub(u.cached).saturating_sub(u.cache_write),
+        "cache_creation_input_tokens": u.cache_write,
+        "cache_read_input_tokens": u.cached,
+        "output_tokens": u.output,
     })
 }
 
 /// `clampUsage(raw, window)`: `None` when nothing needs clamping, else the RAW-units figure
 /// whose projection's three input columns sum to exactly `window`.
-pub fn clamp_usage(raw: Option<&Value>, window: f64) -> Option<Value> {
-    if !window.is_finite() || window <= 0.0 {
+pub fn clamp_usage(raw: &Usage, window: u64) -> Option<Usage> {
+    if window == 0 {
         return None;
     }
-    let proj = usage_out(raw);
-    let cols = [
-        "input_tokens",
-        "cache_read_input_tokens",
-        "cache_creation_input_tokens",
+    let vals = [
+        raw.input
+            .saturating_sub(raw.cached)
+            .saturating_sub(raw.cache_write),
+        raw.cached,
+        raw.cache_write,
     ];
-    let vals: Vec<f64> = cols.iter().map(|k| js::to_number(proj.get(*k))).collect();
-    let sum: f64 = vals.iter().sum();
-    // `sum <= window` is false for NaN, so NaN proceeds as in JS
-    if sum <= window {
+    let sum: u128 = vals.iter().map(|v| u128::from(*v)).sum();
+    if sum <= u128::from(window) {
         return None;
     }
-    let mut scaled: Vec<f64> = vals.iter().map(|v| ((v * window) / sum).floor()).collect();
-    let mut rest = window - scaled.iter().sum::<f64>();
-    let mut order: Vec<usize> = (0..cols.len()).collect();
-    order.sort_by(|&a, &b| {
-        let d = vals[b] - vals[a];
-        d.partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    let mut scaled: Vec<u64> = vals
+        .iter()
+        .map(|v| (u128::from(*v) * u128::from(window) / sum) as u64)
+        .collect();
+    let mut rest = window - scaled.iter().sum::<u64>();
+    // the remainder goes to the largest columns first (stable on ties)
+    let mut order: Vec<usize> = (0..vals.len()).collect();
+    order.sort_by(|&a, &b| vals[b].cmp(&vals[a]));
     for i in order {
-        if rest <= 0.0 {
+        if rest == 0 {
             break;
         }
-        scaled[i] += 1.0;
-        rest -= 1.0;
+        scaled[i] += 1;
+        rest -= 1;
     }
     let (input, cache_read, cache_write) = (scaled[0], scaled[1], scaled[2]);
-    Some(json!({
-        "inputTokens": js::num(input + cache_read + cache_write),
-        "cachedInputTokens": js::num(cache_read),
-        "cacheWriteInputTokens": js::num(cache_write),
-        "outputTokens": field_or_zero(raw, "outputTokens"),
-    }))
+    Some(Usage {
+        input: input + cache_read + cache_write,
+        cached: cache_read,
+        cache_write,
+        output: raw.output,
+    })
 }

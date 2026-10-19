@@ -3,6 +3,7 @@
 //! emission. Every exit writes one `http` (or `http-error`) row and settles every attached
 //! connection.
 
+use crate::codex::{ToolCall, Usage};
 use crate::errors::SidecarError;
 use crate::js;
 use crate::logging::redact_headers;
@@ -177,7 +178,7 @@ pub async fn run(
             Sink::buffer(tx, &wire)
         };
         w.sinks.insert(sink, sk);
-        let token = request_token(Value::from(req_id.as_str()), mode, &norm, &ident);
+        let token = request_token(req_id.clone(), mode, &norm, &ident);
         let token_id = w.id();
         let rc = Rc {
             pi,
@@ -200,7 +201,7 @@ pub async fn run(
                     digest: outcome.digest.clone(),
                     stop_reason: outcome.stop_reason.clone(),
                     tool_calls: outcome.tool_calls.clone(),
-                    usage: outcome.usage.clone(),
+                    usage: outcome.usage,
                     blocks: outcome.blocks.clone(),
                 };
                 emit_replay(w, &rc, &lo);
@@ -208,7 +209,7 @@ pub async fn run(
             }
             Disposition::Join { owner } => Plan::Join {
                 owner: owner.id,
-                owner_req: owner.token.req_id.clone(),
+                owner_req: Value::from(owner.token.req_id.as_str()),
             },
             Disposition::Drive { supersedes } => Plan::Drive {
                 supersedes: supersedes.map(|o| (o.id, Box::new(o.token.clone()))),
@@ -244,7 +245,7 @@ fn finish_request(me: &Shared, rc: &Rc) {
 const FORK_TEXT: &str = "(side query answered locally by codex-sidecar; no model call was made)";
 
 fn local_text(persona: &str, body: &Value, text: &str) -> Reply {
-    let usage = json!({ "input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0 });
+    let usage = usage_out(None);
     let model = wire_model_id(persona, js::prop(Some(body), "model"));
     if js::truthy(js::prop(Some(body), "stream")) {
         let msg = with_keys(&message_skeleton(&model), vec![("usage", usage.clone())]);
@@ -372,16 +373,19 @@ fn rekey_candidates(w: &World, pi: usize, ident: &Identity) -> Vec<u64> {
     let Some(suffix) = suffix_of(&ident.key) else {
         return Vec::new();
     };
-    w.personas[pi]
+    let mut out: Vec<u64> = w.personas[pi]
         .sessions
-        .iter()
-        .map(|(_, s)| *s)
+        .values()
+        .copied()
         .filter(|sid| {
             w.sessions.get(sid).is_some_and(|s| {
                 s.key != ident.key && !s.closed && suffix_of(&s.key) == Some(suffix)
             })
         })
-        .collect()
+        .collect();
+    // oldest session first (ids are monotonic), deterministic across map orders
+    out.sort_unstable();
+    out
 }
 
 fn find_fork_target(
@@ -437,9 +441,9 @@ fn adopt_rekeyed(
     let s = w.sessions.get_mut(&sid)?;
     let from = std::mem::replace(&mut s.key, ident.key.clone());
     s.outbox_key = outbox_key_of(&ident.key, ident.weak);
-    let tid = s.thread_id.clone().unwrap_or(Value::Null);
+    let tid = s.thread_id.as_ref().map_or(Value::Null, Value::from);
     let p = &mut w.personas[pi];
-    p.sessions.retain(|(k, _)| *k != from);
+    p.sessions.remove(&from);
     p.set_session(&ident.key, sid);
     let name = p.name.clone();
     w.log(
@@ -480,7 +484,7 @@ fn dispose_session(
             row.insert("now".into(), Value::from(norm.msgs.len()));
             row.insert(
                 "threadId".into(),
-                s.thread_id.clone().unwrap_or(Value::Null),
+                s.thread_id.as_ref().map_or(Value::Null, Value::from),
             );
             if let Some(a) = at {
                 row.insert("at".into(), Value::from(a));
@@ -549,8 +553,8 @@ fn log_http(
     rc: &Rc,
     stop_reason: &Value,
     tool_calls: &Value,
-    usage: &Value,
-    usage_raw: Option<&Value>,
+    usage: &Usage,
+    usage_raw: Option<&Usage>,
     extra: Vec<(&str, Value)>,
 ) {
     let (tid, total) = w
@@ -575,7 +579,7 @@ fn log_http(
         put("effort", e);
     }
     put("effortSource", Value::from(rc.ident.eff.effort_source));
-    put("threadId", tid.clone().unwrap_or(Value::Null));
+    put("threadId", tid.as_ref().map_or(Value::Null, Value::from));
     put("stop_reason", stop_reason.clone());
     put("nMessages", Value::from(n.msgs.len()));
     put(
@@ -587,11 +591,12 @@ fn log_http(
     }
     put("toolCalls", tool_calls.clone());
     put("usage", usage_out(Some(usage)));
+    put("usageCodex", usage_raw.unwrap_or(usage).to_value());
+    // the cumulative figure exactly as codex sent it (every field, and its presence)
     put(
-        "usageCodex",
-        js::present(usage_raw).unwrap_or(usage).clone(),
+        "usageTotalCodex",
+        total.as_ref().map_or(Value::Null, |u| u.raw.clone()),
     );
-    put("usageTotalCodex", total.clone().unwrap_or(Value::Null));
     put("headers", Value::Object(redact_headers(&rc.headers)));
     let joined = extra.iter().any(|(k, _)| *k == "joinedTo");
     for (k, v) in extra {
@@ -620,11 +625,11 @@ fn log_http(
         persona_rate_limited: &mut personas[rc.pi].rate_limited,
         sess_key: &s.key,
         outbox_key: s.outbox_key.as_ref(),
-        thread_id: Some(tid.unwrap_or(Value::Null)),
-        usage_total: total.as_ref(),
-        model: Some(Value::from(rc.ident.parsed.model.as_str())),
-        effort: effort_val(&rc.ident),
-        stop_reason: Some(stop_reason.clone()),
+        thread_id: tid.as_ref(),
+        usage_total: total.as_ref().map(|u| &u.usage),
+        model: &rc.ident.parsed.model,
+        effort: rc.ident.eff.effort.as_deref(),
+        stop_reason,
     });
 }
 
@@ -638,10 +643,9 @@ fn overflow_shape(w: &World, rc: &Rc, e: SidecarError) -> SidecarError {
     let window = w
         .sessions
         .get(&rc.sid)
-        .and_then(|s| js::present(s.context_window.as_ref()))
-        .map(|v| js::to_number(Some(v)))
-        .filter(|n| n.is_finite() && *n > 0.0)
-        .unwrap_or(w.cfg.context_window_tokens as f64);
+        .and_then(|s| s.context_window)
+        .filter(|n| *n > 0)
+        .unwrap_or(w.cfg.context_window_tokens) as f64;
     let estimate = crate::protocol::count_tokens_estimate(&rc.norm.body);
     crate::errors::prompt_too_long(&e, estimate, window)
 }
@@ -655,11 +659,8 @@ fn http_error_row(rc: &Rc, e: &SidecarError, joined: Option<&Value>) -> Value {
     if let (Some(j), Some(o)) = (joined, row.as_object_mut()) {
         o.insert("joinedTo".into(), j.clone());
     }
-    if let (Some(u), Some(o)) = (
-        e.extra.as_ref().and_then(|x| x.get("upstreamMessage")),
-        row.as_object_mut(),
-    ) {
-        o.insert("upstreamMessage".into(), u.clone());
+    if let (Some(u), Some(o)) = (&e.upstream_message, row.as_object_mut()) {
+        o.insert("upstreamMessage".into(), Value::from(u.as_str()));
     }
     row
 }
@@ -1005,21 +1006,19 @@ async fn run_as_owner(me: &Shared, rc: &Rc, supersedes: Option<(u64, Box<Token>)
 
 // -------------------------------------------------------- phase 4: emission --
 
-fn tool_block(call: &Value) -> Value {
-    let p = js::prop(Some(call), "params");
+fn tool_block(call: &ToolCall) -> Value {
+    let p = &call.params;
     let mut b = Map::new();
     b.insert("type".into(), Value::from("tool_use"));
-    if let Some(id) = js::prop(p, "callId") {
-        b.insert("id".into(), id.clone());
+    if let Some(id) = &p.call_id {
+        b.insert("id".into(), Value::from(id));
     }
-    if let Some(n) = js::prop(p, "tool") {
-        b.insert("name".into(), n.clone());
+    if let Some(n) = &p.tool {
+        b.insert("name".into(), Value::from(n.as_str()));
     }
     b.insert(
         "input".into(),
-        js::present(js::prop(p, "arguments"))
-            .cloned()
-            .unwrap_or(json!({})),
+        p.arguments.clone().unwrap_or_else(|| json!({})),
     );
     Value::Object(b)
 }
@@ -1041,28 +1040,24 @@ fn emit_outcome(
     let tool_calls = Value::Array(
         batch
             .iter()
-            .map(|c| {
-                js::prop(js::prop(Some(c), "params"), "tool")
-                    .cloned()
-                    .unwrap_or(Value::Null)
-            })
+            .map(|c| c.params.tool.as_deref().map_or(Value::Null, Value::from))
             .collect(),
     );
     let blocks: Vec<Value> = batch.iter().map(tool_block).collect();
     if is_tool {
         for (call, block) in batch.iter().zip(&blocks) {
-            let id = js::prop(js::prop(Some(call), "params"), "callId")
-                .cloned()
-                .unwrap_or(Value::Null);
-            if let Some(s) = w.sessions.get_mut(&rc.sid) {
-                s.delivered.insert(id_key(&id));
+            if let (Some(id), Some(s)) = (&call.params.call_id, w.sessions.get_mut(&rc.sid)) {
+                s.delivered.insert(id.0.clone());
             }
             for sk in audience {
                 sinks::tool_use(w, *sk, block);
             }
         }
         if batch.len() > 1 {
-            let tid = w.sessions[&rc.sid].thread_id.clone().unwrap_or(Value::Null);
+            let tid = w.sessions[&rc.sid]
+                .thread_id
+                .as_ref()
+                .map_or(Value::Null, Value::from);
             w.log(
                 "parallel-tool-batch",
                 json!({ "persona": rc.persona, "threadId": tid, "n": batch.len() }),
@@ -1074,18 +1069,18 @@ fn emit_outcome(
     };
     s.turn_open = is_tool;
     let usage_raw = s.reconcile();
-    let (window, src) = match js::present(s.context_window.as_ref()) {
-        Some(v) => (v.clone(), "app-server"),
-        None => (Value::from(w.cfg.context_window_tokens), "env"),
+    let (window, src) = match s.context_window {
+        Some(v) => (v, "app-server"),
+        None => (w.cfg.context_window_tokens, "env"),
     };
-    let tid = s.thread_id.clone().unwrap_or(Value::Null);
-    let clamped = clamp_usage(Some(&usage_raw), js::to_number(Some(&window)));
-    let usage = clamped.clone().unwrap_or_else(|| usage_raw.clone());
+    let tid = s.thread_id.as_ref().map_or(Value::Null, Value::from);
+    let clamped = clamp_usage(&usage_raw, window);
+    let usage = clamped.unwrap_or(usage_raw);
     if let Some(c) = &clamped {
         w.log(
             "usage-clamped",
             json!({ "persona": rc.persona, "key": rc.ident.key, "threadId": tid, "window": window,
-                    "windowSource": src, "raw": usage_raw, "clamped": usage_out(Some(c)) }),
+                    "windowSource": src, "raw": usage_raw.to_value(), "clamped": usage_out(Some(c)) }),
         );
     }
     for sk in audience {
@@ -1099,11 +1094,11 @@ fn emit_outcome(
         }
         lb.extend(blocks);
         s.last_outcome = Some(LastOutcome {
-            req_id: Value::from(rc.req_id.as_str()),
+            req_id: rc.req_id.clone(),
             digest: rc.token.digest.clone(),
             stop_reason: stop.clone(),
             tool_calls: tool_calls.clone(),
-            usage: usage.clone(),
+            usage,
             blocks: lb,
         });
     }
@@ -1120,7 +1115,7 @@ fn emit_outcome(
             JoinOutcome::Done {
                 stop_reason: stop.clone(),
                 tool_calls: tool_calls.clone(),
-                usage: usage.clone(),
+                usage,
             },
         );
     }

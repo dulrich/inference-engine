@@ -15,6 +15,8 @@ name = "codex-sidecar"
 path = "src/main.rs"
 
 [dependencies]
+# Typed codex frames/usage and outbox rows (already in the graph via serde_json).
+serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 sha2 = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "process", "io-util", "sync", "signal"] }

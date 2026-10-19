@@ -5,7 +5,7 @@
 //! snapshot into a 429 with a retry-after. No HTTP, session or child process here.
 
 use crate::js;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -13,8 +13,15 @@ pub struct SidecarError {
     pub status: u16,
     pub anthropic_type: String,
     pub message: String,
-    /// `extra` in Node; the only key read today is `retryAfter` (sinks: `retry-after` header).
-    pub extra: Option<Box<Map<String, Value>>>,
+    /// Seconds for the `retry-after` header (a codex account rate-limit exhaustion).
+    pub retry_after: Option<u64>,
+    /// The original codex text of a rewritten error (logged as `upstreamMessage`).
+    pub upstream_message: Option<String>,
+    /// A codex context overflow (`contextWindowExceeded` or the app-server's `Input exceeds
+    /// the maximum length` rejection). The message still holds the original codex text; the
+    /// request layer, which knows the window and the request size, rewrites it with
+    /// [`prompt_too_long`] before it reaches the wire.
+    pub context_overflow: bool,
 }
 
 impl SidecarError {
@@ -23,18 +30,26 @@ impl SidecarError {
             status,
             anthropic_type: anthropic_type.into(),
             message: message.into(),
-            extra: None,
+            retry_after: None,
+            upstream_message: None,
+            context_overflow: false,
         }
-    }
-
-    pub fn with_extra(mut self, extra: Map<String, Value>) -> Self {
-        self.extra = Some(Box::new(extra));
-        self
     }
 
     /// `{type:"error", error:{type, message}}` — the Anthropic error body.
     pub fn body(&self) -> Value {
         json!({ "type": "error", "error": { "type": self.anthropic_type, "message": self.message } })
+    }
+}
+
+impl SidecarError {
+    fn rewritten(self, message: String) -> Self {
+        Self {
+            status: 400,
+            anthropic_type: "invalid_request_error".into(),
+            message,
+            ..self
+        }
     }
 }
 
@@ -66,29 +81,22 @@ const CODEX_ERROR_MAP: &[(&str, u16, &str)] = &[
     ("serverOverloaded", 502, "api_error"),
 ];
 
-/// Marker key in `extra` for a codex context overflow (`contextWindowExceeded` or the
-/// app-server's `Input exceeds the maximum length` rejection). The message still holds the
-/// original codex text here; the request layer, which knows the window and the request size,
-/// rewrites it with [`prompt_too_long`] before it reaches the wire.
-pub const CONTEXT_OVERFLOW: &str = "contextOverflow";
-
 fn context_overflow(full: String) -> SidecarError {
-    let mut x = Map::new();
-    x.insert(CONTEXT_OVERFLOW.into(), Value::Bool(true));
-    SidecarError::new(400, "invalid_request_error", full).with_extra(x)
+    SidecarError {
+        context_overflow: true,
+        ..SidecarError::new(400, "invalid_request_error", full)
+    }
 }
 
 impl SidecarError {
     pub fn is_context_overflow(&self) -> bool {
-        self.extra
-            .as_ref()
-            .is_some_and(|x| x.get(CONTEXT_OVERFLOW) == Some(&Value::Bool(true)))
+        self.context_overflow
     }
 }
 
 /// Rewrite a context-overflow error into Claude Code's "prompt is too long" shape:
 /// `prompt is too long: N tokens > M maximum`, with N floored at M+1 so N > M always holds.
-/// The original codex text is kept in `extra.upstreamMessage` for the `http-error` row.
+/// The original codex text is kept in `upstream_message` for the `http-error` row.
 pub fn prompt_too_long(e: &SidecarError, estimate: f64, window: f64) -> SidecarError {
     let m = if window.is_finite() && window >= 0.0 {
         window.floor()
@@ -101,14 +109,11 @@ pub fn prompt_too_long(e: &SidecarError, estimate: f64, window: f64) -> SidecarE
         0.0
     };
     let n = est.max(m + 1.0);
-    let mut x = e.extra.as_deref().cloned().unwrap_or_default();
-    x.insert("upstreamMessage".into(), Value::String(e.message.clone()));
-    SidecarError::new(
-        400,
-        "invalid_request_error",
-        format!("prompt is too long: {n} tokens > {m} maximum"),
-    )
-    .with_extra(x)
+    SidecarError {
+        upstream_message: Some(e.message.clone()),
+        ..e.clone()
+    }
+    .rewritten(format!("prompt is too long: {n} tokens > {m} maximum"))
 }
 
 /// `/rate.?limit|usage limit|quota|too many requests/i`

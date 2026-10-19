@@ -261,7 +261,7 @@ pub fn resolve_identity(norm: &Normalized) -> Result<Identity, SidecarError> {
 /// One request's identity and diagnostics (`requestToken`).
 #[derive(Debug, Clone)]
 pub struct Token {
-    pub req_id: Value,
+    pub req_id: String,
     pub mode: Mode,
     pub n_messages: usize,
     /// Truthy `tool_use_id`s, sorted as JS `sort()` does (by `String(v)`, UTF-16 order).
@@ -313,7 +313,7 @@ fn block_shape(b: &Value) -> Value {
 }
 
 /// `requestToken({reqId, mode, norm, ident})`; the body passed [`validate`].
-pub fn request_token(req_id: Value, mode: Mode, norm: &Normalized, ident: &Identity) -> Token {
+pub fn request_token(req_id: String, mode: Mode, norm: &Normalized, ident: &Identity) -> Token {
     let model = js::prop(Some(&norm.body), "model");
     let empty = Value::Array(Vec::new());
     let tools = js::present(js::prop(Some(&norm.body), "tools")).unwrap_or(&empty);

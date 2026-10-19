@@ -5,6 +5,7 @@
 //! whole body, or a stream fed through a channel), and `destroyed` is set by the close
 //! event (`http::CloseGuard`). An SSE sink owns one keep-alive task for its whole life.
 
+use crate::codex::Usage;
 use crate::errors::SidecarError;
 use crate::js;
 use crate::protocol::usage_out;
@@ -97,10 +98,9 @@ pub fn sse_headers() -> Headers {
 }
 
 fn retry_after_header(err: &SidecarError) -> Headers {
-    let v = err.extra.as_ref().and_then(|x| x.get("retryAfter"));
-    match v {
-        None | Some(Value::Null) => Vec::new(),
-        Some(v) => vec![("retry-after".to_string(), js::js_string(v))],
+    match err.retry_after {
+        None => Vec::new(),
+        Some(v) => vec![("retry-after".to_string(), v.to_string())],
     }
 }
 
@@ -387,7 +387,7 @@ pub fn abort(w: &mut World, id: u64) {
     }
 }
 
-pub fn start(w: &mut World, id: u64, usage: &Value) {
+pub fn start(w: &mut World, id: u64, usage: &Usage) {
     let Some(s) = w.sinks.get_mut(&id) else {
         return;
     };
@@ -552,7 +552,7 @@ pub fn tool_use(w: &mut World, id: u64, block: &Value) {
     }
 }
 
-pub fn finish(w: &mut World, id: u64, stop_reason: &Value, usage: &Value) {
+pub fn finish(w: &mut World, id: u64, stop_reason: &Value, usage: &Usage) {
     let Some(s) = w.sinks.get_mut(&id) else {
         return;
     };

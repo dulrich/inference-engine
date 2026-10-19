@@ -3,6 +3,7 @@
 //! holds the JavaScript-semantics helpers (`Number()`, `JSON.stringify`, truthiness, UTF-16
 //! lengths) the port needs for byte/behaviour parity.
 
+pub mod codex;
 pub mod config;
 pub mod errors;
 pub mod http;

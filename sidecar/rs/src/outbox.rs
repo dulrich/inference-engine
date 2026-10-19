@@ -7,7 +7,8 @@
 //! nothing.
 
 use crate::js;
-use serde_json::{Map, Value};
+use serde::Serialize;
+use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -27,41 +28,67 @@ pub fn log_dir_for(path: &str) -> PathBuf {
         .join("log")
 }
 
-fn text(v: Option<&Value>) -> Value {
-    match v {
-        Some(Value::String(s)) if !s.is_empty() => Value::from(s.as_str()),
-        _ => Value::Null,
+fn text(v: Option<&Value>) -> Option<&str> {
+    v.and_then(Value::as_str).filter(|s| !s.is_empty())
+}
+
+/// The pinned line, in its byte order (struct field order is the key order; `None` is `null`
+/// except where skipped, as `JSON.stringify` omits `undefined`).
+#[derive(Serialize)]
+struct Line<'a, S: Serialize, K: Serialize, P: Serialize> {
+    v: i64,
+    ts: &'a str,
+    harness: &'static str,
+    leg: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<S>,
+    agent_id: Option<&'a str>,
+    agent_type: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<K>,
+    payload: P,
+}
+
+impl<S: Serialize, K: Serialize, P: Serialize> Line<'_, S, K, P> {
+    fn to_line(&self) -> String {
+        format!("{}\n", serde_json::to_string(self).unwrap_or_default())
     }
 }
 
-/// `serializeRow(event)`: the pinned line format, trailing newline included. A key the event
-/// lacks (`session_id`, `kind`) is omitted, as `JSON.stringify` omits `undefined`.
+/// One typed outbox row (the sidecar's own writes). `harness` is always `codex-sidecar`
+/// and `agent_type` always `null`; `ts` is stamped at write time.
+pub struct Row<'a, P: Serialize> {
+    pub leg: &'a str,
+    pub session_id: &'a str,
+    pub agent_id: Option<&'a str>,
+    pub kind: &'static str,
+    pub payload: P,
+}
+
+/// `serializeRow(event)`: the pinned line format, trailing newline included, and the `ts`
+/// written. A key the event lacks (`session_id`, `kind`) is omitted.
+fn serialize_value(event: &Value) -> (String, String) {
+    let g = |k: &str| event.get(k);
+    let ts = text(g("ts")).map_or_else(js::iso_now, str::to_string);
+    let empty = Value::Object(Default::default());
+    let line = Line {
+        v: ROW_VERSION,
+        ts: &ts,
+        harness: "codex-sidecar",
+        leg: text(g("leg")),
+        session_id: g("session_id"),
+        agent_id: text(g("agent_id")),
+        agent_type: text(g("agent_type")),
+        kind: g("kind"),
+        payload: js::present(g("payload")).unwrap_or(&empty),
+    }
+    .to_line();
+    (ts, line)
+}
+
+/// `serializeRow(event)`: the pinned line format, trailing newline included.
 pub fn serialize_row(event: &Value) -> String {
-    let g = |k: &str| js::prop(Some(event), k);
-    let mut row = Map::new();
-    row.insert("v".into(), Value::from(ROW_VERSION));
-    let ts = match text(g("ts")) {
-        Value::Null => Value::from(js::iso_now()),
-        t => t,
-    };
-    row.insert("ts".into(), ts);
-    row.insert("harness".into(), Value::from("codex-sidecar"));
-    row.insert("leg".into(), text(g("leg")));
-    if let Some(v) = g("session_id") {
-        row.insert("session_id".into(), v.clone());
-    }
-    row.insert("agent_id".into(), text(g("agent_id")));
-    row.insert("agent_type".into(), text(g("agent_type")));
-    if let Some(v) = g("kind") {
-        row.insert("kind".into(), v.clone());
-    }
-    row.insert(
-        "payload".into(),
-        js::present(g("payload"))
-            .cloned()
-            .unwrap_or_else(|| Value::Object(Map::new())),
-    );
-    format!("{}\n", js::stringify(&Value::Object(row)))
+    serialize_value(event).1
 }
 
 /// `openOutbox(path)`: creates the log dir (0700) if needed.
@@ -127,15 +154,40 @@ impl OutboxWriter {
         if self.path.is_empty() {
             return None;
         }
-        let kind = js::prop(Some(event), "kind").and_then(Value::as_str)?;
+        let kind = event.get("kind").and_then(Value::as_str)?;
         if !KINDS.contains(&kind) {
             return None;
         }
-        let sid = js::prop(Some(event), "session_id").and_then(Value::as_str)?;
+        let sid = event.get("session_id").and_then(Value::as_str)?;
         if sid.is_empty() {
             return None;
         }
-        let line = serialize_row(event);
+        let (ts, line) = serialize_value(event);
+        self.append(&ts, &line)
+    }
+
+    /// A typed row; the same line bytes as [`record`](Self::record) of the equivalent event.
+    pub fn record_row<P: Serialize>(&mut self, row: &Row<'_, P>) -> Option<PathBuf> {
+        if self.path.is_empty() || row.session_id.is_empty() || !KINDS.contains(&row.kind) {
+            return None;
+        }
+        let ts = js::iso_now();
+        let line = Line {
+            v: ROW_VERSION,
+            ts: &ts,
+            harness: "codex-sidecar",
+            leg: Some(row.leg).filter(|l| !l.is_empty()),
+            session_id: Some(row.session_id),
+            agent_id: row.agent_id.filter(|a| !a.is_empty()),
+            agent_type: None,
+            kind: Some(row.kind),
+            payload: &row.payload,
+        }
+        .to_line();
+        self.append(&ts, &line)
+    }
+
+    fn append(&mut self, ts: &str, line: &str) -> Option<PathBuf> {
         if line.len() > LINE_MAX_BYTES {
             return None;
         }
@@ -143,11 +195,7 @@ impl OutboxWriter {
             self.log_dir = Some(open_outbox(&self.path).ok()?);
         }
         let log_dir = self.log_dir.clone()?;
-        let ts: Value = serde_json::from_str(&line).ok()?;
-        let ms = js::prop(Some(&ts), "ts")
-            .and_then(Value::as_str)
-            .and_then(js::date_parse)
-            .unwrap_or_else(js::now_ms);
+        let ms = js::date_parse(ts).unwrap_or_else(js::now_ms);
         let day = js::iso_from_ms(ms)[..10].to_string();
         let file = log_dir.join(format!("{day}.jsonl"));
         let mut fd = OpenOptions::new()

@@ -71,8 +71,8 @@ impl World {
     pub fn gc_sessions(&mut self) {
         let mut live: HashSet<u64> = HashSet::new();
         for p in &self.personas {
-            live.extend(p.sessions.iter().map(|(_, s)| *s));
-            live.extend(p.bus.iter().map(|(_, s)| *s));
+            live.extend(p.sessions.values().copied());
+            live.extend(p.bus.values().copied());
         }
         self.sessions.retain(|id, s| {
             live.contains(id) || s.owner.is_some() || !s.joiners.is_empty() || s.resolve.is_some()

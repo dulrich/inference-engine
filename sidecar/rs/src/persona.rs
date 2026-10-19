@@ -3,12 +3,13 @@
 //! sessions map, rate-limit posture, the security boundary (`trip_boundary`) and the backoff
 //! restart. One reader task per child; every frame is handled under the world lock.
 
+use crate::codex::{self, Note, RpcFrame, ThreadId, ToolCall};
 use crate::config::VERSION;
 use crate::errors::{map_upstream_error, rate_limit_exhaustion, SidecarError};
 use crate::js;
-use crate::session::{self, same_value, Frame, Outcome};
+use crate::session::{self, Frame, Outcome};
 use crate::sidecar::{err, with_world, World};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::{Mutex, Weak};
@@ -35,10 +36,10 @@ pub struct Persona {
     pid: Option<i32>,
     rpc_id: u64,
     pending: HashMap<u64, oneshot::Sender<RpcResult>>,
-    /// threadId -> session id (a JS `Map`, insertion order).
-    pub bus: Vec<(Value, u64)>,
-    /// session key -> session id (a JS `Map`, insertion order).
-    pub sessions: Vec<(String, u64)>,
+    /// threadId -> session id.
+    pub bus: HashMap<ThreadId, u64>,
+    /// session key -> session id.
+    pub sessions: HashMap<String, u64>,
     init: InitSlot,
     init_waiters: HashMap<u64, Vec<oneshot::Sender<InitResult>>>,
     pub degraded: bool,
@@ -85,8 +86,8 @@ impl Persona {
             pid: None,
             rpc_id: 1,
             pending: HashMap::new(),
-            bus: Vec::new(),
-            sessions: Vec::new(),
+            bus: HashMap::new(),
+            sessions: HashMap::new(),
             init: InitSlot::None,
             init_waiters: HashMap::new(),
             degraded: false,
@@ -101,32 +102,19 @@ impl Persona {
     }
 
     pub fn session(&self, key: &str) -> Option<u64> {
-        self.sessions
-            .iter()
-            .find(|(k, _)| k == key)
-            .map(|(_, s)| *s)
+        self.sessions.get(key).copied()
     }
 
     pub fn set_session(&mut self, key: &str, sid: u64) {
-        match self.sessions.iter_mut().find(|(k, _)| k == key) {
-            Some(e) => e.1 = sid,
-            None => self.sessions.push((key.to_string(), sid)),
-        }
+        self.sessions.insert(key.to_string(), sid);
     }
 
-    pub fn bus_get(&self, tid: Option<&Value>) -> Option<u64> {
-        let tid = tid?;
-        self.bus
-            .iter()
-            .find(|(k, _)| same_value(k, tid))
-            .map(|(_, s)| *s)
+    pub fn bus_get(&self, tid: Option<&ThreadId>) -> Option<u64> {
+        self.bus.get(tid?).copied()
     }
 
-    pub fn bus_set(&mut self, tid: Value, sid: u64) {
-        match self.bus.iter_mut().find(|(k, _)| same_value(k, &tid)) {
-            Some(e) => e.1 = sid,
-            None => self.bus.push((tid, sid)),
-        }
+    pub fn bus_set(&mut self, tid: ThreadId, sid: u64) {
+        self.bus.insert(tid, sid);
     }
 
     fn next_rpc_id(&mut self) -> u64 {
@@ -432,7 +420,7 @@ fn on_exit(w: &mut World, pi: usize, gen: u64, code: Value, signal: Value, e: Va
     for (_, tx) in p.pending.drain() {
         let _ = tx.send(Err(ex.clone()));
     }
-    let bus: Vec<u64> = p.bus.iter().map(|(_, s)| *s).collect();
+    let bus: Vec<u64> = p.bus.values().copied().collect();
     for sid in bus {
         if let Some(s) = w.sessions.get_mut(&sid) {
             s.parked.clear();
@@ -474,7 +462,7 @@ fn rpc_key(v: &Value) -> Option<u64> {
 }
 
 fn on_frame(w: &mut World, pi: usize, m: Value) {
-    let Value::Object(ref o) = m else {
+    if !m.is_object() {
         if m.is_null() {
             let name = w.personas[pi].name.clone();
             log(
@@ -484,33 +472,32 @@ fn on_frame(w: &mut World, pi: usize, m: Value) {
             );
         }
         return;
-    };
-    let id = o.get("id");
-    let method = o.get("method");
+    }
+    // Every field is optional and `Value`-or-absent, so an object always parses.
+    let f: RpcFrame = serde_json::from_value(m).unwrap_or_default();
     // response to one of our requests
-    if id.is_some() && method.is_none() {
-        let Some(tx) = id
-            .and_then(rpc_key)
-            .and_then(|k| w.personas[pi].pending.remove(&k))
+    if f.id.is_some() && f.method.is_none() {
+        let Some(tx) =
+            f.id.as_ref()
+                .and_then(rpc_key)
+                .and_then(|k| w.personas[pi].pending.remove(&k))
         else {
             return;
         };
-        let r = match o.get("error") {
+        let r = match &f.error {
             Some(e) if js::truthy(Some(e)) => Err(map_upstream_error(e, "app-server")),
-            _ => Ok(o.get("result").cloned().unwrap_or(Value::Null)),
+            _ => Ok(f.result.unwrap_or(Value::Null)),
         };
         let _ = tx.send(r);
         return;
     }
-    let method_s = method.map(js::js_string).unwrap_or_default();
-    let params = o.get("params");
-    let tid = js::prop(params, "threadId");
+    let tid = f.thread_id();
     // server -> client request
-    if js::truthy(method) && id.is_some() {
-        let id = id.cloned().unwrap_or(Value::Null);
-        if method == Some(&Value::from("item/tool/call")) {
-            if let Some(sid) = w.personas[pi].bus_get(tid) {
-                session::on_frame(w, sid, Frame::ToolCall(m.clone()));
+    if js::truthy(f.method.as_ref()) && f.id.is_some() {
+        let id = f.id.clone().unwrap_or(Value::Null);
+        if f.method_str() == Some("item/tool/call") {
+            if let Some(sid) = w.personas[pi].bus_get(tid.as_ref()) {
+                session::on_frame(w, sid, Frame::ToolCall(ToolCall::of(&f)));
                 return;
             }
             send(
@@ -520,46 +507,51 @@ fn on_frame(w: &mut World, pi: usize, m: Value) {
             );
             return;
         }
-        if method_s.to_ascii_lowercase().contains("approval") {
+        let method = f.method.clone().unwrap_or(Value::Null);
+        if js::js_string(&method)
+            .to_ascii_lowercase()
+            .contains("approval")
+        {
             send(
                 w,
                 pi,
                 &json!({ "jsonrpc": "2.0", "id": id, "result": { "decision": "denied" } }),
             );
-            let sid = w.personas[pi].bus_get(tid);
-            trip_boundary(w, pi, method.cloned().unwrap_or(Value::Null), sid);
+            let sid = w.personas[pi].bus_get(tid.as_ref());
+            trip_boundary(w, pi, method, sid);
             return;
         }
         send(w, pi, &json!({ "jsonrpc": "2.0", "id": id, "result": {} }));
         return;
     }
     // notification
-    if !js::truthy(method) {
+    if !js::truthy(f.method.as_ref()) {
         return;
     }
+    let Some(method) = f.method_str() else {
+        return;
+    };
     let p = &mut w.personas[pi];
-    if method_s == "hook/started" && method.is_some_and(Value::is_string) {
+    if method == codex::HOOK_STARTED {
         p.hook_events += 1;
     }
-    if method_s == "mcpServer/startupStatus/updated" && method.is_some_and(Value::is_string) {
+    if method == codex::MCP_STARTUP {
         p.mcp_events += 1;
     }
-    if method == Some(&Value::from("account/rateLimits/updated")) {
-        let hit = rate_limit_exhaustion(js::prop(params, "rateLimits"), js::now_ms());
+    if method == "account/rateLimits/updated" {
+        let limits = codex::rate_limits(f.params.as_ref());
+        let hit = rate_limit_exhaustion(limits.as_ref(), js::now_ms());
         let Some(hit) = hit else {
             return;
         };
         let reason = js::js_string(&hit.reason);
+        let retry_after = hit.retry_after.map(|r| r as u64);
         let mut e = err(
             429,
             "rate_limit_error",
             format!("codex account rate limit reached ({reason})"),
         );
-        if let Some(ra) = hit.retry_after {
-            let mut x = Map::new();
-            x.insert("retryAfter".into(), js::num(ra));
-            e = e.with_extra(x);
-        }
+        e.retry_after = retry_after;
         let name = p.name.clone();
         let ra = hit.retry_after.map_or(Value::Null, js::num);
         log(
@@ -568,7 +560,7 @@ fn on_frame(w: &mut World, pi: usize, m: Value) {
             json!({ "persona": name, "reason": hit.reason, "retryAfter": ra }),
         );
         w.personas[pi].rate_limited = true;
-        let bus: Vec<u64> = w.personas[pi].bus.iter().map(|(_, s)| *s).collect();
+        let bus: Vec<u64> = w.personas[pi].bus.values().copied().collect();
         for sid in &bus {
             let Some(ok) = w.sessions.get(sid).and_then(|s| s.outbox_key.clone()) else {
                 continue;
@@ -576,26 +568,22 @@ fn on_frame(w: &mut World, pi: usize, m: Value) {
             if w.cfg.outbox_path.is_empty() {
                 continue;
             }
-            let mut payload = Map::new();
-            payload.insert("state".into(), Value::from("exhausted"));
-            payload.insert("reason".into(), hit.reason.clone());
-            if let Some(r) = hit.retry_after {
-                payload.insert("retry_after_s".into(), js::num(r));
-            }
-            let row = json!({
-                "harness": "codex-sidecar", "leg": name,
-                "session_id": ok.session_id, "agent_id": ok.agent_id, "agent_type": null,
-                "kind": "rate_limit", "payload": payload,
-            });
-            w.outbox.record(&row);
+            crate::outbox_events::rate_limit_exhausted(
+                &mut w.outbox,
+                &name,
+                &ok,
+                &hit.reason,
+                retry_after,
+            );
         }
         for sid in bus {
             session::settle(w, sid, Outcome::Error(e.clone()));
         }
         return;
     }
-    if let Some(sid) = w.personas[pi].bus_get(tid) {
-        session::on_frame(w, sid, Frame::Note(m.clone()));
+    if let Some(sid) = w.personas[pi].bus_get(tid.as_ref()) {
+        let note = Note::parse(method, f.params.as_ref());
+        session::on_frame(w, sid, Frame::Note(note));
     }
 }
 
@@ -680,16 +668,11 @@ pub fn rpc(w: &mut World, pi: usize, method: &str, params: Value, timeout_ms: u6
 }
 
 /// `turn/interrupt` for a session's open turn; `Some(threadId)` when one was sent.
-fn send_interrupt(w: &mut World, pi: usize, sid: u64) -> Option<Value> {
+fn send_interrupt(w: &mut World, pi: usize, sid: u64) -> Option<ThreadId> {
     let (t, u) = w
         .sessions
         .get(&sid)
-        .and_then(|s| match (&s.thread_id, &s.turn_id) {
-            (Some(t), Some(u)) if js::truthy(Some(t)) && js::truthy(Some(u)) => {
-                Some((t.clone(), u.clone()))
-            }
-            _ => None,
-        })?;
+        .and_then(|s| Some((s.thread_id.clone()?, s.turn_id.clone()?)))?;
     let id = w.personas[pi].next_rpc_id();
     send(
         w,
@@ -703,8 +686,7 @@ fn send_interrupt(w: &mut World, pi: usize, sid: u64) -> Option<Value> {
 pub fn trip_boundary(w: &mut World, pi: usize, what: Value, sid: Option<u64>) {
     let tid = sid
         .and_then(|s| w.sessions.get(&s))
-        .and_then(|s| s.thread_id.clone())
-        .unwrap_or(Value::Null);
+        .and_then(|s| s.thread_id.clone());
     let name = w.personas[pi].name.clone();
     log(
         w,
@@ -720,7 +702,7 @@ pub fn trip_boundary(w: &mut World, pi: usize, what: Value, sid: Option<u64>) {
         "api_error",
         format!("out-of-band execution attempt ({ws}) from the codex app-server; the turn was interrupted and persona {name} marked degraded"),
     );
-    let bus: Vec<u64> = p.bus.iter().map(|(_, s)| *s).collect();
+    let bus: Vec<u64> = p.bus.values().copied().collect();
     for sid in bus {
         send_interrupt(w, pi, sid);
         session::settle(w, sid, Outcome::Error(e.clone()));
@@ -746,7 +728,7 @@ pub fn interrupt(w: &mut World, pi: usize, sid: u64, reason: &str) {
 pub fn drop_session(w: &mut World, pi: usize, sid: u64) {
     session::close(w, sid, "session dropped");
     if let Some(key) = w.sessions.get(&sid).map(|s| s.key.clone()) {
-        w.personas[pi].sessions.retain(|(k, _)| *k != key);
+        w.personas[pi].sessions.remove(&key);
     }
 }
 
@@ -756,7 +738,7 @@ pub fn stop(w: &mut World, pi: usize) {
     if let Some(t) = p.stable_timer.take() {
         t.abort();
     }
-    let ss: Vec<u64> = p.sessions.iter().map(|(_, s)| *s).collect();
+    let ss: Vec<u64> = p.sessions.values().copied().collect();
     for sid in ss {
         session::close(w, sid, "sidecar shutting down");
     }

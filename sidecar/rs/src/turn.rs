@@ -2,6 +2,7 @@
 //! fail closed), `deliver_tool_results` (answer parked calls), `start_turn` (run a turn).
 //! `still_mine` is the supersession check after every await.
 
+use crate::codex::CallId;
 use crate::config::resolve_cwd;
 use crate::errors::{as_sidecar_error, SidecarError};
 use crate::js;
@@ -60,17 +61,14 @@ pub async fn start_thread(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
         let mut w = lock(me);
         let w = &mut *w;
         still_mine(w, rc)?;
-        let tid = js::present(js::prop(js::prop(Some(&started), "thread"), "id"))
-            .or_else(|| js::present(js::prop(Some(&started), "threadId")))
-            .cloned()
-            .unwrap_or(Value::Null);
+        let tid = crate::codex::started_thread_id(&started);
         if let Some(s) = w.sessions.get_mut(&rc.sid) {
-            s.thread_id = Some(tid.clone());
+            s.thread_id = tid.clone();
             s.model = Some(rc.ident.parsed.model.clone());
         }
-        if !js::truthy(Some(&tid)) {
+        let Some(tid) = tid else {
             return Err(err(502, "api_error", "thread/start returned no thread id"));
-        }
+        };
         w.personas[rc.pi].bus_set(tid.clone(), rc.sid);
         let sources = js::prop(Some(&started), "instructionSources");
         let p = &w.personas[rc.pi];
@@ -126,8 +124,8 @@ pub async fn start_thread(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
     let tid = w
         .sessions
         .get(&rc.sid)
-        .and_then(|s| s.thread_id.clone())
-        .unwrap_or(Value::Null);
+        .and_then(|s| s.thread_id.as_ref())
+        .map_or(Value::Null, Value::from);
     let sources = js::present(js::prop(Some(&started), "instructionSources")).cloned();
     if let Some(fp) = feature_problem {
         let mism: Vec<Value> = readings
@@ -211,7 +209,8 @@ pub fn deliver_tool_results(w: &mut World, rc: &Rc) -> usize {
             .cloned()
             .unwrap_or(Value::Null);
         let ok = !js::truthy(js::prop(Some(tr), "is_error"));
-        if session::answer_parked(w, rc.sid, &id, &text, ok) {
+        let call = CallId(session::id_key(&id));
+        if session::answer_parked(w, rc.sid, &call, &text, ok) {
             continue;
         }
         let delivered = w
@@ -249,7 +248,7 @@ pub async fn start_turn(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
         let mut tp = Map::new();
         tp.insert(
             "threadId".into(),
-            s.thread_id.clone().unwrap_or(Value::Null),
+            s.thread_id.as_ref().map_or(Value::Null, Value::from),
         );
         tp.insert("input".into(), json!([{ "type": "text", "text": text }]));
         if let Some(e) = &rc.ident.eff.effort {
@@ -267,7 +266,7 @@ pub async fn start_turn(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
             Some(prev) if *prev != rc.ident.eff.effort => Some(prev.clone()),
             _ => None,
         };
-        let tid = s.thread_id.clone().unwrap_or(Value::Null);
+        let tid = s.thread_id.as_ref().map_or(Value::Null, Value::from);
         s.delta_items.clear();
         s.pending_outcomes.clear();
         if let Some(from) = changed {
@@ -294,9 +293,7 @@ pub async fn start_turn(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
     }
     still_mine(&w, rc)?;
     if let Some(s) = w.sessions.get_mut(&rc.sid) {
-        let t = js::present(js::prop(js::prop(Some(&turn), "turn"), "id"))
-            .or_else(|| js::present(js::prop(Some(&turn), "turnId")))
-            .cloned();
+        let t = crate::codex::started_turn_id(&turn);
         if t.is_some() {
             s.turn_id = t;
         }

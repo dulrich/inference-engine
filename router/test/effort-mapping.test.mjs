@@ -28,24 +28,21 @@
 //   - the contract table below equals the config's effortKwargs row (config drift is a red).
 // Limit: xhigh (and max → xhigh) is the template DEFAULT, so it renders identically to absent
 // kwargs — this oracle cannot tell a delivered xhigh from a dropped one. Forwarding identity for
-// those two rows is owned by the build-stage `effort-kwargs.test.ts` vitest cases (audit M2).
+// those two rows is owned by the crate tests in router/gateway/tests/local_leg.rs
+// (`uses_the_exact_xhigh_and_max_rows_when_the_model_declares_them`,
+// `derives_max_and_xhigh_as_their_own_levels_case_and_whitespace_insensitively`) (audit M2).
 // Whether the model actually FOLLOWS the ladder (medium thinks longer than low) is not gated: the
 // live generation gate that tried flaked on identical code and was retired (router/AGENTS.md 0007).
 //
-// Oracle selection (explicit, never sniffed): ROUTER_IMPL=node|rust, default rust since the
-// WP-6 cutover (plans/router-rust-gateway.md, audit E1); node is for the node-final rollback image.
-//   node — the upstream-direct oracle is llama's OpenAI `/v1/chat/completions` `prompt_tokens`,
-//          because the Node gateway converts Anthropic → chat-completions for the local leg.
-//   rust — the upstream-direct oracle is llama's NATIVE `/v1/messages` at max_tokens:1 with the
-//          expected `chat_template_kwargs` in the Anthropic body, occupancy
-//          `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` — the same path
-//          the Rust gateway's local leg uses (Decision 3). Exact equality either way, no tolerance.
-// The bogus-effort Jinja control stays on chat-completions for both.
+// Oracle: llama's NATIVE `/v1/messages` at max_tokens:1 with the expected `chat_template_kwargs`
+// in the Anthropic body, occupancy `input_tokens + cache_read_input_tokens +
+// cache_creation_input_tokens` — the same path the gateway's local leg uses (Decision 3). Exact
+// equality, no tolerance. The bogus-effort Jinja control uses llama's `/v1/chat/completions`.
 //
 // Auth. The gateway key comes from $GATEWAY_KEY or $ROUTER_ENV_FILE (default
 // <code-root>/fleet-tools/.env) and is never printed. The upstream needs no key.
 //
-// Env: ROUTER_IMPL (node|rust, default rust), ROUTER_BASE_URL (default http://127.0.0.1:4813), ROUTER_ENV_FILE, GATEWAY_KEY,
+// Env: ROUTER_BASE_URL (default http://127.0.0.1:4813), ROUTER_ENV_FILE, GATEWAY_KEY,
 //      LLAMA_UPSTREAM_URL (default http://127.0.0.1:4811 — the host port of the llama container),
 //      EFFORT_UPSTREAM_MODEL (default: the single model keyed in claude-local's effortKwargs).
 
@@ -55,8 +52,6 @@ import fs from "node:fs";
 import test from "node:test";
 
 const BASE_URL = (process.env.ROUTER_BASE_URL || "http://127.0.0.1:4813").replace(/\/$/, "");
-const ROUTER_IMPL = process.env.ROUTER_IMPL || "rust";
-if (!["node", "rust"].includes(ROUTER_IMPL)) throw new Error(`ROUTER_IMPL must be node or rust, got ${ROUTER_IMPL}`);
 const UPSTREAM_URL = (process.env.LLAMA_UPSTREAM_URL || "http://127.0.0.1:4811").replace(/\/$/, "");
 // ROUTER_ENV_FILE, else `fleet-env path router` under the fleet-env cutover, else the legacy file.
 const ENV_FILE = routerEnvFile();
@@ -156,24 +151,15 @@ function upstreamNativeCall(kwargs) {
 
 const occupancy = (u) => u.input_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
 
-// The upstream-direct oracle for ROUTER_IMPL (header "Oracle selection").
+// The upstream-direct oracle (header "Oracle").
 const upstreamMemo = new Map();
 async function upstreamPromptTokens(kwargs) {
   const k = JSON.stringify(kwargs ?? null);
   if (!upstreamMemo.has(k)) {
-    let n;
-    if (ROUTER_IMPL === "rust") {
-      const r = await upstreamNativeCall(kwargs);
-      assert.equal(r.status, 200, `upstream native ${k}: expected 200, got ${r.status}: ${r.text.slice(0, 400)}`);
-      assert.equal(typeof r.json?.usage?.input_tokens, "number", `upstream native ${k}: no usage.input_tokens: ${r.text.slice(0, 400)}`);
-      n = occupancy(r.json.usage);
-    } else {
-      const r = await upstreamCall(kwargs);
-      assert.equal(r.status, 200, `upstream ${k}: expected 200, got ${r.status}: ${r.text.slice(0, 400)}`);
-      n = r.json?.usage?.prompt_tokens;
-      assert.equal(typeof n, "number", `upstream ${k}: no usage.prompt_tokens: ${r.text.slice(0, 400)}`);
-    }
-    upstreamMemo.set(k, n);
+    const r = await upstreamNativeCall(kwargs);
+    assert.equal(r.status, 200, `upstream native ${k}: expected 200, got ${r.status}: ${r.text.slice(0, 400)}`);
+    assert.equal(typeof r.json?.usage?.input_tokens, "number", `upstream native ${k}: no usage.input_tokens: ${r.text.slice(0, 400)}`);
+    upstreamMemo.set(k, occupancy(r.json.usage));
   }
   return upstreamMemo.get(k);
 }
@@ -216,7 +202,7 @@ test("upstream control: low, medium and absent kwargs render pairwise-distinct p
   const low = await upstreamPromptTokens(EXPECTED.low);
   const medium = await upstreamPromptTokens(EXPECTED.medium);
   const absent = await upstreamPromptTokens(undefined);
-  console.log(`[effort] oracle=${ROUTER_IMPL} upstream occupancy low=${low} medium=${medium} absent=${absent}`);
+  console.log(`[effort] oracle=native upstream occupancy low=${low} medium=${medium} absent=${absent}`);
   assert.equal(new Set([low, medium, absent]).size, 3,
     `upstream low/medium/absent are not pairwise distinct (${low}/${medium}/${absent}); the render oracle cannot separate them`);
 });

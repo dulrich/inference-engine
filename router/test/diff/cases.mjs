@@ -1,6 +1,5 @@
-// Case table for the differential harness. Tags: parity (node+rust), changed (rust only,
-// Decisions 2/3), baseline (node only: records today's Node behaviour where Rust changes it),
-// slow (needs --slow). Each case asserts on the upstream-received requests (ctx.upstream())
+// Case table for the differential harness. Tags: parity (behaviour unchanged from the retired
+// Node gateway), changed (Decisions 2/3 deliberate changes), slow (needs --slow). Each case asserts on the upstream-received requests (ctx.upstream())
 // and on the client-received response.
 import assert from 'node:assert/strict';
 
@@ -61,15 +60,12 @@ async function streamCase(ctx, model, provider, expectPath) {
 }
 
 const LOCAL = 'claude-local/qwen38-27b-iq3s';
-// Measured on Node: a bare model id resolves to the deduped provider TYPE list
-// [openai -> claude-local, anthropic -> anthropic], never by searching models[]; a prefixed
-// id is a single target. Multi-target over named providers needs x-target-providers, which only
-// the Node baseline reads (the Rust gateway does not read it; crate tests cover multi-target).
-const CODEX_BOTH = { 'x-target-providers': 'codex-a,codex-b' };
+// A bare model id resolves to the deduped provider TYPE list [openai -> claude-local,
+// anthropic -> anthropic], never by searching models[]; a prefixed id is a single target.
+// x-target-providers is not read (crate tests cover multi-target).
 
 export const cases = [
-  // ---- auth matrix: Rust reads only the raw x-gateway-key value (always on); the ----
-  // ---- Node baseline needed AUTH_STATIC_API_KEY_BEARER_ONLY=false for the same. --------
+  // ---- auth matrix: the gateway reads only the raw x-gateway-key value (always on). ----
   { id: 'auth-missing', tags: ['parity'], script: { anthropic: OK('claude-opus-5-5') },
     async run(ctx) {
       const r = await ctx.req('/v1/messages', { auth: 'none', body: MSG('claude-opus-5-5') });
@@ -163,28 +159,11 @@ export const cases = [
       assert.equal(rec.headers.authorization, 'Bearer local-dummy-key-not-a-secret');
       noCallerCreds(rec, OAUTH);
     } },
-  { id: 'no-caller-credential-codex-node-today', tags: ['baseline'], script: { 'codex-a': OK('gpt-6-luna') },
-    async run(ctx) {
-      // Recorded Node quirk: an anthropic-type passthrough needs SOME caller credential even when
-      // the provider has its own key ("ANTHROPIC_API_KEY is missing.", 400, no upstream call).
-      const r = await ctx.req('/v1/messages', { bearer: false, body: MSG('codex-a/gpt-6-luna') });
-      assert.equal(r.status, 400, r.text);
-      assert.match(r.text, /ANTHROPIC_API_KEY is missing/);
-      await none(ctx);
-    } },
   { id: 'cred-nocred-provider-refused', tags: ['changed'], script: { 'rrdiff-nocred': OK('rrdiff-nocred-model') },
     async run(ctx) {
       const r = await ctx.req('/v1/messages', { headers: { authorization: `Bearer ${OAUTH}` }, body: MSG('rrdiff-nocred/rrdiff-nocred-model') });
       assert.ok(r.status >= 400 && r.status < 600, `expected refusal, got ${r.status}`);
       await none(ctx);
-    } },
-  { id: 'cred-nocred-provider-node-today', tags: ['baseline'], script: { 'rrdiff-nocred': OK('rrdiff-nocred-model') },
-    async run(ctx) {
-      // Recorded Node behaviour: an uncredentialed anthropic-type provider forwards the caller's bearer.
-      const r = await ctx.req('/v1/messages', { headers: { authorization: `Bearer ${OAUTH}` }, body: MSG('rrdiff-nocred/rrdiff-nocred-model') });
-      assert.equal(r.status, 200, r.text);
-      const rec = await one(ctx, 'rrdiff-nocred');
-      assert.equal(rec.headers.authorization, `Bearer ${OAUTH}`);
     } },
 
   // ---- header forwarding --------------------------------------------------------------
@@ -248,34 +227,6 @@ export const cases = [
     } },
 
   // ---- E3(a) multi-target fallthrough --------------------------------------------------------
-  { id: 'fallthrough-codex-bare-5xx', tags: ['baseline'],
-    script: { 'codex-a': { status: 500, body: 'david down (must not reach client)' }, 'codex-b': OK('gpt-6-luna', 'from-b') },
-    async run(ctx) {
-      const r = await ctx.req('/v1/messages', { headers: CODEX_BOTH, body: MSG('gpt-6-luna') });
-      assert.equal(r.status, 200, r.text);
-      assert.equal(JSON.parse(r.text).content[0].text, 'from-b');
-      assert.ok(!r.text.includes('david down'));
-      const log = await ctx.upstream();
-      assert.deepEqual(log.map((x) => `${x.provider}${x.url}`), ['codex-a/codex-a/v1/messages', 'codex-b/codex-b/v1/messages']);
-    } },
-  { id: 'fallthrough-codex-bare-4xx', tags: ['baseline'],
-    script: { 'codex-a': { status: 429, body: 'rate limited' }, 'codex-b': OK('gpt-6-luna', 'from-b') },
-    async run(ctx) {
-      const r = await ctx.req('/v1/messages', { headers: CODEX_BOTH, body: MSG('gpt-6-luna') });
-      assert.equal(r.status, 200, r.text);
-      assert.equal(JSON.parse(r.text).content[0].text, 'from-b');
-      assert.equal((await ctx.upstream()).length, 2);
-    } },
-  { id: 'fallthrough-codex-bare-connect-error', tags: ['baseline'],
-    script: { 'codex-a': { destroy: true }, 'codex-b': OK('gpt-6-luna', 'from-b') },
-    async run(ctx) {
-      const r = await ctx.req('/v1/messages', { headers: CODEX_BOTH, body: MSG('gpt-6-luna') });
-      assert.equal(r.status, 200, r.text);
-      assert.equal(JSON.parse(r.text).content[0].text, 'from-b');
-      const log = await ctx.upstream();
-      // upstream/client.ts: a thrown fetch is retried once on the same target (2 attempts), then falls through.
-      assert.deepEqual(log.map((x) => x.provider), ['codex-a', 'codex-a', 'codex-b']);
-    } },
   { id: 'reset-after-write-not-retried-single-target', tags: ['changed'],
     script: { 'codex-a': { destroy: true } },
     async run(ctx) {
@@ -284,13 +235,6 @@ export const cases = [
       // The request reached codex-a before the reset, so it is not retried.
       await one(ctx, 'codex-a');
     } },
-  { id: 'fallthrough-codex-both-fail-final-relay', tags: ['baseline'],
-    script: { 'codex-a': { status: 500, body: 'david down' }, 'codex-b': { status: 502, headers: { 'content-type': 'text/plain' }, body: 'b down' } },
-    async run(ctx) {
-      const r = await ctx.req('/v1/messages', { headers: CODEX_BOTH, body: MSG('gpt-6-luna') });
-      assert.equal(r.status, 502);
-      assert.equal(r.text, 'b down');
-    } },
   { id: 'fallthrough-prefixed-model-single-target', tags: ['parity'],
     script: { 'codex-a': { status: 500, body: 'david down' }, 'codex-b': OK('gpt-6-luna') },
     async run(ctx) {
@@ -298,15 +242,6 @@ export const cases = [
       assert.equal(r.status, 500);
       assert.equal(r.text, 'david down');
       await one(ctx, 'codex-a');
-    } },
-  { id: 'fallthrough-qwen-flash-node-today', tags: ['baseline'],
-    script: { openrouter: { status: 500, body: 'or down' }, 'or-anthropic': OK('qwen/qwen3.8-flash', 'from-or-anthropic') },
-    async run(ctx) {
-      const r = await ctx.req('/v1/messages', { headers: { 'x-target-providers': 'openrouter,or-anthropic' }, body: MSG('qwen/qwen3.8-flash') });
-      assert.equal(r.status, 200, r.text);
-      assert.equal(JSON.parse(r.text).content[0].text, 'from-or-anthropic');
-      const log = await ctx.upstream();
-      assert.deepEqual(log.map((x) => `${x.provider}${x.url}`), ['openrouter/api/v1/chat/completions', 'or-anthropic/api/v1/messages']);
     } },
   { id: 'target-providers-header-ignored', tags: ['changed'],
     script: { 'codex-a': OK('gpt-6-luna', 'from-david'), 'codex-b': OK('gpt-6-luna', 'from-b') },
@@ -434,16 +369,6 @@ export const cases = [
       const r = await ctx.req('/v1/messages', { body: MSG('openrouter/qwen/qwen3.8-flash') });
       assert.ok(r.status >= 400 && r.status < 500, `expected 4xx, got ${r.status}`);
       await none(ctx);
-    } },
-  { id: 'mismatch-openrouter-on-messages-node-today', tags: ['baseline'],
-    script: { openrouter: { status: 200, json: { id: 'c1', object: 'chat.completion', model: 'qwen/qwen3.8-flash', choices: [{ index: 0, message: { role: 'assistant', content: 'converted' }, finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } } } },
-    async run(ctx) {
-      const r = await ctx.req('/v1/messages', { body: MSG('openrouter/qwen/qwen3.8-flash') });
-      assert.equal(r.status, 200, r.text);
-      assert.equal(JSON.parse(r.text).content[0].text, 'converted');
-      const rec = await one(ctx, 'openrouter');
-      assert.equal(rec.url, '/api/v1/chat/completions');
-      assert.equal(rec.headers.authorization, 'Bearer test-or-key');
     } },
   { id: 'openai-ingress-local-chat-completions', tags: ['parity'],
     script: { 'claude-local': { status: 200, json: { id: 'c1', object: 'chat.completion', model: 'qwen38-27b-iq3s', choices: [{ index: 0, message: { role: 'assistant', content: 'pong' }, finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } } } },

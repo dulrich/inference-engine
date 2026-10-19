@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Differential contract harness runner (router/test/diff/README.md).
-//   node router/test/diff/run.mjs --target image:<tag>|bin:<path> [--impl node|rust]
+//   node router/test/diff/run.mjs --target image:<tag>|bin:<path>
 //        [--case <glob>] [--slow] [--config-source <path>] [--keep] [--stub-image <tag>]
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -13,14 +13,13 @@ import { cases, OAUTH } from './cases.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRouter = path.resolve(here, '../..');
 export const GW_KEY = 'test-gw-key';
-const DEFAULT_RUST_STUB_IMAGE = 'node:24-slim';
+const DEFAULT_STUB_IMAGE = 'node:24-slim';
 
 function parseArgs(argv) {
-  const a = { impl: 'node', slow: false, keep: false, caseGlob: '*', configSource: path.join(repoRouter, 'gateway.config.json') };
+  const a = { slow: false, keep: false, caseGlob: '*', configSource: path.join(repoRouter, 'gateway.config.json') };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === '--target') a.target = argv[++i];
-    else if (k === '--impl') a.impl = argv[++i];
     else if (k === '--case') a.caseGlob = argv[++i];
     else if (k === '--config-source') a.configSource = path.resolve(argv[++i]);
     else if (k === '--slow') a.slow = true;
@@ -29,9 +28,8 @@ function parseArgs(argv) {
     else throw new Error(`unknown argument ${k}`);
   }
   if (!/^(image|bin):.+/.test(a.target || '')) throw new Error('--target image:<tag> | bin:<path> is required');
-  if (!['node', 'rust'].includes(a.impl)) throw new Error('--impl must be node or rust');
-  // The stub needs `node`; a scratch Rust image has none, so rust targets default to a pinned public node image.
-  if (!a.stubImage) a.stubImage = a.impl === 'node' && a.target.startsWith('image:') ? a.target.slice(6) : DEFAULT_RUST_STUB_IMAGE;
+  // The stub needs `node`; the scratch gateway image has none, so default to a pinned public node image.
+  if (!a.stubImage) a.stubImage = DEFAULT_STUB_IMAGE;
   return a;
 }
 
@@ -57,18 +55,8 @@ export function generateConfig(sourceText, stubBase) {
   return out;
 }
 
-// The Rust gateway's auth is always on (x-gateway-key, raw key); the Node rollback image still
-// needs its AUTH_* knobs to behave the same way.
-const NODE_AUTH_ENV = {
-  AUTH_ENABLED: 'true',
-  AUTH_MODE: 'static_api_key',
-  AUTH_REQUIRED: 'true',
-  AUTH_STATIC_API_KEY_HEADER: 'x-gateway-key',
-  AUTH_STATIC_API_KEY_BEARER_ONLY: 'false',
-};
-
-const fakeEnv = (telemetryDir, impl) => ({
-  ...(impl === 'node' ? NODE_AUTH_ENV : {}),
+// The gateway's auth is always on (x-gateway-key, raw key).
+const fakeEnv = (telemetryDir) => ({
   AUTH_STATIC_API_KEYS: GW_KEY,
   OPENROUTER_API_KEY: 'test-or-key',
   CODEX_SIDECAR_KEY: 'test-codex-key',
@@ -124,7 +112,7 @@ async function startImage(tag, stubImage, run, cleanups) {
   await waitFor(`${run.stubUrl}/_log`, 20000, 'stub');
   fs.writeFileSync(run.configPath, generateConfig(fs.readFileSync(run.configSource, 'utf8'), `http://${stubName}:8080`));
   const gwName = `rrdiff-gw-${id}`;
-  const envArgs = Object.entries(fakeEnv('/var/log/inference-router', run.impl)).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
+  const envArgs = Object.entries(fakeEnv('/var/log/inference-router')).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
   docker('run', '-d', '--name', gwName, '--network', netName, '--user', `${process.getuid()}:${process.getgid()}`,
     '-v', `${run.configPath}:/app/gateway.config.json:ro`, '-v', `${run.telemetryDir}:/var/log/inference-router`,
     ...envArgs, tag);
@@ -153,7 +141,7 @@ async function startBin(binPath, run, cleanups) {
   const gwPort = await freePort();
   const gw = spawn(path.resolve(binPath), [], {
     stdio: ['ignore', process.env.RRDIFF_GW_LOG ? fs.openSync(process.env.RRDIFF_GW_LOG, 'w') : 'ignore', 'inherit'],
-    env: { PATH: process.env.PATH, HOST: '127.0.0.1', PORT: String(gwPort), GATEWAY_CONFIG_PATH: run.configPath, ...fakeEnv(run.telemetryDir, run.impl) },
+    env: { PATH: process.env.PATH, HOST: '127.0.0.1', PORT: String(gwPort), GATEWAY_CONFIG_PATH: run.configPath, ...fakeEnv(run.telemetryDir) },
   });
   cleanups.push(() => gw.kill('SIGTERM'));
   run.gwUrl = `http://127.0.0.1:${gwPort}`;
@@ -168,7 +156,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const id = `${process.pid}-${Math.random().toString(36).slice(2, 7)}`;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rrdiff-'));
-  const run = { id, impl: args.impl, configSource: args.configSource, configPath: path.join(tmp, 'gateway.config.json'), telemetryDir: path.join(tmp, 'telemetry') };
+  const run = { id, configSource: args.configSource, configPath: path.join(tmp, 'gateway.config.json'), telemetryDir: path.join(tmp, 'telemetry') };
   fs.mkdirSync(run.telemetryDir, { mode: 0o777 });
   const cleanups = [];
   let cleaned = false;
@@ -186,7 +174,7 @@ async function main() {
   process.on('exit', cleanup);
 
   const re = globToRe(args.caseGlob);
-  const selected = cases.filter((c) => re.test(c.id) && c.tags.some((t) => (t === 'parity') || (t === 'changed' && args.impl === 'rust') || (t === 'baseline' && args.impl === 'node')) && (args.slow || !c.tags.includes('slow')));
+  const selected = cases.filter((c) => re.test(c.id) && c.tags.some((t) => t === 'parity' || t === 'changed') && (args.slow || !c.tags.includes('slow')));
   let failed = 0;
   try {
     const [mode, ref] = [args.target.slice(0, args.target.indexOf(':')), args.target.slice(args.target.indexOf(':') + 1)];
@@ -214,7 +202,7 @@ async function main() {
   } finally {
     cleanup();
   }
-  console.log(`# target=${args.target} impl=${args.impl} cases=${selected.length} failed=${failed}`);
+  console.log(`# target=${args.target} cases=${selected.length} failed=${failed}`);
   console.log(`# config=${run.configPath} telemetryDir=${run.telemetryDir}`);
   process.exit(failed ? 1 : 0);
 }

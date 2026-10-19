@@ -49,8 +49,7 @@
 #      answers.wait.choice in {blocked, offer, none} (patch 0013). Default off.
 #  11. POST /v1/messages via openrouter/qwen/qwen3.8-flash is a 4xx protocol-mismatch refusal
 #      (plans/router-rust-gateway.md Decision 2: an OpenAI-protocol provider is never reached
-#      from Anthropic ingress; no upstream call, unbilled). Rollback caveat: the Node image
-#      (inference-engine-router:node-final) converts and relays instead, so check 11 fails there.
+#      from Anthropic ingress; no upstream call, unbilled).
 #
 # Exits non-zero on any check failure. Requires: curl, jq.
 set -u

@@ -306,7 +306,7 @@ Cell ids (in table order): `g26nt-qat-c32k-f16-mtp-ctkf16-ctvf16-faauto-c32768-8
 | Q5_K_M f16 64k | 4447 | 57.6k | 104.6 | — | 187 | 2362 |
 | Q4_K_M k8v8 64k | 2928 | 57.6k | **119.6** | +9% | 182 | 1335 |
 | Q4_K_M f16 64k | 4188 | 57.6k | 109.6 | — | 198 | 2374 |
-| IQ4_XS f16 48k | ~3500 | 43.1k | **129.1** | — | 204 | 2904 |
+| IQ4_XS f16 48k | 3363 | 43.1k | **129.1** | — | 204 | 2904 |
 
 (*The Q5_K_M f16 128k short-prompt figure is that config's first request after load and reads low against every other Q5_K_M row; treat it as a warm-up artefact.)
 

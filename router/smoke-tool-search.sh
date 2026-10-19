@@ -41,10 +41,10 @@
 #   4. Concrete tool materialised — the probe tool's own parameter names reach the final answer,
 #      which is only possible once its deferred schema was loaded.
 #   5. Within-leg token gate — request 1's `system`+`tools` count_tokens is at or below the
-#      WP-5-measured on-threshold for THIS leg (plus 2% of fixture drift: the throwaway profile's
+#      measured on-threshold for THIS leg (plus 2% of fixture drift: the throwaway profile's
 #      own paths and date move the system prompt by a few tokens), and above that same threshold
 #      under --control. Thresholds were measured with the pinned tool set (PINNED_TOOLS) on
-#      2026-10-19: local 3758 on / 6966 control, codex 3419 on / 6380 control, passthrough
+#      2026-10-19: local (claude-local/nemotron-4b) 3883 on / control not re-measured here, must exceed 3883, codex 3419 on / 6380 control, passthrough
 #      11465 on / 15111 control. The margins are ~46% (local, codex) and ~32% (passthrough), so
 #      2% cannot mask an eager expansion. Cross-leg comparison is invalid (different catalogues, different tokenizers) and
 #      is never attempted.
@@ -241,7 +241,7 @@ pick_model() { # <preferred> <listed-as> <prefix>
 		echo "$1"
 		return 0
 	fi
-	echo "$model_ids" | grep -m1 "^$3" || true
+	echo "$model_ids" | grep -v -E '(^|/)(qwen3[68]|Qwen3\.[68])' | grep -m1 "^$3" || true
 }
 
 # ── fixture profile (documentation of record: the spike's "Fixture profile used") ────────────
@@ -447,11 +447,11 @@ run_leg() { # <leg> <model> <on-threshold>
 
 # ── legs ─────────────────────────────────────────────────────────────────────────────────────
 if [ "$WANT_LOCAL" -eq 1 ]; then
-	m=$(pick_model "claude-local/qwen38-27b-iq3s" "claude-local/qwen38-27b-iq3s" "claude-local/")
+	m=$(pick_model "claude-local/nemotron-4b" "claude-local/nemotron-4b" "claude-local/")
 	if [ -z "$m" ]; then
 		bad "local: /v1/models lists no claude-local/* id"
 	else
-		run_leg "local" "$m" 3760
+		run_leg "local" "$m" 3883
 	fi
 fi
 

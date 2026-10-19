@@ -23,14 +23,14 @@
 # Checks (all by response body):
 #   1. GET /v1/models lists both the claude-local/* ids (including the four qwen38 reasoning-
 #      effort ids — still listed, no longer picker rows) and the hosted anthropic/* ids.
-#   2. POST /v1/messages via claude-local/qwen38-27b-iq3s with thinking:{"type":"disabled"}
+#   2. POST /v1/messages via claude-local/nemotron-4b with thinking:{"type":"disabled"}
 #      returns 2xx and NO thinking content block — the deterministic half of the router's
-#      effort mapping (patch 0007). The low-vs-medium token delta is prompt- and slot-state-
+#      effort mapping (the nemotron-4b effortKwargs row). The low-vs-medium token delta is prompt- and slot-state-
 #      dependent, so no gate asserts it.
 #   3. A request with a missing gateway key, and one with a wrong gateway key, each return a
 #      401 error body (asserted on the body's error message, not just the status).
-#   4. One non-streamed chat completion via claude-local/qwen36-a3b returns non-empty content.
-#   5. POST /v1/messages/count_tokens via claude-local/qwen36-a3b returns an integer
+#   4. One non-streamed chat completion via claude-local/nemotron-4b returns non-empty content.
+#   5. POST /v1/messages/count_tokens via claude-local/nemotron-4b returns an integer
 #      input_tokens field (local leg; patch 0004).
 #   6. POST /v1/messages/count_tokens with an unresolvable model returns a 404-class JSON
 #      error body (patch 0004).
@@ -145,26 +145,26 @@ else
 fi
 
 # ── 2. Effort mapping, deterministic half: thinking disabled ⇒ no thinking block ────────────
-# Patch 0007 maps the harness's own effort control onto chat_template_kwargs on the upstream body
-# (plans/router-effort-mapping-claude-local.md): thinking:{"type":"disabled"} becomes
-# enable_thinking:false for claude-local/qwen38-27b-iq3s. That is the one level whose effect is
-# deterministic on this template — the low-vs-medium token delta is prompt-dependent (measured)
-# and slot-state-dependent, so it is not gated anywhere. First request after a model
-# switch may include a llama-swap load, hence the long timeout.
-note "checking POST /v1/messages (model=claude-local/qwen38-27b-iq3s, thinking disabled) ..."
+# Thinking-disabled mapping: the nemotron-4b `effortKwargs` row in gateway.config.json turns
+# thinking:{"type":"disabled"} into enable_thinking:false on the upstream body (measured
+# 2026-10-19: enable_thinking:false gives reasoning length 0 versus 71). That is the one level
+# whose effect is deterministic — the low-vs-medium token delta is prompt-dependent and
+# slot-state-dependent, so it is not gated anywhere. First request after a model switch may
+# include a llama-swap load, hence the long timeout.
+note "checking POST /v1/messages (model=claude-local/nemotron-4b, thinking disabled) ..."
 effort_status=$(curl -s --max-time 300 -o /tmp/smoke-router-effort-body.$$ -w '%{http_code}' \
 	-X POST "$BASE_URL/v1/messages" \
 	-H 'Content-Type: application/json' \
 	-H "x-gateway-key: $GATEWAY_KEY" \
 	-H 'anthropic-version: 2023-06-01' \
-	-d '{"model":"claude-local/qwen38-27b-iq3s","max_tokens":128,"stream":false,"thinking":{"type":"disabled"},"messages":[{"role":"user","content":"Reply with the single word: pong"}]}') || effort_status=""
+	-d '{"model":"claude-local/nemotron-4b","max_tokens":128,"stream":false,"thinking":{"type":"disabled"},"messages":[{"role":"user","content":"Reply with the single word: pong"}]}') || effort_status=""
 effort_json=$(cat /tmp/smoke-router-effort-body.$$ 2>/dev/null)
 rm -f /tmp/smoke-router-effort-body.$$
 effort_types=$(echo "$effort_json" | jq -r '[.content[]?.type] | join(",")' 2>/dev/null)
 if [ "${effort_status#2}" != "$effort_status" ] && [ -n "$effort_types" ] && ! echo "$effort_types" | grep -q thinking; then
-	pass "/v1/messages (claude-local/qwen38-27b-iq3s, thinking disabled) returned $effort_status with content blocks [$effort_types] — no thinking block"
+	pass "/v1/messages (claude-local/nemotron-4b, thinking disabled) returned $effort_status with content blocks [$effort_types] — no thinking block"
 else
-	bad "/v1/messages (claude-local/qwen38-27b-iq3s, thinking disabled) expected 2xx with no thinking block (status=$effort_status, blocks=[$effort_types]). Response: $(echo "$effort_json" | head -c 300)"
+	bad "/v1/messages (claude-local/nemotron-4b, thinking disabled) expected 2xx with no thinking block (status=$effort_status, blocks=[$effort_types]). Response: $(echo "$effort_json" | head -c 300)"
 fi
 
 # ── 3. Missing / wrong gateway key both 401 by body ─────────────────────────────────────────
@@ -186,36 +186,36 @@ else
 	bad "wrong key did not produce a body error message. Response: $wrong_json"
 fi
 
-# ── 4. Local chat completion via claude-local/qwen36-a3b ────────────────────────────────────
-note "checking POST /v1/chat/completions (model=claude-local/qwen36-a3b) ..."
+# ── 4. Local chat completion via claude-local/nemotron-4b ────────────────────────────────────
+note "checking POST /v1/chat/completions (model=claude-local/nemotron-4b) ..."
 chat_json=$(curl -s --max-time 120 -X POST "$BASE_URL/v1/chat/completions" \
 	-H 'Content-Type: application/json' \
 	-H "x-gateway-key: $GATEWAY_KEY" \
-	-d '{"model":"claude-local/qwen36-a3b","max_tokens":256,"stream":false,"messages":[{"role":"user","content":"Reply with the single word: pong"}]}') || chat_json=""
+	-d '{"model":"claude-local/nemotron-4b","max_tokens":256,"stream":false,"messages":[{"role":"user","content":"Reply with the single word: pong"}]}') || chat_json=""
 chat_content=$(echo "$chat_json" | jq -r '
 	(.choices[0].message.content // empty)
 	| if type == "string" and length > 0 then . else empty end
 ' 2>/dev/null)
 if [ -n "$chat_content" ]; then
-	pass "/v1/chat/completions (claude-local/qwen36-a3b) returned non-empty content"
+	pass "/v1/chat/completions (claude-local/nemotron-4b) returned non-empty content"
 else
-	bad "/v1/chat/completions (claude-local/qwen36-a3b) did not return non-empty content. Response: $chat_json"
+	bad "/v1/chat/completions (claude-local/nemotron-4b) did not return non-empty content. Response: $chat_json"
 fi
 
-# ── 5. Local-leg count_tokens (claude-local/qwen36-a3b) ─────────────────────────────────────
-note "checking POST /v1/messages/count_tokens (model=claude-local/qwen36-a3b) ..."
+# ── 5. Local-leg count_tokens (claude-local/nemotron-4b) ─────────────────────────────────────
+note "checking POST /v1/messages/count_tokens (model=claude-local/nemotron-4b) ..."
 count_tokens_json=$(curl -s --max-time 30 -X POST "$BASE_URL/v1/messages/count_tokens" \
 	-H 'Content-Type: application/json' \
 	-H "x-gateway-key: $GATEWAY_KEY" \
-	-d '{"model":"claude-local/qwen36-a3b","messages":[{"role":"user","content":"Reply with the single word: pong"}]}') || count_tokens_json=""
+	-d '{"model":"claude-local/nemotron-4b","messages":[{"role":"user","content":"Reply with the single word: pong"}]}') || count_tokens_json=""
 count_tokens_value=$(echo "$count_tokens_json" | jq -r '
 	.input_tokens
 	| if type == "number" and (. == (. | floor)) then . else empty end
 ' 2>/dev/null)
 if [ -n "$count_tokens_value" ]; then
-	pass "/v1/messages/count_tokens (claude-local/qwen36-a3b) returned integer input_tokens=$count_tokens_value"
+	pass "/v1/messages/count_tokens (claude-local/nemotron-4b) returned integer input_tokens=$count_tokens_value"
 else
-	bad "/v1/messages/count_tokens (claude-local/qwen36-a3b) did not return an integer input_tokens. Response: $count_tokens_json"
+	bad "/v1/messages/count_tokens (claude-local/nemotron-4b) did not return an integer input_tokens. Response: $count_tokens_json"
 fi
 
 # ── 6. count_tokens with an unresolvable model returns a 404-class JSON error body ──────────

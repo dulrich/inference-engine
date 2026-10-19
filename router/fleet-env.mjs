@@ -14,7 +14,7 @@ import { homedir } from "node:os";
 
 export const LEGACY_ROUTER_ENV_FILE = "<code-root>/fleet-tools/.env";
 
-const bin = () => process.env.FLEET_ENV_BIN || "<code-root>/fleet-tools/fleet_env/bin/fleet-env";
+const bin = () => process.env.FLEET_ENV_BIN || "<code-root>/fleet-tools/fleet/fleet_env/bin/fleet-env";
 
 function die(msg) {
   process.stderr.write(`fleet-env: ${msg}\n`);

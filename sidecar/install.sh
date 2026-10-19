@@ -249,9 +249,11 @@ printf '\nNext steps (run these yourself; install.sh never enables or starts any
 if [ "$REAL_HOME" -eq 1 ] && [ "$linger" != "yes" ]; then
   printf '  loginctl enable-linger %s\n' "${USER:-$(id -un)}"
 fi
-if [ "$(systemctl --user is-enabled codex-sidecar.service 2>/dev/null)" = "enabled" ]; then
-  # upgrade: the unit is already enabled, so the new binary only needs a restart
-  printf '  systemctl --user daemon-reload && systemctl --user restart codex-sidecar.service\n'
+if [ "$REAL_HOME" -eq 1 ] && command -v systemctl >/dev/null 2>&1 &&
+  [ "$(systemctl --user is-enabled codex-sidecar.service 2>/dev/null)" = "enabled" ]; then
+  # upgrade: the unit is already enabled and the daemon-reload above already ran,
+  # so the new binary only needs a restart (a test home never touches systemd)
+  printf '  systemctl --user restart codex-sidecar.service\n'
 else
   printf '  systemctl --user enable --now codex-sidecar\n'
 fi

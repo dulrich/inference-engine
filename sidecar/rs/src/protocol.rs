@@ -39,12 +39,58 @@ pub fn sha256_hex(data: &str) -> String {
         .collect()
 }
 
+/// Where a request's effort came from (logged as `as_str()`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffortSource {
+    Suffix,
+    Request,
+    Default,
+}
+
+impl EffortSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Suffix => "suffix",
+            Self::Request => "request",
+            Self::Default => "default",
+        }
+    }
+}
+
+impl From<EffortSource> for Value {
+    fn from(v: EffortSource) -> Self {
+        Value::from(v.as_str())
+    }
+}
+
+/// A session key's agent scope (logged as `as_str()`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    Parent,
+    Subagent,
+}
+
+impl Scope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Parent => "parent",
+            Self::Subagent => "subagent",
+        }
+    }
+}
+
+impl From<Scope> for Value {
+    fn from(v: Scope) -> Self {
+        Value::from(v.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedModel {
     pub model: String,
     pub effort: String,
-    /// `"suffix"` or `"default"`.
-    pub effort_source: &'static str,
+    /// `Suffix` or `Default`.
+    pub effort_source: EffortSource,
 }
 
 /// `parseModelId(raw)`: `gpt-5.6-luna`, `codex-a/gpt-5.6-luna`, or either with a
@@ -60,7 +106,7 @@ pub fn parse_model_id(raw: Option<&Value>) -> Option<ParsedModel> {
         return Some(ParsedModel {
             model: bare.into(),
             effort: e.into(),
-            effort_source: "default",
+            effort_source: EffortSource::Default,
         });
     }
     // /^(.*)-(low|medium|high)$/ — `.` excludes line terminators
@@ -70,7 +116,7 @@ pub fn parse_model_id(raw: Option<&Value>) -> Option<ParsedModel> {
                 return Some(ParsedModel {
                     model: head.into(),
                     effort: suf.into(),
-                    effort_source: "suffix",
+                    effort_source: EffortSource::Suffix,
                 });
             }
         }
@@ -81,35 +127,34 @@ pub fn parse_model_id(raw: Option<&Value>) -> Option<ParsedModel> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Effort {
     pub effort: Option<String>,
-    /// `"suffix"`, `"request"` or `"default"`.
-    pub effort_source: &'static str,
+    pub effort_source: EffortSource,
 }
 
 /// `resolveEffort(parsed, body)`: suffix -> `output_config.effort` -> `thinking.type ===
 /// "disabled"` (low) -> family default. Never an error.
 pub fn resolve_effort(parsed: Option<&ParsedModel>, body: &Value) -> Effort {
-    if let Some(p) = parsed.filter(|p| p.effort_source == "suffix") {
+    if let Some(p) = parsed.filter(|p| p.effort_source == EffortSource::Suffix) {
         return Effort {
             effort: Some(p.effort.clone()),
-            effort_source: "suffix",
+            effort_source: EffortSource::Suffix,
         };
     }
     let want = js::prop(js::prop(Some(body), "output_config"), "effort").and_then(Value::as_str);
     if let Some(e) = want.and_then(|w| lookup(EFFORT_LEVELS, w)) {
         return Effort {
             effort: Some(e.into()),
-            effort_source: "request",
+            effort_source: EffortSource::Request,
         };
     }
     if js::prop(js::prop(Some(body), "thinking"), "type") == Some(&Value::from("disabled")) {
         return Effort {
             effort: Some("low".into()),
-            effort_source: "request",
+            effort_source: EffortSource::Request,
         };
     }
     Effort {
         effort: parsed.map(|p| p.effort.clone()),
-        effort_source: "default",
+        effort_source: EffortSource::Default,
     }
 }
 
@@ -299,8 +344,7 @@ pub fn system_text_without_billing_line(body: &Value, system_text: &str) -> Stri
 pub struct SessionKey {
     pub key: String,
     pub weak: bool,
-    /// `"parent"` or `"subagent"`.
-    pub scope: &'static str,
+    pub scope: Scope,
 }
 
 /// `sessionKeyOf(body, systemText, firstUserText, headers)`: one thread per (session_id,
@@ -322,12 +366,12 @@ pub fn session_key_of(
         .map(|s| js::trim(s).to_string())
         .unwrap_or_default();
     let scope = if is_subagent_request(body) {
-        "subagent"
+        Scope::Subagent
     } else {
-        "parent"
+        Scope::Parent
     };
     if !sid.is_empty() {
-        if scope == "parent" {
+        if scope == Scope::Parent {
             return SessionKey {
                 key: sid,
                 weak: false,

@@ -8,7 +8,7 @@ use crate::js;
 use crate::outbox_events::OutboxKey;
 use crate::persona;
 use crate::protocol::zero_usage;
-use crate::request::{SessionState, Token};
+use crate::request::Token;
 use crate::sidecar::{err, with_world, World};
 use crate::sinks;
 use serde_json::{json, Value};
@@ -94,35 +94,6 @@ pub struct Session {
     pub resolve: Option<oneshot::Sender<Outcome>>,
     pub timeout_gen: u64,
     pub closed: bool,
-}
-
-impl SessionState for Session {
-    type Owner = OwnerTok;
-    type Outcome = LastOutcome;
-    fn owner(&self) -> Option<&OwnerTok> {
-        self.owner.as_ref()
-    }
-    fn owner_mode(o: &OwnerTok) -> &str {
-        &o.token.mode
-    }
-    fn owner_digest(o: &OwnerTok) -> &str {
-        &o.token.digest
-    }
-    fn last_outcome(&self) -> Option<&LastOutcome> {
-        self.last_outcome.as_ref()
-    }
-    fn outcome_digest(o: &LastOutcome) -> &str {
-        &o.digest
-    }
-    fn turn_open(&self) -> bool {
-        self.turn_open
-    }
-    fn parked_len(&self) -> usize {
-        self.parked.len()
-    }
-    fn delivered(&self) -> &HashSet<String> {
-        &self.delivered
-    }
 }
 
 /// JS `SameValueZero` for the primitive ids a `Map`/`Set` is keyed by (objects never match).
@@ -290,7 +261,7 @@ pub fn preempt(w: &mut World, sid: u64, e: SidecarError) {
 }
 
 /// `waitOutcome(timeoutMs)`.
-pub fn wait_outcome(w: &mut World, sid: u64, timeout_ms: f64) -> oneshot::Receiver<Outcome> {
+pub fn wait_outcome(w: &mut World, sid: u64, timeout_ms: u64) -> oneshot::Receiver<Outcome> {
     let (tx, rx) = oneshot::channel();
     let me = w.shared();
     let Some(s) = w.sessions.get_mut(&sid) else {
@@ -304,11 +275,7 @@ pub fn wait_outcome(w: &mut World, sid: u64, timeout_ms: f64) -> oneshot::Receiv
     s.resolve = Some(tx);
     s.timeout_gen += 1;
     let gen = s.timeout_gen;
-    let ms = if timeout_ms.is_finite() && timeout_ms > 0.0 {
-        timeout_ms as u64
-    } else {
-        1
-    };
+    let ms = timeout_ms.max(1);
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
         with_world(&me, |w| {
@@ -362,11 +329,7 @@ fn arm_batch(w: &mut World, sid: u64) {
     s.batch_gen += 1;
     s.batch_armed = true;
     let gen = s.batch_gen;
-    let ms = if ms.is_finite() && ms > 0.0 {
-        ms as u64
-    } else {
-        1
-    };
+    let ms = ms.max(1);
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
         with_world(&me, |w| {

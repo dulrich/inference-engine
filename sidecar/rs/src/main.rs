@@ -23,7 +23,13 @@ fn main() -> ExitCode {
 }
 
 async fn run() -> ExitCode {
-    let cfg = config::read_config(&config::process_env());
+    let cfg = match config::read_config(&config::process_env()) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("codex-sidecar: {e}");
+            return ExitCode::from(1);
+        }
+    };
     let pinned = match Pinned::load() {
         Ok(p) => p,
         Err(e) => {

@@ -243,8 +243,8 @@ pub async fn start_turn(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
         let mut w = lock(me);
         let w = &mut *w;
         let n = &rc.norm;
-        let text = turn_input_text(&rc.mode, &n.msgs, n.last.as_ref(), &n.last_blocks);
-        if renders_transcript(&rc.mode, &n.msgs) {
+        let text = turn_input_text(rc.mode, &n.msgs, n.last.as_ref(), &n.last_blocks);
+        if renders_transcript(rc.mode, &n.msgs) {
             w.log(
                 "rehydrated",
                 json!({ "persona": rc.persona, "key": rc.ident.key, "reqId": rc.req_id, "nMessages": n.msgs.len(), "chars": js::utf16_len(&text) }),

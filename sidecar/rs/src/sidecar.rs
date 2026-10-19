@@ -167,7 +167,7 @@ pub async fn start(cfg: Config, pinned: Pinned) -> Result<Handle, String> {
     if cfg.key.is_empty() {
         return Err("SIDECAR_KEY is required".into());
     }
-    let logger = Logger::new(cfg.log_dir.clone(), cfg.log_keep_days);
+    let logger = Logger::new(cfg.log_dir.clone(), f64::from(cfg.log_keep_days));
     let outbox = OutboxWriter::new(&cfg.outbox_path);
     let names = cfg.personas.clone();
     let world: Shared = Arc::new_cyclic(|me| {
@@ -206,14 +206,7 @@ pub async fn start(cfg: Config, pinned: Pinned) -> Result<Handle, String> {
     let servers = Arc::new(Mutex::new(Vec::new()));
     let shutdown_tx = Arc::new(Mutex::new(Vec::new()));
 
-    let want = if (0.0..65536.0).contains(&port_cfg) {
-        port_cfg as u16
-    } else {
-        return Err(format!(
-            "options.port should be >= 0 and < 65536. Received {}.",
-            crate::js::fmt_number(port_cfg)
-        ));
-    };
+    let want = port_cfg;
     let primary = bind("127.0.0.1", want).await?;
     let port = primary.local_addr().map(|a| a.port()).unwrap_or(want);
     {
@@ -238,21 +231,21 @@ pub async fn start(cfg: Config, pinned: Pinned) -> Result<Handle, String> {
                     let mut w = lock(&world);
                     w.log(
                         "bind-extra-retrying",
-                        json!({ "host": bind_extra, "port": port, "err": first, "budgetMs": crate::js::num(budget_ms) }),
+                        json!({ "host": bind_extra, "port": port, "err": first, "budgetMs": budget_ms }),
                     );
                     w.bind_retry_gen += 1;
                     w.bind_retry_gen
                 };
                 let (wd, sv, st) = (world.clone(), servers.clone(), shutdown_tx.clone());
                 tokio::spawn(async move {
-                    let mut attempts: f64 = 1.0;
-                    let mut delay = retry_ms.max(1.0);
+                    let mut attempts: u64 = 1;
+                    let mut delay = retry_ms.max(1);
                     loop {
-                        tokio::time::sleep(std::time::Duration::from_millis(delay as u64)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                         if lock(&wd).bind_retry_gen != gen {
                             return;
                         }
-                        attempts += 1.0;
+                        attempts += 1;
                         match bind(&bind_extra, port).await {
                             Ok(l) => {
                                 {
@@ -261,7 +254,7 @@ pub async fn start(cfg: Config, pinned: Pinned) -> Result<Handle, String> {
                                     let el = crate::js::now_ms() - started;
                                     w.log(
                                         "bind-extra-recovered",
-                                        json!({ "host": bind_extra, "port": port, "attempts": crate::js::num(attempts), "elapsedMs": crate::js::num(el) }),
+                                        json!({ "host": bind_extra, "port": port, "attempts": attempts, "elapsedMs": crate::js::num(el) }),
                                     );
                                 }
                                 serve(&wd, l, &sv, &st);
@@ -269,14 +262,14 @@ pub async fn start(cfg: Config, pinned: Pinned) -> Result<Handle, String> {
                             }
                             Err(e) => {
                                 let el = crate::js::now_ms() - started;
-                                if el + delay > budget_ms {
+                                if el + delay as f64 > budget_ms as f64 {
                                     lock(&wd).log(
                                         "bind-extra-failed",
-                                        json!({ "host": bind_extra, "port": port, "attempts": crate::js::num(attempts), "elapsedMs": crate::js::num(el), "err": e }),
+                                        json!({ "host": bind_extra, "port": port, "attempts": attempts, "elapsedMs": crate::js::num(el), "err": e }),
                                     );
                                     return;
                                 }
-                                delay = (delay * 2.0).min(5000.0);
+                                delay = delay.saturating_mul(2).min(5000);
                             }
                         }
                     }
@@ -290,7 +283,7 @@ pub async fn start(cfg: Config, pinned: Pinned) -> Result<Handle, String> {
         let names: Vec<String> = w.personas.iter().map(|p| p.name.clone()).collect();
         let row = json!({
             "port": port, "binds": w.binds.bound, "expected": w.binds.expected,
-            "personas": names, "logDir": w.cfg.log_dir, "keepDays": crate::js::num(w.cfg.log_keep_days),
+            "personas": names, "logDir": w.cfg.log_dir, "keepDays": w.cfg.log_keep_days,
         });
         w.log("listen", row);
         names

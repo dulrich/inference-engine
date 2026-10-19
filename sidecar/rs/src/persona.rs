@@ -40,7 +40,7 @@ pub struct Persona {
     init_waiters: HashMap<u64, Vec<oneshot::Sender<InitResult>>>,
     pub degraded: bool,
     degraded_reason: Option<Value>,
-    backoff_ms: f64,
+    backoff_ms: u64,
     stable_gen: u64,
     pub hook_events: u64,
     pub mcp_events: u64,
@@ -75,7 +75,7 @@ fn signal_name(sig: i32) -> String {
 }
 
 impl Persona {
-    pub fn new(name: String, backoff_ms: f64) -> Self {
+    pub fn new(name: String, backoff_ms: u64) -> Self {
         Self {
             name,
             child_alive: false,
@@ -184,13 +184,13 @@ pub fn ensure(
 }
 
 /// `setInit(boot())`, or the restart path's delayed boot.
-fn set_init(w: &mut World, pi: usize, delay_ms: Option<f64>) {
+fn set_init(w: &mut World, pi: usize, delay_ms: Option<u64>) {
     let gen = w.id();
     w.personas[pi].init = InitSlot::Pending(gen);
     let me = w.shared();
     tokio::spawn(async move {
         if let Some(d) = delay_ms {
-            tokio::time::sleep(std::time::Duration::from_millis(d.max(0.0) as u64)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(d)).await;
             let stopped = with_world(&me, |w| {
                 if w.personas[pi].stopped {
                     let name = w.personas[pi].name.clone();
@@ -220,7 +220,7 @@ fn set_init(w: &mut World, pi: usize, delay_ms: Option<f64>) {
                 pi,
                 "initialize",
                 json!({ "clientInfo": { "name": "codex-sidecar", "version": VERSION }, "capabilities": { "experimentalApi": true } }),
-                0.0,
+                0,
             )
         }) else {
             return;
@@ -465,7 +465,7 @@ fn on_exit(w: &mut World, pi: usize, gen: u64, code: Value, signal: Value, e: Va
         return;
     }
     let wait = p.backoff_ms;
-    p.backoff_ms = (p.backoff_ms * 2.0).min(30000.0);
+    p.backoff_ms = p.backoff_ms.saturating_mul(2).min(30_000);
     set_init(w, pi, Some(wait));
 }
 
@@ -495,7 +495,7 @@ fn on_frame(w: &mut World, pi: usize, m: Value) {
             log(
                 w,
                 "frame-error",
-                json!({ "persona": name, "err": "TypeError: Cannot read properties of null (reading 'id')" }),
+                json!({ "persona": name, "err": "frame is null, expected a JSON object" }),
             );
         }
         return;
@@ -632,16 +632,16 @@ pub fn rpc(
     pi: usize,
     method: &str,
     params: Value,
-    timeout_ms: f64,
+    timeout_ms: u64,
 ) -> oneshot::Receiver<RpcResult> {
     let (tx, rx) = oneshot::channel();
     let id = w.personas[pi].next_rpc_id();
     w.personas[pi].pending.insert(id, tx);
-    if timeout_ms > 0.0 {
+    if timeout_ms > 0 {
         let me = w.shared();
         let m = method.to_string();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(timeout_ms as u64)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)).await;
             with_world(&me, |w| {
                 if let Some(tx) = w.personas[pi].pending.remove(&id) {
                     let _ = tx.send(Err(err(

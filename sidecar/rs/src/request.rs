@@ -7,9 +7,9 @@
 
 use crate::errors::SidecarError;
 use crate::js;
-use crate::protocol::{self, Effort, ParsedModel, SessionKey, MODEL_FAMILIES};
+use crate::protocol::{self, Effort, ParsedModel, Scope, SessionKey, MODEL_FAMILIES};
+use crate::session::Session;
 use serde_json::{json, Map, Value};
-use std::collections::HashSet;
 
 /// `canon(v)`: object keys sorted (UTF-16 order, as `Array.prototype.sort`), arrays kept.
 /// Re-serialized through `js::stringify`, so array-index keys still lead as in JS.
@@ -114,6 +114,58 @@ pub fn short_digest(d: &str) -> String {
     d.chars().take(12).collect()
 }
 
+/// The request-shape check that runs before any session or sink is touched: `messages`, when
+/// present, is an array of objects, and every element of an array `content` is an object.
+pub fn validate(body: &Value) -> Result<(), SidecarError> {
+    let bad = |m: String| SidecarError::new(400, "invalid_request_error", m);
+    let msgs = match js::prop(Some(body), "messages") {
+        None | Some(Value::Null) => return Ok(()),
+        Some(Value::Array(a)) => a,
+        Some(_) => return Err(bad("messages must be an array".into())),
+    };
+    for (i, m) in msgs.iter().enumerate() {
+        let Value::Object(o) = m else {
+            return Err(bad(format!("messages[{i}] must be an object")));
+        };
+        if let Some(Value::Array(blocks)) = o.get("content") {
+            if let Some(j) = blocks.iter().position(|b| !b.is_object()) {
+                return Err(bad(format!("messages[{i}].content[{j}] must be an object")));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// How a request drives its session (logged as `as_str()`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    NewThread,
+    NewThreadAfterRewind,
+    ToolResult,
+    NextTurn,
+}
+
+impl Mode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NewThread => "new-thread",
+            Self::NewThreadAfterRewind => "new-thread-after-rewind",
+            Self::ToolResult => "tool-result",
+            Self::NextTurn => "next-turn",
+        }
+    }
+
+    pub fn is_new_thread(self) -> bool {
+        matches!(self, Self::NewThread | Self::NewThreadAfterRewind)
+    }
+}
+
+impl From<Mode> for Value {
+    fn from(v: Mode) -> Self {
+        Value::from(v.as_str())
+    }
+}
+
 /// The body, read once (`normalizeRequest`).
 #[derive(Debug, Clone)]
 pub struct Normalized {
@@ -165,7 +217,7 @@ pub struct Identity {
     pub eff: Effort,
     pub key: String,
     pub weak: bool,
-    pub scope: &'static str,
+    pub scope: Scope,
 }
 
 /// `resolveIdentity(norm)`: model, effort and session key; the 400 for an unknown model id.
@@ -208,7 +260,7 @@ pub fn resolve_identity(norm: &Normalized) -> Result<Identity, SidecarError> {
 #[derive(Debug, Clone)]
 pub struct Token {
     pub req_id: Value,
-    pub mode: String,
+    pub mode: Mode,
     pub n_messages: usize,
     /// Truthy `tool_use_id`s, sorted as JS `sort()` does (by `String(v)`, UTF-16 order).
     pub tool_result_ids: Vec<Value>,
@@ -223,17 +275,10 @@ fn effort_value(e: &Effort) -> Value {
     e.effort.as_deref().map_or(Value::Null, Value::from)
 }
 
-fn type_error_null(prop: &str) -> SidecarError {
-    crate::errors::as_sidecar_error(&format!(
-        "Cannot read properties of null (reading '{prop}')"
-    ))
-}
-
 /// One block's `{type, keys, len}` summary.
-fn block_shape(b: &Value) -> Result<Value, SidecarError> {
+fn block_shape(b: &Value) -> Value {
     let mut m = Map::new();
     let keys: String = match b {
-        Value::Null => return Err(type_error_null("type")),
         Value::Object(o) => {
             if let Some(t) = o.get("type") {
                 m.insert("type".into(), t.clone());
@@ -262,17 +307,11 @@ fn block_shape(b: &Value) -> Result<Value, SidecarError> {
         _ => Value::Null,
     };
     m.insert("len".into(), len);
-    Ok(Value::Object(m))
+    Value::Object(m)
 }
 
-/// `requestToken({reqId, mode, norm, ident})`. Errs only where Node would throw a TypeError
-/// (a `null` content block in `msgShape`), mapped as `asSidecarError` maps it.
-pub fn request_token(
-    req_id: Value,
-    mode: &str,
-    norm: &Normalized,
-    ident: &Identity,
-) -> Result<Token, SidecarError> {
+/// `requestToken({reqId, mode, norm, ident})`; the body passed [`validate`].
+pub fn request_token(req_id: Value, mode: Mode, norm: &Normalized, ident: &Identity) -> Token {
     let model = js::prop(Some(&norm.body), "model");
     let empty = Value::Array(Vec::new());
     let tools = js::present(js::prop(Some(&norm.body), "tools")).unwrap_or(&empty);
@@ -308,10 +347,7 @@ pub fn request_token(
             Some(Value::Array(a)) => a.clone(),
             other => vec![json!({ "type": "text", "text": js::js_string_or_empty(other) })],
         };
-        let blocks = blocks
-            .iter()
-            .map(block_shape)
-            .collect::<Result<Vec<_>, _>>()?;
+        let blocks: Vec<Value> = blocks.iter().map(block_shape).collect();
         let mut row = Map::new();
         row.insert("d".into(), Value::from(d));
         if let Some(r) = js::prop(Some(m), "role") {
@@ -320,15 +356,15 @@ pub fn request_token(
         row.insert("blocks".into(), Value::Array(blocks));
         shape.push(Value::Object(row));
     }
-    Ok(Token {
+    Token {
         req_id,
-        mode: mode.to_string(),
+        mode,
         n_messages: norm.msgs.len(),
         tool_result_ids: ids,
         digest,
         parts,
         msg_shape: Value::Array(shape),
-    })
+    }
 }
 
 /// `msgDiff(a, b)`: up to four indices where two `msg_shape` summaries differ.
@@ -365,24 +401,16 @@ pub fn msg_diff(a: Option<&Value>, b: Option<&Value>) -> Option<Value> {
 
 // ------------------------------------------------------------- disposition ----
 
-/// What `dispositionOf` reads from a session; WP-3's `Session` implements it.
-pub trait SessionState {
-    type Owner;
-    type Outcome;
-    fn owner(&self) -> Option<&Self::Owner>;
-    fn owner_mode(owner: &Self::Owner) -> &str;
-    fn owner_digest(owner: &Self::Owner) -> &str;
-    fn last_outcome(&self) -> Option<&Self::Outcome>;
-    fn outcome_digest(outcome: &Self::Outcome) -> &str;
-    fn turn_open(&self) -> bool;
-    fn parked_len(&self) -> usize;
-    fn delivered(&self) -> &HashSet<String>;
-}
-
-pub enum Disposition<'a, S: SessionState> {
-    Replay { outcome: &'a S::Outcome },
-    Join { owner: &'a S::Owner },
-    Drive { supersedes: Option<&'a S::Owner> },
+pub enum Disposition<'a> {
+    Replay {
+        outcome: &'a crate::session::LastOutcome,
+    },
+    Join {
+        owner: &'a crate::session::OwnerTok,
+    },
+    Drive {
+        supersedes: Option<&'a crate::session::OwnerTok>,
+    },
 }
 
 fn id_key(v: &Value) -> String {
@@ -394,37 +422,37 @@ fn id_key(v: &Value) -> String {
 
 /// THE decision: replay (straggler retry of the completed turn), join (byte-equal undecorated
 /// twin of the driving request), or drive (superseding any owner).
-pub fn disposition_of<'a, S: SessionState>(sess: &'a S, token: &Token) -> Disposition<'a, S> {
-    if sess.owner().is_none() {
-        if let Some(lo) = sess.last_outcome() {
-            let straggler = !sess.turn_open()
-                && sess.parked_len() == 0
+pub fn disposition_of<'a>(sess: &'a Session, token: &Token) -> Disposition<'a> {
+    if sess.owner.is_none() {
+        if let Some(lo) = &sess.last_outcome {
+            let straggler = !sess.turn_open
+                && sess.parked.is_empty()
                 && !token.tool_result_ids.is_empty()
-                && token.digest == S::outcome_digest(lo)
+                && token.digest == lo.digest
                 && token
                     .tool_result_ids
                     .iter()
-                    .all(|id| sess.delivered().contains(&id_key(id)));
+                    .all(|id| sess.delivered.contains(&id_key(id)));
             if straggler {
                 return Disposition::Replay { outcome: lo };
             }
         }
     }
-    if let Some(o) = sess.owner() {
-        if S::owner_mode(o) == token.mode && S::owner_digest(o) == token.digest {
+    if let Some(o) = &sess.owner {
+        if o.token.mode == token.mode && o.token.digest == token.digest {
             return Disposition::Join { owner: o };
         }
     }
     Disposition::Drive {
-        supersedes: sess.owner(),
+        supersedes: sess.owner.as_ref(),
     }
 }
 
 // ------------------------------------------------------------- turn input ----
 
 /// `rendersTranscript(mode, msgs)`: a new thread opening mid-conversation.
-pub fn renders_transcript(mode: &str, msgs: &[Value]) -> bool {
-    mode.starts_with("new-thread")
+pub fn renders_transcript(mode: Mode, msgs: &[Value]) -> bool {
+    mode.is_new_thread()
         && msgs
             .iter()
             .any(|m| js::prop(Some(m), "role") == Some(&Value::from("assistant")))
@@ -541,14 +569,14 @@ pub fn render_transcript(msgs: &[Value]) -> String {
 
 /// `turnInputText(mode, msgs, last, lastBlocks)`: the text one turn carries.
 pub fn turn_input_text(
-    mode: &str,
+    mode: Mode,
     msgs: &[Value],
     last: Option<&Value>,
     last_blocks: &[Value],
 ) -> String {
     let text = if renders_transcript(mode, msgs) {
         render_transcript(msgs)
-    } else if mode.starts_with("new-thread") {
+    } else if mode.is_new_thread() {
         msgs.iter()
             .filter(|m| js::prop(Some(m), "role") == Some(&Value::from("user")))
             .map(|m| protocol::text_of(js::prop(Some(m), "content")))

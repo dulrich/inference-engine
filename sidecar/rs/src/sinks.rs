@@ -208,7 +208,7 @@ pub enum Kind {
         blocks: Vec<Value>,
     },
     Sse {
-        ping_ms: f64,
+        ping_ms: u64,
         index: f64,
         text_open: bool,
         any_block: bool,
@@ -240,7 +240,7 @@ impl Sink {
             },
         }
     }
-    pub fn sse(res: u64, model: &str, ping_ms: f64) -> Self {
+    pub fn sse(res: u64, model: &str, ping_ms: u64) -> Self {
         Self {
             res,
             msg: message_skeleton(model),
@@ -314,7 +314,7 @@ fn arm(w: &mut World, id: u64) {
         return;
     }
     let gen = *timer_gen;
-    let ms = ping_ms.max(1.0) as u64;
+    let ms = (*ping_ms).max(1);
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
         with_world(&me, |w| {

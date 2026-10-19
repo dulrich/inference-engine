@@ -12,7 +12,7 @@ const TITLE_SYSTEM: &str =
     "You are naming a coding session so the user can pick it out of a long list of sessions.";
 
 fn pm(id: Option<Value>) -> Option<(String, String, &'static str)> {
-    parse_model_id(id.as_ref()).map(|p| (p.model, p.effort, p.effort_source))
+    parse_model_id(id.as_ref()).map(|p| (p.model, p.effort, p.effort_source.as_str()))
 }
 
 fn want(m: &str, e: &str, s: &'static str) -> Option<(String, String, &'static str)> {
@@ -137,7 +137,7 @@ fn sessions_key_on_metadata_user_id_and_fall_back_to_a_warned_hash() {
         SessionKey {
             key: "abc-123".into(),
             weak: false,
-            scope: "parent"
+            scope: Scope::Parent
         }
     );
     let a = session_key_of(&json!({}), "sys", "hi", None);

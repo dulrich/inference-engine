@@ -1,7 +1,7 @@
 //! Port of sidecar/test/effort.test.mjs, case for case: suffix -> output_config.effort ->
 //! thinking disabled -> family default, and never an error.
 
-use codex_sidecar::protocol::{parse_model_id, resolve_effort, Effort};
+use codex_sidecar::protocol::{parse_model_id, resolve_effort, Effort, EffortSource};
 use serde_json::{json, Value};
 
 fn resolve(id: &str, body: Value) -> Effort {
@@ -9,9 +9,17 @@ fn resolve(id: &str, body: Value) -> Effort {
 }
 
 fn eff(e: &str, src: &'static str) -> Effort {
+    let effort_source = [
+        EffortSource::Suffix,
+        EffortSource::Request,
+        EffortSource::Default,
+    ]
+    .into_iter()
+    .find(|s| s.as_str() == src)
+    .expect("known effort source");
     Effort {
         effort: Some(e.into()),
-        effort_source: src,
+        effort_source,
     }
 }
 

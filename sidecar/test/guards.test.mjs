@@ -222,3 +222,44 @@ test("an unknown item type still trips the execution boundary (allowlist, not de
   const health = await req(h, "/healthz", { method: "GET" });
   assert.equal(health.json.personas["codex-a"].degraded, true);
 });
+
+test("a malformed content block is a 400 before the session is touched (no rewind, no interrupt)", async t => {
+  const h = await withSidecar({ scenario: { turns: [SIMPLE_TURN, SIMPLE_TURN, SIMPLE_TURN] } });
+  t.after(() => h.close());
+
+  const a = await req(h, "/codex-a/v1/messages", { body: msgBody({ messages: [{ role: "user", content: "one" }] }) });
+  assert.equal(a.status, 200);
+  const before = h.log().length;
+
+  // diverged history plus a null block: the shape check rejects it before dispose_session
+  const b = await req(h, "/codex-a/v1/messages", {
+    body: msgBody({
+      messages: [
+        { role: "user", content: "DIFFERENT" },
+        { role: "assistant", content: "x" },
+        { role: "user", content: [null] },
+      ],
+    }),
+  });
+  assert.equal(b.status, 400);
+  assert.equal(b.json.error.type, "invalid_request_error");
+  assert.equal(b.json.error.message, "messages[2].content[0] must be an object");
+  const rows = h.log().slice(before);
+  for (const kind of ["rewind", "turn-interrupt", "http-start"]) {
+    assert.equal(rows.filter(r => r.kind === kind).length, 0, `no ${kind} row for the malformed request`);
+  }
+  assert.equal(rows.filter(r => r.kind === "http-error" && r.status === 400).length, 1);
+
+  const c = await req(h, "/codex-a/v1/messages", {
+    body: msgBody({
+      messages: [
+        { role: "user", content: "one" },
+        { role: "assistant", content: "hello world" },
+        { role: "user", content: "two" },
+      ],
+    }),
+  });
+  assert.equal(c.status, 200, "the first session still answers");
+  const start = h.log().slice(before).find(r => r.kind === "http-start");
+  assert.equal(start.mode, "next-turn", "the continuation lands on the original thread");
+});

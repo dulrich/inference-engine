@@ -55,7 +55,7 @@ fn subagent_session_key_and_token_estimate_match_node() {
     });
     let k = session_key_of(&body, &format!("{billing}\n\nS"), "héllo 😀", None);
     assert_eq!(k.key, "sid:9868bc96decaf055");
-    assert_eq!(k.scope, "subagent");
+    assert_eq!(k.scope.as_str(), "subagent");
     assert_eq!(count_tokens_estimate(&body), 31.0);
 }
 
@@ -135,4 +135,25 @@ fn transcript_oversize_final_elides_every_prior() {
             elision_marker(2)
         )
     );
+}
+
+#[test]
+fn validate_rejects_malformed_message_shapes_with_a_400() {
+    use codex_sidecar::request::validate;
+    assert!(validate(&json!({})).is_ok());
+    assert!(validate(&json!({"messages": [{"role": "user", "content": "x"}]})).is_ok());
+    for (body, msg) in [
+        (json!({"messages": {}}), "messages must be an array"),
+        (json!({"messages": ["x"]}), "messages[0] must be an object"),
+        (
+            json!({"messages": [{"role": "user", "content": "a"}, {"role": "user", "content": [{"type": "text", "text": "b"}, null]}]}),
+            "messages[1].content[1] must be an object",
+        ),
+    ] {
+        let e = validate(&body).expect_err(msg);
+        assert_eq!(
+            (e.status, e.anthropic_type.as_str(), e.message.as_str()),
+            (400, "invalid_request_error", msg)
+        );
+    }
 }

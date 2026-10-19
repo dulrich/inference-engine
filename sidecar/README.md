@@ -93,6 +93,8 @@ Spike-09 fixture task through the router at `:4813`, six metered `claude -p` run
 
 ## Environment
 
+Integer variables (ports, `*_MS`, days, tokens, here and under Test seams) are strict: surrounding whitespace is trimmed, unset or empty takes the default, and anything other than plain decimal digits in range (a sign, fraction, exponent, hex, overflow) stops startup with `codex-sidecar: <VAR>: invalid integer "…"`.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SIDECAR_KEY` | *(required)* | Shared bridge key. Startup fails without it. Never logged. |

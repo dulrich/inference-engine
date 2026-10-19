@@ -2,8 +2,9 @@
 //!
 //! Two kinds of value live here and the distinction is the point: the PINNED ones (preamble,
 //! thread config, the in-band item-type allowlist) are contract and deliberately NOT
-//! env-overridable, and `read_config` reads everything that is — with `config.mjs`'s exact
-//! lenient semantics (B1: parity, not hardening; `Number(v)`, non-finite -> default).
+//! env-overridable, and `read_config` reads everything that is. Integer knobs are strict:
+//! surrounding whitespace is trimmed, unset/empty takes the default, and anything that is not
+//! plain ASCII digits in range is a startup error naming the variable.
 
 use crate::js;
 use crate::logging::Logger;
@@ -79,30 +80,30 @@ impl Pinned {
     }
 }
 
-/// `readConfig(env)`'s result. Numbers stay `f64` exactly as JS holds them.
+/// `readConfig(env)`'s result.
 #[derive(Clone)]
 pub struct Config {
     /// Required by the server; never logged (redacted from `Debug`).
     pub key: String,
-    pub port: f64,
+    pub port: u16,
     /// `""` = skip the extra bind (`SIDECAR_BIND_EXTRA=""`); unset = the docker0 gateway.
     pub bind_extra: String,
     pub personas: Vec<String>,
     pub cwd_fallback: String,
     pub state_dir: String,
     pub log_dir: String,
-    pub log_keep_days: f64,
+    pub log_keep_days: u32,
     /// SQLite-era name; the outbox writer only uses its directory. Empty = writer off.
     pub outbox_path: String,
-    pub context_window_tokens: f64,
+    pub context_window_tokens: u64,
     // ---- test seams (README "Test seams"; they never weaken an invariant) ----
     pub app_server_cmd: String,
-    pub ping_ms: f64,
-    pub batch_ms: f64,
-    pub turn_timeout_ms: f64,
-    pub backoff_ms: f64,
-    pub bind_retry_ms: f64,
-    pub bind_retry_budget_ms: f64,
+    pub ping_ms: u64,
+    pub batch_ms: u64,
+    pub turn_timeout_ms: u64,
+    pub backoff_ms: u64,
+    pub bind_retry_ms: u64,
+    pub bind_retry_budget_ms: u64,
     pub env: HashMap<String, String>,
 }
 
@@ -151,18 +152,27 @@ fn join(base: &str, parts: &[&str]) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// Strict unsigned integer: trimmed, ASCII digits only, in range for `T`; unset/empty = `d`.
+fn int<T: std::str::FromStr>(env: &HashMap<String, String>, k: &str, d: T) -> Result<T, String> {
+    let Some(raw) = env.get(k) else {
+        return Ok(d);
+    };
+    let v = raw.trim();
+    if v.is_empty() {
+        return Ok(d);
+    }
+    if !v.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(format!("{k}: invalid integer {raw:?}"));
+    }
+    v.parse::<T>()
+        .map_err(|_| format!("{k}: integer out of range {raw:?}"))
+}
+
 /// `readConfig(env)`.
-pub fn read_config(env: &HashMap<String, String>) -> Config {
+pub fn read_config(env: &HashMap<String, String>) -> Result<Config, String> {
     let get = |k: &str| env.get(k).map(String::as_str);
     // `env.X || d`: unset and empty both take the default.
     let or = |k: &str, d: String| get(k).filter(|s| !s.is_empty()).map_or(d, str::to_string);
-    // `num(v, d)`: `Number(v)`, falling back on non-finite (unset is `Number(undefined)` = NaN).
-    let num = |k: &str, d: f64| {
-        get(k)
-            .map(js::js_number)
-            .filter(|n| n.is_finite())
-            .unwrap_or(d)
-    };
     #[allow(deprecated)]
     let os_home = || {
         std::env::home_dir()
@@ -176,9 +186,9 @@ pub fn read_config(env: &HashMap<String, String>) -> Config {
         "SIDECAR_STATE_DIR",
         join(&home, &[".local", "state", "codex-sidecar"]),
     );
-    Config {
+    Ok(Config {
         key: get("SIDECAR_KEY").unwrap_or("").to_string(),
-        port: num("SIDECAR_PORT", 4877.0),
+        port: int(env, "SIDECAR_PORT", 4877)?,
         bind_extra: get("SIDECAR_BIND_EXTRA")
             .unwrap_or("172.17.0.1")
             .to_string(),
@@ -191,19 +201,19 @@ pub fn read_config(env: &HashMap<String, String>) -> Config {
             .collect(),
         cwd_fallback: or("SIDECAR_CWD", join(&state_dir, &["empty-cwd"])),
         log_dir: or("SIDECAR_LOG_DIR", join(&state_dir, &["logs"])),
-        log_keep_days: num("SIDECAR_LOG_KEEP_DAYS", 14.0),
+        log_keep_days: int(env, "SIDECAR_LOG_KEEP_DAYS", 14)?,
         outbox_path: get("SIDECAR_OUTBOX_PATH").unwrap_or("").to_string(),
-        context_window_tokens: num("SIDECAR_CONTEXT_WINDOW_TOKENS", 258_400.0),
+        context_window_tokens: int(env, "SIDECAR_CONTEXT_WINDOW_TOKENS", 258_400)?,
         app_server_cmd: get("SIDECAR_APP_SERVER_CMD").unwrap_or("").to_string(),
-        ping_ms: num("SIDECAR_PING_MS", 15_000.0),
-        batch_ms: num("SIDECAR_BATCH_MS", 200.0),
-        turn_timeout_ms: num("SIDECAR_TURN_TIMEOUT_MS", 300_000.0),
-        backoff_ms: num("SIDECAR_BACKOFF_MS", 1000.0),
-        bind_retry_ms: num("SIDECAR_BIND_RETRY_MS", 500.0),
-        bind_retry_budget_ms: num("SIDECAR_BIND_RETRY_BUDGET_MS", 60_000.0),
+        ping_ms: int(env, "SIDECAR_PING_MS", 15_000)?,
+        batch_ms: int(env, "SIDECAR_BATCH_MS", 200)?,
+        turn_timeout_ms: int(env, "SIDECAR_TURN_TIMEOUT_MS", 300_000)?,
+        backoff_ms: int(env, "SIDECAR_BACKOFF_MS", 1000)?,
+        bind_retry_ms: int(env, "SIDECAR_BIND_RETRY_MS", 500)?,
+        bind_retry_budget_ms: int(env, "SIDECAR_BIND_RETRY_BUDGET_MS", 60_000)?,
         state_dir,
         env: env.clone(),
-    }
+    })
 }
 
 /// `resolveCwd(config, logger, rawCwd)`: the client's own working directory when it names a

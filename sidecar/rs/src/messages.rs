@@ -8,10 +8,12 @@ use crate::js;
 use crate::logging::redact_headers;
 use crate::outbox_events::{outbox_key_of, outbox_turn, TurnRow};
 use crate::persona;
-use crate::protocol::{clamp_usage, has_image_block, is_title_request, title_envelope, usage_out};
+use crate::protocol::{
+    clamp_usage, has_image_block, is_title_request, title_envelope, usage_out, Scope,
+};
 use crate::request::{
     disposition_of, message_digests, msg_diff, normalize_request, request_token, resolve_identity,
-    short_digest, Disposition, Identity, Normalized, Token,
+    short_digest, validate, Disposition, Identity, Mode, Normalized, Token,
 };
 use crate::session::{
     self, attach, detach, id_key, joiners_of, remove_joiner, settle_joiner, JoinOutcome, Joiner,
@@ -42,7 +44,7 @@ pub struct Rc {
     pub norm: Normalized,
     pub ident: Identity,
     pub sid: u64,
-    pub mode: String,
+    pub mode: Mode,
     pub req_id: String,
     pub token: Token,
     pub token_id: u64,
@@ -67,7 +69,8 @@ pub async fn handle_messages(
     headers: Map<String, Value>,
     res: u64,
 ) -> Result<(), SidecarError> {
-    // 1. normalization
+    // 1. validation and normalization (nothing is touched before the shape check)
+    validate(&body)?;
     let norm = normalize_request(body, Some(headers.clone()));
     let (ident, digests, init) = {
         let mut w = lock(me);
@@ -125,7 +128,7 @@ pub async fn handle_messages(
         let name = w.personas[pi].name.clone();
         w.log(
             "http-start",
-            json!({ "persona": name, "key": ident.key, "reqId": req_id, "mode": mode, "stream": norm.stream, "nMessages": norm.msgs.len() }),
+            json!({ "persona": name, "key": ident.key, "reqId": req_id, "mode": mode.as_str(), "stream": norm.stream, "nMessages": norm.msgs.len() }),
         );
         let wire = wire_model_id(&name, js::prop(Some(&norm.body), "model"));
         let sink = w.id();
@@ -135,7 +138,7 @@ pub async fn handle_messages(
             Sink::buffer(res, &wire)
         };
         w.sinks.insert(sink, sk);
-        let token = request_token(Value::from(req_id.as_str()), &mode, &norm, &ident)?;
+        let token = request_token(Value::from(req_id.as_str()), mode, &norm, &ident);
         let token_id = w.id();
         let rc = Rc {
             pi,
@@ -274,7 +277,7 @@ fn classify_against(
     let first_diff = |upto: usize| (0..upto).find(|&i| digests.get(i) != hist.get(i));
     if n < m {
         let at = first_diff(n);
-        if at.is_none() && ident.scope == "subagent" && !norm.stream {
+        if at.is_none() && ident.scope == Scope::Subagent && !norm.stream {
             return Cls::Fork;
         }
         return match at {
@@ -329,7 +332,7 @@ fn suffix_of(key: &str) -> Option<&str> {
 }
 
 fn rekey_candidates(w: &World, pi: usize, ident: &Identity) -> Vec<u64> {
-    if ident.scope != "subagent" || ident.weak {
+    if ident.scope != Scope::Subagent || ident.weak {
         return Vec::new();
     }
     let Some(suffix) = suffix_of(&ident.key) else {
@@ -354,7 +357,7 @@ fn find_fork_target(
     ident: &Identity,
     digests: &[String],
 ) -> Option<u64> {
-    if ident.scope != "subagent" || norm.stream {
+    if ident.scope != Scope::Subagent || norm.stream {
         return None;
     }
     let pool = match w.personas[pi].session(&ident.key) {
@@ -425,7 +428,7 @@ fn dispose_session(
     norm: &Normalized,
     ident: &Identity,
     digests: Vec<String>,
-) -> (u64, String) {
+) -> (u64, Mode) {
     let key = ident.key.as_str();
     let name = w.personas[pi].name.clone();
     let mut sid = w.personas[pi].session(key);
@@ -454,7 +457,7 @@ fn dispose_session(
             w.log("rewind", Value::Object(row));
             persona::interrupt(w, pi, old, "rewind");
             persona::drop_session(w, pi, old);
-            (new_session(w, pi, key), "new-thread-after-rewind")
+            (new_session(w, pi, key), Mode::NewThreadAfterRewind)
         }
         (Some(s), Some(_)) => {
             let sess = &w.sessions[&s];
@@ -466,7 +469,7 @@ fn dispose_session(
                 })
             };
             if !tr.is_empty() && (!sess.parked.is_empty() || (sess.turn_open && echoes())) {
-                (s, "tool-result")
+                (s, Mode::ToolResult)
             } else {
                 if !sess.parked.is_empty() {
                     let n = sess.parked.len();
@@ -476,17 +479,17 @@ fn dispose_session(
                     );
                     session::abandon_parked(w, s, "no result returned by the client");
                 }
-                (s, "next-turn")
+                (s, Mode::NextTurn)
             }
         }
-        _ => (new_session(w, pi, key), "new-thread"),
+        _ => (new_session(w, pi, key), Mode::NewThread),
     };
     if let Some(s) = w.sessions.get_mut(&sid) {
         s.msg_count = norm.msgs.len();
         s.hist = digests;
         s.outbox_key = outbox_key_of(key, ident.weak);
     }
-    (sid, mode.to_string())
+    (sid, mode)
 }
 
 /// `nTools: (body.tools || []).length` — `None` when `.length` is undefined.
@@ -531,7 +534,7 @@ fn log_http(
     put("key", Value::from(rc.ident.key.as_str()));
     put("reqId", Value::from(rc.req_id.as_str()));
     put("scope", Value::from(rc.ident.scope));
-    put("mode", Value::from(rc.mode.as_str()));
+    put("mode", Value::from(rc.mode));
     put("stream", Value::from(n.stream));
     put("model", Value::from(rc.ident.parsed.model.as_str()));
     if let Some(e) = effort_val(&rc.ident) {
@@ -604,14 +607,14 @@ fn overflow_shape(w: &World, rc: &Rc, e: SidecarError) -> SidecarError {
         .and_then(|s| js::present(s.context_window.as_ref()))
         .map(|v| js::to_number(Some(v)))
         .filter(|n| n.is_finite() && *n > 0.0)
-        .unwrap_or(w.cfg.context_window_tokens);
+        .unwrap_or(w.cfg.context_window_tokens as f64);
     let estimate = crate::protocol::count_tokens_estimate(&rc.norm.body);
     crate::errors::prompt_too_long(&e, estimate, window)
 }
 
 fn http_error_row(rc: &Rc, e: &SidecarError, joined: Option<&Value>) -> Value {
     let mut row = json!({
-        "persona": rc.persona, "key": rc.ident.key, "reqId": rc.req_id, "mode": rc.mode,
+        "persona": rc.persona, "key": rc.ident.key, "reqId": rc.req_id, "mode": rc.mode.as_str(),
         "status": e.status, "type": e.anthropic_type, "message": e.message,
         "headers": redact_headers(&rc.headers),
     });
@@ -666,7 +669,7 @@ async fn run_as_joiner(me: &Shared, rc: &Rc, owner: u64, owner_req: Value) {
         let w = &mut *w;
         w.log(
             "joined-request",
-            json!({ "persona": rc.persona, "key": rc.ident.key, "reqId": rc.req_id, "ownerReqId": owner_req, "mode": rc.mode, "stream": rc.norm.stream, "reqDigest": short_digest(&rc.token.digest) }),
+            json!({ "persona": rc.persona, "key": rc.ident.key, "reqId": rc.req_id, "ownerReqId": owner_req, "mode": rc.mode.as_str(), "stream": rc.norm.stream, "reqDigest": short_digest(&rc.token.digest) }),
         );
         let (tx, rx) = tokio::sync::oneshot::channel();
         let jid = w.id();
@@ -761,7 +764,7 @@ fn supersede(w: &mut World, rc: &Rc, old_id: u64, old: &Token) {
         "superseded-request",
         json!({
             "persona": rc.persona, "key": rc.ident.key, "reqId": rc.req_id, "supersededReqId": old.req_id,
-            "mode": rc.mode, "nMessages": rc.norm.msgs.len(), "ownerNMessages": old.n_messages,
+            "mode": rc.mode.as_str(), "nMessages": rc.norm.msgs.len(), "ownerNMessages": old.n_messages,
             "reqDigest": short_digest(&t.digest), "ownerDigest": short_digest(&old.digest),
             "parts": t.parts, "ownerParts": old.parts,
             "msgDiff": msg_diff(Some(&t.msg_shape), Some(&old.msg_shape)).unwrap_or(Value::Null),
@@ -841,10 +844,10 @@ async fn drive(
     joiners: &mut Vec<u64>,
     deduped: &mut usize,
 ) -> Result<(), SidecarError> {
-    if rc.mode.starts_with("new-thread") {
+    if rc.mode.is_new_thread() {
         start_thread(me, rc).await?;
     }
-    if rc.mode == "tool-result" {
+    if rc.mode == Mode::ToolResult {
         let mut w = lock(me);
         *deduped = deliver_tool_results(&mut w, rc);
     } else {
@@ -1045,7 +1048,7 @@ fn emit_outcome(
     let usage_raw = s.reconcile();
     let (window, src) = match js::present(s.context_window.as_ref()) {
         Some(v) => (v.clone(), "app-server"),
-        None => (js::num(w.cfg.context_window_tokens), "env"),
+        None => (Value::from(w.cfg.context_window_tokens), "env"),
     };
     let tid = s.thread_id.clone().unwrap_or(Value::Null);
     let clamped = clamp_usage(Some(&usage_raw), js::to_number(Some(&window)));

@@ -1,0 +1,3 @@
+{"v":1,"ts":"2026-10-13T01:02:03.456Z","harness":"codex-sidecar","leg":"codex-a","session_id":"s1","agent_id":null,"agent_type":null,"kind":"turn.completed","payload":{"stop_reason":"end_turn","model":"m"}}
+{"v":1,"ts":"2026-10-13T23:59:59.999Z","harness":"codex-sidecar","leg":"codex-b","session_id":"s2","agent_id":"0123456789abcdef","agent_type":null,"kind":"child.spawned","payload":{}}
+{"v":1,"ts":"2026-10-14T00:00:00.000Z","harness":"codex-sidecar","leg":null,"session_id":"s3","agent_id":null,"agent_type":null,"kind":"usage","payload":{}}

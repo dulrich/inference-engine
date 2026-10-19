@@ -17,6 +17,11 @@ path = "src/main.rs"
 [dependencies]
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "process", "io-util", "sync", "signal"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+# SSE response body: a poll_fn stream over the sink's channel (the gateway already pulls it).
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+bytes = "1"
 
 [profile.release]
 opt-level = 3

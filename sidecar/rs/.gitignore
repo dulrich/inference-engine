@@ -1,1 +1,3 @@
 /target/
+# sidecar/.gitignore ignores *.jsonl; this fixture is test input and must be tracked
+!/tests/fixtures/*.jsonl

@@ -591,6 +591,24 @@ fn log_http(
     });
 }
 
+/// A codex context overflow becomes `prompt is too long: N tokens > M maximum`. M is the
+/// thread's `modelContextWindow` (else `SIDECAR_CONTEXT_WINDOW_TOKENS`); N is the request's
+/// `count_tokens` estimate, floored at M+1 by `prompt_too_long`. Never retried.
+fn overflow_shape(w: &World, rc: &Rc, e: SidecarError) -> SidecarError {
+    if !e.is_context_overflow() {
+        return e;
+    }
+    let window = w
+        .sessions
+        .get(&rc.sid)
+        .and_then(|s| js::present(s.context_window.as_ref()))
+        .map(|v| js::to_number(Some(v)))
+        .filter(|n| n.is_finite() && *n > 0.0)
+        .unwrap_or(w.cfg.context_window_tokens);
+    let estimate = crate::protocol::count_tokens_estimate(&rc.norm.body);
+    crate::errors::prompt_too_long(&e, estimate, window)
+}
+
 fn http_error_row(rc: &Rc, e: &SidecarError, joined: Option<&Value>) -> Value {
     let mut row = json!({
         "persona": rc.persona, "key": rc.ident.key, "reqId": rc.req_id, "mode": rc.mode,
@@ -599,6 +617,12 @@ fn http_error_row(rc: &Rc, e: &SidecarError, joined: Option<&Value>) -> Value {
     });
     if let (Some(j), Some(o)) = (joined, row.as_object_mut()) {
         o.insert("joinedTo".into(), j.clone());
+    }
+    if let (Some(u), Some(o)) = (
+        e.extra.as_ref().and_then(|x| x.get("upstreamMessage")),
+        row.as_object_mut(),
+    ) {
+        o.insert("upstreamMessage".into(), u.clone());
     }
     row
 }
@@ -893,6 +917,7 @@ async fn run_as_owner(me: &Shared, rc: &Rc, supersedes: Option<(u64, Box<Token>)
     let r = drive(me, rc, &mut joiners, &mut deduped).await;
     let mut w = lock(me);
     let w = &mut *w;
+    let r = r.map_err(|e| overflow_shape(w, rc, e));
     if let Err(e) = r {
         // catch
         if is_owner(w, rc) {

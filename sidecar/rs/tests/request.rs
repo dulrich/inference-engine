@@ -4,7 +4,10 @@
 //! block, integer-like keys and a 2e21 float.
 
 use codex_sidecar::protocol::{count_tokens_estimate, session_key_of};
-use codex_sidecar::request::{message_digests, request_digest, DigestFields};
+use codex_sidecar::request::{
+    elision_marker, message_digests, render_transcript, request_digest, DigestFields,
+    TRANSCRIPT_MAX_CHARS,
+};
 use serde_json::{json, Value};
 
 fn msgs() -> Vec<Value> {
@@ -54,4 +57,82 @@ fn subagent_session_key_and_token_estimate_match_node() {
     assert_eq!(k.key, "sid:9868bc96decaf055");
     assert_eq!(k.scope, "subagent");
     assert_eq!(count_tokens_estimate(&body), 31.0);
+}
+
+// ---------------------------------------------------- rehydration cap (WP-3) ----
+
+fn text_msg(role: &str, t: &str) -> Value {
+    json!({"role": role, "content": [{"type": "text", "text": t}]})
+}
+
+fn u16len(s: &str) -> usize {
+    s.encode_utf16().count()
+}
+
+const HEAD: &str =
+    "<prior-conversation>\nThis thread was (re)started mid-conversation. The transcript so far:\n\n";
+
+#[test]
+fn transcript_under_budget_is_byte_identical() {
+    let small = vec![
+        text_msg("user", "a"),
+        text_msg("assistant", "b"),
+        text_msg("user", "c"),
+    ];
+    assert_eq!(
+        render_transcript(&small),
+        format!("{HEAD}### user\na\n\n### assistant\nb\n</prior-conversation>\n\nc")
+    );
+    // exactly at budget still renders whole, no marker
+    let base = u16len(&render_transcript(&[
+        text_msg("user", ""),
+        text_msg("user", "z"),
+    ]));
+    let pad = "p".repeat(TRANSCRIPT_MAX_CHARS - base);
+    let at = render_transcript(&[text_msg("user", &pad), text_msg("user", "z")]);
+    assert_eq!(u16len(&at), TRANSCRIPT_MAX_CHARS);
+    assert!(!at.contains("omitted"));
+}
+
+#[test]
+fn transcript_over_budget_drops_oldest_with_marker() {
+    let big = "x".repeat(50_000);
+    let mut ms: Vec<Value> = (0..10)
+        .map(|i| {
+            let role = if i % 2 == 0 { "user" } else { "assistant" };
+            text_msg(role, &format!("m{i} {big}"))
+        })
+        .collect();
+    ms.push(text_msg("user", "final question"));
+    let out = render_transcript(&ms);
+    assert!(u16len(&out) <= TRANSCRIPT_MAX_CHARS, "{}", u16len(&out));
+    let kept: Vec<usize> = (0..10)
+        .filter(|i| out.contains(&format!("m{i} ")))
+        .collect();
+    assert_eq!(kept, vec![6, 7, 8, 9], "newest kept, oldest dropped");
+    let marker = elision_marker(6);
+    assert_eq!(
+        marker,
+        "[6 earlier message(s) omitted: transcript capped at 240000 characters]"
+    );
+    assert!(out.starts_with(&format!("{HEAD}{marker}\n\n### user\nm6 ")));
+    assert!(out.ends_with("\n</prior-conversation>\n\nfinal question"));
+    assert!(out.find("m8 ").unwrap() < out.find("m9 ").unwrap());
+}
+
+#[test]
+fn transcript_oversize_final_elides_every_prior() {
+    let huge = "y".repeat(TRANSCRIPT_MAX_CHARS + 10);
+    let ms = vec![
+        text_msg("user", "old"),
+        text_msg("assistant", "older"),
+        text_msg("user", &huge),
+    ];
+    assert_eq!(
+        render_transcript(&ms),
+        format!(
+            "{HEAD}{}\n</prior-conversation>\n\n{huge}",
+            elision_marker(2)
+        )
+    );
 }

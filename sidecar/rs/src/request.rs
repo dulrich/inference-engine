@@ -484,7 +484,22 @@ fn render_blocks(content: Option<&Value>) -> String {
         .join("\n")
 }
 
-/// `renderTranscript(msgs)`: the whole conversation, role-labeled, never truncated.
+/// Upper bound on [`render_transcript`] output, in UTF-16 code units (the JS string length,
+/// conservative against codex's 1 MiB character limit), wrapper and elision marker included.
+pub const TRANSCRIPT_MAX_CHARS: usize = 240_000;
+
+/// The elision line that opens `<prior-conversation>` when earlier messages were dropped.
+pub fn elision_marker(omitted: usize) -> String {
+    format!("[{omitted} earlier message(s) omitted: transcript capped at {TRANSCRIPT_MAX_CHARS} characters]")
+}
+
+/// `renderTranscript(msgs)`: the conversation, role-labeled, bounded by
+/// [`TRANSCRIPT_MAX_CHARS`] UTF-16 code units. Under budget the output is the whole
+/// transcript, unchanged. Over budget the wrapper, the elision marker and the final message
+/// are reserved first, then prior messages are admitted newest-first into what remains (so
+/// they drop oldest-first and keep their order), and the marker states how many were omitted.
+/// The final message is never cut: if it alone exceeds the budget, every prior message is
+/// elided and the overflow error mapping covers codex's rejection.
 pub fn render_transcript(msgs: &[Value]) -> String {
     let prior: Vec<String> = msgs
         .iter()
@@ -498,10 +513,30 @@ pub fn render_transcript(msgs: &[Value]) -> String {
         })
         .collect();
     let fin = render_blocks(msgs.last().and_then(|m| js::prop(Some(m), "content")));
-    format!(
-        "<prior-conversation>\nThis thread was (re)started mid-conversation. The transcript so far:\n\n{}\n</prior-conversation>\n\n{fin}",
-        prior.join("\n\n")
-    )
+    let wrap = |body: &str| {
+        format!(
+            "<prior-conversation>\nThis thread was (re)started mid-conversation. The transcript so far:\n\n{body}\n</prior-conversation>\n\n{fin}"
+        )
+    };
+    let full = wrap(&prior.join("\n\n"));
+    if js::utf16_len(&full) <= TRANSCRIPT_MAX_CHARS {
+        return full;
+    }
+    // framing + final + the widest marker this request could need
+    let reserved = js::utf16_len(&wrap("")) + js::utf16_len(&elision_marker(prior.len()));
+    let mut room = TRANSCRIPT_MAX_CHARS.saturating_sub(reserved);
+    let mut keep = 0;
+    for p in prior.iter().rev() {
+        let cost = js::utf16_len(p) + 2; // "\n\n" separator
+        if cost > room {
+            break;
+        }
+        room -= cost;
+        keep += 1;
+    }
+    let mut body = vec![elision_marker(prior.len() - keep)];
+    body.extend(prior[prior.len() - keep..].iter().cloned());
+    wrap(&body.join("\n\n"))
 }
 
 /// `turnInputText(mode, msgs, last, lastBlocks)`: the text one turn carries.

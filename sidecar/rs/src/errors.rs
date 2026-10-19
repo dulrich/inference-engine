@@ -66,6 +66,51 @@ const CODEX_ERROR_MAP: &[(&str, u16, &str)] = &[
     ("serverOverloaded", 502, "api_error"),
 ];
 
+/// Marker key in `extra` for a codex context overflow (`contextWindowExceeded` or the
+/// app-server's `Input exceeds the maximum length` rejection). The message still holds the
+/// original codex text here; the request layer, which knows the window and the request size,
+/// rewrites it with [`prompt_too_long`] before it reaches the wire.
+pub const CONTEXT_OVERFLOW: &str = "contextOverflow";
+
+fn context_overflow(full: String) -> SidecarError {
+    let mut x = Map::new();
+    x.insert(CONTEXT_OVERFLOW.into(), Value::Bool(true));
+    SidecarError::new(400, "invalid_request_error", full).with_extra(x)
+}
+
+impl SidecarError {
+    pub fn is_context_overflow(&self) -> bool {
+        self.extra
+            .as_ref()
+            .is_some_and(|x| x.get(CONTEXT_OVERFLOW) == Some(&Value::Bool(true)))
+    }
+}
+
+/// Rewrite a context-overflow error into Claude Code's "prompt is too long" shape:
+/// `prompt is too long: N tokens > M maximum`, with N floored at M+1 so N > M always holds.
+/// The original codex text is kept in `extra.upstreamMessage` for the `http-error` row.
+pub fn prompt_too_long(e: &SidecarError, estimate: f64, window: f64) -> SidecarError {
+    let m = if window.is_finite() && window >= 0.0 {
+        window.floor()
+    } else {
+        0.0
+    };
+    let est = if estimate.is_finite() {
+        estimate.ceil()
+    } else {
+        0.0
+    };
+    let n = est.max(m + 1.0);
+    let mut x = e.extra.as_deref().cloned().unwrap_or_default();
+    x.insert("upstreamMessage".into(), Value::String(e.message.clone()));
+    SidecarError::new(
+        400,
+        "invalid_request_error",
+        format!("prompt is too long: {n} tokens > {m} maximum"),
+    )
+    .with_extra(x)
+}
+
 /// `/rate.?limit|usage limit|quota|too many requests/i`
 fn is_rate_limit_text(lower: &str) -> bool {
     lower.contains("usage limit")
@@ -143,6 +188,12 @@ pub fn map_upstream_error(err: &Value, ctx_label: &str) -> SidecarError {
         _ => None,
     };
     let full = format!("{ctx_label}: {msg}");
+    if info_key.as_deref() == Some("contextWindowExceeded")
+        || text.contains("Input exceeds the maximum length")
+        || msg.contains("Input exceeds the maximum length")
+    {
+        return context_overflow(full);
+    }
     if let Some(k) = &info_key {
         if let Some((_, status, ty)) = CODEX_ERROR_MAP.iter().find(|(n, _, _)| n == k) {
             return SidecarError::new(*status, ty, full);

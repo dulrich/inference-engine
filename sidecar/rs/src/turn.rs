@@ -5,11 +5,10 @@
 use crate::codex::CallId;
 use crate::config::resolve_cwd;
 use crate::errors::{as_sidecar_error, SidecarError};
-use crate::js;
 use crate::messages::{superseded, Rc};
 use crate::persona;
 use crate::protocol::{base_instructions_of, text_of, to_dynamic_tools};
-use crate::request::{renders_transcript, turn_input_text};
+use crate::request::{renders_transcript, turn_input_text, Content};
 use crate::session;
 use crate::sidecar::{err, lock, Shared, World};
 use crate::thread_config::{feature_readings, verify_features, verify_instruction_sources};
@@ -35,7 +34,7 @@ pub async fn start_thread(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
             .map_err(|e| as_sidecar_error(&e.to_string()))?;
         let p = &w.personas[rc.pi];
         let (hb, mb) = (p.hook_events, p.mcp_events);
-        let tools = to_dynamic_tools(js::prop(Some(&rc.norm.body), "tools"));
+        let tools = to_dynamic_tools(rc.norm.req.tool_list());
         let n_tools = tools.len();
         let params = json!({
             "cwd": cwd,
@@ -70,7 +69,7 @@ pub async fn start_thread(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
             return Err(err(502, "api_error", "thread/start returned no thread id"));
         };
         w.personas[rc.pi].bus_set(tid.clone(), rc.sid);
-        let sources = js::prop(Some(&started), "instructionSources");
+        let sources = started.get("instructionSources");
         let p = &w.personas[rc.pi];
         let problem = verify_instruction_sources(sources)
             .or_else(|| {
@@ -81,7 +80,7 @@ pub async fn start_thread(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
                     .then(|| "an MCP server started during thread/start".into())
             });
         if let Some(problem) = problem {
-            let src = js::present(sources).cloned().unwrap_or(Value::Null);
+            let src = sources.cloned().unwrap_or(Value::Null);
             w.log(
                 "config-unverified",
                 json!({ "persona": rc.persona, "threadId": tid, "stage": "thread/start", "problem": problem, "instructionSources": src }),
@@ -107,7 +106,7 @@ pub async fn start_thread(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
     let w = &mut *w;
     let (reported, oracle_error) = match listed {
         Ok(l) => (
-            match js::prop(Some(&l), "data") {
+            match l.get("data") {
                 Some(Value::Array(a)) => Value::Array(a.clone()),
                 _ => json!([]),
             },
@@ -115,7 +114,7 @@ pub async fn start_thread(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
         ),
         Err(e) => (json!([]), Some(e.message)),
     };
-    let declared = js::prop(Some(&w.pinned.thread_config), "features").cloned();
+    let declared = w.pinned.thread_config.get("features").cloned();
     let readings = feature_readings(declared.as_ref(), Some(&reported));
     let feature_problem = match &oracle_error {
         Some(e) => Some(format!("feature oracle unavailable: {e}")),
@@ -126,7 +125,10 @@ pub async fn start_thread(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
         .get(&rc.sid)
         .and_then(|s| s.thread_id.as_ref())
         .map_or(Value::Null, Value::from);
-    let sources = js::present(js::prop(Some(&started), "instructionSources")).cloned();
+    let sources = started
+        .get("instructionSources")
+        .filter(|v| !v.is_null())
+        .cloned();
     if let Some(fp) = feature_problem {
         let mism: Vec<Value> = readings
             .mismatches
@@ -164,15 +166,15 @@ pub async fn start_thread(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
     row.insert("nTools".into(), Value::from(n_tools));
     row.insert(
         "preambleChars".into(),
-        Value::from(js::utf16_len(&w.pinned.preamble)),
+        Value::from(w.pinned.preamble.chars().count()),
     );
     row.insert(
         "systemChars".into(),
-        Value::from(js::utf16_len(&rc.norm.system_text)),
+        Value::from(rc.norm.system_text.chars().count()),
     );
     row.insert(
         "interleavedSystemChars".into(),
-        Value::from(js::utf16_len(&rc.norm.interleaved_text)),
+        Value::from(rc.norm.interleaved_text.chars().count()),
     );
     row.insert("features".into(), Value::Object(readings.features));
     row.insert(
@@ -181,7 +183,8 @@ pub async fn start_thread(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
     );
     row.insert(
         "multiAgentMode".into(),
-        js::present(js::prop(Some(&started), "multiAgentMode"))
+        started
+            .get("multiAgentMode")
             .cloned()
             .unwrap_or(Value::Null),
     );
@@ -192,23 +195,20 @@ pub async fn start_thread(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
 /// Returns the number of re-sent results silently absorbed.
 pub fn deliver_tool_results(w: &mut World, rc: &Rc) -> usize {
     let mut deduped = 0;
-    for tr in &rc.norm.tool_results {
-        let content = js::prop(Some(tr), "content");
-        let text = match content {
-            Some(Value::String(s)) => s.clone(),
-            _ => {
-                let t = text_of(content);
-                if t.is_empty() {
-                    js::stringify(js::present(content).unwrap_or(&Value::from("")))
-                } else {
-                    t
+    for tr in &rc.norm.tool_results() {
+        let text = match &tr.content {
+            Some(Content::Text(s)) => s.clone(),
+            c => {
+                let t = text_of(c.as_ref());
+                match c {
+                    _ if !t.is_empty() => t,
+                    None | Some(Content::Other(Value::Null)) => "\"\"".into(),
+                    Some(c) => c.to_value().to_string(),
                 }
             }
         };
-        let id = js::prop(Some(tr), "tool_use_id")
-            .cloned()
-            .unwrap_or(Value::Null);
-        let ok = !js::truthy(js::prop(Some(tr), "is_error"));
+        let id = tr.tool_use_id.clone().unwrap_or(Value::Null);
+        let ok = !tr.is_error();
         let call = CallId(session::id_key(&id));
         if session::answer_parked(w, rc.sid, &call, &text, ok) {
             continue;
@@ -235,11 +235,11 @@ pub async fn start_turn(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
         let mut w = lock(me);
         let w = &mut *w;
         let n = &rc.norm;
-        let text = turn_input_text(rc.mode, &n.msgs, n.last.as_ref(), &n.last_blocks);
+        let text = turn_input_text(rc.mode, &n.msgs);
         if renders_transcript(rc.mode, &n.msgs) {
             w.log(
                 "rehydrated",
-                json!({ "persona": rc.persona, "key": rc.ident.key, "reqId": rc.req_id, "nMessages": n.msgs.len(), "chars": js::utf16_len(&text) }),
+                json!({ "persona": rc.persona, "key": rc.ident.key, "reqId": rc.req_id, "nMessages": n.msgs.len(), "chars": text.chars().count() }),
             );
         }
         let Some(s) = w.sessions.get_mut(&rc.sid) else {

@@ -6,7 +6,6 @@
 //! surrounding whitespace is trimmed, unset/empty takes the default, and anything that is not
 //! plain ASCII digits in range is a startup error naming the variable.
 
-use crate::js;
 use crate::logging::Logger;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -195,7 +194,7 @@ pub fn read_config(env: &HashMap<String, String>) -> Result<Config, String> {
         personas: get("SIDECAR_PERSONAS")
             .unwrap_or("codex-a,codex-b")
             .split(',')
-            .map(js::trim)
+            .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string)
             .collect(),

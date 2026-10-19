@@ -6,8 +6,7 @@
 use crate::codex::{self, Note, RpcFrame, ThreadId, ToolCall};
 use crate::config::VERSION;
 use crate::errors::{map_upstream_error, rate_limit_exhaustion, SidecarError};
-use crate::js;
-use crate::session::{self, Frame, Outcome};
+use crate::session::{self, is_set, Frame, Outcome};
 use crate::sidecar::{err, with_world, World};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -147,7 +146,7 @@ pub fn ensure(
         let why = p
             .degraded_reason
             .as_ref()
-            .map_or("null".to_string(), js::js_string);
+            .map_or("null".to_string(), as_text);
         return Err(err(
             503,
             "api_error",
@@ -226,7 +225,9 @@ fn set_init(w: &mut World, pi: usize, delay_ms: Option<u64>) {
                 p.degraded = false;
                 p.degraded_reason = None;
                 let name = p.name.clone();
-                let ua = js::present(js::prop(Some(&r), "userAgent"))
+                let ua = r
+                    .get("userAgent")
+                    .filter(|v| !v.is_null())
                     .cloned()
                     .unwrap_or(Value::Null);
                 log(
@@ -261,7 +262,7 @@ fn spawn_child(w: &mut World, pi: usize) {
     let (file, args): (String, Vec<String>) = if !cmd.is_empty() {
         let s = cmd.replace("{persona}", &name);
         let parts: Vec<String> = s
-            .split(js::is_js_space)
+            .split(char::is_whitespace)
             .filter(|x| !x.is_empty())
             .map(String::from)
             .collect();
@@ -322,7 +323,7 @@ fn spawn_child(w: &mut World, pi: usize) {
                             break;
                         }
                         let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                        let text = js::utf16_prefix(&text, 2000).to_string();
+                        let text: String = text.chars().take(2000).collect();
                         with_world(&me2, |w| {
                             log(w, "child-stderr", json!({ "persona": nm, "text": text }))
                         });
@@ -407,8 +408,8 @@ fn on_exit(w: &mut World, pi: usize, gen: u64, code: Value, signal: Value, e: Va
     let name = p.name.clone();
     let msg = format!(
         "the codex app-server for {name} exited (code={} signal={})",
-        js::js_string(&code),
-        js::js_string(&signal)
+        as_text(&code),
+        as_text(&signal)
     );
     log(
         w,
@@ -443,14 +444,14 @@ fn on_exit(w: &mut World, pi: usize, gen: u64, code: Value, signal: Value, e: Va
 }
 
 fn on_line(w: &mut World, pi: usize, line: &str) {
-    if js::trim(line).is_empty() {
+    if line.trim().is_empty() {
         return;
     }
     match serde_json::from_str::<Value>(line) {
         Ok(m) => on_frame(w, pi, m),
         Err(_) => {
             let name = w.personas[pi].name.clone();
-            let l = js::utf16_prefix(line, 400).to_string();
+            let l: String = line.chars().take(400).collect();
             log(w, "unparsed-frame", json!({ "persona": name, "line": l }));
         }
     }
@@ -485,7 +486,7 @@ fn on_frame(w: &mut World, pi: usize, m: Value) {
             return;
         };
         let r = match &f.error {
-            Some(e) if js::truthy(Some(e)) => Err(map_upstream_error(e, "app-server")),
+            Some(e) if is_set(Some(e)) => Err(map_upstream_error(e, "app-server")),
             _ => Ok(f.result.unwrap_or(Value::Null)),
         };
         let _ = tx.send(r);
@@ -493,7 +494,7 @@ fn on_frame(w: &mut World, pi: usize, m: Value) {
     }
     let tid = f.thread_id();
     // server -> client request
-    if js::truthy(f.method.as_ref()) && f.id.is_some() {
+    if is_set(f.method.as_ref()) && f.id.is_some() {
         let id = f.id.clone().unwrap_or(Value::Null);
         if f.method_str() == Some("item/tool/call") {
             if let Some(sid) = w.personas[pi].bus_get(tid.as_ref()) {
@@ -508,10 +509,7 @@ fn on_frame(w: &mut World, pi: usize, m: Value) {
             return;
         }
         let method = f.method.clone().unwrap_or(Value::Null);
-        if js::js_string(&method)
-            .to_ascii_lowercase()
-            .contains("approval")
-        {
+        if as_text(&method).to_ascii_lowercase().contains("approval") {
             send(
                 w,
                 pi,
@@ -525,7 +523,7 @@ fn on_frame(w: &mut World, pi: usize, m: Value) {
         return;
     }
     // notification
-    if !js::truthy(f.method.as_ref()) {
+    if !is_set(f.method.as_ref()) {
         return;
     }
     let Some(method) = f.method_str() else {
@@ -540,11 +538,11 @@ fn on_frame(w: &mut World, pi: usize, m: Value) {
     }
     if method == "account/rateLimits/updated" {
         let limits = codex::rate_limits(f.params.as_ref());
-        let hit = rate_limit_exhaustion(limits.as_ref(), js::now_ms());
+        let hit = rate_limit_exhaustion(limits.as_ref(), crate::logging::now_ms());
         let Some(hit) = hit else {
             return;
         };
-        let reason = js::js_string(&hit.reason);
+        let reason = as_text(&hit.reason);
         let retry_after = hit.retry_after.map(|r| r as u64);
         let mut e = err(
             429,
@@ -553,7 +551,7 @@ fn on_frame(w: &mut World, pi: usize, m: Value) {
         );
         e.retry_after = retry_after;
         let name = p.name.clone();
-        let ra = hit.retry_after.map_or(Value::Null, js::num);
+        let ra = retry_after.map_or(Value::Null, Value::from);
         log(
             w,
             "rate-limited",
@@ -594,7 +592,7 @@ pub fn send(w: &mut World, pi: usize, obj: &Value) -> bool {
         return false;
     }
     match &p.stdin {
-        Some(tx) => tx.send(format!("{}\n", js::stringify(obj))).is_ok(),
+        Some(tx) => tx.send(format!("{obj}\n")).is_ok(),
         None => true,
     }
 }
@@ -693,7 +691,7 @@ pub fn trip_boundary(w: &mut World, pi: usize, what: Value, sid: Option<u64>) {
         "security-event",
         json!({ "persona": name, "itemType": what, "threadId": tid, "action": "turn/interrupt + degrade + restart" }),
     );
-    let ws = js::js_string(&what);
+    let ws = as_text(&what);
     let p = &mut w.personas[pi];
     p.degraded = true;
     p.degraded_reason = Some(what);
@@ -743,4 +741,12 @@ pub fn stop(w: &mut World, pi: usize) {
         session::close(w, sid, "sidecar shutting down");
     }
     w.personas[pi].kill_child();
+}
+
+/// A wire value as log/message text: a string as-is, anything else as its JSON.
+fn as_text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
 }

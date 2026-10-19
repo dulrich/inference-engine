@@ -4,7 +4,6 @@
 //! the CodexErrorInfo/TurnError translation, and the rate-limit reading that turns an account
 //! snapshot into a 429 with a retry-after. No HTTP, session or child process here.
 
-use crate::js;
 use serde_json::{json, Value};
 use std::fmt;
 
@@ -148,7 +147,7 @@ fn has_gap(s: &str, a: &str, b: &str, max: Option<usize>) -> bool {
             if rest[j..].starts_with(b) {
                 return true;
             }
-            if js::is_line_terminator(c) || max.is_some_and(|m| gap >= m) {
+            if crate::protocol::is_line_break(c) || max.is_some_and(|m| gap >= m) {
                 return false;
             }
         }
@@ -158,7 +157,10 @@ fn has_gap(s: &str, a: &str, b: &str, max: Option<usize>) -> bool {
 
 fn invalid_api_key(s: &str) -> bool {
     s.match_indices("invalid").any(|(i, _)| {
-        let line = s[i..].split(js::is_line_terminator).next().unwrap_or("");
+        let line = s[i..]
+            .split(crate::protocol::is_line_break)
+            .next()
+            .unwrap_or("");
         line.match_indices("api")
             .any(|(j, _)| has_gap(&line[j..], "api", "key", Some(1)))
     })
@@ -176,20 +178,27 @@ pub fn map_upstream_error(err: &Value, ctx_label: &str) -> SidecarError {
     let text = match err {
         Value::String(s) => s.clone(),
         Value::Null => "{}".into(),
-        other => js::stringify(other),
+        other => other.to_string(),
     };
-    let get = |k: &str| obj.and_then(|o| js::present(o.get(k)));
+    let get = |k: &str| obj.and_then(|o| o.get(k)).filter(|x| !x.is_null());
+    let nested = |outer: &str, k: &str| get(outer).and_then(|o| o.get(k)).filter(|x| !x.is_null());
     let msg = get("message")
-        .or_else(|| js::present(js::prop(get("error"), "message")))
-        .map_or_else(|| text.clone(), js::js_string);
+        .or_else(|| nested("error", "message"))
+        .map_or_else(
+            || text.clone(),
+            |m| match m {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            },
+        );
     let info = get("codexErrorInfo")
-        .or_else(|| js::present(js::prop(get("error"), "codexErrorInfo")))
-        .or_else(|| js::present(js::prop(get("data"), "codexErrorInfo")));
+        .or_else(|| nested("error", "codexErrorInfo"))
+        .or_else(|| nested("data", "codexErrorInfo"));
+    // a string variant, or an object variant's (first) key
     let info_key: Option<String> = match info {
         Some(Value::String(s)) => Some(s.clone()),
-        Some(v @ (Value::Object(_) | Value::Array(_))) => {
-            js::entries(v).into_iter().next().map(|(k, _)| k)
-        }
+        Some(Value::Object(m)) => m.keys().next().cloned(),
+        Some(Value::Array(a)) if !a.is_empty() => Some("0".into()),
         _ => None,
     };
     let full = format!("{ctx_label}: {msg}");
@@ -206,10 +215,13 @@ pub fn map_upstream_error(err: &Value, ctx_label: &str) -> SidecarError {
     }
     // object CodexErrorInfo variants forward the upstream HTTP status verbatim
     let http_status = match (&info_key, info) {
-        (Some(k), Some(v @ (Value::Object(_) | Value::Array(_)))) => js::entries(v)
-            .into_iter()
-            .find(|(n, _)| n == k)
-            .and_then(|(_, x)| js::prop(Some(x), "httpStatusCode"))
+        (Some(k), Some(Value::Object(m))) => m
+            .get(k)
+            .and_then(|x| x.get("httpStatusCode"))
+            .and_then(Value::as_f64),
+        (Some(_), Some(Value::Array(a))) => a
+            .first()
+            .and_then(|x| x.get("httpStatusCode"))
             .and_then(Value::as_f64),
         _ => None,
     };
@@ -250,33 +262,33 @@ pub fn rate_limit_exhaustion(snapshot: Option<&Value>, now_ms: f64) -> Option<Ex
     let s = snapshot.filter(|v| v.is_object() || v.is_array())?;
     let windows: Vec<&Value> = ["primary", "secondary"]
         .iter()
-        .filter_map(|k| js::prop(Some(s), k))
+        .filter_map(|k| s.get(*k))
         .filter(|w| w.is_object() || w.is_array())
         .collect();
     let full: Vec<&Value> = windows
         .iter()
         .copied()
         .filter(|w| {
-            js::prop(Some(w), "usedPercent")
+            w.get("usedPercent")
                 .and_then(Value::as_f64)
                 .is_some_and(|p| p >= 100.0)
         })
         .collect();
-    let reached = js::prop(Some(s), "rateLimitReachedType");
-    if full.is_empty() && !js::truthy(reached) {
+    let reached = s
+        .get("rateLimitReachedType")
+        .filter(|r| crate::session::is_set(Some(r)));
+    if full.is_empty() && reached.is_none() {
         return None;
     }
     let pool = if full.is_empty() { &windows } else { &full };
     let resets: Vec<f64> = pool
         .iter()
-        .filter_map(|w| retry_after_seconds(js::prop(Some(w), "resetsAt"), now_ms))
+        .filter_map(|w| retry_after_seconds(w.get("resetsAt"), now_ms))
         .collect();
     Some(Exhaustion {
-        reason: if js::truthy(reached) {
-            reached.cloned().unwrap_or(Value::Null)
-        } else {
-            Value::from("rate_limit_reached")
-        },
+        reason: reached
+            .cloned()
+            .unwrap_or_else(|| Value::from("rate_limit_reached")),
         retry_after: resets.into_iter().reduce(f64::min),
     })
 }

@@ -1,16 +1,21 @@
-//! Digest parity with the Node oracle. Expected values were measured once by importing
-//! `sidecar/request.mjs` / `protocol.mjs` under Node on exactly these inputs (2026-10-18):
-//! non-ASCII + astral text, `cache_control` decoration, a trailing post-`tool_result` text
-//! block, integer-like keys and a 2e21 float.
+//! Digests, the session key, the token estimate and the transcript cap. The digest values
+//! are in-process only (pinned here as a regression check, re-baselined when the request was
+//! typed); what must hold is their equivalence classes: `cache_control` and post-`tool_result`
+//! text are ignored, key order is canonical, numbers compare by value, and every field the
+//! typed request does not name still counts.
 
 use codex_sidecar::protocol::{count_tokens_estimate, session_key_of};
 use codex_sidecar::request::{
-    elision_marker, message_digests, render_transcript, request_digest, DigestFields,
-    TRANSCRIPT_MAX_CHARS,
+    elision_marker, message_digests, render_transcript, request_digest, DigestFields, Message,
+    Request, TRANSCRIPT_MAX_CHARS,
 };
 use serde_json::{json, Value};
 
-fn msgs() -> Vec<Value> {
+fn typed(v: Vec<Value>) -> Vec<Message> {
+    serde_json::from_value(Value::Array(v)).unwrap()
+}
+
+fn raw_msgs() -> Vec<Value> {
     vec![
         json!({"role": "user", "content": [{"type": "text", "text": "héllo 😀", "cache_control": {"type": "ephemeral"}}]}),
         json!({"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Bash",
@@ -19,8 +24,16 @@ fn msgs() -> Vec<Value> {
     ]
 }
 
+fn msgs() -> Vec<Message> {
+    typed(raw_msgs())
+}
+
+fn digest_of(m: Value) -> String {
+    message_digests(&typed(vec![m])).remove(0)
+}
+
 #[test]
-fn request_and_message_digests_match_node() {
+fn request_and_message_digests_are_stable() {
     let m = msgs();
     let model = json!("gpt-5.6-sol");
     let tools = json!([]);
@@ -33,13 +46,13 @@ fn request_and_message_digests_match_node() {
     });
     assert_eq!(
         d,
-        "986539c4bfc897a694536ca0057fed083d154baa016f5050093abea3857963b2"
+        "093a2b6cb94f69b43703bffabe14a9e3d72de432e309ec06f31589d1057256a8"
     );
     assert_eq!(
         message_digests(&m),
         [
             "eca83eb978e309d8ab59e59e9ee91f6db62c68702df59bfd2069d766a3e525a8",
-            "d0f1987977d3b6ba5976faa5604324a30a7e78e90d683058c0f029bd12ab9ea3",
+            "0f69dfc61e9d403f2aa0788b7a2d988e60148b1777f41a04393c34c30d0ce662",
             "7dd545fe8dd33bc61c60f2269c762615659d0b65ddb7ab0068af0a33da8c2fe1",
         ]
     );
@@ -48,25 +61,29 @@ fn request_and_message_digests_match_node() {
 #[test]
 fn subagent_session_key_and_token_estimate_match_node() {
     let billing = "x-anthropic-billing-header: cc_version=1; cc_is_subagent=true;";
-    let body = json!({
+    let body = Request::parse(json!({
         "system": [{"type": "text", "text": billing}, {"type": "text", "text": "S"}],
         "metadata": {"user_id": {"session_id": "sid"}},
-        "messages": msgs(),
-    });
+        "messages": raw_msgs(),
+    }))
+    .unwrap();
     let k = session_key_of(&body, &format!("{billing}\n\nS"), "héllo 😀", None);
     assert_eq!(k.key, "sid:9868bc96decaf055");
     assert_eq!(k.scope.as_str(), "subagent");
-    assert_eq!(count_tokens_estimate(&body), 31.0);
+    assert_eq!(count_tokens_estimate(&body, &body.messages), 31);
 }
 
 // ---------------------------------------------------- rehydration cap (WP-3) ----
 
-fn text_msg(role: &str, t: &str) -> Value {
-    json!({"role": role, "content": [{"type": "text", "text": t}]})
+fn text_msg(role: &str, t: &str) -> Message {
+    typed(vec![
+        json!({"role": role, "content": [{"type": "text", "text": t}]}),
+    ])
+    .remove(0)
 }
 
-fn u16len(s: &str) -> usize {
-    s.encode_utf16().count()
+fn chars(s: &str) -> usize {
+    s.chars().count()
 }
 
 const HEAD: &str =
@@ -84,20 +101,20 @@ fn transcript_under_budget_is_byte_identical() {
         format!("{HEAD}### user\na\n\n### assistant\nb\n</prior-conversation>\n\nc")
     );
     // exactly at budget still renders whole, no marker
-    let base = u16len(&render_transcript(&[
+    let base = chars(&render_transcript(&[
         text_msg("user", ""),
         text_msg("user", "z"),
     ]));
     let pad = "p".repeat(TRANSCRIPT_MAX_CHARS - base);
     let at = render_transcript(&[text_msg("user", &pad), text_msg("user", "z")]);
-    assert_eq!(u16len(&at), TRANSCRIPT_MAX_CHARS);
+    assert_eq!(chars(&at), TRANSCRIPT_MAX_CHARS);
     assert!(!at.contains("omitted"));
 }
 
 #[test]
 fn transcript_over_budget_drops_oldest_with_marker() {
     let big = "x".repeat(50_000);
-    let mut ms: Vec<Value> = (0..10)
+    let mut ms: Vec<Message> = (0..10)
         .map(|i| {
             let role = if i % 2 == 0 { "user" } else { "assistant" };
             text_msg(role, &format!("m{i} {big}"))
@@ -105,7 +122,7 @@ fn transcript_over_budget_drops_oldest_with_marker() {
         .collect();
     ms.push(text_msg("user", "final question"));
     let out = render_transcript(&ms);
-    assert!(u16len(&out) <= TRANSCRIPT_MAX_CHARS, "{}", u16len(&out));
+    assert!(chars(&out) <= TRANSCRIPT_MAX_CHARS, "{}", chars(&out));
     let kept: Vec<usize> = (0..10)
         .filter(|i| out.contains(&format!("m{i} ")))
         .collect();
@@ -138,8 +155,8 @@ fn transcript_oversize_final_elides_every_prior() {
 }
 
 #[test]
-fn validate_rejects_malformed_message_shapes_with_a_400() {
-    use codex_sidecar::request::validate;
+fn parse_rejects_malformed_message_shapes_with_a_400() {
+    let validate = |v: &Value| Request::parse(v.clone());
     assert!(validate(&json!({})).is_ok());
     assert!(validate(&json!({"messages": [{"role": "user", "content": "x"}]})).is_ok());
     for (body, msg) in [
@@ -156,4 +173,75 @@ fn validate_rejects_malformed_message_shapes_with_a_400() {
             (400, "invalid_request_error", msg)
         );
     }
+}
+
+#[test]
+fn transcript_cap_counts_chars_not_utf16_units() {
+    // 200,000 astral chars are 400,000 UTF-16 units: under the char cap, so nothing is elided
+    let astral = "😀".repeat(200_000);
+    let out = render_transcript(&[text_msg("user", &astral), text_msg("user", "z")]);
+    assert!(!out.contains("omitted"));
+    assert!(chars(&out) <= TRANSCRIPT_MAX_CHARS);
+}
+
+/// E2: numbers digest by value, as `JSON.stringify` spelled them on the Node sidecar
+/// (measured on bfb0a27's `message_digests`: `1`≡`1.0`, `0`≡`-0`≡`-0.0`, 2^53+1≡2^53,
+/// `1e21`≡`10^21`; each class distinct from the others).
+#[test]
+fn digest_numbers_compare_by_value() {
+    let m = |n: &str| -> Value {
+        serde_json::from_str(&format!(
+            r#"{{"role":"user","content":[{{"type":"tool_use","id":"t","name":"B","input":{{"n":{n}}}}}]}}"#
+        ))
+        .unwrap()
+    };
+    let classes: &[&[&str]] = &[
+        &["1", "1.0"],
+        &["0", "-0", "-0.0"],
+        &["9007199254740993", "9007199254740992"],
+        &["1e21", "1000000000000000000000"],
+        &["1.5"],
+    ];
+    let reps: Vec<String> = classes.iter().map(|c| digest_of(m(c[0]))).collect();
+    for (class, rep) in classes.iter().zip(&reps) {
+        for n in *class {
+            assert_eq!(&digest_of(m(n)), rep, "{n} joins {}", class[0]);
+        }
+    }
+    for (i, a) in reps.iter().enumerate() {
+        assert!(!reps[i + 1..].contains(a), "class {i} is distinct");
+    }
+}
+
+/// E2: a field the typed request does not name still contributes to the digest; only the
+/// decorations (`cache_control`, post-`tool_result` text) are ignored.
+#[test]
+fn digest_keeps_identity_bearing_unknown_fields() {
+    let base = digest_of(json!({"role": "user", "content": [{"type": "text", "text": "a"}]}));
+    for differing in [
+        json!({"role": "user", "content": [{"type": "text", "text": "a", "citations": [1]}]}),
+        json!({"role": "user", "content": [{"type": "text", "text": "a"}], "name": "x"}),
+        json!({"role": "user", "content": [{"type": "text", "text": "a"}, {"type": "document", "source": {"data": "x"}}]}),
+        json!({"role": "user", "content": [{"type": "text", "text": "a"}, {"type": "document", "source": {"data": "y"}}]}),
+        json!({"role": "user", "content": [{"type": "text", "text": 5}]}),
+    ] {
+        assert_ne!(digest_of(differing.clone()), base, "{differing}");
+    }
+    let doc = |d: &str| {
+        digest_of(json!({"role": "user", "content": [{"type": "document", "source": {"data": d}}]}))
+    };
+    assert_ne!(doc("x"), doc("y"), "an unknown block's payload counts");
+    assert_eq!(
+        digest_of(
+            json!({"role": "user", "content": [{"text": "a", "type": "text", "cache_control": {"type": "ephemeral"}}]})
+        ),
+        base,
+        "cache_control and key order are not identity"
+    );
+    let tr = json!({"type": "tool_result", "tool_use_id": "t", "content": "ok"});
+    assert_eq!(
+        digest_of(json!({"role": "user", "content": [tr, {"type": "text", "text": "reminder"}]})),
+        digest_of(json!({"role": "user", "content": [tr]})),
+        "text after a tool_result is not identity"
+    );
 }

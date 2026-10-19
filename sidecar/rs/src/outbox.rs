@@ -6,7 +6,6 @@
 //! row over `LINE_MAX_BYTES` dropped whole; no message content; fail-open; an empty path opens
 //! nothing.
 
-use crate::js;
 use serde::Serialize;
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
@@ -69,7 +68,7 @@ pub struct Row<'a, P: Serialize> {
 /// written. A key the event lacks (`session_id`, `kind`) is omitted.
 fn serialize_value(event: &Value) -> (String, String) {
     let g = |k: &str| event.get(k);
-    let ts = text(g("ts")).map_or_else(js::iso_now, str::to_string);
+    let ts = text(g("ts")).map_or_else(crate::logging::iso_now, str::to_string);
     let empty = Value::Object(Default::default());
     let line = Line {
         v: ROW_VERSION,
@@ -80,7 +79,7 @@ fn serialize_value(event: &Value) -> (String, String) {
         agent_id: text(g("agent_id")),
         agent_type: text(g("agent_type")),
         kind: g("kind"),
-        payload: js::present(g("payload")).unwrap_or(&empty),
+        payload: g("payload").filter(|p| !p.is_null()).unwrap_or(&empty),
     }
     .to_line();
     (ts, line)
@@ -106,11 +105,7 @@ pub fn open_outbox(path: &str) -> std::io::Result<PathBuf> {
 }
 
 fn day_of(name: &str) -> Option<f64> {
-    let day = name.strip_suffix(".jsonl")?;
-    if !crate::logging::is_day_shape(day) {
-        return None;
-    }
-    js::date_parse(&format!("{day}T00:00:00Z"))
+    crate::logging::day_ms(name.strip_suffix(".jsonl")?)
 }
 
 /// `prune(logDir, {now, olderThanMs})`: unlinks day-files older than retention + 1 day.
@@ -171,7 +166,7 @@ impl OutboxWriter {
         if self.path.is_empty() || row.session_id.is_empty() || !KINDS.contains(&row.kind) {
             return None;
         }
-        let ts = js::iso_now();
+        let ts = crate::logging::iso_now();
         let line = Line {
             v: ROW_VERSION,
             ts: &ts,
@@ -195,8 +190,14 @@ impl OutboxWriter {
             self.log_dir = Some(open_outbox(&self.path).ok()?);
         }
         let log_dir = self.log_dir.clone()?;
-        let ms = js::date_parse(ts).unwrap_or_else(js::now_ms);
-        let day = js::iso_from_ms(ms)[..10].to_string();
+        // the row's own UTC day when its `ts` opens with one, else today
+        let day = ts
+            .get(..10)
+            .filter(|d| crate::logging::day_ms(d).is_some())
+            .map_or_else(
+                || crate::logging::iso_now()[..10].to_string(),
+                str::to_string,
+            );
         let file = log_dir.join(format!("{day}.jsonl"));
         let mut fd = OpenOptions::new()
             .append(true)
@@ -210,7 +211,7 @@ impl OutboxWriter {
             .ok()
             .map(|b| u64::from_le_bytes(b.try_into().unwrap_or_default()));
         if draw.is_some_and(|d| d % PRUNE_ODDS == 0) {
-            let _ = prune(&log_dir, js::now_ms(), PRUNE_AFTER_MS);
+            let _ = prune(&log_dir, crate::logging::now_ms(), PRUNE_AFTER_MS);
         }
         Some(file)
     }

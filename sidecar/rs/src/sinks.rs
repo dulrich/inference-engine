@@ -7,7 +7,6 @@
 
 use crate::codex::Usage;
 use crate::errors::SidecarError;
-use crate::js;
 use crate::protocol::usage_out;
 use crate::sidecar::{random_hex, with_world, World};
 use bytes::Bytes;
@@ -42,7 +41,7 @@ impl Reply {
         Reply::Full {
             status,
             headers: hs,
-            body: Some(js::stringify(obj)),
+            body: Some(obj.to_string()),
         }
     }
     /// `sendError(res, err)`.
@@ -105,11 +104,8 @@ fn retry_after_header(err: &SidecarError) -> Headers {
 }
 
 /// `wireModelId(personaName, requested)`: re-prefix the persona the router stripped.
-pub fn wire_model_id(persona: &str, requested: Option<&Value>) -> String {
-    let id = match requested {
-        None | Some(Value::Null) => String::new(),
-        Some(v) => js::js_string(v),
-    };
+pub fn wire_model_id(persona: &str, requested: &str) -> String {
+    let id = requested.to_string();
     if id.contains('/') {
         id
     } else {
@@ -145,7 +141,7 @@ pub enum Kind {
     },
     Sse {
         ping_ms: u64,
-        index: f64,
+        index: u64,
         text_open: bool,
         any_block: bool,
         /// The last successful write; the keep-alive task pings `ping_ms` after it.
@@ -210,7 +206,7 @@ impl Sink {
             model,
             Kind::Sse {
                 ping_ms,
-                index: 0.0,
+                index: 0,
                 text_open: false,
                 any_block: false,
                 last_write: Instant::now(),
@@ -282,7 +278,7 @@ pub fn sink_done(w: &World, id: u64) -> bool {
 }
 
 fn frame(t: &str, obj: &Value) -> String {
-    format!("event: {t}\ndata: {}\n\n", js::stringify(obj))
+    format!("event: {t}\ndata: {obj}\n\n")
 }
 
 /// `SseSink.#raw(text)`.
@@ -451,14 +447,14 @@ pub fn text_delta(w: &mut World, id: u64, t: &str) {
                     w,
                     id,
                     "content_block_start",
-                    json!({ "type": "content_block_start", "index": js::num(idx), "content_block": { "type": "text", "text": "" } }),
+                    json!({ "type": "content_block_start", "index": idx, "content_block": { "type": "text", "text": "" } }),
                 );
             }
             write(
                 w,
                 id,
                 "content_block_delta",
-                json!({ "type": "content_block_delta", "index": js::num(idx), "delta": { "type": "text_delta", "text": t } }),
+                json!({ "type": "content_block_delta", "index": idx, "delta": { "type": "text_delta", "text": t } }),
             );
         }
     }
@@ -482,12 +478,12 @@ fn close_text(w: &mut World, id: u64) {
     }
     let idx = *index;
     *text_open = false;
-    *index += 1.0;
+    *index += 1;
     write(
         w,
         id,
         "content_block_stop",
-        json!({ "type": "content_block_stop", "index": js::num(idx) }),
+        json!({ "type": "content_block_stop", "index": idx }),
     );
 }
 
@@ -527,25 +523,25 @@ pub fn tool_use(w: &mut World, id: u64, block: &Value) {
                 w,
                 id,
                 "content_block_start",
-                json!({ "type": "content_block_start", "index": js::num(idx), "content_block": cb }),
+                json!({ "type": "content_block_start", "index": idx, "content_block": cb }),
             );
             write(
                 w,
                 id,
                 "content_block_delta",
-                json!({ "type": "content_block_delta", "index": js::num(idx), "delta": { "type": "input_json_delta", "partial_json": js::stringify(&input) } }),
+                json!({ "type": "content_block_delta", "index": idx, "delta": { "type": "input_json_delta", "partial_json": input.to_string() } }),
             );
             write(
                 w,
                 id,
                 "content_block_stop",
-                json!({ "type": "content_block_stop", "index": js::num(idx) }),
+                json!({ "type": "content_block_stop", "index": idx }),
             );
             if let Some(Kind::Sse {
                 index, any_block, ..
             }) = w.sinks.get_mut(&id).map(|s| &mut s.kind)
             {
-                *index += 1.0;
+                *index += 1;
                 *any_block = true;
             }
         }

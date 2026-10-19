@@ -5,6 +5,15 @@ use codex_sidecar::codex::{CallId, ThreadId, TokenUsage, ToolCall, Usage};
 use codex_sidecar::errors::{map_upstream_error, rate_limit_exhaustion, retry_after_seconds};
 use codex_sidecar::logging::Logger;
 use codex_sidecar::protocol::*;
+use codex_sidecar::request::{normalize_request, Message, Request};
+
+fn req(v: Value) -> Request {
+    Request::parse(v).unwrap()
+}
+
+fn msgs(v: Vec<Value>) -> Vec<Message> {
+    serde_json::from_value(Value::Array(v)).unwrap()
+}
 use codex_sidecar::thread_config::{verify_features, verify_instruction_sources};
 use serde_json::{json, Map, Value};
 use std::os::unix::fs::PermissionsExt;
@@ -13,7 +22,8 @@ const TITLE_SYSTEM: &str =
     "You are naming a coding session so the user can pick it out of a long list of sessions.";
 
 fn pm(id: Option<Value>) -> Option<(String, String, &'static str)> {
-    parse_model_id(id.as_ref()).map(|p| (p.model, p.effort, p.effort_source.as_str()))
+    let text = Request::parse(json!({ "model": id })).unwrap().model_text();
+    parse_model_id(&text).map(|p| (p.model, p.effort, p.effort_source.as_str()))
 }
 
 fn want(m: &str, e: &str, s: &'static str) -> Option<(String, String, &'static str)> {
@@ -59,13 +69,16 @@ fn effort_lives_in_the_model_id_suffix() {
 
 #[test]
 fn title_signature_needs_three_robust_conditions() {
-    let session_msg = vec![json!({"role": "user", "content": "<session>chat</session>"})];
-    let cc2269 = vec![
+    let session_msg = msgs(vec![
+        json!({"role": "user", "content": "<session>chat</session>"}),
+    ]);
+    let cc2269 = msgs(vec![
         json!({"role": "user", "content": "<session>chat</session>\n\nWrite the title in the predominant language of the session — a stray word or code token in another language doesn't change it, and neither does the English of these instructions."}),
-    ];
-    let drifted =
-        vec![json!({"role": "user", "content": "please read <session>x</session> for me"})];
-    let empty_tools = json!({"tools": []});
+    ]);
+    let drifted = msgs(vec![
+        json!({"role": "user", "content": "please read <session>x</session> for me"}),
+    ]);
+    let empty_tools = req(json!({"tools": []}));
     assert!(
         is_title_request(&empty_tools, TITLE_SYSTEM, &cc2269),
         "2.1.269 envelope"
@@ -79,12 +92,12 @@ fn title_signature_needs_three_robust_conditions() {
     assert_eq!(title_envelope(&drifted), "drifted");
     assert!(is_title_request(&empty_tools, TITLE_SYSTEM, &session_msg));
     assert!(
-        is_title_request(&json!({}), TITLE_SYSTEM, &session_msg),
+        is_title_request(&req(json!({})), TITLE_SYSTEM, &session_msg),
         "absent tools count as empty"
     );
     assert!(
         !is_title_request(
-            &json!({"tools": [{"name": "Bash"}]}),
+            &req(json!({"tools": [{"name": "Bash"}]})),
             TITLE_SYSTEM,
             &session_msg
         ),
@@ -101,7 +114,7 @@ fn title_signature_needs_three_robust_conditions() {
     );
     let two = vec![
         session_msg[0].clone(),
-        json!({"role": "assistant", "content": "Title"}),
+        msgs(vec![json!({"role": "assistant", "content": "Title"})]).remove(0),
     ];
     assert!(
         !is_title_request(&empty_tools, TITLE_SYSTEM, &two),
@@ -117,11 +130,14 @@ fn cwd_comes_from_environment_block_and_system_messages_drop() {
         {"role": "assistant", "content": "hi"},
         {"role": "system", "content": "<system-reminder>budget</system-reminder>"},
     ]);
-    let arr = msgs.as_array().unwrap();
-    assert_eq!(extract_cwd(arr, "").as_deref(), Some("/home/u/repo"));
-    assert_eq!(conversational(Some(&msgs)).len(), 2);
+    let norm = normalize_request(req(json!({ "messages": msgs })), None);
+    assert_eq!(norm.raw_cwd.as_deref(), Some("/home/u/repo"));
+    assert_eq!(norm.msgs.len(), 2, "system-role entries are not turns");
     assert_eq!(
-        extract_cwd(&[json!({"role": "user", "content": "no env here"})], ""),
+        extract_cwd(
+            &self::msgs(vec![json!({"role": "user", "content": "no env here"})]),
+            ""
+        ),
         None
     );
     assert_eq!(
@@ -134,22 +150,22 @@ fn cwd_comes_from_environment_block_and_system_messages_drop() {
 fn sessions_key_on_metadata_user_id_and_fall_back_to_a_warned_hash() {
     let body = |sid: &str| json!({"metadata": {"user_id": json!({"device_id": "d", "account_uuid": "a", "session_id": sid}).to_string()}});
     assert_eq!(
-        session_key_of(&body("abc-123"), "sys", "hi", None),
+        session_key_of(&req(body("abc-123")), "sys", "hi", None),
         SessionKey {
             key: "abc-123".into(),
             weak: false,
             scope: Scope::Parent
         }
     );
-    let a = session_key_of(&json!({}), "sys", "hi", None);
-    let b = session_key_of(&json!({}), "sys", "hi", None);
-    let c = session_key_of(&json!({}), "sys", "different", None);
+    let a = session_key_of(&req(json!({})), "sys", "hi", None);
+    let b = session_key_of(&req(json!({})), "sys", "hi", None);
+    let c = session_key_of(&req(json!({})), "sys", "different", None);
     assert!(a.weak);
     assert_eq!(a.key, b.key, "the fallback is stable for the same prompt");
     assert_ne!(a.key, c.key);
     assert!(
         session_key_of(
-            &json!({"metadata": {"user_id": "not json"}}),
+            &req(json!({"metadata": {"user_id": "not json"}})),
             "sys",
             "hi",
             None
@@ -278,18 +294,19 @@ fn upstream_errors_rate_limits_and_instruction_sources_map_as_schema_says() {
     assert_eq!(presented_key(&axum::http::HeaderMap::new()), None);
 
     assert_eq!(
-        to_dynamic_tools(Some(
-            &json!([{"name": "Bash", "description": "run", "input_schema": {"type": "object"}}])
-        )),
+        to_dynamic_tools(&[
+            json!({"name": "Bash", "description": "run", "input_schema": {"type": "object"}})
+        ]),
         vec![
             json!({"type": "function", "name": "Bash", "description": "run", "inputSchema": {"type": "object"}})
         ]
     );
     assert_eq!(
         count_tokens_estimate(
-            &json!({"system": [{"type": "text", "text": "12345678"}], "messages": []})
+            &req(json!({"system": [{"type": "text", "text": "12345678"}], "messages": []})),
+            &[]
         ),
-        2.0
+        2
     );
 }
 

@@ -7,7 +7,6 @@ pub mod codex;
 pub mod config;
 pub mod errors;
 pub mod http;
-pub mod js;
 pub mod logging;
 pub mod messages;
 pub mod outbox;

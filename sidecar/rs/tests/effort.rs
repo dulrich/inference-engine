@@ -2,10 +2,11 @@
 //! thinking disabled -> family default, and never an error.
 
 use codex_sidecar::protocol::{parse_model_id, resolve_effort, Effort, EffortSource};
+use codex_sidecar::request::Request;
 use serde_json::{json, Value};
 
 fn resolve(id: &str, body: Value) -> Effort {
-    resolve_effort(parse_model_id(Some(&json!(id))).as_ref(), &body)
+    resolve_effort(parse_model_id(id).as_ref(), &Request::parse(body).unwrap())
 }
 
 fn eff(e: &str, src: &'static str) -> Effort {

@@ -7,7 +7,6 @@ use crate::codex::{
 };
 use crate::config::INBAND_ITEM_TYPES;
 use crate::errors::{map_upstream_error, SidecarError};
-use crate::js;
 use crate::outbox_events::OutboxKey;
 use crate::persona;
 use crate::request::Token;
@@ -105,8 +104,23 @@ pub struct Session {
 pub fn id_key(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
-        other => js::js_string(other),
+        other => other.to_string(),
     }
+}
+
+/// A wire value that is set: present and not `null`, `false`, `0` or `""`.
+pub fn is_set(v: Option<&Value>) -> bool {
+    match v {
+        None | Some(Value::Null | Value::Bool(false)) => false,
+        Some(Value::String(s)) => !s.is_empty(),
+        Some(Value::Number(n)) => n.as_f64() != Some(0.0),
+        Some(_) => true,
+    }
+}
+
+/// A client-side id that is set ([`is_set`]), as its `delivered` key.
+pub fn usable_id(v: Option<&Value>) -> Option<String> {
+    v.filter(|v| is_set(Some(v))).map(id_key)
 }
 
 impl Session {
@@ -423,7 +437,7 @@ pub fn on_frame(w: &mut World, sid: u64, ev: Frame) {
         Note::TurnStarted { turn_id } => keep_turn(s, turn_id),
         Note::ItemStarted { turn_id, item_type } => {
             keep_turn(s, turn_id);
-            if let Some(ty) = item_type.filter(|t| js::truthy(Some(t))) {
+            if let Some(ty) = item_type.filter(|t| is_set(Some(t))) {
                 let inband = ty.as_str().is_some_and(|t| INBAND_ITEM_TYPES.contains(&t));
                 if !inband {
                     persona::trip_boundary(w, pi, ty, Some(sid));
@@ -471,7 +485,7 @@ pub fn on_frame(w: &mut World, sid: u64, ev: Frame) {
                 take_usage(s, tu);
             }
             let failed = turn.status.as_deref() == Some("failed");
-            if failed || js::truthy(turn.error.as_ref()) {
+            if failed || is_set(turn.error.as_ref()) {
                 let e = match turn.error {
                     Some(v) if !v.is_null() => v,
                     _ => {

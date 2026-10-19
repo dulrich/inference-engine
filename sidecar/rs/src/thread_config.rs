@@ -4,7 +4,6 @@
 //! app-server's own flag oracle. A declared key the oracle does not report is *unknown*, not a
 //! mismatch. CONFIG drift detection only; `Persona.tripBoundary` is the runtime line.
 
-use crate::js;
 use serde_json::{Map, Value};
 
 /// `verifyInstructionSources(sources)`: `None` when the trim held, else the problem string.
@@ -16,16 +15,16 @@ pub fn verify_instruction_sources(sources: Option<&Value>) -> Option<String> {
             list.len()
         ));
     }
-    let bad = list.iter().find(|s| {
-        let t = match s {
+    let bad = list
+        .iter()
+        .map(|s| match s {
             Value::String(x) => x.clone(),
-            other => js::stringify(other),
-        };
-        !t.to_ascii_lowercase().ends_with("agents.md")
-    })?;
+            other => other.to_string(),
+        })
+        .find(|t| !t.to_ascii_lowercase().ends_with("agents.md"))?;
     Some(format!(
         "unexpected instruction source: {}",
-        js::utf16_prefix(&js::js_string(bad), 200)
+        bad.chars().take(200).collect::<String>()
     ))
 }
 
@@ -53,17 +52,22 @@ pub struct FeatureReadings {
 pub fn feature_readings(declared: Option<&Value>, reported: Option<&Value>) -> FeatureReadings {
     let mut by_name: Vec<(&str, &Value)> = Vec::new();
     for e in reported.and_then(Value::as_array).into_iter().flatten() {
-        if let Some(n) = js::prop(Some(e), "name").and_then(Value::as_str) {
+        if let Some(n) = e.get("name").and_then(Value::as_str) {
             if !by_name.iter().any(|(k, _)| *k == n) {
                 by_name.push((n, e));
             }
         }
     }
     let mut out = FeatureReadings::default();
-    let decl = declared
-        .filter(|d| d.is_object() || d.is_array())
-        .map(js::entries)
-        .unwrap_or_default();
+    let decl: Vec<(String, &Value)> = match declared {
+        Some(Value::Object(m)) => m.iter().map(|(k, v)| (k.clone(), v)).collect(),
+        Some(Value::Array(a)) => a
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i.to_string(), v))
+            .collect(),
+        _ => Vec::new(),
+    };
     for (name, want_raw) in decl {
         if FEATURE_VERIFY_EXEMPT.contains(&name.as_str()) {
             continue;
@@ -72,7 +76,7 @@ pub fn feature_readings(declared: Option<&Value>, reported: Option<&Value>) -> F
             out.unknown_features.push(name);
             continue;
         };
-        let got = js::prop(Some(entry), "enabled") == Some(&Value::Bool(true));
+        let got = entry.get("enabled") == Some(&Value::Bool(true));
         let want = *want_raw == Value::Bool(true);
         out.features.insert(name.clone(), Value::Bool(got));
         if got != want {

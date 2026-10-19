@@ -228,7 +228,7 @@ pub async fn start(cfg: Config, pinned: Pinned) -> Result<Handle, String> {
                 serve(&world, l, &servers, &shutdown_tx);
             }
             Err(first) => {
-                let started = crate::js::now_ms();
+                let started = std::time::Instant::now();
                 lock(&world).log(
                     "bind-extra-retrying",
                     json!({ "host": bind_extra, "port": port, "err": first, "budgetMs": budget_ms }),
@@ -245,21 +245,21 @@ pub async fn start(cfg: Config, pinned: Pinned) -> Result<Handle, String> {
                                 {
                                     let mut w = lock(&wd);
                                     w.binds.bound.push(bind_of(&l));
-                                    let el = crate::js::now_ms() - started;
+                                    let el = started.elapsed().as_millis() as u64;
                                     w.log(
                                         "bind-extra-recovered",
-                                        json!({ "host": bind_extra, "port": port, "attempts": attempts, "elapsedMs": crate::js::num(el) }),
+                                        json!({ "host": bind_extra, "port": port, "attempts": attempts, "elapsedMs": el }),
                                     );
                                 }
                                 serve(&wd, l, &sv, &st);
                                 return;
                             }
                             Err(e) => {
-                                let el = crate::js::now_ms() - started;
-                                if el + delay as f64 > budget_ms as f64 {
+                                let el = started.elapsed().as_millis() as u64;
+                                if el + delay > budget_ms {
                                     lock(&wd).log(
                                         "bind-extra-failed",
-                                        json!({ "host": bind_extra, "port": port, "attempts": attempts, "elapsedMs": crate::js::num(el), "err": e }),
+                                        json!({ "host": bind_extra, "port": port, "attempts": attempts, "elapsedMs": el, "err": e }),
                                     );
                                     return;
                                 }

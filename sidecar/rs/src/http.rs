@@ -8,10 +8,10 @@
 
 use crate::config::{BODY_LIMIT, VERSION};
 use crate::errors::{as_sidecar_error, SidecarError};
-use crate::js;
 use crate::logging::redact_headers;
 use crate::messages::{admit, on_joiner_close, on_owner_close, run, Admit};
 use crate::protocol::{count_tokens_estimate, presented_key, safe_equal};
+use crate::request::Request as AnthropicRequest;
 use crate::sidecar::{err, lock, with_world, Shared, World};
 use crate::sinks::{self, json_headers, CloseHook, Reply};
 use axum::body::Body;
@@ -204,7 +204,7 @@ fn front(
     }
     if path == "/healthz" {
         let b = health_body(w);
-        let st = if js::truthy(b.get("degraded")) {
+        let st = if b.get("degraded") == Some(&Value::Bool(true)) {
             503
         } else {
             200
@@ -302,16 +302,16 @@ async fn post(
         ));
     };
     if rest == "/v1/messages/count_tokens" {
-        let n = count_tokens_estimate(&body);
+        let req = match AnthropicRequest::parse(body) {
+            Ok(r) => r,
+            Err(e) => return Step::Done(fail(me, path, &e)),
+        };
+        let n = count_tokens_estimate(&req, &req.messages);
         lock(me).log(
             "count_tokens",
-            json!({ "persona": name, "input_tokens": js::num(n) }),
+            json!({ "persona": name, "input_tokens": n }),
         );
-        return Step::Done(Reply::json(
-            200,
-            &json!({ "input_tokens": js::num(n) }),
-            Vec::new(),
-        ));
+        return Step::Done(Reply::json(200, &json!({ "input_tokens": n }), Vec::new()));
     }
     let admitted = match admit(me, pi, body, headers) {
         Ok(Admit::Local(reply)) => return Step::Done(reply),

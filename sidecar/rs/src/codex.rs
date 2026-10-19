@@ -12,10 +12,19 @@ use serde::de::{DeserializeOwned, Deserializer};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+/// A JSON number as JS `String(n)` spells it for the ids codex sends: integral values (within
+/// 2^53) without a fraction.
+fn number_text(n: &serde_json::Number) -> String {
+    match n.as_f64() {
+        Some(f) if f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 => (f as i64).to_string(),
+        _ => n.to_string(),
+    }
+}
+
 fn id_text(v: &Value) -> Option<String> {
     match v {
         Value::String(s) if !s.is_empty() => Some(s.clone()),
-        Value::Number(_) => Some(crate::js::js_string(v)),
+        Value::Number(n) => Some(number_text(n)),
         _ => None,
     }
 }

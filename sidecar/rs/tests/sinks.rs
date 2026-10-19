@@ -3,28 +3,32 @@
 
 use codex_sidecar::http::has_dot_segment;
 use codex_sidecar::logging::redact_headers;
+use codex_sidecar::request::Request;
 use codex_sidecar::sinks::{message_skeleton, wire_model_id};
 use serde_json::{json, Value};
 
 #[test]
 fn wire_model_id_restores_the_persona_prefix() {
-    let v = |s: &str| Value::from(s);
     assert_eq!(
-        wire_model_id("codex-b", Some(&v("gpt-5.6-sol"))),
+        wire_model_id("codex-b", "gpt-5.6-sol"),
         "codex-b/gpt-5.6-sol"
     );
     assert_eq!(
-        wire_model_id("codex-b", Some(&v("gpt-5.6-sol-high"))),
+        wire_model_id("codex-b", "gpt-5.6-sol-high"),
         "codex-b/gpt-5.6-sol-high"
     );
     assert_eq!(
-        wire_model_id("codex-a", Some(&v("codex-a/gpt-5.6-luna"))),
+        wire_model_id("codex-a", "codex-a/gpt-5.6-luna"),
         "codex-a/gpt-5.6-luna"
     );
-    // String(requested ?? "")
-    assert_eq!(wire_model_id("codex-a", None), "codex-a/");
+    // the request's `String(model ?? "")`
+    let model = |v: Value| Request::parse(json!({ "model": v })).unwrap().model_text();
     assert_eq!(
-        wire_model_id("codex-a", Some(&json!(5))),
+        wire_model_id("codex-a", &model(Value::Null)),
+        "codex-a/"
+    );
+    assert_eq!(
+        wire_model_id("codex-a", &model(json!(5))),
         "codex-a/5"
     );
 }

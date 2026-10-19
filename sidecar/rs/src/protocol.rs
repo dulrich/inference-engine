@@ -3,9 +3,10 @@
 //! discriminator, title signature), and the codex -> Anthropic usage projection with its clamp.
 
 use crate::codex::Usage;
-use crate::js;
+use crate::request::{Content, ContentBlock, Message, Request, System};
 use axum::http::HeaderMap;
 use serde_json::{json, Value};
+
 use sha2::{Digest, Sha256};
 
 pub const MODEL_FAMILIES: &[(&str, &str)] = &[
@@ -32,6 +33,11 @@ const CWD_PREFIX: &str = "Primary working directory:";
 
 fn lookup(table: &[(&'static str, &'static str)], k: &str) -> Option<&'static str> {
     table.iter().find(|(n, _)| *n == k).map(|(_, v)| *v)
+}
+
+/// The characters a regex `.` does not match and `^`/`$` (with `m`) break on.
+pub fn is_line_break(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
 }
 
 pub fn sha256_hex(data: &str) -> String {
@@ -97,9 +103,8 @@ pub struct ParsedModel {
 
 /// `parseModelId(raw)`: `gpt-5.6-luna`, `codex-a/gpt-5.6-luna`, or either with a
 /// `-low|-medium|-high` suffix; anything else `None` (the caller answers 400).
-pub fn parse_model_id(raw: Option<&Value>) -> Option<ParsedModel> {
-    let s = js::js_string_or_empty(raw);
-    let id = js::trim(&s);
+pub fn parse_model_id(raw: &str) -> Option<ParsedModel> {
+    let id = raw.trim();
     if id.is_empty() {
         return None;
     }
@@ -114,7 +119,7 @@ pub fn parse_model_id(raw: Option<&Value>) -> Option<ParsedModel> {
     // /^(.*)-(low|medium|high)$/ — `.` excludes line terminators
     for suf in ["low", "medium", "high"] {
         if let Some(head) = bare.strip_suffix(suf).and_then(|h| h.strip_suffix('-')) {
-            if !head.contains(js::is_line_terminator) && lookup(MODEL_FAMILIES, head).is_some() {
+            if !head.contains(is_line_break) && lookup(MODEL_FAMILIES, head).is_some() {
                 return Some(ParsedModel {
                     model: head.into(),
                     effort: suf.into(),
@@ -134,21 +139,21 @@ pub struct Effort {
 
 /// `resolveEffort(parsed, body)`: suffix -> `output_config.effort` -> `thinking.type ===
 /// "disabled"` (low) -> family default. Never an error.
-pub fn resolve_effort(parsed: Option<&ParsedModel>, body: &Value) -> Effort {
+pub fn resolve_effort(parsed: Option<&ParsedModel>, req: &Request) -> Effort {
     if let Some(p) = parsed.filter(|p| p.effort_source == EffortSource::Suffix) {
         return Effort {
             effort: Some(p.effort.clone()),
             effort_source: EffortSource::Suffix,
         };
     }
-    let want = js::prop(js::prop(Some(body), "output_config"), "effort").and_then(Value::as_str);
+    let want = req.output_config.effort.as_deref();
     if let Some(e) = want.and_then(|w| lookup(EFFORT_LEVELS, w)) {
         return Effort {
             effort: Some(e.into()),
             effort_source: EffortSource::Request,
         };
     }
-    if js::prop(js::prop(Some(body), "thinking"), "type") == Some(&Value::from("disabled")) {
+    if req.thinking.kind.as_deref() == Some("disabled") {
         return Effort {
             effort: Some("low".into()),
             effort_source: EffortSource::Request,
@@ -160,64 +165,50 @@ pub fn resolve_effort(parsed: Option<&ParsedModel>, body: &Value) -> Effort {
     }
 }
 
-/// `blocksOf(content)`: an array as-is, a string as one text block, else none.
-pub fn blocks_of(content: Option<&Value>) -> Vec<Value> {
-    match content {
-        Some(Value::Array(a)) => a.clone(),
-        Some(Value::String(s)) => vec![json!({ "type": "text", "text": s })],
-        _ => Vec::new(),
-    }
-}
-
 /// `textOf(content)`: only text blocks survive, joined by `\n`.
-pub fn text_of(content: Option<&Value>) -> String {
-    blocks_of(content)
+pub fn text_of(content: Option<&Content>) -> String {
+    content
+        .map(Content::blocks)
+        .unwrap_or_default()
         .iter()
-        .filter(|b| js::prop(Some(b), "type") == Some(&Value::from("text")))
-        .filter_map(|b| {
-            js::prop(Some(b), "text")
-                .and_then(Value::as_str)
-                .map(str::to_string)
+        .filter_map(|b| match b {
+            ContentBlock::Text(t) => Some(t.text.as_str()),
+            _ => None,
         })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-/// `systemTextOf(body)`.
-pub fn system_text_of(body: &Value) -> String {
-    match js::prop(Some(body), "system") {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Array(a)) => a
-            .iter()
-            .map(|x| match x {
-                Value::String(s) => s.clone(),
-                other => js::js_string_or_empty(js::prop(Some(other), "text")),
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n"),
-        _ => String::new(),
+/// `String(x.text ?? "")` for a `system` block.
+fn system_block_text(b: &Value) -> String {
+    match b {
+        Value::String(s) => s.clone(),
+        other => match other.get("text") {
+            None | Some(Value::Null) => String::new(),
+            Some(Value::String(s)) => s.clone(),
+            Some(v) => v.to_string(),
+        },
     }
 }
 
-fn role_is(m: &Value, role: &str) -> bool {
-    js::prop(Some(m), "role") == Some(&Value::from(role))
-}
-
-/// `conversational(msgs)`: only user/assistant entries are turns.
-pub fn conversational(msgs: Option<&Value>) -> Vec<Value> {
-    msgs.and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|m| role_is(m, "user") || role_is(m, "assistant"))
-        .cloned()
-        .collect()
+/// `systemTextOf(body)`.
+pub fn system_text_of(req: &Request) -> String {
+    match &req.system {
+        Some(System::Text(s)) => s.clone(),
+        Some(System::Blocks(a)) => a
+            .iter()
+            .map(system_block_text)
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        None => String::new(),
+    }
 }
 
 /// `interleavedSystemText(msgs)`: the text of interleaved role:"system" entries, in order.
-pub fn interleaved_system_text(msgs: &[Value]) -> String {
+pub fn interleaved_system_text(msgs: &[Message]) -> String {
     msgs.iter()
-        .filter(|m| role_is(m, "system"))
-        .map(|m| js::trim(&text_of(js::prop(Some(m), "content"))).to_string())
+        .filter(|m| m.role() == Some("system"))
+        .map(|m| text_of(m.content.as_ref()).trim().to_string())
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
@@ -237,39 +228,33 @@ pub fn base_instructions_of(preamble: &str, system_text: &str, interleaved: &str
         .join("\n\n")
 }
 
-fn type_is(b: &Value, t: &str) -> bool {
-    js::prop(Some(b), "type") == Some(&Value::from(t))
-}
-
-/// `hasImageBlock(body)`.
-pub fn has_image_block(body: &Value) -> bool {
-    for m in js::prop(Some(body), "messages")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        for b in blocks_of(js::prop(Some(m), "content")) {
-            if type_is(&b, "image") {
-                return true;
-            }
-            if type_is(&b, "tool_result")
-                && blocks_of(js::prop(Some(&b), "content"))
-                    .iter()
-                    .any(|c| type_is(c, "image"))
-            {
-                return true;
+/// `hasImageBlock(body)`: an image block in any message (or in a `tool_result`), or in
+/// `system`.
+pub fn has_image_block<'a>(req: &Request, msgs: impl IntoIterator<Item = &'a Message>) -> bool {
+    for m in msgs {
+        for b in m.blocks() {
+            match &b {
+                ContentBlock::Image(_) => return true,
+                ContentBlock::ToolResult(t)
+                    if t.content.as_ref().is_some_and(|c| {
+                        c.blocks()
+                            .iter()
+                            .any(|x| matches!(x, ContentBlock::Image(_)))
+                    }) =>
+                {
+                    return true
+                }
+                _ => {}
             }
         }
     }
-    js::prop(Some(body), "system")
-        .and_then(Value::as_array)
-        .is_some_and(|a| a.iter().any(|b| type_is(b, "image")))
+    matches!(&req.system, Some(System::Blocks(a)) if a.iter().any(|b| b.get("type") == Some(&Value::from("image"))))
 }
 
 /// `CWD_RE.exec(text)?.[1]` for `/^[ \t]*Primary working directory:[ \t]*(.+?)[ \t]*$/m`.
 fn cwd_in(text: &str) -> Option<String> {
     let blank = |c: char| c == ' ' || c == '\t';
-    for line in text.split(js::is_line_terminator) {
+    for line in text.split(is_line_break) {
         let Some(rest) = line.trim_start_matches(blank).strip_prefix(CWD_PREFIX) else {
             continue;
         };
@@ -286,9 +271,9 @@ fn cwd_in(text: &str) -> Option<String> {
 }
 
 /// `extractCwd(allMsgs, systemText)`: the cwd, parsed before the system-role filter.
-pub fn extract_cwd(all_msgs: &[Value], system_text: &str) -> Option<String> {
-    for m in all_msgs.iter().filter(|m| role_is(m, "system")) {
-        if let Some(c) = cwd_in(&text_of(js::prop(Some(m), "content"))) {
+pub fn extract_cwd(msgs: &[Message], system_text: &str) -> Option<String> {
+    for m in msgs.iter().filter(|m| m.role() == Some("system")) {
+        if let Some(c) = cwd_in(&text_of(m.content.as_ref())) {
             return Some(c);
         }
     }
@@ -296,23 +281,20 @@ pub fn extract_cwd(all_msgs: &[Value], system_text: &str) -> Option<String> {
 }
 
 /// `billingLineOf(body)`: the `x-anthropic-billing-header:` first line of `system`, or `""`.
-pub fn billing_line_of(body: &Value) -> String {
-    let head = match js::prop(Some(body), "system") {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Array(a)) => match a.first() {
-            Some(Value::String(s)) => s.clone(),
-            f => match js::prop(f, "text") {
-                Some(Value::String(s)) => s.clone(),
-                _ => String::new(),
-            },
+pub fn billing_line_of(req: &Request) -> String {
+    let head = match &req.system {
+        Some(System::Text(s)) => s.as_str(),
+        Some(System::Blocks(a)) => match a.first() {
+            Some(Value::String(s)) => s.as_str(),
+            f => f
+                .and_then(|f| f.get("text"))
+                .and_then(Value::as_str)
+                .unwrap_or(""),
         },
-        _ => String::new(),
+        None => "",
     };
     let line = head.split('\n').next().unwrap_or("");
-    if js::trim_start(line)
-        .to_lowercase()
-        .starts_with(BILLING_PREFIX)
-    {
+    if line.trim_start().to_lowercase().starts_with(BILLING_PREFIX) {
         line.to_string()
     } else {
         String::new()
@@ -320,20 +302,20 @@ pub fn billing_line_of(body: &Value) -> String {
 }
 
 /// `/(?:^|[\s;])cc_is_subagent=true(?:[;\s]|$)/` on the billing line.
-pub fn is_subagent_request(body: &Value) -> bool {
+pub fn is_subagent_request(req: &Request) -> bool {
     const TOKEN: &str = "cc_is_subagent=true";
-    let line = billing_line_of(body);
+    let line = billing_line_of(req);
     line.match_indices(TOKEN).any(|(i, _)| {
         let before = line[..i].chars().next_back();
         let after = line[i + TOKEN.len()..].chars().next();
-        before.is_none_or(|c| c == ';' || js::is_js_space(c))
-            && after.is_none_or(|c| c == ';' || js::is_js_space(c))
+        before.is_none_or(|c| c == ';' || c.is_whitespace())
+            && after.is_none_or(|c| c == ';' || c.is_whitespace())
     })
 }
 
 /// `systemTextWithoutBillingLine(body, systemText)`.
-pub fn system_text_without_billing_line(body: &Value, system_text: &str) -> String {
-    let line = billing_line_of(body);
+pub fn system_text_without_billing_line(req: &Request, system_text: &str) -> String {
+    let line = billing_line_of(req);
     if line.is_empty() || !system_text.starts_with(&line) {
         return system_text.to_string();
     }
@@ -352,22 +334,23 @@ pub struct SessionKey {
 /// `sessionKeyOf(body, systemText, firstUserText, headers)`: one thread per (session_id,
 /// agent scope); a missing session id falls back to a weak prompt hash.
 pub fn session_key_of(
-    body: &Value,
+    req: &Request,
     system_text: &str,
     first_user_text: &str,
     headers: Option<&HeaderMap>,
 ) -> SessionKey {
-    let uid = js::prop(js::prop(Some(body), "metadata"), "user_id");
-    let parsed: Option<Value> = match uid {
+    let parsed: Option<Value> = match &req.metadata.user_id {
         Some(Value::String(s)) => serde_json::from_str(s).ok(),
         Some(v @ (Value::Object(_) | Value::Array(_))) => Some(v.clone()),
         _ => None,
     };
-    let sid = js::prop(parsed.as_ref(), "session_id")
+    let sid = parsed
+        .as_ref()
+        .and_then(|p| p.get("session_id"))
         .and_then(Value::as_str)
-        .map(|s| js::trim(s).to_string())
+        .map(|s| s.trim().to_string())
         .unwrap_or_default();
-    let scope = if is_subagent_request(body) {
+    let scope = if is_subagent_request(req) {
         Scope::Subagent
     } else {
         Scope::Parent
@@ -384,7 +367,7 @@ pub fn session_key_of(
             .and_then(|h| h.get("x-claude-code-agent-id"))
             .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
             .unwrap_or_default();
-        let agent = js::trim(&agent);
+        let agent = agent.trim();
         if !agent.is_empty() {
             return SessionKey {
                 key: format!("{sid}:{agent}"),
@@ -394,7 +377,7 @@ pub fn session_key_of(
         }
         let disc = sha256_hex(&format!(
             "{}\0{first_user_text}",
-            system_text_without_billing_line(body, system_text)
+            system_text_without_billing_line(req, system_text)
         ));
         return SessionKey {
             key: format!("{sid}:{}", &disc[..16]),
@@ -412,26 +395,24 @@ pub fn session_key_of(
 
 /// `isTitleRequest(body, systemText, msgs)`: empty tools, short system carrying the naming
 /// phrase, a single user message.
-pub fn is_title_request(body: &Value, system_text: &str, msgs: &[Value]) -> bool {
-    let tools = js::prop(Some(body), "tools")
-        .and_then(Value::as_array)
-        .map_or(0, Vec::len);
-    if tools != 0 {
+pub fn is_title_request(req: &Request, system_text: &str, msgs: &[Message]) -> bool {
+    if !req.tool_list().is_empty() {
         return false;
     }
-    if system_text.is_empty() || js::utf16_len(system_text) >= TITLE_MAX_SYSTEM_CHARS {
+    if system_text.is_empty() || system_text.chars().count() >= TITLE_MAX_SYSTEM_CHARS {
         return false;
     }
     if !system_text.contains(TITLE_PHRASE) {
         return false;
     }
-    msgs.len() == 1 && role_is(&msgs[0], "user")
+    msgs.len() == 1 && msgs[0].role() == Some("user")
 }
 
 /// `titleEnvelope(msgs)`: `"pinned"` when the user message opens with a `<session>` block.
-pub fn title_envelope(msgs: &[Value]) -> &'static str {
-    let t = text_of(msgs.first().and_then(|m| js::prop(Some(m), "content")));
-    let pinned = js::trim_start(&t)
+pub fn title_envelope(msgs: &[Message]) -> &'static str {
+    let t = text_of(msgs.first().and_then(|m| m.content.as_ref()));
+    let pinned = t
+        .trim_start()
         .strip_prefix("<session>")
         .is_some_and(|r| r.contains("</session>"));
     if pinned {
@@ -441,40 +422,44 @@ pub fn title_envelope(msgs: &[Value]) -> &'static str {
     }
 }
 
-/// `countTokensEstimate(body)`: UTF-16 chars / 4, rounded up.
-pub fn count_tokens_estimate(body: &Value) -> f64 {
-    let mut chars = js::utf16_len(&system_text_of(body));
-    for m in js::prop(Some(body), "messages")
-        .and_then(Value::as_array)
+/// A tool's `input_schema` (or `inputSchema`), when set.
+fn schema_of(t: &Value) -> Option<&Value> {
+    ["input_schema", "inputSchema"]
         .into_iter()
-        .flatten()
-    {
-        for b in blocks_of(js::prop(Some(m), "content")) {
-            let content = js::prop(Some(&b), "content");
-            if let Some(Value::String(t)) = js::prop(Some(&b), "text") {
-                chars += js::utf16_len(t);
+        .find_map(|k| t.get(k).filter(|v| !v.is_null()))
+}
+
+/// `countTokensEstimate(body)`: chars / 4, rounded up, over the system text, every message
+/// block and the tool specs.
+pub fn count_tokens_estimate<'a>(
+    req: &Request,
+    msgs: impl IntoIterator<Item = &'a Message>,
+) -> u64 {
+    let n = |s: &str| s.chars().count();
+    let mut chars = n(&system_text_of(req));
+    for m in msgs {
+        for b in m.blocks() {
+            let v = b.to_value();
+            let content = v.get("content").filter(|c| !c.is_null());
+            if let Some(Value::String(t)) = v.get("text") {
+                chars += n(t);
             } else if let Some(Value::String(c)) = content {
-                chars += js::utf16_len(c);
-            } else if js::truthy(content) || js::truthy(js::prop(Some(&b), "input")) {
-                let v = js::present(content).or_else(|| js::prop(Some(&b), "input"));
-                chars += v.map_or(0, |v| js::utf16_len(&js::stringify(v)));
+                chars += n(c);
+            } else if let Some(x) = content.or_else(|| v.get("input").filter(|i| !i.is_null())) {
+                chars += n(&x.to_string());
             }
         }
     }
-    for t in js::prop(Some(body), "tools")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let schema = js::present(js::prop(Some(t), "input_schema"))
-            .or_else(|| js::present(js::prop(Some(t), "inputSchema")))
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        chars += js::utf16_len(&js::js_string_or_empty(js::prop(Some(t), "name")))
-            + js::utf16_len(&js::js_string_or_empty(js::prop(Some(t), "description")))
-            + js::utf16_len(&js::stringify(&schema));
+    for t in req.tool_list() {
+        let text = |k: &str| match t.get(k) {
+            None | Some(Value::Null) => String::new(),
+            Some(Value::String(s)) => s.clone(),
+            Some(v) => v.to_string(),
+        };
+        let schema = schema_of(t).cloned().unwrap_or_else(|| json!({}));
+        chars += n(&text("name")) + n(&text("description")) + n(&schema.to_string());
     }
-    (chars as f64 / 4.0).ceil()
+    chars.div_ceil(4) as u64
 }
 
 /// `safeEqual(a, b)`: constant-time over equal lengths; empty never matches.
@@ -494,22 +479,21 @@ pub fn presented_key(headers: &HeaderMap) -> Option<String> {
             .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
     };
     if let Some(a) = text("authorization") {
-        let a = a.as_str();
-        let a = js::trim(a);
+        let a = a.trim();
         if !a.is_empty() {
             // /^bearer\s+(.*)$/i
             let tail = a
                 .get(..6)
                 .filter(|h| h.eq_ignore_ascii_case("bearer"))
                 .map(|_| &a[6..])
-                .filter(|r| r.starts_with(js::is_js_space))
-                .map(|r| r.trim_start_matches(js::is_js_space))
-                .filter(|r| !r.contains(js::is_line_terminator));
-            return Some(js::trim(tail.unwrap_or(a)).to_string());
+                .filter(|r| r.starts_with(char::is_whitespace))
+                .map(str::trim_start)
+                .filter(|r| !r.contains(is_line_break));
+            return Some(tail.unwrap_or(a).trim().to_string());
         }
     }
     if let Some(x) = text("x-api-key") {
-        let x = js::trim(&x);
+        let x = x.trim();
         if !x.is_empty() {
             return Some(x.to_string());
         }
@@ -517,30 +501,28 @@ pub fn presented_key(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-/// `toDynamicTools(tools)`: Anthropic tools -> app-server DynamicToolSpec (function variant).
-pub fn to_dynamic_tools(tools: Option<&Value>) -> Vec<Value> {
+/// `toDynamicTools(tools)`: Anthropic tools -> app-server DynamicToolSpec (function variant);
+/// the description is cut at 4000 chars.
+pub fn to_dynamic_tools(tools: &[Value]) -> Vec<Value> {
     tools
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
+        .iter()
         .filter_map(|t| {
-            let name = js::prop(Some(t), "name")
+            let name = t
+                .get("name")
                 .and_then(Value::as_str)
                 .filter(|n| !n.is_empty())?;
-            let d = js::prop(Some(t), "description");
-            let desc = if js::truthy(d) {
-                js::js_string(d.unwrap_or(&Value::Null))
-            } else {
-                name.to_string()
+            let desc = match t.get("description") {
+                Some(Value::String(d)) if !d.is_empty() => d.as_str(),
+                _ => name,
             };
-            let schema = js::present(js::prop(Some(t), "input_schema"))
-                .or_else(|| js::present(js::prop(Some(t), "inputSchema")))
+            let desc: String = desc.chars().take(4000).collect();
+            let schema = schema_of(t)
                 .cloned()
                 .unwrap_or_else(|| json!({ "type": "object", "properties": {} }));
             Some(json!({
                 "type": "function",
                 "name": name,
-                "description": js::utf16_prefix(&desc, 4000),
+                "description": desc,
                 "inputSchema": schema,
             }))
         })

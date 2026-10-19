@@ -5,7 +5,6 @@
 
 use crate::codex::{ToolCall, Usage};
 use crate::errors::SidecarError;
-use crate::js;
 use crate::logging::redact_headers;
 use crate::outbox_events::{outbox_key_of, outbox_turn, TurnRow};
 use crate::persona;
@@ -14,7 +13,7 @@ use crate::protocol::{
 };
 use crate::request::{
     disposition_of, message_digests, msg_diff, normalize_request, request_token, resolve_identity,
-    short_digest, validate, Disposition, Identity, Mode, Normalized, Token,
+    short_digest, Content, ContentBlock, Disposition, Identity, Mode, Normalized, Request, Token,
 };
 use crate::session::{
     self, attach, detach, id_key, joiners_of, remove_joiner, settle_joiner, JoinOutcome, Joiner,
@@ -86,19 +85,18 @@ pub fn admit(
     body: Value,
     headers: HeaderMap,
 ) -> Result<Admit, SidecarError> {
-    validate(&body)?;
-    let norm = normalize_request(body, Some(headers.clone()));
+    let norm = normalize_request(Request::parse(body)?, Some(headers.clone()));
     let mut w = lock(me);
     let w = &mut *w;
     let name = w.personas[pi].name.clone();
-    if is_title_request(&norm.body, &norm.system_text, &norm.msgs) {
+    if is_title_request(&norm.req, &norm.system_text, &norm.msgs) {
         w.log(
             "title-local",
             json!({ "persona": name, "stream": norm.stream, "envelope": title_envelope(&norm.msgs) }),
         );
-        return Ok(Admit::Local(local_text(&name, &norm.body, "Session")));
+        return Ok(Admit::Local(local_text(&name, &norm, "Session")));
     }
-    if has_image_block(&norm.body) {
+    if has_image_block(&norm.req, norm.all_msgs()) {
         return Err(err(
             400,
             "invalid_request_error",
@@ -123,7 +121,7 @@ pub fn admit(
             "fork-local",
             json!({ "persona": name, "key": ident.key, "forkOf": fk, "n": norm.msgs.len(), "seen": seen }),
         );
-        return Ok(Admit::Local(local_text(&name, &norm.body, FORK_TEXT)));
+        return Ok(Admit::Local(local_text(&name, &norm, FORK_TEXT)));
     }
     let init = persona::ensure(w, pi)?;
     Ok(Admit::Run(Box::new(Admitted {
@@ -168,7 +166,7 @@ pub async fn run(
             "http-start",
             json!({ "persona": name, "key": ident.key, "reqId": req_id, "mode": mode.as_str(), "stream": norm.stream, "nMessages": norm.msgs.len() }),
         );
-        let wire = wire_model_id(&name, js::prop(Some(&norm.body), "model"));
+        let wire = wire_model_id(&name, &norm.req.model_text());
         let Some(tx) = reply.take() else {
             return Ok(());
         };
@@ -244,10 +242,10 @@ fn finish_request(me: &Shared, rc: &Rc) {
 
 const FORK_TEXT: &str = "(side query answered locally by codex-sidecar; no model call was made)";
 
-fn local_text(persona: &str, body: &Value, text: &str) -> Reply {
+fn local_text(persona: &str, norm: &Normalized, text: &str) -> Reply {
     let usage = usage_out(None);
-    let model = wire_model_id(persona, js::prop(Some(body), "model"));
-    if js::truthy(js::prop(Some(body), "stream")) {
+    let model = wire_model_id(persona, &norm.req.model_text());
+    if norm.stream {
         let msg = with_keys(&message_skeleton(&model), vec![("usage", usage.clone())]);
         let frames = [
             (
@@ -274,7 +272,7 @@ fn local_text(persona: &str, body: &Value, text: &str) -> Reply {
         ];
         let sse: String = frames
             .iter()
-            .map(|(t, o)| format!("event: {t}\ndata: {}\n\n", js::stringify(o)))
+            .map(|(t, o)| format!("event: {t}\ndata: {o}\n\n"))
             .collect();
         return Reply::sse(sse);
     }
@@ -414,18 +412,13 @@ fn adopt_rekeyed(
     digests: &[String],
 ) -> Option<u64> {
     let mut ids: HashSet<String> = HashSet::new();
-    for m in &norm.msgs {
-        if js::prop(Some(m), "role") != Some(&Value::from("assistant")) {
-            continue;
-        }
-        let Some(Value::Array(c)) = js::prop(Some(m), "content") else {
+    for m in norm.msgs.iter().filter(|m| m.role() == Some("assistant")) {
+        let Some(Content::Blocks(c)) = &m.content else {
             continue;
         };
         for b in c {
-            if js::prop(Some(b), "type") == Some(&Value::from("tool_use")) {
-                if let Some(id) = js::prop(Some(b), "id").filter(|v| js::truthy(Some(v))) {
-                    ids.insert(id_key(id));
-                }
+            if let ContentBlock::ToolUse(t) = b {
+                ids.extend(session::usable_id(t.id.as_ref()));
             }
         }
     }
@@ -499,10 +492,11 @@ fn dispose_session(
         }
         (Some(s), Some(_)) => {
             let sess = &w.sessions[&s];
-            let tr = &norm.tool_results;
+            let tr = norm.tool_results();
             let echoes = || {
                 tr.iter().any(|t| {
-                    js::prop(Some(t), "tool_use_id")
+                    t.tool_use_id
+                        .as_ref()
                         .is_some_and(|id| sess.delivered.contains(&id_key(id)))
                 })
             };
@@ -528,19 +522,6 @@ fn dispose_session(
         s.outbox_key = outbox_key_of(key, ident.weak);
     }
     (sid, mode)
-}
-
-/// `nTools: (body.tools || []).length` — `None` when `.length` is undefined.
-fn n_tools(body: &Value) -> Option<Value> {
-    let t = js::prop(Some(body), "tools");
-    if !js::truthy(t) {
-        return Some(Value::from(0));
-    }
-    match t {
-        Some(Value::Array(a)) => Some(Value::from(a.len())),
-        Some(Value::String(s)) => Some(Value::from(js::utf16_len(s))),
-        _ => None,
-    }
 }
 
 fn effort_val(ident: &Identity) -> Option<Value> {
@@ -582,13 +563,8 @@ fn log_http(
     put("threadId", tid.as_ref().map_or(Value::Null, Value::from));
     put("stop_reason", stop_reason.clone());
     put("nMessages", Value::from(n.msgs.len()));
-    put(
-        "nSystemRole",
-        Value::from(n.all_msgs.len() as i64 - n.msgs.len() as i64),
-    );
-    if let Some(t) = n_tools(&n.body) {
-        put("nTools", t);
-    }
+    put("nSystemRole", Value::from(n.other_msgs.len()));
+    put("nTools", Value::from(n.req.tool_list().len()));
     put("toolCalls", tool_calls.clone());
     put("usage", usage_out(Some(usage)));
     put("usageCodex", usage_raw.unwrap_or(usage).to_value());
@@ -646,7 +622,7 @@ fn overflow_shape(w: &World, rc: &Rc, e: SidecarError) -> SidecarError {
         .and_then(|s| s.context_window)
         .filter(|n| *n > 0)
         .unwrap_or(w.cfg.context_window_tokens) as f64;
-    let estimate = crate::protocol::count_tokens_estimate(&rc.norm.body);
+    let estimate = crate::protocol::count_tokens_estimate(&rc.norm.req, rc.norm.all_msgs()) as f64;
     crate::errors::prompt_too_long(&e, estimate, window)
 }
 
@@ -675,10 +651,8 @@ fn emit_replay(w: &mut World, rc: &Rc, lo: &LastOutcome) {
     let lag = w.sessions[&rc.sid].lag_usage();
     sinks::start(w, rc.sink, &lag);
     for b in &lo.blocks {
-        if js::prop(Some(b), "type") == Some(&Value::from("text")) {
-            let t = js::prop(Some(b), "text")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+        if b.get("type") == Some(&Value::from("text")) {
+            let t = b.get("text").and_then(Value::as_str).unwrap_or("");
             sinks::text_delta(w, rc.sink, t);
         } else {
             sinks::tool_use(w, rc.sink, b);

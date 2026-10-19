@@ -18,6 +18,13 @@
 // never for a model absent from `/running`, and never from a `/v1/models` listing. A
 // non-ready model is still REPORTED (with `slots: null`) so the view can show it.
 //
+// DISABLED by user decision 2026-10-19, for two measured residency effects of polling `/upstream`:
+// (a) `/upstream/<model>/slots` counts as activity for llama-swap's ttl, so a polled model never
+// reaches its ttl (the 27B stayed resident ~10 h past ttl 1800 on 2026-10-19);
+// (b) an `/upstream` hit on an exclusive-group model evicts the other groups' members, so each tick
+// evicted bge-m3/bge-small and the next polls cold-started them (1.25 s each, ~10k spawns over 72 h).
+// The installer refuses without `--i-accept-model-residency`.
+//
 // Bun, ESM, zero dependencies. Importing this module has no side effects; only direct
 // execution (`import.meta.main`) starts the loop.
 

@@ -9,14 +9,19 @@ POLLER_JS="$SCRIPT_DIR/router-slots-poller.mjs"
 TEMPLATE="$SCRIPT_DIR/router-slots-poller.service.in"
 UNIT_NAME="router-slots-poller.service"
 
+ACCEPT_RESIDENCY=0
 INSTALL_HOME="${POLLER_INSTALL_HOME:-$HOME}"
 BASE_URL="${POLLER_BASE_URL:-http://127.0.0.1:4811}"
 OUT_DIR=""
 
 usage() {
   cat <<'USAGE'
-usage: install-router-slots-poller.sh [--home <dir>] [--base-url <url>] [--out-dir <dir>]
+usage: install-router-slots-poller.sh --i-accept-model-residency [--home <dir>] [--base-url <url>] [--out-dir <dir>]
 
+  --i-accept-model-residency
+                    REQUIRED. Without it the installer refuses and installs nothing.
+                    The poller is disabled by user decision 2026-10-19: polling
+                    /upstream/<model>/slots mutates model residency (see the refusal text).
   --home <dir>      Install under <dir> instead of $HOME (also POLLER_INSTALL_HOME).
                     With a non-default home, `systemctl --user daemon-reload` is
                     skipped (test/dry mode); nothing is ever enabled or started.
@@ -45,10 +50,25 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || die "--out-dir requires a directory argument"
       OUT_DIR="$2"; shift 2 ;;
     --out-dir=*)  OUT_DIR="${1#--out-dir=}"; shift ;;
+    --i-accept-model-residency) ACCEPT_RESIDENCY=1; shift ;;
     -h|--help)    usage; exit 0 ;;
     *) usage >&2; die "unknown argument: $1" ;;
   esac
 done
+
+if [ "$ACCEPT_RESIDENCY" -ne 1 ]; then
+  cat >&2 <<'REFUSE'
+install-router-slots-poller.sh: refusing to install (nothing was written).
+
+The slots poller was disabled by user decision 2026-10-19 because polling /upstream/<model>/slots mutates model residency, two measured ways:
+  (a) An /upstream/<model>/slots request counts as activity, so a polled model never reaches its ttl (the 27B stayed resident ~10 h past its ttl of 1800 on 2026-10-19).
+  (b) An /upstream hit on an exclusive-group model evicts the other groups' members, so each tick evicted bge-m3/bge-small and the next polls cold-started them (1.25 s each, ~10k spawns in 72 h).
+
+Re-enabling needs a design that never touches /upstream of resident exclusive-group models (dashboard/AGENTS.md, Router status plane).
+To install anyway, pass --i-accept-model-residency.
+REFUSE
+  exit 1
+fi
 
 [ -n "$INSTALL_HOME" ] || die "install home resolves to an empty path"
 [ -n "$BASE_URL" ]     || die "--base-url resolves to an empty value"

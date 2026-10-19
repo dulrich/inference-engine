@@ -33,6 +33,24 @@
       "gateway_id": null,
       "consumers": []
     },
+    "MiniCPM5-2B-Q6_K-c32k-f16": {
+      "gateway_id": null,
+      "consumers": [
+        "openwebui"
+      ]
+    },
+    "MiniCPM5-2B-Q6_K-c64k-q8_0": {
+      "gateway_id": null,
+      "consumers": [
+        "openwebui"
+      ]
+    },
+    "MiniCPM5-2B-Q6_K-c128k-q4_0": {
+      "gateway_id": null,
+      "consumers": [
+        "openwebui"
+      ]
+    },
     "gemma-4-12B-it-qat-UD-Q4_K_XL": {
       "gateway_id": null,
       "consumers": [

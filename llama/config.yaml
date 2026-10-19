@@ -15,6 +15,9 @@
 # keyed by model key and crosswalks to the gateway id); an ALIAS rename stays forbidden outright,
 # so the `gateway_id` crosswalk can never silently fork. `bun run check:recipes` catches the key
 # rename; this line is why.
+# KV suffix rule (user, 2026-10-19): every NEW alias appends its KV-cache format as a `-kv<type>`
+# suffix (`-kvf16`, `-kvq8`, `-kvq4`, …; f16 included, never implicit). New aliases only —
+# existing aliases are never renamed.
 #
 # ── Consumer registry — who stores which alias, and where ──────────────────────────────────────
 #
@@ -99,6 +102,9 @@
 #                                         here from landing so the append-only contract covers it
 #                                         before anything stores it; this row gains a consumer the
 #                                         day one actually does.
+#   minicpm5-2b-q6k-c32k-kvf16  (none yet)  NO EXTERNAL CONSUMER — added 2026-10-19
+#   minicpm5-2b-q6k-c64k-kvq8               (plans/minicpm5-2b-q6k-serving.md); Open WebUI only,
+#   minicpm5-2b-q6k-c128k-kvq4              which keys rows by model key (row below).
 #   (model keys)      Open WebUI          per-model settings (capability toggles, description)
 #                                         in Open WebUI's own config DB, keyed by `/v1/models`
 #                                         `id` — which llama-swap sets to the model KEY, not the
@@ -527,6 +533,132 @@ models:
       ${llama_server_chat_common}
       -m /models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q8_0.gguf
       -c 131072
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
+  # ── MiniCPM5-2B Q6_K (bartowski/MiniCPM5-2B-GGUF), Open WebUI only, no external consumer yet —
+  # plans/minicpm5-2b-q6k-serving.md; fit evidence docs/test-matrix-results.md "minicpm5-2b-4gb-fit
+  # spike" (Q6_K follow-up). Symmetric KV only. Sampling from the openbmb card (one recommended set,
+  # no separate thinking/non-thinking split). Default 4 slots share one unified KV
+  # (`kv_unified = 'true'`, `n_ctx_seq` = `-c`), so `-c` is not split and no `-np 1` is pinned.
+  MiniCPM5-2B-Q6_K-c32k-f16:
+    name: "MiniCPM5-2B (Q6_K, 32k, f16 KV)"
+    aliases:
+      - minicpm5-2b-q6k-c32k-kvf16
+    metadata:
+      context_length: 32768
+      input_modalities: ["text"]
+      output_modalities: ["text"]
+      tool_calling: true
+      reasoning: "request-controllable"
+      serving:
+        quant: "Q6_K"
+        kv_cache_type: "f16"
+        flash_attention: true
+        mtp: false
+      sampling:
+        temperature: 1.0
+        top_p: 0.95
+        min_p: 0.0
+      max_output:
+        reasoning_budget: -1
+        answer_tokens: 32000
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/openbmb/MiniCPM5-2B", verified: "2026-10-18"}
+        "sampling.top_p": {url: "https://huggingface.co/openbmb/MiniCPM5-2B", verified: "2026-10-18"}
+        "sampling.top_k": {url: "none", reason: "card and generation_config.json state only temperature/top_p/min_p; silent on top_k"}
+        "sampling.min_p": {url: "https://huggingface.co/openbmb/MiniCPM5-2B", verified: "2026-10-18"}
+        "sampling.presence_penalty": {url: "none", reason: "card and generation_config.json are silent on presence_penalty"}
+        "sampling.repetition_penalty": {url: "none", reason: "card gives repetition_penalty=1.05 only as a fallback 'if you encounter repetitive outputs', not as the recommended default"}
+        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this model; 32000 is the Claude Code default max_tokens ceiling alone (CLAUDE_CODE_MAX_OUTPUT_TOKENS, docs/model-capabilities.md answer_tokens rule), not a publisher value"}
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/bartowski/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q6_K.gguf
+      -c 32768
+      -fa on
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
+  MiniCPM5-2B-Q6_K-c64k-q8_0:
+    name: "MiniCPM5-2B (Q6_K, 64k, q8_0 KV)"
+    aliases:
+      - minicpm5-2b-q6k-c64k-kvq8
+    metadata:
+      context_length: 65536
+      input_modalities: ["text"]
+      output_modalities: ["text"]
+      tool_calling: true
+      reasoning: "request-controllable"
+      serving:
+        quant: "Q6_K"
+        kv_cache_type: "q8_0"
+        flash_attention: true
+        mtp: false
+      sampling:
+        temperature: 1.0
+        top_p: 0.95
+        min_p: 0.0
+      max_output:
+        reasoning_budget: -1
+        answer_tokens: 32000
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/openbmb/MiniCPM5-2B", verified: "2026-10-18"}
+        "sampling.top_p": {url: "https://huggingface.co/openbmb/MiniCPM5-2B", verified: "2026-10-18"}
+        "sampling.top_k": {url: "none", reason: "card and generation_config.json state only temperature/top_p/min_p; silent on top_k"}
+        "sampling.min_p": {url: "https://huggingface.co/openbmb/MiniCPM5-2B", verified: "2026-10-18"}
+        "sampling.presence_penalty": {url: "none", reason: "card and generation_config.json are silent on presence_penalty"}
+        "sampling.repetition_penalty": {url: "none", reason: "card gives repetition_penalty=1.05 only as a fallback 'if you encounter repetitive outputs', not as the recommended default"}
+        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this model; 32000 is the Claude Code default max_tokens ceiling alone (CLAUDE_CODE_MAX_OUTPUT_TOKENS, docs/model-capabilities.md answer_tokens rule), not a publisher value"}
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/bartowski/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q6_K.gguf
+      -c 65536
+      -ctk q8_0
+      -ctv q8_0
+      -fa on
+      --jinja
+    ttl: 1800
+    checkEndpoint: /health
+
+  MiniCPM5-2B-Q6_K-c128k-q4_0:
+    name: "MiniCPM5-2B (Q6_K, 128k, q4_0 KV)"
+    aliases:
+      - minicpm5-2b-q6k-c128k-kvq4
+    metadata:
+      context_length: 131072
+      input_modalities: ["text"]
+      output_modalities: ["text"]
+      tool_calling: true
+      reasoning: "request-controllable"
+      serving:
+        quant: "Q6_K"
+        kv_cache_type: "q4_0"
+        flash_attention: true
+        mtp: false
+      sampling:
+        temperature: 1.0
+        top_p: 0.95
+        min_p: 0.0
+      max_output:
+        reasoning_budget: -1
+        answer_tokens: 32000
+      sources:
+        "sampling.temperature": {url: "https://huggingface.co/openbmb/MiniCPM5-2B", verified: "2026-10-18"}
+        "sampling.top_p": {url: "https://huggingface.co/openbmb/MiniCPM5-2B", verified: "2026-10-18"}
+        "sampling.top_k": {url: "none", reason: "card and generation_config.json state only temperature/top_p/min_p; silent on top_k"}
+        "sampling.min_p": {url: "https://huggingface.co/openbmb/MiniCPM5-2B", verified: "2026-10-18"}
+        "sampling.presence_penalty": {url: "none", reason: "card and generation_config.json are silent on presence_penalty"}
+        "sampling.repetition_penalty": {url: "none", reason: "card gives repetition_penalty=1.05 only as a fallback 'if you encounter repetitive outputs', not as the recommended default"}
+        "max_output.answer_tokens": {url: "none", reason: "no approved source states a recommended answer cap for this model; 32000 is the Claude Code default max_tokens ceiling alone (CLAUDE_CODE_MAX_OUTPUT_TOKENS, docs/model-capabilities.md answer_tokens rule), not a publisher value"}
+    cmd: |
+      ${llama_server_chat_common}
+      -m /models/bartowski/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q6_K.gguf
+      -c 131072
+      -ctk q4_0
+      -ctv q4_0
+      -fa on
       --jinja
     ttl: 1800
     checkEndpoint: /health
@@ -1486,6 +1618,19 @@ groups:
       - Ling-3.0-tiny-UD-Q4_K_XL
       - Ling-3.0-tiny-UD-Q6_K_XL
       - Ling-3.0-tiny-Q8_0
+
+  # ── minicpm5-2b — MiniCPM5-2B Q6_K, Open WebUI only (plans/minicpm5-2b-q6k-serving.md). Same
+  # swap/exclusive shape as the other chat groups. Measured VRAM loaded/peak (docs/test-matrix-results.md
+  # "minicpm5-2b-4gb-fit spike", Q6_K follow-up): c32k f16 3229/3270 MiB, c64k q8_0 3346/3391 MiB,
+  # c128k q4_0 3494/3536 MiB — all inside a 4 GB card's envelope.
+  minicpm5-2b:
+    swap: true
+    exclusive: true
+    persistent: false
+    members:
+      - MiniCPM5-2B-Q6_K-c32k-f16
+      - MiniCPM5-2B-Q6_K-c64k-q8_0
+      - MiniCPM5-2B-Q6_K-c128k-q4_0
 
   # ── gemma-qat-bakeoff — Gemma4-12B QAT, testing only (see plans/serving-harness-round-2.md
   # WP-2). Same shape as `chat`/`ling-bakeoff` above: swap:true/exclusive:true so this new,

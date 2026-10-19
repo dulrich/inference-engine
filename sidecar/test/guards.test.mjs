@@ -135,6 +135,8 @@ test("an out-of-band commandExecution item trips the runtime execution boundary"
   const sec = h.log().find(l => l.kind === "security-event");
   assert.equal(sec.itemType, "commandExecution");
   assert.equal(sec.persona, "codex-a");
+  // the fake records the interrupt asynchronously; the 502 can reach us first
+  await waitFor(() => sentTo(h.trace(), "turn/interrupt").length > 0, 3000);
   assert.equal(sentTo(h.trace(), "turn/interrupt").length, 1, "the turn is interrupted");
 
   const health = await req(h, "/healthz", { method: "GET" });

@@ -2,6 +2,7 @@
 // Every sidecar started here binds an ephemeral port on loopback only
 // (SIDECAR_PORT=0, SIDECAR_BIND_EXTRA empty) and keeps all state under a temp dir.
 import fs from "node:fs";
+import { spawn } from "node:child_process";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -24,13 +25,50 @@ process.on("exit", () => {
   }
 });
 
-export async function withSidecar({ scenario = {}, perPersona = null, env = {}, personas = PERSONAS } = {}) {
+const SIDECAR_DIR = path.dirname(HERE);
+
+// SIDECAR_TARGET (a whitespace-split command line, relative paths against sidecar/) runs the
+// suite out-of-process against that binary; unset/empty keeps the in-process startSidecar.
+// The handle keeps the in-process contract: `port` and `close()`.
+export function spawnTarget(cmdline, env) {
+  const [cmd, ...args] = cmdline.trim().split(/\s+/);
+  const child = spawn(cmd, args, { cwd: SIDECAR_DIR, env: { PATH: process.env.PATH, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+  const exited = new Promise(r => child.once("exit", r));
+  let out = "", err = "";
+  child.stderr.on("data", c => { err += c; });
+  return new Promise((resolve, reject) => {
+    const fail = why => { child.kill("SIGKILL"); reject(new Error(`target ${cmdline} ${why}\n${err}`)); };
+    const timer = setTimeout(() => fail("did not report a port within 10 s"), 10000);
+    child.once("error", e => { clearTimeout(timer); reject(e); });
+    child.once("exit", code => { clearTimeout(timer); reject(new Error(`target ${cmdline} exited ${code}\n${err}`)); });
+    child.stdout.on("data", c => {
+      out += c;
+      const m = /listening on [^\s:]+:(\d+)/.exec(out);
+      if (!m) return;
+      clearTimeout(timer);
+      child.stdout.resume();
+      resolve({
+        port: Number(m[1]),
+        pid: child.pid,
+        async close() {
+          if (child.exitCode !== null || child.signalCode !== null) return;
+          child.kill("SIGTERM");
+          const t = setTimeout(() => child.kill("SIGKILL"), 5000);
+          await exited;
+          clearTimeout(t);
+        },
+      });
+    });
+  });
+}
+
+export async function withSidecar({ scenario = {}, perPersona = null, env = {}, personas = PERSONAS, target = process.env.SIDECAR_TARGET } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-sidecar-test-"));
   tempDirs.add(dir);
   for (const p of personas) {
     fs.writeFileSync(path.join(dir, `${p}.json`), JSON.stringify(perPersona?.[p] ?? scenario));
   }
-  const handle = await startSidecar({
+  const sidecarEnv = {
     HOME: dir,                                   // nothing may touch the real home
     SIDECAR_KEY: "test-key",
     SIDECAR_PORT: "0",
@@ -44,7 +82,8 @@ export async function withSidecar({ scenario = {}, perPersona = null, env = {}, 
     SIDECAR_TURN_TIMEOUT_MS: "8000",
     SIDECAR_BACKOFF_MS: "150",
     ...env,
-  });
+  };
+  const handle = target?.trim() ? await spawnTarget(target, sidecarEnv) : await startSidecar(sidecarEnv);
   return {
     port: handle.port,
     key: "test-key",
@@ -59,7 +98,7 @@ export async function withSidecar({ scenario = {}, perPersona = null, env = {}, 
   };
 }
 
-function readJsonl(file) {
+export function readJsonl(file) {
   let text = "";
   try { text = fs.readFileSync(file, "utf8"); } catch { return []; }
   return text.split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);

@@ -8,7 +8,7 @@ Description=codex app-server sidecar (Anthropic Messages front end for codex per
 
 [Service]
 Type=simple
-ExecStart=@NODE@ @SIDECAR@
+ExecStart=@EXEC@
 Environment=PATH=@PATH@
 EnvironmentFile=@ENV_FILE@
 StandardInput=null

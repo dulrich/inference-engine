@@ -1,0 +1,57 @@
+//! Digest parity with the Node oracle. Expected values were measured once by importing
+//! `sidecar/request.mjs` / `protocol.mjs` under Node on exactly these inputs (2026-10-18):
+//! non-ASCII + astral text, `cache_control` decoration, a trailing post-`tool_result` text
+//! block, integer-like keys and a 2e21 float.
+
+use codex_sidecar::protocol::{count_tokens_estimate, session_key_of};
+use codex_sidecar::request::{message_digests, request_digest, DigestFields};
+use serde_json::{json, Value};
+
+fn msgs() -> Vec<Value> {
+    vec![
+        json!({"role": "user", "content": [{"type": "text", "text": "héllo 😀", "cache_control": {"type": "ephemeral"}}]}),
+        json!({"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Bash",
+               "input": {"b": 1.5, "a": [1, 2e21], "10": "x", "2": null}}]}),
+        json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}, {"type": "text", "text": "reminder"}]}),
+    ]
+}
+
+#[test]
+fn request_and_message_digests_match_node() {
+    let m = msgs();
+    let model = json!("gpt-5.6-sol");
+    let tools = json!([]);
+    let d = request_digest(&DigestFields {
+        model: Some(&model),
+        effort: Some(json!("medium")),
+        system: Some("sys"),
+        tools: Some(&tools),
+        messages: Some(&m),
+    });
+    assert_eq!(
+        d,
+        "986539c4bfc897a694536ca0057fed083d154baa016f5050093abea3857963b2"
+    );
+    assert_eq!(
+        message_digests(&m),
+        [
+            "eca83eb978e309d8ab59e59e9ee91f6db62c68702df59bfd2069d766a3e525a8",
+            "d0f1987977d3b6ba5976faa5604324a30a7e78e90d683058c0f029bd12ab9ea3",
+            "7dd545fe8dd33bc61c60f2269c762615659d0b65ddb7ab0068af0a33da8c2fe1",
+        ]
+    );
+}
+
+#[test]
+fn subagent_session_key_and_token_estimate_match_node() {
+    let billing = "x-anthropic-billing-header: cc_version=1; cc_is_subagent=true;";
+    let body = json!({
+        "system": [{"type": "text", "text": billing}, {"type": "text", "text": "S"}],
+        "metadata": {"user_id": {"session_id": "sid"}},
+        "messages": msgs(),
+    });
+    let k = session_key_of(&body, &format!("{billing}\n\nS"), "héllo 😀", None);
+    assert_eq!(k.key, "sid:9868bc96decaf055");
+    assert_eq!(k.scope, "subagent");
+    assert_eq!(count_tokens_estimate(&body), 31.0);
+}

@@ -43,8 +43,10 @@
 #   5. Within-leg token gate — request 1's `system`+`tools` count_tokens is at or below the
 #      WP-5-measured on-threshold for THIS leg (plus 2% of fixture drift: the throwaway profile's
 #      own paths and date move the system prompt by a few tokens), and above that same threshold
-#      under --control. The margin between the two profiles is ~39%, so 2% cannot mask an eager
-#      expansion. Cross-leg comparison is invalid (different catalogues, different tokenizers) and
+#      under --control. Thresholds were measured with the pinned tool set (PINNED_TOOLS) on
+#      2026-10-19: local 3758 on / 6966 control, codex 3419 on / 6380 control. The margin is
+#      ~46%, so 2% cannot mask an eager expansion. The passthrough threshold predates the pin
+#      and is unmeasured under it (it needs one metered Claude turn). Cross-leg comparison is invalid (different catalogues, different tokenizers) and
 #      is never attempted.
 #
 # How it observes request 1: Claude Code is pointed at a throwaway loopback capture proxy that
@@ -320,6 +322,11 @@ start_proxy() { # <out-dir> -> echoes the proxy base url
 }
 
 # ── per-leg run ──────────────────────────────────────────────────────────────────────────────
+# The built-in tool set every leg runs with, pinned so check 5's thresholds measure the
+# defer_loading mechanism, not Claude Code's catalogue growth between releases (an unpinned
+# catalogue drifted request 1 to 8206 > 8032 on 2026-10-19). Includes the probe tool and ToolSearch.
+PINNED_TOOLS="Bash,Read,Edit,Write,ToolSearch,NotebookEdit,CronCreate,CronDelete,CronList,EnterWorktree,ExitWorktree,TaskStop"
+
 run_leg() { # <leg> <model> <on-threshold>
 	leg="$1"
 	model="$2"
@@ -339,7 +346,7 @@ run_leg() { # <leg> <model> <on-threshold>
 	answer_file="$out/.answer.json"
 	(
 		cd "$fix/work" || exit 2
-		HOME="$fix" timeout 420 claude -p "$PROMPT" --output-format json >"$answer_file" 2>"$out/.claude.err"
+		HOME="$fix" timeout 420 claude -p "$PROMPT" --tools "$PINNED_TOOLS" --output-format json >"$answer_file" 2>"$out/.claude.err"
 	)
 	rc=$?
 	answer=$(jq -r '.result // empty' "$answer_file" 2>/dev/null)
@@ -444,7 +451,7 @@ if [ "$WANT_LOCAL" -eq 1 ]; then
 	if [ -z "$m" ]; then
 		bad "local: /v1/models lists no claude-local/* id"
 	else
-		run_leg "local" "$m" 8238
+		run_leg "local" "$m" 3760
 	fi
 fi
 
@@ -454,7 +461,7 @@ if [ "$WANT_CODEX" -eq 1 ]; then
 	if [ -z "$m" ]; then
 		bad "codex: /v1/models lists no codex-b/* id"
 	else
-		run_leg "codex" "$m" 7875
+		run_leg "codex" "$m" 3420
 	fi
 else
 	note "--codex not passed: SKIPPING the metered codex sidecar leg (one Codex-subscription turn)."

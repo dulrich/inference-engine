@@ -1,7 +1,8 @@
 //! `sinks.mjs` / `http.mjs` pure pieces: the `wireModelId` assertions of `unit.test.mjs`
-//! test 5, the message envelope, and Node's `req.headers` shaping.
+//! test 5, the message envelope, header redaction and the dot-segment 404 rule.
 
-use codex_sidecar::http::node_headers;
+use codex_sidecar::http::has_dot_segment;
+use codex_sidecar::logging::redact_headers;
 use codex_sidecar::sinks::{message_skeleton, wire_model_id};
 use serde_json::{json, Value};
 
@@ -50,16 +51,31 @@ fn message_skeleton_shape() {
 }
 
 #[test]
-fn node_headers_join_duplicates_like_node() {
+fn redacted_headers_come_from_the_header_map() {
     let mut h = axum::http::HeaderMap::new();
     h.append("accept", "a".parse().unwrap());
-    h.append("host", "h1".parse().unwrap());
+    h.append("authorization", "Bearer k".parse().unwrap());
     h.append("accept", "b".parse().unwrap());
-    h.append("host", "h2".parse().unwrap());
     h.append("cookie", "c=1".parse().unwrap());
-    h.append("cookie", "d=2".parse().unwrap());
-    let m = node_headers(&h);
+    let m = redact_headers(&h);
+    let keys: Vec<&String> = m.keys().collect();
+    assert_eq!(keys, ["accept", "authorization", "cookie"]);
     assert_eq!(m["accept"], json!("a, b"));
-    assert_eq!(m["host"], json!("h1"));
-    assert_eq!(m["cookie"], json!("c=1; d=2"));
+    assert_eq!(m["authorization"], json!("<redacted>"));
+    assert_eq!(m["cookie"], json!("<redacted>"));
+}
+
+#[test]
+fn dot_segment_paths_are_not_routed() {
+    for p in [
+        "/codex-a/../healthz",
+        "/codex-a/./v1/messages",
+        "/%2E%2e/x",
+        "/a/.",
+    ] {
+        assert!(has_dot_segment(p), "{p}");
+    }
+    for p in ["/codex-a/v1/messages", "/healthz", "/a/..b/.c"] {
+        assert!(!has_dot_segment(p), "{p}");
+    }
 }

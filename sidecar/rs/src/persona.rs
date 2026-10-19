@@ -11,8 +11,11 @@ use crate::sidecar::{err, with_world, World};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::process::Stdio;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::sync::{Mutex, Weak};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::AbortHandle;
+use tokio::time::Duration;
 
 pub type RpcResult = Result<Value, SidecarError>;
 pub type InitResult = Result<(), SidecarError>;
@@ -41,34 +44,32 @@ pub struct Persona {
     pub degraded: bool,
     degraded_reason: Option<Value>,
     backoff_ms: u64,
-    stable_gen: u64,
+    /// Resets the backoff once a child has stayed up for 60 s; aborted on exit/stop.
+    stable_timer: Option<AbortHandle>,
     pub hook_events: u64,
     pub mcp_events: u64,
     pub rate_limited: bool,
     stopped: bool,
 }
 
-extern "C" {
-    fn kill(pid: i32, sig: i32) -> i32;
-}
-
+/// The name of a signal number, keyed by libc's constants; else `SIG<n>`.
 fn signal_name(sig: i32) -> String {
     let n = match sig {
-        1 => "SIGHUP",
-        2 => "SIGINT",
-        3 => "SIGQUIT",
-        4 => "SIGILL",
-        5 => "SIGTRAP",
-        6 => "SIGABRT",
-        7 => "SIGBUS",
-        8 => "SIGFPE",
-        9 => "SIGKILL",
-        10 => "SIGUSR1",
-        11 => "SIGSEGV",
-        12 => "SIGUSR2",
-        13 => "SIGPIPE",
-        14 => "SIGALRM",
-        15 => "SIGTERM",
+        libc::SIGHUP => "SIGHUP",
+        libc::SIGINT => "SIGINT",
+        libc::SIGQUIT => "SIGQUIT",
+        libc::SIGILL => "SIGILL",
+        libc::SIGTRAP => "SIGTRAP",
+        libc::SIGABRT => "SIGABRT",
+        libc::SIGBUS => "SIGBUS",
+        libc::SIGFPE => "SIGFPE",
+        libc::SIGKILL => "SIGKILL",
+        libc::SIGUSR1 => "SIGUSR1",
+        libc::SIGSEGV => "SIGSEGV",
+        libc::SIGUSR2 => "SIGUSR2",
+        libc::SIGPIPE => "SIGPIPE",
+        libc::SIGALRM => "SIGALRM",
+        libc::SIGTERM => "SIGTERM",
         _ => return format!("SIG{sig}"),
     };
     n.to_string()
@@ -91,7 +92,7 @@ impl Persona {
             degraded: false,
             degraded_reason: None,
             backoff_ms,
-            stable_gen: 0,
+            stable_timer: None,
             hook_events: 0,
             mcp_events: 0,
             rate_limited: false,
@@ -136,9 +137,9 @@ impl Persona {
 
     fn kill_child(&self) {
         if let Some(pid) = self.pid {
-            // SAFETY: libc kill(2) on the pid of a child this process spawned.
+            // SAFETY: kill(2) on the pid of a child this process spawned.
             unsafe {
-                kill(pid, 15);
+                libc::kill(pid, libc::SIGTERM);
             }
         }
     }
@@ -225,9 +226,7 @@ fn set_init(w: &mut World, pi: usize, delay_ms: Option<u64>) {
         }) else {
             return;
         };
-        let r = rx
-            .await
-            .unwrap_or_else(|_| Err(err(502, "api_error", "rpc dropped")));
+        let r = rx.wait().await;
         with_world(&me, |w| match r {
             Ok(r) => {
                 send(
@@ -316,11 +315,7 @@ fn spawn_child(w: &mut World, pi: usize) {
                 tokio::spawn(async move {
                     while let Some(line) = rx.recv().await {
                         if let Err(e) = stdin.write_all(line.as_bytes()).await {
-                            let msg = if e.kind() == std::io::ErrorKind::BrokenPipe {
-                                "write EPIPE".to_string()
-                            } else {
-                                e.to_string()
-                            };
+                            let msg = format!("write: {e}");
                             with_world(&me2, |w| {
                                 log(w, "child-stdin-error", json!({ "persona": nm, "err": msg }))
                             });
@@ -349,30 +344,23 @@ fn spawn_child(w: &mut World, pi: usize) {
             let stdout = child.stdout.take();
             let me2 = me.clone();
             tokio::spawn(async move {
-                if let Some(mut out) = stdout {
-                    let mut buf: Vec<u8> = Vec::new();
-                    let mut chunk = vec![0u8; 65536];
-                    while let Ok(n) = out.read(&mut chunk).await {
-                        if n == 0 {
+                if let Some(out) = stdout {
+                    let mut out = BufReader::new(out);
+                    let mut line: Vec<u8> = Vec::new();
+                    // one frame per newline; a trailing partial line at EOF is dropped
+                    while let Ok(n) = out.read_until(b'\n', &mut line).await {
+                        if n == 0 || line.last() != Some(&b'\n') {
                             break;
                         }
-                        buf.extend_from_slice(&chunk[..n]);
-                        let mut lines = Vec::new();
-                        while let Some(i) = buf.iter().position(|b| *b == b'\n') {
-                            let line: Vec<u8> = buf.drain(..=i).collect();
-                            lines.push(String::from_utf8_lossy(&line[..i]).to_string());
-                        }
-                        if !lines.is_empty() {
-                            let done = with_world(&me2, |w| {
-                                for l in lines {
-                                    if w.personas[pi].child_gen == gen {
-                                        on_line(w, pi, &l);
-                                    }
-                                }
-                            });
-                            if done.is_none() {
-                                return;
+                        let l = String::from_utf8_lossy(&line[..line.len() - 1]).into_owned();
+                        line.clear();
+                        let done = with_world(&me2, |w| {
+                            if w.personas[pi].child_gen == gen {
+                                on_line(w, pi, &l);
                             }
+                        });
+                        if done.is_none() {
+                            return;
                         }
                     }
                 }
@@ -391,13 +379,7 @@ fn spawn_child(w: &mut World, pi: usize) {
             });
         }
         Err(e) => {
-            let msg = if e.kind() == std::io::ErrorKind::NotFound {
-                format!("spawn {file} ENOENT")
-            } else if e.kind() == std::io::ErrorKind::PermissionDenied {
-                format!("spawn {file} EACCES")
-            } else {
-                format!("spawn {file} {e}")
-            };
+            let msg = format!("spawn {file}: {e}");
             let me2 = me.clone();
             tokio::spawn(async move {
                 with_world(&me2, |w| {
@@ -411,17 +393,18 @@ fn spawn_child(w: &mut World, pi: usize) {
         "child-started",
         json!({ "persona": name, "cmd": file, "args": args }),
     );
-    let p = &mut w.personas[pi];
-    p.stable_gen += 1;
-    let sg = p.stable_gen;
-    tokio::spawn(async move {
+    let stable = tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(60000)).await;
         with_world(&me, |w| {
-            if w.personas[pi].stable_gen == sg {
-                w.personas[pi].backoff_ms = w.cfg.backoff_ms;
-            }
+            let b = w.cfg.backoff_ms;
+            let p = &mut w.personas[pi];
+            p.stable_timer = None;
+            p.backoff_ms = b;
         });
     });
+    if let Some(old) = w.personas[pi].stable_timer.replace(stable.abort_handle()) {
+        old.abort();
+    }
 }
 
 fn on_exit(w: &mut World, pi: usize, gen: u64, code: Value, signal: Value, e: Value) {
@@ -430,7 +413,9 @@ fn on_exit(w: &mut World, pi: usize, gen: u64, code: Value, signal: Value, e: Va
         return;
     }
     p.child_alive = false;
-    p.stable_gen += 1;
+    if let Some(t) = p.stable_timer.take() {
+        t.abort();
+    }
     let name = p.name.clone();
     let msg = format!(
         "the codex app-server for {name} exited (code={} signal={})",
@@ -626,33 +611,53 @@ pub fn send(w: &mut World, pi: usize, obj: &Value) -> bool {
     }
 }
 
-/// `rpc(method, params, timeoutMs)`.
-pub fn rpc(
-    w: &mut World,
+/// An issued JSON-RPC call; `wait` is its answer under the call's timeout.
+pub struct Call {
+    rx: oneshot::Receiver<RpcResult>,
+    me: Weak<Mutex<World>>,
     pi: usize,
-    method: &str,
-    params: Value,
+    id: u64,
+    method: String,
     timeout_ms: u64,
-) -> oneshot::Receiver<RpcResult> {
+}
+
+impl Call {
+    pub async fn wait(mut self) -> RpcResult {
+        let dropped = || Err(err(502, "api_error", "rpc dropped"));
+        if self.timeout_ms == 0 {
+            return self.rx.await.unwrap_or_else(|_| dropped());
+        }
+        let t = Duration::from_millis(self.timeout_ms);
+        match tokio::time::timeout(t, &mut self.rx).await {
+            Ok(r) => r.unwrap_or_else(|_| dropped()),
+            Err(_) => {
+                let (pi, id) = (self.pi, self.id);
+                with_world(&self.me, |w| {
+                    w.personas[pi].pending.remove(&id);
+                    // an answer that landed in the same instant wins
+                    self.rx.try_recv().ok()
+                })
+                .flatten()
+                .unwrap_or_else(|| {
+                    Err(err(
+                        502,
+                        "api_error",
+                        format!(
+                            "timed out waiting for the codex app-server ({})",
+                            self.method
+                        ),
+                    ))
+                })
+            }
+        }
+    }
+}
+
+/// `rpc(method, params, timeoutMs)`; `timeout_ms == 0` waits without a limit.
+pub fn rpc(w: &mut World, pi: usize, method: &str, params: Value, timeout_ms: u64) -> Call {
     let (tx, rx) = oneshot::channel();
     let id = w.personas[pi].next_rpc_id();
     w.personas[pi].pending.insert(id, tx);
-    if timeout_ms > 0 {
-        let me = w.shared();
-        let m = method.to_string();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)).await;
-            with_world(&me, |w| {
-                if let Some(tx) = w.personas[pi].pending.remove(&id) {
-                    let _ = tx.send(Err(err(
-                        502,
-                        "api_error",
-                        format!("timed out waiting for the codex app-server ({m})"),
-                    )));
-                }
-            });
-        });
-    }
     let frame = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
     if !send(w, pi, &frame) {
         if let Some(tx) = w.personas[pi].pending.remove(&id) {
@@ -664,7 +669,34 @@ pub fn rpc(
             )));
         }
     }
-    rx
+    Call {
+        rx,
+        me: w.shared(),
+        pi,
+        id,
+        method: method.to_string(),
+        timeout_ms,
+    }
+}
+
+/// `turn/interrupt` for a session's open turn; `Some(threadId)` when one was sent.
+fn send_interrupt(w: &mut World, pi: usize, sid: u64) -> Option<Value> {
+    let (t, u) = w
+        .sessions
+        .get(&sid)
+        .and_then(|s| match (&s.thread_id, &s.turn_id) {
+            (Some(t), Some(u)) if js::truthy(Some(t)) && js::truthy(Some(u)) => {
+                Some((t.clone(), u.clone()))
+            }
+            _ => None,
+        })?;
+    let id = w.personas[pi].next_rpc_id();
+    send(
+        w,
+        pi,
+        &json!({ "jsonrpc": "2.0", "id": id, "method": "turn/interrupt", "params": { "threadId": t, "turnId": u } }),
+    );
+    Some(t)
 }
 
 /// The security boundary: interrupt, fail closed, degrade, restart.
@@ -690,23 +722,7 @@ pub fn trip_boundary(w: &mut World, pi: usize, what: Value, sid: Option<u64>) {
     );
     let bus: Vec<u64> = p.bus.iter().map(|(_, s)| *s).collect();
     for sid in bus {
-        let ids = w
-            .sessions
-            .get(&sid)
-            .and_then(|s| match (&s.thread_id, &s.turn_id) {
-                (Some(t), Some(u)) if js::truthy(Some(t)) && js::truthy(Some(u)) => {
-                    Some((t.clone(), u.clone()))
-                }
-                _ => None,
-            });
-        if let Some((t, u)) = ids {
-            let id = w.personas[pi].next_rpc_id();
-            send(
-                w,
-                pi,
-                &json!({ "jsonrpc": "2.0", "id": id, "method": "turn/interrupt", "params": { "threadId": t, "turnId": u } }),
-            );
-        }
+        send_interrupt(w, pi, sid);
         session::settle(w, sid, Outcome::Error(e.clone()));
     }
     let me = w.shared();
@@ -717,22 +733,7 @@ pub fn trip_boundary(w: &mut World, pi: usize, what: Value, sid: Option<u64>) {
 }
 
 pub fn interrupt(w: &mut World, pi: usize, sid: u64, reason: &str) {
-    let ids = w
-        .sessions
-        .get(&sid)
-        .and_then(|s| match (&s.thread_id, &s.turn_id) {
-            (Some(t), Some(u)) if js::truthy(Some(t)) && js::truthy(Some(u)) => {
-                Some((t.clone(), u.clone()))
-            }
-            _ => None,
-        });
-    if let Some((t, u)) = ids {
-        let id = w.personas[pi].next_rpc_id();
-        send(
-            w,
-            pi,
-            &json!({ "jsonrpc": "2.0", "id": id, "method": "turn/interrupt", "params": { "threadId": t, "turnId": u } }),
-        );
+    if let Some(t) = send_interrupt(w, pi, sid) {
         let name = w.personas[pi].name.clone();
         log(
             w,
@@ -752,7 +753,9 @@ pub fn drop_session(w: &mut World, pi: usize, sid: u64) {
 pub fn stop(w: &mut World, pi: usize) {
     let p = &mut w.personas[pi];
     p.stopped = true;
-    p.stable_gen += 1;
+    if let Some(t) = p.stable_timer.take() {
+        t.abort();
+    }
     let ss: Vec<u64> = p.sessions.iter().map(|(_, s)| *s).collect();
     for sid in ss {
         session::close(w, sid, "sidecar shutting down");

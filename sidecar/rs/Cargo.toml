@@ -22,6 +22,10 @@ axum = { version = "0.8", default-features = false, features = ["http1", "tokio"
 # SSE response body: a poll_fn stream over the sink's channel (the gateway already pulls it).
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 bytes = "1"
+# kill(2)/SIGTERM, signal names, getrandom(2) (already in the graph via tokio).
+libc = "0.2"
+# The body-limit error type behind axum::body::to_bytes (already in the graph via axum).
+http-body-util = "0.1"
 
 [profile.release]
 opt-level = 3

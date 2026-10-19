@@ -261,9 +261,9 @@ fn upstream_errors_rate_limits_and_instruction_sources_map_as_schema_says() {
     );
     assert_eq!(verify_features(Some(&declared), None), None);
 
-    let h = |k: &str, v: &str| {
-        let mut m = Map::new();
-        m.insert(k.into(), json!(v));
+    let h = |k: &'static str, v: &'static str| {
+        let mut m = axum::http::HeaderMap::new();
+        m.insert(k, v.parse().unwrap());
         m
     };
     assert_eq!(
@@ -274,7 +274,7 @@ fn upstream_errors_rate_limits_and_instruction_sources_map_as_schema_says() {
         presented_key(&h("x-api-key", "sekret")).as_deref(),
         Some("sekret")
     );
-    assert_eq!(presented_key(&Map::new()), None);
+    assert_eq!(presented_key(&axum::http::HeaderMap::new()), None);
 
     assert_eq!(
         to_dynamic_tools(Some(

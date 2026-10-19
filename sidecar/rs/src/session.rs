@@ -9,11 +9,13 @@ use crate::outbox_events::OutboxKey;
 use crate::persona;
 use crate::protocol::zero_usage;
 use crate::request::Token;
-use crate::sidecar::{err, with_world, World};
+use crate::sidecar::{err, lock, with_world, Shared, World};
 use crate::sinks;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use tokio::sync::oneshot;
+use tokio::task::AbortHandle;
+use tokio::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub enum Outcome {
@@ -74,8 +76,10 @@ pub struct Session {
     pub delivered: HashSet<String>,
     pub turn_open: bool,
     pub batch: Vec<Value>,
-    pub batch_gen: u64,
-    pub batch_armed: bool,
+    /// The batch debounce: when the open batch settles (moved by each new call), and the
+    /// one task that waits for it.
+    pub batch_due: Option<Instant>,
+    pub batch_timer: Option<AbortHandle>,
     pub msg_count: usize,
     pub hist: Vec<String>,
     pub delta_items: Vec<Value>,
@@ -92,7 +96,6 @@ pub struct Session {
     pub last_outcome: Option<LastOutcome>,
     pub pending_outcomes: Vec<Outcome>,
     pub resolve: Option<oneshot::Sender<Outcome>>,
-    pub timeout_gen: u64,
     pub closed: bool,
 }
 
@@ -105,7 +108,7 @@ pub fn same_value(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// The `delivered` key of an id (strings as-is; matches `request::disposition_of`).
+/// The `delivered` key of an id (strings as-is; shared with `request::disposition_of`).
 pub fn id_key(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -126,8 +129,8 @@ impl Session {
             delivered: HashSet::new(),
             turn_open: false,
             batch: Vec::new(),
-            batch_gen: 0,
-            batch_armed: false,
+            batch_due: None,
+            batch_timer: None,
             msg_count: 0,
             hist: Vec::new(),
             delta_items: Vec::new(),
@@ -143,7 +146,6 @@ impl Session {
             last_outcome: None,
             pending_outcomes: Vec::new(),
             resolve: None,
-            timeout_gen: 0,
             closed: false,
         }
     }
@@ -250,7 +252,6 @@ pub fn emit_text(w: &mut World, sid: u64, t: &str) {
 pub fn resolve_outcome(w: &mut World, sid: u64, o: Outcome) {
     if let Some(s) = w.sessions.get_mut(&sid) {
         if let Some(tx) = s.resolve.take() {
-            s.timeout_gen += 1;
             let _ = tx.send(o);
         }
     }
@@ -260,40 +261,52 @@ pub fn preempt(w: &mut World, sid: u64, e: SidecarError) {
     resolve_outcome(w, sid, Outcome::Error(e));
 }
 
-/// `waitOutcome(timeoutMs)`.
-pub fn wait_outcome(w: &mut World, sid: u64, timeout_ms: u64) -> oneshot::Receiver<Outcome> {
+fn turn_timed_out() -> Outcome {
+    Outcome::Error(err(
+        502,
+        "api_error",
+        "timed out waiting for the codex app-server",
+    ))
+}
+
+/// `waitOutcome(timeoutMs)`, first half: park the request; `await_outcome` is the wait.
+pub fn wait_outcome(w: &mut World, sid: u64) -> oneshot::Receiver<Outcome> {
     let (tx, rx) = oneshot::channel();
-    let me = w.shared();
     let Some(s) = w.sessions.get_mut(&sid) else {
-        let _ = tx.send(Outcome::Error(err(
-            502,
-            "api_error",
-            "timed out waiting for the codex app-server",
-        )));
+        let _ = tx.send(turn_timed_out());
         return rx;
     };
     s.resolve = Some(tx);
-    s.timeout_gen += 1;
-    let gen = s.timeout_gen;
-    let ms = timeout_ms.max(1);
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-        with_world(&me, |w| {
-            if w.sessions.get(&sid).is_some_and(|s| s.timeout_gen == gen) {
-                resolve_outcome(
-                    w,
-                    sid,
-                    Outcome::Error(err(
-                        502,
-                        "api_error",
-                        "timed out waiting for the codex app-server",
-                    )),
-                );
-            }
-        });
-    });
     drain(w, sid);
     rx
+}
+
+/// `waitOutcome(timeoutMs)`, second half: the outcome, or the turn timeout. On timeout the
+/// parked resolver is withdrawn, unless an outcome landed in the same instant.
+pub async fn await_outcome(
+    me: &Shared,
+    sid: u64,
+    mut rx: oneshot::Receiver<Outcome>,
+    timeout: Duration,
+) -> Outcome {
+    match tokio::time::timeout(timeout.max(Duration::from_millis(1)), &mut rx).await {
+        Ok(r) => r.unwrap_or_else(|_| turn_timed_out()),
+        Err(_) => {
+            let mut w = lock(me);
+            match rx.try_recv() {
+                Ok(o) => return o,
+                // Still open: the parked resolver is ours, withdraw it. Closed means a newer
+                // request already replaced it — leave that one alone.
+                Err(oneshot::error::TryRecvError::Empty) => {
+                    if let Some(s) = w.sessions.get_mut(&sid) {
+                        s.resolve = None;
+                    }
+                }
+                Err(oneshot::error::TryRecvError::Closed) => {}
+            }
+            turn_timed_out()
+        }
+    }
 }
 
 /// `settle(outcome)`: outcomes queue in order; an error replaces whatever is queued.
@@ -320,33 +333,49 @@ pub fn drain(w: &mut World, sid: u64) {
     resolve_outcome(w, sid, o);
 }
 
+/// Arm (or push back) the batch debounce. One task per open batch: it sleeps to the due
+/// time, re-reads it (a new call moves it), and settles once it is reached.
 fn arm_batch(w: &mut World, sid: u64) {
     let me = w.shared();
-    let ms = w.cfg.batch_ms;
+    let after = Duration::from_millis(w.cfg.batch_ms.max(1));
     let Some(s) = w.sessions.get_mut(&sid) else {
         return;
     };
-    s.batch_gen += 1;
-    s.batch_armed = true;
-    let gen = s.batch_gen;
-    let ms = ms.max(1);
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-        with_world(&me, |w| {
-            let Some(s) = w.sessions.get_mut(&sid) else {
+    s.batch_due = Some(Instant::now() + after);
+    if s.batch_timer.is_some() {
+        return;
+    }
+    let task = tokio::spawn(async move {
+        loop {
+            let due = with_world(&me, |w| w.sessions.get(&sid).and_then(|s| s.batch_due));
+            let Some(Some(due)) = due else {
                 return;
             };
-            if s.batch_gen != gen || !s.batch_armed {
+            tokio::time::sleep_until(due).await;
+            let fired = with_world(&me, |w| {
+                let Some(s) = w.sessions.get_mut(&sid) else {
+                    return true;
+                };
+                match s.batch_due {
+                    Some(d) if d > Instant::now() => return false,
+                    None => return true,
+                    Some(_) => {}
+                }
+                s.batch_due = None;
+                s.batch_timer = None;
+                if s.batch.is_empty() {
+                    return true;
+                }
+                let batch = std::mem::take(&mut s.batch);
+                settle(w, sid, Outcome::ToolUse(batch));
+                true
+            });
+            if fired != Some(false) {
                 return;
             }
-            s.batch_armed = false;
-            if s.batch.is_empty() {
-                return;
-            }
-            let batch = std::mem::take(&mut s.batch);
-            settle(w, sid, Outcome::ToolUse(batch));
-        });
+        }
     });
+    s.batch_timer = Some(task.abort_handle());
 }
 
 fn params_of(m: &Value) -> Value {
@@ -539,7 +568,7 @@ pub fn on_frame(w: &mut World, sid: u64, ev: Frame) {
                 );
                 return;
             }
-            if s.batch_armed {
+            if s.batch_due.is_some() {
                 return;
             }
             settle(w, sid, Outcome::EndTurn);
@@ -593,8 +622,10 @@ pub fn abandon_parked(w: &mut World, sid: u64, reason: &str) {
     }
     if let Some(s) = w.sessions.get_mut(&sid) {
         s.batch.clear();
-        s.batch_armed = false;
-        s.batch_gen += 1;
+        s.batch_due = None;
+        if let Some(t) = s.batch_timer.take() {
+            t.abort();
+        }
     }
 }
 
@@ -616,7 +647,6 @@ pub fn close(w: &mut World, sid: u64, reason: &str) {
     let Some(s) = w.sessions.get_mut(&sid) else {
         return;
     };
-    s.timeout_gen += 1;
     let (pi, tid) = (s.persona, s.thread_id.clone());
     if let Some(tid) = tid {
         w.personas[pi].bus.retain(|(k, _)| !same_value(k, &tid));

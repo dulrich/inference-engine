@@ -8,9 +8,7 @@
 
 use crate::js;
 use serde_json::{Map, Value};
-use std::collections::hash_map::RandomState;
 use std::fs::{self, OpenOptions};
-use std::hash::{BuildHasher, Hasher};
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -160,7 +158,10 @@ impl OutboxWriter {
             .ok()?;
         fd.write_all(line.as_bytes()).ok()?;
         drop(fd);
-        if RandomState::new().build_hasher().finish() % PRUNE_ODDS == 0 {
+        let draw = crate::sidecar::random_bytes(8)
+            .ok()
+            .map(|b| u64::from_le_bytes(b.try_into().unwrap_or_default()));
+        if draw.is_some_and(|d| d % PRUNE_ODDS == 0) {
             let _ = prune(&log_dir, js::now_ms(), PRUNE_AFTER_MS);
         }
         Some(file)

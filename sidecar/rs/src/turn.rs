@@ -26,13 +26,6 @@ fn opt_str(v: &Option<String>) -> Value {
     v.as_deref().map_or(Value::Null, Value::from)
 }
 
-async fn await_rpc(
-    rx: tokio::sync::oneshot::Receiver<persona::RpcResult>,
-) -> Result<Value, SidecarError> {
-    rx.await
-        .unwrap_or_else(|_| Err(err(502, "api_error", "rpc dropped")))
-}
-
 pub async fn start_thread(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
     let (rx, hook_before, mcp_before, cwd, n_tools) = {
         let mut w = lock(me);
@@ -62,7 +55,7 @@ pub async fn start_thread(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
             n_tools,
         )
     };
-    let started = await_rpc(rx).await?;
+    let started = rx.wait().await?;
     let rx = {
         let mut w = lock(me);
         let w = &mut *w;
@@ -111,7 +104,7 @@ pub async fn start_thread(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
             t,
         )
     };
-    let listed = await_rpc(rx).await;
+    let listed = rx.wait().await;
     let mut w = lock(me);
     let w = &mut *w;
     let (reported, oracle_error) = match listed {
@@ -294,7 +287,7 @@ pub async fn start_turn(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
         let t = w.cfg.turn_timeout_ms;
         persona::rpc(w, rc.pi, "turn/start", Value::Object(tp), t)
     };
-    let turn = await_rpc(rx).await?;
+    let turn = rx.wait().await?;
     let mut w = lock(me);
     if let Some(s) = w.sessions.get_mut(&rc.sid) {
         s.last_effort = Some(rc.ident.eff.effort.clone());

@@ -3,7 +3,8 @@
 //! discriminator, title signature), and the codex -> Anthropic usage projection with its clamp.
 
 use crate::js;
-use serde_json::{json, Map, Value};
+use axum::http::HeaderMap;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 pub const MODEL_FAMILIES: &[(&str, &str)] = &[
@@ -353,7 +354,7 @@ pub fn session_key_of(
     body: &Value,
     system_text: &str,
     first_user_text: &str,
-    headers: Option<&Map<String, Value>>,
+    headers: Option<&HeaderMap>,
 ) -> SessionKey {
     let uid = js::prop(js::prop(Some(body), "metadata"), "user_id");
     let parsed: Option<Value> = match uid {
@@ -378,7 +379,10 @@ pub fn session_key_of(
                 scope,
             };
         }
-        let agent = js::js_string_or_empty(headers.and_then(|h| h.get("x-claude-code-agent-id")));
+        let agent = headers
+            .and_then(|h| h.get("x-claude-code-agent-id"))
+            .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
+            .unwrap_or_default();
         let agent = js::trim(&agent);
         if !agent.is_empty() {
             return SessionKey {
@@ -482,8 +486,14 @@ pub fn safe_equal(a: &str, b: &str) -> bool {
 }
 
 /// `presentedKey(headers)`: `authorization` (`Bearer` optional), else `x-api-key`.
-pub fn presented_key(headers: &Map<String, Value>) -> Option<String> {
-    if let Some(Value::String(a)) = headers.get("authorization") {
+pub fn presented_key(headers: &HeaderMap) -> Option<String> {
+    let text = |k: &str| {
+        headers
+            .get(k)
+            .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
+    };
+    if let Some(a) = text("authorization") {
+        let a = a.as_str();
         let a = js::trim(a);
         if !a.is_empty() {
             // /^bearer\s+(.*)$/i
@@ -497,8 +507,8 @@ pub fn presented_key(headers: &Map<String, Value>) -> Option<String> {
             return Some(js::trim(tail.unwrap_or(a)).to_string());
         }
     }
-    if let Some(Value::String(x)) = headers.get("x-api-key") {
-        let x = js::trim(x);
+    if let Some(x) = text("x-api-key") {
+        let x = js::trim(&x);
         if !x.is_empty() {
             return Some(x.to_string());
         }

@@ -10,17 +10,19 @@ use crate::config::{BODY_LIMIT, VERSION};
 use crate::errors::{as_sidecar_error, SidecarError};
 use crate::js;
 use crate::logging::redact_headers;
-use crate::messages::{handle_messages, on_joiner_close, on_owner_close};
+use crate::messages::{admit, on_joiner_close, on_owner_close, run, Admit};
 use crate::protocol::{count_tokens_estimate, presented_key, safe_equal};
 use crate::sidecar::{err, lock, with_world, Shared, World};
-use crate::sinks::{json_headers, send_error, send_json, CloseHook, Reply, Res};
+use crate::sinks::{self, json_headers, CloseHook, Reply};
 use axum::body::Body;
 use axum::extract::{Request, State};
+use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::Router;
 use bytes::Bytes;
 use serde_json::{json, Map, Value};
 use std::sync::{Mutex, Weak};
+use tokio::sync::oneshot;
 
 pub fn router(world: Shared) -> Router {
     Router::new().fallback(handler).with_state(world)
@@ -55,107 +57,24 @@ pub fn health_body(w: &World) -> Value {
     })
 }
 
-/// Node's `req.headers`: lower-cased names, arrival order, duplicates joined with `, `
-/// (`cookie` with `; `, `set-cookie` as an array, singletons keep the first value).
-pub fn node_headers(h: &axum::http::HeaderMap) -> Map<String, Value> {
-    const SINGLE: &[&str] = &[
-        "age",
-        "authorization",
-        "content-length",
-        "content-type",
-        "etag",
-        "expires",
-        "from",
-        "host",
-        "if-modified-since",
-        "if-unmodified-since",
-        "last-modified",
-        "location",
-        "max-forwards",
-        "proxy-authorization",
-        "referer",
-        "retry-after",
-        "server",
-        "user-agent",
-    ];
-    let mut m = Map::new();
-    for (k, v) in h {
-        let name = k.as_str().to_string();
-        let val = String::from_utf8_lossy(v.as_bytes()).to_string();
-        if name == "set-cookie" {
-            let e = m.entry(name).or_insert_with(|| Value::Array(Vec::new()));
-            if let Value::Array(a) = e {
-                a.push(Value::from(val));
-            }
-            continue;
-        }
-        match m.get_mut(&name) {
-            None => {
-                m.insert(name, Value::from(val));
-            }
-            Some(_) if SINGLE.contains(&name.as_str()) => {}
-            Some(Value::String(prev)) => {
-                let sep = if name == "cookie" { "; " } else { ", " };
-                prev.push_str(sep);
-                prev.push_str(&val);
-            }
-            Some(_) => {}
-        }
-    }
-    m
-}
-
-/// `new URL(req.url, base).pathname` for the paths this server sees: dot segments removed.
-fn pathname(raw: &str) -> String {
-    let p = raw.split(['?', '#']).next().unwrap_or("");
-    let p = p.replace('\\', "/");
-    let mut out: Vec<&str> = Vec::new();
-    let segs: Vec<&str> = p.split('/').skip(1).collect();
-    let n = segs.len();
-    for (i, s) in segs.iter().enumerate() {
-        let last = i + 1 == n;
-        match *s {
-            "." | "%2e" | "%2E" => {
-                if last {
-                    out.push("");
-                }
-            }
-            ".." | ".%2e" | "%2e." | "%2e%2e" | ".%2E" | "%2E." | "%2E%2E" => {
-                out.pop();
-                if last {
-                    out.push("");
-                }
-            }
-            s => out.push(s),
-        }
-    }
-    format!("/{}", out.join("/"))
-}
-
 struct CloseGuard {
     world: Weak<Mutex<World>>,
-    res: u64,
+    sink: u64,
 }
 
 impl Drop for CloseGuard {
     fn drop(&mut self) {
-        let (w, id) = (self.world.clone(), self.res);
+        let (w, id) = (self.world.clone(), self.sink);
         // never lock here: the drop can happen inside a critical section
         tokio::spawn(async move {
-            with_world(&w, |w| res_closed(w, id));
+            with_world(&w, |w| sink_closed(w, id));
         });
     }
 }
 
 /// Node's `res` `close` event.
-fn res_closed(w: &mut World, id: u64) {
-    let Some(r) = w.res.get_mut(&id) else {
-        return;
-    };
-    r.destroyed = true;
-    let hook = r.hook.take();
-    w.res.remove(&id);
-    match hook {
+fn sink_closed(w: &mut World, id: u64) {
+    match sinks::closed(w, id) {
         Some(CloseHook::Owner {
             sid,
             token,
@@ -181,34 +100,20 @@ fn build(status: u16, headers: Vec<(String, String)>, body: Body) -> Response {
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
-async fn handler(State(world): State<Shared>, req: Request) -> Response {
-    let (tx, rx) = tokio::sync::oneshot::channel::<Reply>();
-    let id = {
-        let mut w = lock(&world);
-        let id = w.id();
-        w.res.insert(id, Res::new(tx));
-        id
-    };
-    let guard = CloseGuard {
-        world: std::sync::Arc::downgrade(&world),
-        res: id,
-    };
-    let me = world.clone();
-    tokio::spawn(async move {
-        serve_request(&me, id, req).await;
-    });
-    match rx.await {
-        Ok(Reply::Full {
+/// A reply as a response; a streamed body carries the close guard until it ends.
+fn respond(reply: Reply, guard: Option<CloseGuard>) -> Response {
+    match reply {
+        Reply::Full {
             status,
             headers,
             body,
-        }) => build(status, headers, body.map_or_else(Body::empty, Body::from)),
-        Ok(Reply::Stream {
+        } => build(status, headers, body.map_or_else(Body::empty, Body::from)),
+        Reply::Stream {
             status,
             headers,
             mut rx,
-        }) => {
-            let mut guard = Some(guard);
+        } => {
+            let mut guard = guard;
             let stream = futures_util::stream::poll_fn(move |cx| {
                 let _keep = &guard;
                 match rx.poll_recv(cx) {
@@ -224,165 +129,207 @@ async fn handler(State(world): State<Shared>, req: Request) -> Response {
             });
             build(status, headers, Body::from_stream(stream))
         }
+    }
+}
+
+/// What a request resolved to: a whole response, or a messages request whose head the
+/// spawned driver will send to `rx` (its sink is `sink`).
+enum Step {
+    Done(Reply),
+    Wait {
+        sink: u64,
+        rx: oneshot::Receiver<Reply>,
+    },
+}
+
+/// The one `http-error` row of a request that failed before a sink took it over.
+fn fail(me: &Shared, path: &str, e: &SidecarError) -> Reply {
+    lock(me).log(
+        "http-error",
+        json!({ "path": path, "status": e.status, "type": e.anthropic_type, "message": e.message }),
+    );
+    Reply::error(e)
+}
+
+async fn handler(State(world): State<Shared>, req: Request) -> Response {
+    let (parts, body) = req.into_parts();
+    let path = parts.uri.path().to_string();
+    let method = parts.method.as_str().to_string();
+    let headers = parts.headers;
+    let target = match front(&world, &method, &path, &headers) {
+        Ok(t) => t,
+        Err(reply) => return respond(reply, None),
+    };
+    // The body read and everything after it run as their own task: the request keeps
+    // running (and writes its row) when the client goes.
+    let me = world.clone();
+    let task = tokio::spawn(async move { post(&me, target, &path, headers, body).await });
+    match task.await {
+        Ok(Step::Done(reply)) => respond(reply, None),
+        Ok(Step::Wait { sink, rx }) => {
+            let guard = CloseGuard {
+                world: std::sync::Arc::downgrade(&world),
+                sink,
+            };
+            match rx.await {
+                Ok(reply) => respond(reply, Some(guard)),
+                Err(_) => build(500, json_headers(), Body::empty()),
+            }
+        }
         Err(_) => build(500, json_headers(), Body::empty()),
     }
 }
 
-async fn serve_request(me: &Shared, id: u64, req: Request) {
-    let method = req.method().as_str().to_string();
-    let path = pathname(req.uri().path_and_query().map_or("/", |p| p.as_str()));
-    let headers = node_headers(req.headers());
-    let r = route(me, id, &method, &path, headers, req.into_body()).await;
-    if let Err(e) = r {
-        let mut w = lock(me);
-        let w = &mut *w;
-        w.log(
-            "http-error",
-            json!({ "path": path, "status": e.status, "type": e.anthropic_type, "message": e.message }),
-        );
-        match w.res.get_mut(&id) {
-            Some(r) if !r.headers_sent() => send_error(w, id, &e),
-            Some(r) if !r.ended => r.end(),
-            _ => {}
-        }
-    }
-}
-
-async fn route(
+/// The routes answered from the head alone: auth, `/healthz`, the 404s and `hello`.
+/// `Ok` is a POST route to read the body of: `(persona index, persona name, rest)`.
+fn front(
     me: &Shared,
-    id: u64,
     method: &str,
     path: &str,
-    headers: Map<String, Value>,
-    body: Body,
-) -> Result<(), SidecarError> {
-    let persona = {
-        let mut w = lock(me);
-        let w = &mut *w;
-        let presented = presented_key(&headers).unwrap_or_default();
-        if !safe_equal(&presented, &w.cfg.key) {
-            w.log(
-                "auth-failed",
-                json!({ "path": path, "method": method, "headers": redact_headers(&headers) }),
-            );
-            send_error(
-                w,
-                id,
-                &err(
-                    401,
-                    "authentication_error",
-                    "missing or invalid sidecar key",
-                ),
-            );
-            return Ok(());
-        }
-        if path == "/healthz" {
-            let b = health_body(w);
-            let st = if js::truthy(b.get("degraded")) {
-                503
-            } else {
-                200
-            };
-            send_json(w, id, st, &b, Vec::new());
-            return Ok(());
-        }
-        let seg: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        let pi = seg.first().and_then(|s| w.persona_index(s));
-        let rest = format!(
-            "/{}",
-            seg.iter().skip(1).copied().collect::<Vec<_>>().join("/")
+    headers: &HeaderMap,
+) -> Result<(usize, String, String), Reply> {
+    let mut w = lock(me);
+    let w = &mut *w;
+    let presented = presented_key(headers).unwrap_or_default();
+    if !safe_equal(&presented, &w.cfg.key) {
+        w.log(
+            "auth-failed",
+            json!({ "path": path, "method": method, "headers": redact_headers(headers) }),
         );
-        let Some(pi) = pi else {
-            send_error(
-                w,
-                id,
-                &err(
-                    404,
-                    "not_found_error",
-                    format!("unknown persona in path {path}"),
-                ),
-            );
-            return Ok(());
+        return Err(Reply::error(&err(
+            401,
+            "authentication_error",
+            "missing or invalid sidecar key",
+        )));
+    }
+    if path == "/healthz" {
+        let b = health_body(w);
+        let st = if js::truthy(b.get("degraded")) {
+            503
+        } else {
+            200
         };
-        let name = w.personas[pi].name.clone();
-        if rest == "/api/hello" && (method == "GET" || method == "HEAD") {
-            w.log("hello", json!({ "persona": name, "method": method }));
-            if let Some(r) = w.res.get_mut(&id) {
-                let b = (method != "HEAD").then(|| "{}".to_string());
-                r.full(200, json_headers(), b);
-            }
-            return Ok(());
-        }
-        if method != "POST" || (rest != "/v1/messages" && rest != "/v1/messages/count_tokens") {
-            send_error(
-                w,
-                id,
-                &err(404, "not_found_error", format!("unsupported path {path}")),
-            );
-            return Ok(());
-        }
-        (pi, name, rest)
+        return Err(Reply::json(st, &b, Vec::new()));
+    }
+    let seg: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let dotted = has_dot_segment(path);
+    let pi = seg
+        .first()
+        .and_then(|s| w.persona_index(s))
+        .filter(|_| !dotted);
+    let rest = format!(
+        "/{}",
+        seg.iter().skip(1).copied().collect::<Vec<_>>().join("/")
+    );
+    let Some(pi) = pi else {
+        return Err(Reply::error(&err(
+            404,
+            "not_found_error",
+            format!("unknown persona in path {path}"),
+        )));
     };
-    let (pi, name, rest) = persona;
+    let name = w.personas[pi].name.clone();
+    if rest == "/api/hello" && (method == "GET" || method == "HEAD") {
+        w.log("hello", json!({ "persona": name, "method": method }));
+        let b = (method != "HEAD").then(|| "{}".to_string());
+        return Err(Reply::Full {
+            status: 200,
+            headers: json_headers(),
+            body: b,
+        });
+    }
+    if method != "POST" || (rest != "/v1/messages" && rest != "/v1/messages/count_tokens") {
+        return Err(Reply::error(&err(
+            404,
+            "not_found_error",
+            format!("unsupported path {path}"),
+        )));
+    }
+    Ok((pi, name, rest))
+}
+
+/// A `.`/`..` segment, plain or percent-encoded: such a path is a 404 (never normalized).
+pub fn has_dot_segment(path: &str) -> bool {
+    path.split('/').any(|s| {
+        matches!(
+            s.to_ascii_lowercase().as_str(),
+            "." | ".." | "%2e" | "%2e%2e" | ".%2e" | "%2e."
+        )
+    })
+}
+
+/// The axum body-limit rejection, found by type in the error's source chain.
+fn is_length_limit(e: &axum::Error) -> bool {
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(x) = cur {
+        if x.is::<http_body_util::LengthLimitError>() {
+            return true;
+        }
+        cur = x.source();
+    }
+    false
+}
+
+async fn post(
+    me: &Shared,
+    (pi, name, rest): (usize, String, String),
+    path: &str,
+    headers: HeaderMap,
+    body: Body,
+) -> Step {
     let bytes = match axum::body::to_bytes(body, BODY_LIMIT).await {
         Ok(b) => b,
-        Err(e) => {
-            let too_big = std::error::Error::source(&e)
-                .map(|s| s.to_string())
-                .unwrap_or_default()
-                .contains("length limit")
-                || e.to_string().contains("length limit");
-            if too_big {
-                let mut w = lock(me);
-                if let Some(r) = w.res.get_mut(&id) {
-                    if !r.headers_sent() {
-                        r.full(
-                            413,
-                            vec![
-                                ("content-type".into(), "application/json".into()),
-                                ("connection".into(), "close".into()),
-                            ],
-                            Some(js::stringify(
-                                &err(413, "invalid_request_error", "request body exceeds 32 MiB")
-                                    .body(),
-                            )),
-                        );
-                    }
-                }
-                drop(w);
-                return Err(err(
-                    413,
-                    "invalid_request_error",
-                    "request body exceeds 32 MiB",
-                ));
+        Err(e) if is_length_limit(&e) => {
+            let e = err(413, "invalid_request_error", "request body exceeds 32 MiB");
+            let mut reply = fail(me, path, &e);
+            if let Reply::Full { headers, .. } = &mut reply {
+                headers.push(("connection".into(), "close".into()));
             }
-            return Err(as_sidecar_error(&e.to_string()));
+            return Step::Done(reply);
         }
+        Err(e) => return Step::Done(fail(me, path, &as_sidecar_error(&e.to_string()))),
     };
     let raw = String::from_utf8_lossy(&bytes);
-    let body: Value = serde_json::from_str(&raw).map_err(|_| {
-        err(
-            400,
-            "invalid_request_error",
-            "request body is not valid JSON",
-        )
-    })?;
+    let Ok(body) = serde_json::from_str::<Value>(&raw) else {
+        return Step::Done(fail(
+            me,
+            path,
+            &err(
+                400,
+                "invalid_request_error",
+                "request body is not valid JSON",
+            ),
+        ));
+    };
     if rest == "/v1/messages/count_tokens" {
         let n = count_tokens_estimate(&body);
-        let mut w = lock(me);
-        let w = &mut *w;
-        w.log(
+        lock(me).log(
             "count_tokens",
             json!({ "persona": name, "input_tokens": js::num(n) }),
         );
-        send_json(
-            w,
-            id,
+        return Step::Done(Reply::json(
             200,
             &json!({ "input_tokens": js::num(n) }),
             Vec::new(),
-        );
-        return Ok(());
+        ));
     }
-    handle_messages(me, pi, body, headers, id).await
+    let admitted = match admit(me, pi, body, headers) {
+        Ok(Admit::Local(reply)) => return Step::Done(reply),
+        Ok(Admit::Run(a)) => a,
+        Err(e) => return Step::Done(fail(me, path, &e)),
+    };
+    let sink = lock(me).id();
+    let (tx, rx) = oneshot::channel();
+    let me = me.clone();
+    let path = path.to_string();
+    tokio::spawn(async move {
+        let mut reply = Some(tx);
+        if let Err(e) = run(&me, *admitted, sink, &mut reply).await {
+            let r = fail(&me, &path, &e);
+            if let Some(tx) = reply {
+                let _ = tx.send(r);
+            }
+        }
+    });
+    Step::Wait { sink, rx }
 }

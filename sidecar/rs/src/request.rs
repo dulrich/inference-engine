@@ -8,7 +8,9 @@
 use crate::errors::SidecarError;
 use crate::js;
 use crate::protocol::{self, Effort, ParsedModel, Scope, SessionKey, MODEL_FAMILIES};
+use crate::session::id_key;
 use crate::session::Session;
+use axum::http::HeaderMap;
 use serde_json::{json, Map, Value};
 
 /// `canon(v)`: object keys sorted (UTF-16 order, as `Array.prototype.sort`), arrays kept.
@@ -170,7 +172,7 @@ impl From<Mode> for Value {
 #[derive(Debug, Clone)]
 pub struct Normalized {
     pub body: Value,
-    pub headers: Map<String, Value>,
+    pub headers: HeaderMap,
     pub system_text: String,
     pub all_msgs: Vec<Value>,
     pub msgs: Vec<Value>,
@@ -182,7 +184,7 @@ pub struct Normalized {
     pub stream: bool,
 }
 
-pub fn normalize_request(body: Value, headers: Option<Map<String, Value>>) -> Normalized {
+pub fn normalize_request(body: Value, headers: Option<HeaderMap>) -> Normalized {
     let system_text = protocol::system_text_of(&body);
     let all_msgs: Vec<Value> = js::prop(Some(&body), "messages")
         .and_then(Value::as_array)
@@ -411,13 +413,6 @@ pub enum Disposition<'a> {
     Drive {
         supersedes: Option<&'a crate::session::OwnerTok>,
     },
-}
-
-fn id_key(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        other => js::js_string(other),
-    }
 }
 
 /// THE decision: replay (straggler retry of the completed turn), join (byte-equal undecorated

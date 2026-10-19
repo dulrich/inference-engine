@@ -5,6 +5,7 @@
 //! every failure here is swallowed. `redact_headers` is the one rule about what may be written.
 
 use crate::js;
+use axum::http::HeaderMap;
 use serde_json::{Map, Value};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -126,20 +127,26 @@ pub(crate) fn is_day_shape(s: &str) -> bool {
 }
 
 /// `redactHeaders(headers)`: the four credential headers become `<redacted>`, order kept.
-pub fn redact_headers(headers: &Map<String, Value>) -> Map<String, Value> {
-    headers
-        .iter()
-        .map(|(k, v)| {
-            let secret = matches!(
-                k.to_ascii_lowercase().as_str(),
-                "authorization" | "x-api-key" | "cookie" | "proxy-authorization"
-            );
-            let v = if secret {
-                Value::from("<redacted>")
-            } else {
-                v.clone()
-            };
-            (k.clone(), v)
-        })
-        .collect()
+/// A repeated header logs its values joined with `, `.
+pub fn redact_headers(headers: &HeaderMap) -> Map<String, Value> {
+    let mut out = Map::new();
+    for k in headers.keys() {
+        let name = k.as_str();
+        let secret = matches!(
+            name,
+            "authorization" | "x-api-key" | "cookie" | "proxy-authorization"
+        );
+        let v = if secret {
+            "<redacted>".to_string()
+        } else {
+            headers
+                .get_all(k)
+                .iter()
+                .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        out.insert(name.to_string(), Value::from(v));
+    }
+    out
 }

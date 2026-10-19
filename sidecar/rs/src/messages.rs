@@ -20,12 +20,12 @@ use crate::session::{
     LastOutcome, Outcome, OwnerTok, Session,
 };
 use crate::sidecar::{err, lock, random_hex, Shared, World};
-use crate::sinks::{
-    self, message_skeleton, send_json, sse_headers, wire_model_id, with_keys, CloseHook, Sink,
-};
+use crate::sinks::{self, message_skeleton, wire_model_id, with_keys, CloseHook, Reply, Sink};
 use crate::turn::{deliver_tool_results, start_thread, start_turn, still_mine};
+use axum::http::HeaderMap;
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
+use tokio::sync::oneshot;
 
 pub fn superseded() -> SidecarError {
     err(
@@ -39,8 +39,7 @@ pub fn superseded() -> SidecarError {
 pub struct Rc {
     pub pi: usize,
     pub persona: String,
-    pub res: u64,
-    pub headers: Map<String, Value>,
+    pub headers: HeaderMap,
     pub norm: Normalized,
     pub ident: Identity,
     pub sid: u64,
@@ -62,58 +61,96 @@ enum Plan {
     },
 }
 
-pub async fn handle_messages(
+/// Phase 1 resolved: what `run` needs to drive the request.
+pub struct Admitted {
+    pi: usize,
+    headers: HeaderMap,
+    norm: Normalized,
+    ident: Identity,
+    digests: Vec<String>,
+    init: Option<oneshot::Receiver<persona::InitResult>>,
+}
+
+/// What phase 1 decided: a local answer (title, fork) or a request to run.
+pub enum Admit {
+    Local(Reply),
+    Run(Box<Admitted>),
+}
+
+/// Phase 1: validation and normalization (nothing is touched before the shape check),
+/// the local answers, and the persona boot. One critical section, no await.
+pub fn admit(
     me: &Shared,
     pi: usize,
     body: Value,
-    headers: Map<String, Value>,
-    res: u64,
-) -> Result<(), SidecarError> {
-    // 1. validation and normalization (nothing is touched before the shape check)
+    headers: HeaderMap,
+) -> Result<Admit, SidecarError> {
     validate(&body)?;
     let norm = normalize_request(body, Some(headers.clone()));
-    let (ident, digests, init) = {
-        let mut w = lock(me);
-        let w = &mut *w;
-        let name = w.personas[pi].name.clone();
-        if is_title_request(&norm.body, &norm.system_text, &norm.msgs) {
-            w.log(
-                "title-local",
-                json!({ "persona": name, "stream": norm.stream, "envelope": title_envelope(&norm.msgs) }),
-            );
-            write_local_text(w, &name, &norm.body, "Session", res);
-            return Ok(());
-        }
-        if has_image_block(&norm.body) {
-            return Err(err(
-                400,
-                "invalid_request_error",
-                "images unsupported by the codex app-server leg",
-            ));
-        }
-        let ident = resolve_identity(&norm)?;
-        if ident.weak {
-            w.log(
-                "weak-session-key",
-                json!({ "persona": name, "key": ident.key, "reason": "metadata.user_id carried no session_id" }),
-            );
-        }
-        let digests = message_digests(&norm.msgs);
-        if let Some(fork) = find_fork_target(w, pi, &norm, &ident, &digests) {
-            let (fk, seen) = w
-                .sessions
-                .get(&fork)
-                .map(|s| (s.key.clone(), s.hist.len()))
-                .unwrap_or_default();
-            w.log(
-                "fork-local",
-                json!({ "persona": name, "key": ident.key, "forkOf": fk, "n": norm.msgs.len(), "seen": seen }),
-            );
-            write_local_text(w, &name, &norm.body, FORK_TEXT, res);
-            return Ok(());
-        }
-        (ident, digests, persona::ensure(w, pi)?)
-    };
+    let mut w = lock(me);
+    let w = &mut *w;
+    let name = w.personas[pi].name.clone();
+    if is_title_request(&norm.body, &norm.system_text, &norm.msgs) {
+        w.log(
+            "title-local",
+            json!({ "persona": name, "stream": norm.stream, "envelope": title_envelope(&norm.msgs) }),
+        );
+        return Ok(Admit::Local(local_text(&name, &norm.body, "Session")));
+    }
+    if has_image_block(&norm.body) {
+        return Err(err(
+            400,
+            "invalid_request_error",
+            "images unsupported by the codex app-server leg",
+        ));
+    }
+    let ident = resolve_identity(&norm)?;
+    if ident.weak {
+        w.log(
+            "weak-session-key",
+            json!({ "persona": name, "key": ident.key, "reason": "metadata.user_id carried no session_id" }),
+        );
+    }
+    let digests = message_digests(&norm.msgs);
+    if let Some(fork) = find_fork_target(w, pi, &norm, &ident, &digests) {
+        let (fk, seen) = w
+            .sessions
+            .get(&fork)
+            .map(|s| (s.key.clone(), s.hist.len()))
+            .unwrap_or_default();
+        w.log(
+            "fork-local",
+            json!({ "persona": name, "key": ident.key, "forkOf": fk, "n": norm.msgs.len(), "seen": seen }),
+        );
+        return Ok(Admit::Local(local_text(&name, &norm.body, FORK_TEXT)));
+    }
+    let init = persona::ensure(w, pi)?;
+    Ok(Admit::Run(Box::new(Admitted {
+        pi,
+        headers,
+        norm,
+        ident,
+        digests,
+        init,
+    })))
+}
+
+/// Phases 2-4. `sink` is the id the HTTP layer's close guard watches; `reply` moves into
+/// the sink once it exists, so an `Err` here means the head has not been sent.
+pub async fn run(
+    me: &Shared,
+    a: Admitted,
+    sink: u64,
+    reply: &mut Option<oneshot::Sender<Reply>>,
+) -> Result<(), SidecarError> {
+    let Admitted {
+        pi,
+        headers,
+        norm,
+        ident,
+        digests,
+        init,
+    } = a;
     if let Some(rx) = init {
         rx.await
             .unwrap_or_else(|_| Err(err(502, "api_error", "persona boot dropped")))?;
@@ -131,11 +168,13 @@ pub async fn handle_messages(
             json!({ "persona": name, "key": ident.key, "reqId": req_id, "mode": mode.as_str(), "stream": norm.stream, "nMessages": norm.msgs.len() }),
         );
         let wire = wire_model_id(&name, js::prop(Some(&norm.body), "model"));
-        let sink = w.id();
+        let Some(tx) = reply.take() else {
+            return Ok(());
+        };
         let sk = if norm.stream {
-            Sink::sse(res, &wire, w.cfg.ping_ms)
+            Sink::sse(tx, &wire, w.cfg.ping_ms)
         } else {
-            Sink::buffer(res, &wire)
+            Sink::buffer(tx, &wire)
         };
         w.sinks.insert(sink, sk);
         let token = request_token(Value::from(req_id.as_str()), mode, &norm, &ident);
@@ -143,7 +182,6 @@ pub async fn handle_messages(
         let rc = Rc {
             pi,
             persona: name,
-            res,
             headers,
             norm,
             ident,
@@ -205,15 +243,11 @@ fn finish_request(me: &Shared, rc: &Rc) {
 
 const FORK_TEXT: &str = "(side query answered locally by codex-sidecar; no model call was made)";
 
-fn write_local_text(w: &mut World, persona: &str, body: &Value, text: &str, res: u64) {
+fn local_text(persona: &str, body: &Value, text: &str) -> Reply {
     let usage = json!({ "input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0 });
     let model = wire_model_id(persona, js::prop(Some(body), "model"));
     if js::truthy(js::prop(Some(body), "stream")) {
         let msg = with_keys(&message_skeleton(&model), vec![("usage", usage.clone())]);
-        let Some(r) = w.res.get_mut(&res) else {
-            return;
-        };
-        r.stream_head(200, sse_headers());
         let frames = [
             (
                 "message_start",
@@ -237,11 +271,11 @@ fn write_local_text(w: &mut World, persona: &str, body: &Value, text: &str, res:
             ),
             ("message_stop", json!({ "type": "message_stop" })),
         ];
-        for (t, o) in frames {
-            r.write(&format!("event: {t}\ndata: {}\n\n", js::stringify(&o)));
-        }
-        r.end();
-        return;
+        let sse: String = frames
+            .iter()
+            .map(|(t, o)| format!("event: {t}\ndata: {}\n\n", js::stringify(o)))
+            .collect();
+        return Reply::sse(sse);
     }
     let body = with_keys(
         &message_skeleton(&model),
@@ -251,7 +285,7 @@ fn write_local_text(w: &mut World, persona: &str, body: &Value, text: &str, res:
             ("usage", usage),
         ],
     );
-    send_json(w, res, 200, &body, Vec::new());
+    Reply::json(200, &body, Vec::new())
 }
 
 // --------------------------------------------------------------- phase 2 ----
@@ -693,7 +727,7 @@ async fn run_as_joiner(me: &Shared, rc: &Rc, owner: u64, owner_req: Value) {
         if let Some(s) = w.sessions.get_mut(&rc.sid) {
             s.joiners.push(jid);
         }
-        if let Some(r) = w.res.get_mut(&rc.res) {
+        if let Some(r) = w.sinks.get_mut(&rc.sink) {
             r.hook = Some(CloseHook::Joiner {
                 sid: rc.sid,
                 joiner: jid,
@@ -728,7 +762,7 @@ async fn run_as_joiner(me: &Shared, rc: &Rc, owner: u64, owner_req: Value) {
     }
     remove_joiner(w, rc.sid, jid);
     w.joiners.remove(&jid);
-    if let Some(r) = w.res.get_mut(&rc.res) {
+    if let Some(r) = w.sinks.get_mut(&rc.sink) {
         r.hook = None;
     }
     w.sinks.remove(&rc.sink);
@@ -853,22 +887,16 @@ async fn drive(
     } else {
         start_turn(me, rc).await?;
     }
-    let rx = {
+    let (rx, t) = {
         let mut w = lock(me);
         let w = &mut *w;
         still_mine(w, rc)?;
         let lag = w.sessions[&rc.sid].lag_usage();
         sinks::start(w, rc.sink, &lag);
         let t = w.cfg.turn_timeout_ms;
-        session::wait_outcome(w, rc.sid, t)
+        (session::wait_outcome(w, rc.sid), t)
     };
-    let out = rx.await.unwrap_or_else(|_| {
-        Outcome::Error(err(
-            502,
-            "api_error",
-            "timed out waiting for the codex app-server",
-        ))
-    });
+    let out = session::await_outcome(me, rc.sid, rx, std::time::Duration::from_millis(t)).await;
     let mut w = lock(me);
     let w = &mut *w;
     if is_owner(w, rc) {
@@ -906,7 +934,7 @@ async fn run_as_owner(me: &Shared, rc: &Rc, supersedes: Option<(u64, Box<Token>)
             s.turn_text.clear();
         }
         attach(w, rc.sid, rc.sink);
-        if let Some(r) = w.res.get_mut(&rc.res) {
+        if let Some(r) = w.sinks.get_mut(&rc.sink) {
             r.hook = Some(CloseHook::Owner {
                 sid: rc.sid,
                 token: rc.token_id,
@@ -953,7 +981,7 @@ async fn run_as_owner(me: &Shared, rc: &Rc, supersedes: Option<(u64, Box<Token>)
             s.owner_gone = false;
         }
     }
-    if let Some(r) = w.res.get_mut(&rc.res) {
+    if let Some(r) = w.sinks.get_mut(&rc.sink) {
         r.hook = None;
     }
     let stalled = err(

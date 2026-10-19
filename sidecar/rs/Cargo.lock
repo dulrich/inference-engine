@@ -82,6 +82,8 @@ dependencies = [
  "axum",
  "bytes",
  "futures-util",
+ "http-body-util",
+ "libc",
  "serde_json",
  "sha2",
  "tokio",

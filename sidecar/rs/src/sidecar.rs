@@ -12,7 +12,7 @@ use crate::logging::Logger;
 use crate::outbox::OutboxWriter;
 use crate::persona::Persona;
 use crate::session::{Joiner, Session};
-use crate::sinks::{Res, Sink};
+use crate::sinks::Sink;
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -36,10 +36,10 @@ pub struct World {
     pub personas: Vec<Persona>,
     pub sessions: HashMap<u64, Session>,
     pub sinks: HashMap<u64, Sink>,
-    pub res: HashMap<u64, Res>,
     pub joiners: HashMap<u64, Joiner>,
     pub binds: Binds,
-    pub bind_retry_gen: u64,
+    /// The bind-extra retry task, aborted by `close()`.
+    pub bind_retry: Option<tokio::task::AbortHandle>,
     next_id: u64,
 }
 
@@ -91,34 +91,36 @@ pub fn with_world<R>(w: &Weak<Mutex<World>>, f: impl FnOnce(&mut World) -> R) ->
     Some(f(&mut g))
 }
 
-/// `n` random bytes as lowercase hex (`crypto.randomBytes(n).toString("hex")`).
-pub fn random_hex(n: usize) -> String {
-    use std::io::Read;
+/// `n` bytes from the kernel CSPRNG (`getrandom(2)`).
+pub fn random_bytes(n: usize) -> std::io::Result<Vec<u8>> {
     let mut buf = vec![0u8; n];
-    let ok = std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut buf))
-        .is_ok();
-    if !ok {
-        use std::hash::{BuildHasher, Hasher};
-        for (i, b) in buf.iter_mut().enumerate() {
-            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-            h.write_usize(i);
-            *b = h.finish() as u8;
+    let mut got = 0;
+    while got < n {
+        // SAFETY: the pointer/length pair is the unfilled tail of `buf`.
+        let r = unsafe { libc::getrandom(buf[got..].as_mut_ptr().cast(), n - got, 0) };
+        if r < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(e);
         }
+        got += r as usize;
     }
+    Ok(buf)
+}
+
+/// `n` random bytes as lowercase hex (`crypto.randomBytes(n).toString("hex")`). `start`
+/// refuses to boot when the random source fails, and once it has answered, getrandom(2)
+/// does not fail for reads of up to 256 bytes, so a failure here is an invariant breach.
+pub fn random_hex(n: usize) -> String {
+    let buf = random_bytes(n).expect("getrandom(2) failed after the startup probe");
     buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Node's `listen` error text (`listen EADDRINUSE: address already in use 127.0.0.2:4877`).
+/// A bind failure: the address and the native `io::Error` text.
 pub fn listen_error(e: &std::io::Error, host: &str, port: u16) -> String {
-    use std::io::ErrorKind;
-    let (code, text) = match e.kind() {
-        ErrorKind::AddrInUse => ("EADDRINUSE", "address already in use"),
-        ErrorKind::AddrNotAvailable => ("EADDRNOTAVAIL", "address not available"),
-        ErrorKind::PermissionDenied => ("EACCES", "permission denied"),
-        _ => return format!("listen {e} {host}:{port}"),
-    };
-    format!("listen {code}: {text} {host}:{port}")
+    format!("listen {host}:{port}: {e}")
 }
 
 pub struct Handle {
@@ -167,6 +169,7 @@ pub async fn start(cfg: Config, pinned: Pinned) -> Result<Handle, String> {
     if cfg.key.is_empty() {
         return Err("SIDECAR_KEY is required".into());
     }
+    random_bytes(16).map_err(|e| format!("the OS random source failed: {e}"))?;
     let logger = Logger::new(cfg.log_dir.clone(), f64::from(cfg.log_keep_days));
     let outbox = OutboxWriter::new(&cfg.outbox_path);
     let names = cfg.personas.clone();
@@ -187,10 +190,9 @@ pub async fn start(cfg: Config, pinned: Pinned) -> Result<Handle, String> {
             personas,
             sessions: HashMap::new(),
             sinks: HashMap::new(),
-            res: HashMap::new(),
             joiners: HashMap::new(),
             binds: Binds::default(),
-            bind_retry_gen: 0,
+            bind_retry: None,
             next_id: 0,
         })
     });
@@ -227,24 +229,16 @@ pub async fn start(cfg: Config, pinned: Pinned) -> Result<Handle, String> {
             }
             Err(first) => {
                 let started = crate::js::now_ms();
-                let gen = {
-                    let mut w = lock(&world);
-                    w.log(
-                        "bind-extra-retrying",
-                        json!({ "host": bind_extra, "port": port, "err": first, "budgetMs": budget_ms }),
-                    );
-                    w.bind_retry_gen += 1;
-                    w.bind_retry_gen
-                };
+                lock(&world).log(
+                    "bind-extra-retrying",
+                    json!({ "host": bind_extra, "port": port, "err": first, "budgetMs": budget_ms }),
+                );
                 let (wd, sv, st) = (world.clone(), servers.clone(), shutdown_tx.clone());
-                tokio::spawn(async move {
+                let task = tokio::spawn(async move {
                     let mut attempts: u64 = 1;
                     let mut delay = retry_ms.max(1);
                     loop {
                         tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                        if lock(&wd).bind_retry_gen != gen {
-                            return;
-                        }
                         attempts += 1;
                         match bind(&bind_extra, port).await {
                             Ok(l) => {
@@ -274,6 +268,7 @@ pub async fn start(cfg: Config, pinned: Pinned) -> Result<Handle, String> {
                         }
                     }
                 });
+                lock(&world).bind_retry = Some(task.abort_handle());
             }
         }
     }
@@ -313,7 +308,9 @@ impl Handle {
     pub async fn close(mut self) {
         {
             let mut w = lock(&self.world);
-            w.bind_retry_gen += 1;
+            if let Some(t) = w.bind_retry.take() {
+                t.abort();
+            }
             for i in 0..w.personas.len() {
                 crate::persona::stop(&mut w, i);
             }

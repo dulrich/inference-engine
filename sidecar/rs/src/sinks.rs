@@ -1,9 +1,9 @@
 //! `sinks.mjs` — the two response transports (`BufferSink`, `SseSink`), the message envelope
 //! they share, and the one-shot writers. A sink is the only thing that writes to a client.
 //!
-//! `Res` stands in for Node's `ServerResponse`: the head goes to the waiting HTTP task as a
-//! `Reply` (a whole body, or a stream fed through a channel), and `destroyed` is set by the
-//! close event (`http::CloseGuard`).
+//! A `Sink` owns its response: the head goes to the waiting HTTP handler as a `Reply` (a
+//! whole body, or a stream fed through a channel), and `destroyed` is set by the close
+//! event (`http::CloseGuard`). An SSE sink owns one keep-alive task for its whole life.
 
 use crate::errors::SidecarError;
 use crate::js;
@@ -12,6 +12,8 @@ use crate::sidecar::{random_hex, with_world, World};
 use bytes::Bytes;
 use serde_json::{json, Map, Value};
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::AbortHandle;
+use tokio::time::{Duration, Instant};
 
 pub type Headers = Vec<(String, String)>;
 
@@ -26,6 +28,36 @@ pub enum Reply {
         headers: Headers,
         rx: mpsc::UnboundedReceiver<Bytes>,
     },
+}
+
+impl Reply {
+    /// A JSON body (`sendJson(res, status, obj, headers)`).
+    pub fn json(status: u16, obj: &Value, extra: Headers) -> Self {
+        let mut hs = json_headers();
+        for (k, v) in extra {
+            hs.retain(|(hk, _)| hk != &k);
+            hs.push((k, v));
+        }
+        Reply::Full {
+            status,
+            headers: hs,
+            body: Some(js::stringify(obj)),
+        }
+    }
+    /// `sendError(res, err)`.
+    pub fn error(err: &SidecarError) -> Self {
+        Reply::json(err.status, &err.body(), retry_after_header(err))
+    }
+    /// A complete, already-known SSE body, sent as a stream.
+    pub fn sse(text: String) -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let _ = tx.send(Bytes::from(text));
+        Reply::Stream {
+            status: 200,
+            headers: sse_headers(),
+            rx,
+        }
+    }
 }
 
 /// What `res.on("close", fn)` registered (messages.mjs `onClose` / `onJoinerClose`).
@@ -43,73 +75,6 @@ pub enum CloseHook {
         sink: u64,
         persona: usize,
     },
-}
-
-pub struct Res {
-    reply: Option<oneshot::Sender<Reply>>,
-    body: Option<mpsc::UnboundedSender<Bytes>>,
-    pub ended: bool,
-    pub destroyed: bool,
-    pub hook: Option<CloseHook>,
-}
-
-impl Res {
-    pub fn new(reply: oneshot::Sender<Reply>) -> Self {
-        Self {
-            reply: Some(reply),
-            body: None,
-            ended: false,
-            destroyed: false,
-            hook: None,
-        }
-    }
-    pub fn headers_sent(&self) -> bool {
-        self.reply.is_none()
-    }
-    /// `writeHead(status, headers)` + `end(body)`.
-    pub fn full(&mut self, status: u16, headers: Headers, body: Option<String>) {
-        if let Some(tx) = self.reply.take() {
-            let _ = tx.send(Reply::Full {
-                status,
-                headers,
-                body,
-            });
-        }
-        self.ended = true;
-    }
-    /// `writeHead(status, headers)` for a streamed body.
-    pub fn stream_head(&mut self, status: u16, headers: Headers) {
-        if let Some(tx) = self.reply.take() {
-            let (btx, rx) = mpsc::unbounded_channel();
-            if tx
-                .send(Reply::Stream {
-                    status,
-                    headers,
-                    rx,
-                })
-                .is_ok()
-            {
-                self.body = Some(btx);
-            }
-        }
-    }
-    /// `res.write(text)`; false when the client is gone.
-    pub fn write(&mut self, text: &str) -> bool {
-        if self.ended || self.destroyed {
-            return false;
-        }
-        match &self.body {
-            Some(b) => b.send(Bytes::from(text.to_string())).is_ok(),
-            None => false,
-        }
-    }
-    pub fn end(&mut self) {
-        if self.reply.is_some() {
-            self.full(200, Vec::new(), None);
-        }
-        self.ended = true;
-        self.body = None;
-    }
 }
 
 fn h(pairs: &[(&str, &str)]) -> Headers {
@@ -131,41 +96,12 @@ pub fn sse_headers() -> Headers {
     ])
 }
 
-fn retry_after(err: &SidecarError) -> Option<String> {
-    let v = err.extra.as_ref()?.get("retryAfter")?;
-    if v.is_null() {
-        return None;
+fn retry_after_header(err: &SidecarError) -> Headers {
+    let v = err.extra.as_ref().and_then(|x| x.get("retryAfter"));
+    match v {
+        None | Some(Value::Null) => Vec::new(),
+        Some(v) => vec![("retry-after".to_string(), js::js_string(v))],
     }
-    Some(js::js_string(v))
-}
-
-fn error_headers(err: &SidecarError) -> Headers {
-    let mut hs = json_headers();
-    if let Some(r) = retry_after(err) {
-        hs.push(("retry-after".into(), r));
-    }
-    hs
-}
-
-/// `sendJson(res, status, obj, headers)`.
-pub fn send_json(w: &mut World, res: u64, status: u16, obj: &Value, extra: Headers) {
-    if let Some(r) = w.res.get_mut(&res) {
-        let mut hs = json_headers();
-        for (k, v) in extra {
-            hs.retain(|(hk, _)| hk != &k);
-            hs.push((k, v));
-        }
-        r.full(status, hs, Some(js::stringify(obj)));
-    }
-}
-
-/// `sendError(res, err)`.
-pub fn send_error(w: &mut World, res: u64, err: &SidecarError) {
-    let mut extra = Vec::new();
-    if let Some(r) = retry_after(err) {
-        extra.push(("retry-after".to_string(), r));
-    }
-    send_json(w, res, err.status, &err.body(), extra);
 }
 
 /// `wireModelId(personaName, requested)`: re-prefix the persona the router stripped.
@@ -212,13 +148,19 @@ pub enum Kind {
         index: f64,
         text_open: bool,
         any_block: bool,
-        timer_gen: u64,
+        /// The last successful write; the keep-alive task pings `ping_ms` after it.
+        last_write: Instant,
+        keepalive: Option<AbortHandle>,
         pre_start: Vec<String>,
     },
 }
 
 pub struct Sink {
-    pub res: u64,
+    reply: Option<oneshot::Sender<Reply>>,
+    body: Option<mpsc::UnboundedSender<Bytes>>,
+    ended: bool,
+    pub destroyed: bool,
+    pub hook: Option<CloseHook>,
     pub msg: Value,
     pub started: bool,
     pub done: bool,
@@ -226,36 +168,112 @@ pub struct Sink {
     pub kind: Kind,
 }
 
+impl Drop for Sink {
+    fn drop(&mut self) {
+        if let Kind::Sse {
+            keepalive: Some(k), ..
+        } = &self.kind
+        {
+            k.abort();
+        }
+    }
+}
+
 impl Sink {
-    pub fn buffer(res: u64, model: &str) -> Self {
+    fn new(reply: oneshot::Sender<Reply>, model: &str, kind: Kind) -> Self {
         Self {
-            res,
+            reply: Some(reply),
+            body: None,
+            ended: false,
+            destroyed: false,
+            hook: None,
             msg: message_skeleton(model),
             started: false,
             done: false,
             closed_by_client: false,
-            kind: Kind::Buffer {
+            kind,
+        }
+    }
+    pub fn buffer(reply: oneshot::Sender<Reply>, model: &str) -> Self {
+        Self::new(
+            reply,
+            model,
+            Kind::Buffer {
                 text: String::new(),
                 blocks: Vec::new(),
             },
-        }
+        )
     }
-    pub fn sse(res: u64, model: &str, ping_ms: u64) -> Self {
-        Self {
-            res,
-            msg: message_skeleton(model),
-            started: false,
-            done: false,
-            closed_by_client: false,
-            kind: Kind::Sse {
+    pub fn sse(reply: oneshot::Sender<Reply>, model: &str, ping_ms: u64) -> Self {
+        Self::new(
+            reply,
+            model,
+            Kind::Sse {
                 ping_ms,
                 index: 0.0,
                 text_open: false,
                 any_block: false,
-                timer_gen: 0,
+                last_write: Instant::now(),
+                keepalive: None,
                 pre_start: Vec::new(),
             },
+        )
+    }
+    /// The client is gone or the response already ended (Node `res.writableEnded ||
+    /// res.destroyed`).
+    fn gone(&self) -> bool {
+        self.ended
+            || self.destroyed
+            || self.reply.as_ref().is_some_and(oneshot::Sender::is_closed)
+            || self
+                .body
+                .as_ref()
+                .is_some_and(mpsc::UnboundedSender::is_closed)
+    }
+    /// `writeHead(status, headers)` + `end(body)`.
+    fn full(&mut self, reply: Reply) {
+        if let Some(tx) = self.reply.take() {
+            let _ = tx.send(reply);
         }
+        self.ended = true;
+        self.body = None;
+    }
+    /// `writeHead(status, headers)` for a streamed body.
+    fn stream_head(&mut self, status: u16, headers: Headers) {
+        if let Some(tx) = self.reply.take() {
+            let (btx, rx) = mpsc::unbounded_channel();
+            if tx
+                .send(Reply::Stream {
+                    status,
+                    headers,
+                    rx,
+                })
+                .is_ok()
+            {
+                self.body = Some(btx);
+            }
+        }
+    }
+    /// `res.write(text)`; false when the client is gone.
+    fn send(&mut self, text: String) -> bool {
+        if self.ended || self.destroyed {
+            return false;
+        }
+        match &self.body {
+            Some(b) => b.send(Bytes::from(text)).is_ok(),
+            None => false,
+        }
+    }
+    fn end(&mut self) {
+        if self.reply.is_some() {
+            self.full(Reply::Full {
+                status: 200,
+                headers: Vec::new(),
+                body: None,
+            });
+        }
+        self.ended = true;
+        self.body = None;
     }
 }
 
@@ -269,13 +287,10 @@ fn frame(t: &str, obj: &Value) -> String {
 
 /// `SseSink.#raw(text)`.
 fn raw(w: &mut World, id: u64, text: String) -> bool {
-    let World { sinks, res, .. } = w;
-    let Some(s) = sinks.get_mut(&id) else {
+    let Some(s) = w.sinks.get_mut(&id) else {
         return false;
     };
-    let r = res.get_mut(&s.res);
-    let gone = r.as_ref().is_none_or(|r| r.ended || r.destroyed);
-    if s.done || gone {
+    if s.done || s.gone() {
         return false;
     }
     if !s.started {
@@ -284,7 +299,7 @@ fn raw(w: &mut World, id: u64, text: String) -> bool {
         }
         return true;
     }
-    if r.is_some_and(|r| r.write(&text)) {
+    if s.send(text) {
         return true;
     }
     abort(w, id);
@@ -293,45 +308,75 @@ fn raw(w: &mut World, id: u64, text: String) -> bool {
 
 fn write(w: &mut World, id: u64, t: &str, obj: Value) {
     if raw(w, id, frame(t, &obj)) {
-        arm(w, id);
+        touch(w, id);
     }
 }
 
-fn arm(w: &mut World, id: u64) {
+/// Re-arm the keep-alive: the next ping is due `ping_ms` after this write.
+fn touch(w: &mut World, id: u64) {
+    if let Some(Kind::Sse { last_write, .. }) = w.sinks.get_mut(&id).map(|s| &mut s.kind) {
+        *last_write = Instant::now();
+    }
+}
+
+/// The one keep-alive task of a started SSE sink: it sleeps until `ping_ms` after the last
+/// write, re-reads the deadline (writes move it), and pings only after real silence. It
+/// ends when the sink is done or gone.
+fn spawn_keepalive(w: &mut World, id: u64) {
     let me = w.shared();
-    let Some(s) = w.sinks.get_mut(&id) else {
-        return;
-    };
-    let (done, started) = (s.done, s.started);
-    let Kind::Sse {
-        timer_gen, ping_ms, ..
-    } = &mut s.kind
+    let Some(Kind::Sse {
+        ping_ms, keepalive, ..
+    }) = w.sinks.get_mut(&id).map(|s| &mut s.kind)
     else {
         return;
     };
-    *timer_gen += 1;
-    if done || !started {
+    if keepalive.is_some() {
         return;
     }
-    let gen = *timer_gen;
-    let ms = (*ping_ms).max(1);
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-        with_world(&me, |w| {
-            let live = w
-                .sinks
-                .get(&id)
-                .is_some_and(|s| matches!(s.kind, Kind::Sse { timer_gen, .. } if timer_gen == gen));
-            if live && raw(w, id, frame("ping", &json!({ "type": "ping" }))) {
-                arm(w, id);
+    let every = Duration::from_millis((*ping_ms).max(1));
+    let task = tokio::spawn(async move {
+        loop {
+            let due = with_world(&me, |w| match w.sinks.get(&id) {
+                Some(s) if !s.done => match &s.kind {
+                    Kind::Sse { last_write, .. } => Some(*last_write + every),
+                    Kind::Buffer { .. } => None,
+                },
+                _ => None,
+            });
+            let Some(Some(due)) = due else {
+                return;
+            };
+            tokio::time::sleep_until(due).await;
+            let go_on = with_world(&me, |w| {
+                let silent = match w.sinks.get(&id) {
+                    Some(s) if !s.done => match &s.kind {
+                        Kind::Sse { last_write, .. } => *last_write + every <= Instant::now(),
+                        Kind::Buffer { .. } => return false,
+                    },
+                    _ => return false,
+                };
+                if !silent {
+                    return true;
+                }
+                if raw(w, id, frame("ping", &json!({ "type": "ping" }))) {
+                    touch(w, id);
+                    return true;
+                }
+                false
+            });
+            if go_on != Some(true) {
+                return;
             }
-        });
+        }
     });
+    *keepalive = Some(task.abort_handle());
 }
 
 fn clear_timer(s: &mut Sink) {
-    if let Kind::Sse { timer_gen, .. } = &mut s.kind {
-        *timer_gen += 1;
+    if let Kind::Sse { keepalive, .. } = &mut s.kind {
+        if let Some(k) = keepalive.take() {
+            k.abort();
+        }
     }
 }
 
@@ -353,11 +398,8 @@ pub fn start(w: &mut World, id: u64, usage: &Value) {
     if matches!(s.kind, Kind::Buffer { .. }) {
         return;
     }
-    let res_id = s.res;
     let msg = with_keys(&s.msg, vec![("usage", usage_out(Some(usage)))]);
-    if let Some(r) = w.res.get_mut(&res_id) {
-        r.stream_head(200, sse_headers());
-    }
+    s.stream_head(200, sse_headers());
     write(
         w,
         id,
@@ -375,7 +417,10 @@ pub fn start(w: &mut World, id: u64, usage: &Value) {
         }
     }
     if any {
-        arm(w, id);
+        touch(w, id);
+    }
+    if !sink_done(w, id) {
+        spawn_keepalive(w, id);
     }
 }
 
@@ -514,25 +559,23 @@ pub fn finish(w: &mut World, id: u64, stop_reason: &Value, usage: &Value) {
     if s.done {
         return;
     }
-    let res_id = s.res;
     match &mut s.kind {
         Kind::Buffer { text, blocks } => {
-            s.done = true;
             flush_text(text, blocks);
             if blocks.is_empty() {
                 blocks.push(json!({ "type": "text", "text": "(no text)" }));
             }
+            let content = Value::Array(std::mem::take(blocks));
+            s.done = true;
             let body = with_keys(
                 &s.msg,
                 vec![
-                    ("content", Value::Array(std::mem::take(blocks))),
+                    ("content", content),
                     ("stop_reason", stop_reason.clone()),
                     ("usage", usage_out(Some(usage))),
                 ],
             );
-            if let Some(r) = w.res.get_mut(&res_id) {
-                r.full(200, json_headers(), Some(js::stringify(&body)));
-            }
+            s.full(Reply::json(200, &body, Vec::new()));
         }
         Kind::Sse { any_block, .. } => {
             if !*any_block {
@@ -549,10 +592,8 @@ pub fn finish(w: &mut World, id: u64, stop_reason: &Value, usage: &Value) {
             if let Some(s) = w.sinks.get_mut(&id) {
                 s.done = true;
                 clear_timer(s);
-            }
-            if let Some(r) = w.res.get_mut(&res_id) {
-                if !r.ended {
-                    r.end();
+                if !s.ended {
+                    s.end();
                 }
             }
         }
@@ -569,22 +610,21 @@ pub fn error(w: &mut World, id: u64, err: &SidecarError) {
     }
     s.done = true;
     clear_timer(s);
-    let res_id = s.res;
     let buffered = matches!(s.kind, Kind::Buffer { .. });
-    let started = s.started;
-    let Some(r) = w.res.get_mut(&res_id) else {
-        return;
-    };
-    if buffered || !started {
-        r.full(
-            err.status,
-            error_headers(err),
-            Some(js::stringify(&err.body())),
-        );
+    if buffered || !s.started {
+        s.full(Reply::error(err));
         return;
     }
-    if !r.ended && !r.destroyed {
-        r.write(&frame("error", &err.body()));
-        r.end();
+    if !s.ended && !s.destroyed {
+        s.send(frame("error", &err.body()));
+        s.end();
     }
+}
+
+/// The `close` event of the sink's response (`http::CloseGuard`): mark it destroyed and
+/// hand back the registered hook.
+pub fn closed(w: &mut World, id: u64) -> Option<CloseHook> {
+    let s = w.sinks.get_mut(&id)?;
+    s.destroyed = true;
+    s.hook.take()
 }

@@ -45,7 +45,7 @@ test("extra bind fails then succeeds on retry: degraded until recovered, then ok
   assert.equal(before.status, 503, before.text);
   assert.equal(before.json.status, "degraded");
   assert.deepEqual(before.json.binds.missing, [`${EXTRA}:${blocker.port}`]);
-  assert.ok(h.log().some(l => l.kind === "bind-extra-retrying" && /EADDRINUSE/.test(l.err)));
+  assert.ok(h.log().some(l => l.kind === "bind-extra-retrying" && /[Aa]ddress already in use|AddrInUse/.test(l.err)));
 
   await blocker.release();
   await waitFor(() => h.log().some(l => l.kind === "bind-extra-recovered"), 4000);

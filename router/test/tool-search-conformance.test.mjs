@@ -7,15 +7,13 @@
 // HTTP. When that gateway is unreachable the tests FAIL — they never skip. A conformance gate
 // that quietly disappears when its target is down is not a gate.
 //
-// Bodies. The spike's captured request-1 bodies are replayed when a capture directory is
-// present ($TOOL_SEARCH_CAPTURE_DIR, default /tmp/wp5-capture); that is the only way to carry
-// the spike's absolute token thresholds, which were measured against this fleet's real system
-// prompt and its real always-on tool descriptions. Without captures the test builds bodies of
-// the documented shape in-test (12 tools: a fully-schema'd ToolSearch, exactly one
-// `defer_loading: true` DeferredToolPlaceholder, the always-on tools; the deferred names
-// advertised in an interleaved role:"system" message) and asserts the same invariants
-// relatively — a synthetic catalogue is necessarily smaller than the fleet's, so only the
-// direction is meaningful. Which mode ran is printed, never inferred.
+// Bodies. Byte-fixed synthetic bodies of the spike's documented shape, built in-test (12 tools:
+// a fully-schema'd ToolSearch, exactly one `defer_loading: true` DeferredToolPlaceholder, the
+// always-on tools; the deferred names advertised in an interleaved role:"system" message; the
+// eager control materialises all 20). The token thresholds are measured on these bodies per leg
+// (LEGS[].synth in ./tool-search-shared.mjs), not the spike's real-profile figures, and apply only
+// on the exact model measured; a leg without them asserts ordering only. (The spike's captured
+// /tmp bodies were throwaway and are no longer replayed, 2026-10-19.)
 //
 // Token metric. Exactly the spike's: POST /v1/messages/count_tokens with the cell's own
 // `system` + `tools` and a one-word user message, on that cell's own leg. Cross-leg comparison
@@ -32,7 +30,7 @@
 // Auth. The gateway key comes from $GATEWAY_KEY or $ROUTER_ENV_FILE
 // (default <code-root>/fleet-tools/.env) and is never printed.
 //
-// Env: ROUTER_BASE_URL, ROUTER_ENV_FILE, GATEWAY_KEY, TOOL_SEARCH_CAPTURE_DIR.
+// Env: ROUTER_BASE_URL, ROUTER_ENV_FILE, GATEWAY_KEY.
 
 import assert from "node:assert/strict";
 import test from "node:test";

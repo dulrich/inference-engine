@@ -13,7 +13,7 @@
 // skips. A triggered run without the bearer is reported to the user as not run, naming
 // ROUTER_HOSTED_BEARER.
 //
-// Env: ROUTER_HOSTED_BEARER, ROUTER_BASE_URL, ROUTER_ENV_FILE, GATEWAY_KEY, TOOL_SEARCH_CAPTURE_DIR.
+// Env: ROUTER_HOSTED_BEARER, ROUTER_BASE_URL, ROUTER_ENV_FILE, GATEWAY_KEY.
 
 import { LEGS, registerLegTests } from "../tool-search-shared.mjs";
 

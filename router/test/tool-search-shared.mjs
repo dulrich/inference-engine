@@ -8,13 +8,11 @@
 import { routerEnvFile } from "../fleet-env.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import path from "node:path";
 import test from "node:test";
 
 const BASE_URL = (process.env.ROUTER_BASE_URL || "http://127.0.0.1:4813").replace(/\/$/, "");
 // ROUTER_ENV_FILE, else `fleet-env path router` under the fleet-env cutover, else the legacy file.
 const ENV_FILE = routerEnvFile();
-const CAPTURE_DIR = process.env.TOOL_SEARCH_CAPTURE_DIR || "/tmp/wp5-capture";
 // The engine's anthropic-type legs want *some* client bearer to build passthrough headers; the
 // provider's own apiKeyEnv replaces it before the upstream (smoke-router.sh checks 7 and 8).
 const DUMMY_BEARER = "tool-search-conformance-dummy-client-bearer";
@@ -162,16 +160,6 @@ const synthOff = () => ({
   messages: [{ role: "user", content: `What parameters does ${PROBE_TOOL} take?` }],
 });
 
-function capturedBody(cell) {
-  const file = path.join(CAPTURE_DIR, cell, "001.req.json");
-  try {
-    const body = JSON.parse(fs.readFileSync(file, "utf8"))?.body;
-    return body && Array.isArray(body.tools) ? body : null;
-  } catch {
-    return null;
-  }
-}
-
 // The captured id is whatever was resident on spike day; the leg is what matters, so the model
 // is always rewritten to the id this gateway reports now.
 const countBody = (model, src, { withTools = true } = {}) => ({
@@ -189,23 +177,24 @@ const LEGS = [
     label: "Claude passthrough",
     hosted: true,
     pick: ids => resolveModel(ids, { preferred: "claude-haiku-4-5", listedAs: "anthropic/claude-haiku-4-5", prefix: "anthropic/" }),
-    off: 29159, on: 17745,
+    // No synthetic-body thresholds measured for the hosted leg: ordering only.
+    synth: null,
   },
   {
     cell: "local",
     label: "local OpenAI-conversion",
     pick: ids => resolveModel(ids, { preferred: "claude-local/qwen38-27b-iq3s", prefix: "claude-local/" }),
-    off: 15394, on: 8238,
-    // Synthetic-body floor on the eager/deferred tools-only ratio (measured 2.28x, 2026-10-19).
-    synthMinRatio: 2.0,
+    // Synthetic bodies on the exact model, measured 2026-10-19: system+tools on 920 / off 2014,
+    // tools-only ratio 2.28x (floor 2.0x, ~10% slack).
+    synth: { on: 920, off: 2014, minRatio: 2.0 },
   },
   {
     cell: "codex",
     label: "codex sidecar",
     pick: ids => resolveModel(ids, { preferred: "codex-b/gpt-5.6-luna", prefix: "codex-b/" }),
-    off: 14549, on: 7875,
-    // Synthetic-body floor on the eager/deferred tools-only ratio (measured 3.62x, 2026-10-19).
-    synthMinRatio: 3.2,
+    // Synthetic bodies on the exact model, measured 2026-10-19: system+tools on 382 / off 1344,
+    // tools-only ratio 3.62x (floor 3.2x, ~10% slack).
+    synth: { on: 382, off: 1344, minRatio: 3.2 },
   },
 ];
 
@@ -232,10 +221,8 @@ const byName = (tools, name) => tools.find(t => t?.name === name);
 // Registers the two per-leg cells (deferred shape; within-leg token gate) for one leg.
 export function registerLegTests(leg) {
   test(`${leg.label}: request 1 carries the deferred shape, and the eager control does not`, async t => {
-    const onSrc = capturedBody(`${leg.cell}-on`) ?? synthOn();
-    const offSrc = capturedBody(`${leg.cell}-off`) ?? synthOff();
-    t.diagnostic(`${leg.cell}: on=${capturedBody(`${leg.cell}-on`) ? "replayed capture" : "synthetic"}, `
-      + `off=${capturedBody(`${leg.cell}-off`) ? "replayed capture" : "synthetic"} (capture dir ${CAPTURE_DIR})`);
+    const onSrc = synthOn();
+    const offSrc = synthOff();
 
     // Invariant 1 — exactly one defer_loading marker, a usable ToolSearch, the probe tool absent.
     const deferred = deferredEntries(onSrc.tools);
@@ -261,54 +248,47 @@ export function registerLegTests(leg) {
   test(`${leg.label}: the deferred catalogue is not eagerly expanded (within-leg token gate)`, async t => {
     const ids = await modelIds();
     const { id: model, exact } = leg.pick(ids);
-    const onCap = capturedBody(`${leg.cell}-on`);
-    const offCap = capturedBody(`${leg.cell}-off`);
-    const replayed = Boolean(onCap && offCap);
-    const onSrc = onCap ?? synthOn();
-    const offSrc = offCap ?? synthOff();
+    const onSrc = synthOn();
+    const offSrc = synthOff();
 
     const onTokens = await countTokens(leg, model, onSrc);
     const offTokens = await countTokens(leg, model, offSrc);
     const onToolsOnly = onTokens - await countTokens(leg, model, onSrc, { withTools: false });
     const offToolsOnly = offTokens - await countTokens(leg, model, offSrc, { withTools: false });
+    const ratio = offToolsOnly / onToolsOnly;
     t.diagnostic(`${leg.cell} (${model}): system+tools on=${onTokens} off=${offTokens} | `
-      + `tools only on=${onToolsOnly} off=${offToolsOnly} | ratio ${(offToolsOnly / onToolsOnly).toFixed(2)}x | `
-      + `${replayed ? "replayed" : "synthetic"} bodies`);
+      + `tools only on=${onToolsOnly} off=${offToolsOnly} | ratio ${ratio.toFixed(2)}x | synthetic bodies`);
 
-    // Direction 1 — the deferred profile stays at or under the WP-5 on-threshold. Replaying the
-    // spike's own captured body reproduces its number exactly, so the bound is `<=` plus 2% of
-    // drift headroom; anything above that is either eager expansion or a grown profile.
-    const ceiling = Math.ceil(leg.on * 1.02);
-    assert.ok(onTokens <= ceiling, `${leg.label}: the deferred profile cost ${onTokens} system+tools tokens, above the `
-      + `WP-5 measured ${leg.on} (+2% = ${ceiling}). Either the catalogue is being eagerly expanded again, or the profile `
-      + "grew and the threshold needs re-measuring — the spike record is the only place a new number may come from.");
-
-    // Direction 2 — the gate must be able to fail: the eager control has to exceed that same
-    // threshold. Absolute thresholds are only meaningful on replayed captures against the id the
-    // spike measured; otherwise the within-leg ordering is what is asserted.
-    if (replayed && exact) {
-      assert.ok(offTokens > leg.on, `${leg.label}: the eager control cost only ${offTokens} system+tools tokens, which does `
-        + `not exceed the WP-5 on-threshold ${leg.on} — the negative control is no longer a control.`);
-      assert.ok(offTokens <= leg.off * 1.05, `${leg.label}: the eager control cost ${offTokens} tokens, more than 5% above the `
-        + `WP-5 measured ${leg.off}; the fixture profile has drifted and the thresholds need re-measuring.`);
-    } else {
-      t.diagnostic(`${leg.cell}: absolute thresholds not asserted (replayed=${replayed}, exact model=${exact}); `
-        + "within-leg ordering only. Point TOOL_SEARCH_CAPTURE_DIR at a WP-5-shaped capture to restore them.");
-      assert.ok(offTokens > onTokens, `${leg.label}: the eager control (${offTokens}) did not cost more than the deferred `
-        + `profile (${onTokens}) — the deferred path is saving nothing.`);
-    }
+    // Ordering, every leg: deferral must save something, on the whole prompt and the tool block.
+    assert.ok(offTokens > onTokens, `${leg.label}: the eager control (${offTokens}) did not cost more than the deferred `
+      + `profile (${onTokens}) — the deferred path is saving nothing.`);
     assert.ok(offToolsOnly > onToolsOnly, `${leg.label}: the eager tool block (${offToolsOnly}) did not exceed the deferred `
       + `one (${onToolsOnly}); deferral is not reducing the tool block at all.`);
-    // Plain ordering only proves deferral saves *something*. On the synthetic bodies, with the
-    // exact model the floor was measured on, require the measured saving (~10% slack) so a
-    // partial eager expansion of the deferred tools also fails. Legs without a floor (the hosted
-    // leg, unmeasured) keep plain ordering.
-    if (!replayed && exact && leg.synthMinRatio) {
-      const ratio = offToolsOnly / onToolsOnly;
-      assert.ok(ratio >= leg.synthMinRatio, `${leg.label}: the eager/deferred tool-block ratio is ${ratio.toFixed(2)}x `
-        + `(${offToolsOnly}/${onToolsOnly}), below the synthetic-body floor ${leg.synthMinRatio}x — deferral saves less than `
-        + "measured; part of the deferred catalogue is being counted eagerly, or the synthetic bodies changed.");
+
+    // Absolute thresholds: measured on these byte-fixed synthetic bodies, so they hold only on the
+    // exact model they were measured with, and only for legs that have them (not the hosted leg).
+    if (!exact || !leg.synth) {
+      t.diagnostic(`${leg.cell}: absolute thresholds not asserted (exact model=${exact}, `
+        + `measured=${Boolean(leg.synth)}); ordering only.`);
+      return;
     }
+    const { on, off, minRatio } = leg.synth;
+    // Direction 1 — the deferred profile stays at its measured cost (+2% for tokenizer drift).
+    const ceiling = Math.ceil(on * 1.02);
+    assert.ok(onTokens <= ceiling, `${leg.label}: the deferred profile cost ${onTokens} system+tools tokens, above the `
+      + `measured ${on} (+2% = ${ceiling}). The catalogue is being counted eagerly, or the synthetic bodies changed `
+      + "and the thresholds need re-measuring.");
+    // Direction 2 — the gate must be able to fail: the eager control exceeds that same threshold,
+    // and stays near its own measured cost.
+    assert.ok(offTokens > on, `${leg.label}: the eager control cost only ${offTokens} system+tools tokens, which does `
+      + `not exceed the on-threshold ${on} — the negative control is no longer a control.`);
+    assert.ok(offTokens <= off * 1.05, `${leg.label}: the eager control cost ${offTokens} tokens, more than 5% above the `
+      + `measured ${off}; the synthetic bodies or the tokenizer drifted and the thresholds need re-measuring.`);
+    // Ratio floor (~10% slack under the measured saving): a partial eager expansion fails here
+    // even when plain ordering still holds.
+    assert.ok(ratio >= minRatio, `${leg.label}: the eager/deferred tool-block ratio is ${ratio.toFixed(2)}x `
+      + `(${offToolsOnly}/${onToolsOnly}), below the floor ${minRatio}x — deferral saves less than measured; part of `
+      + "the deferred catalogue is being counted eagerly, or the synthetic bodies changed.");
   });
 }
 
@@ -347,6 +327,6 @@ function roundTripBody(model) {
 }
 
 export {
-  ADVERT_PHRASE, BASE_URL, CAPTURE_DIR, LEGS, PROBE_TOOL,
+  ADVERT_PHRASE, BASE_URL, LEGS, PROBE_TOOL,
   call, countTokens, hostedBearer, modelIds, resolveModel, roundTripBody, synthOff, synthOn,
 };

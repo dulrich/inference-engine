@@ -184,3 +184,39 @@ test("the session-title signature is answered locally, and only that signature",
   assert.equal(ordinary.json.content[0].text, "hello world");
   assert.equal(sentTo(h.trace(), "thread/start").length, 1, "the normal path opens a thread");
 });
+
+test("a mid-turn contextCompaction item is in band: the turn completes and the persona stays healthy", async t => {
+  const h = await withSidecar({
+    scenario: {
+      threadStart: { instructionSources: ["/home/u/.codex-a/AGENTS.md"] },
+      defaultTurn: [{ text: "hello " }, { item: { type: "contextCompaction" } }, { text: "world" }, { complete: {} }],
+    },
+  });
+  t.after(() => h.close());
+
+  const r = await req(h, "/codex-a/v1/messages", { body: msgBody({}) });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.content[0].text, "hello world");
+  assert.equal(h.log().filter(l => l.kind === "security-event").length, 0);
+  assert.equal(sentTo(h.trace(), "turn/interrupt").length, 0);
+  const health = await req(h, "/healthz", { method: "GET" });
+  assert.equal(health.json.personas["codex-a"].degraded, false);
+});
+
+test("an unknown item type still trips the execution boundary (allowlist, not denylist)", async t => {
+  const h = await withSidecar({
+    scenario: {
+      threadStart: { instructionSources: ["/home/u/.codex-a/AGENTS.md"] },
+      defaultTurn: [{ text: "x" }, { item: { type: "fooBar" } }, { delay: 3000 }, { complete: {} }],
+    },
+    env: { SIDECAR_BACKOFF_MS: "5000" },
+  });
+  t.after(() => h.close());
+
+  const r = await req(h, "/codex-a/v1/messages", { body: msgBody({}) });
+  assert.equal(r.status, 502);
+  assert.match(r.json.error.message, /out-of-band execution attempt \(fooBar\)/);
+  assert.equal(h.log().find(l => l.kind === "security-event").itemType, "fooBar");
+  const health = await req(h, "/healthz", { method: "GET" });
+  assert.equal(health.json.personas["codex-a"].degraded, true);
+});

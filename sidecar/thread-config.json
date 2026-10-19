@@ -1,5 +1,6 @@
 {
   "project_doc_max_bytes": 0,
+  "model_auto_compact_token_limit": 200000,
   "features": {
     "apps": false,
     "plugins": false,

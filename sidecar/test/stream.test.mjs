@@ -100,3 +100,38 @@ test("the wire usage is the Anthropic projection; the http row keeps the raw cod
     inputTokens: 6463, cachedInputTokens: 3840, cacheWriteInputTokens: 0, outputTokens: 12,
   }, "the raw codex delta stays recoverable for subscription-burn reading");
 });
+
+test("an all-input-zero compaction interim never replaces the last non-zero usage (audit E1)", async t => {
+  const zero = { last: { inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+    total: { inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 } };
+  const h = await withSidecar({
+    scenario: {
+      turns: [
+        [{ delay: 30 }, { usage: usage(100, 10) }, { text: "one" }, { complete: {} }],
+        // the compaction interval: the turn ends on the zero interim
+        [{ delay: 30 }, { item: { type: "contextCompaction" } }, { usage: zero }, { text: "two" }, { complete: {} }],
+        [{ delay: 30 }, { usage: usage(80, 5) }, { text: "three" }, { complete: {} }],
+      ],
+    },
+  });
+  t.after(() => h.close());
+
+  const sid = "dddddddd-0000-0000-0000-0000000000e1";
+  const turn = (n) => {
+    const msgs = [{ role: "user", content: "hi" }];
+    for (let i = 1; i < n; i++) msgs.push({ role: "assistant", content: ["one", "two"][i - 1] }, { role: "user", content: `again ${i}` });
+    return req(h, "/codex-a/v1/messages", { body: msgBody({ stream: true, sessionId: sid, messages: msgs }) });
+  };
+  const startUsage = r => r.events.find(e => e.event === "message_start").data.message.usage;
+  const deltaUsage = r => r.events.find(e => e.event === "message_delta").data.usage;
+
+  const first = await turn(1);
+  assert.equal(deltaUsage(first).input_tokens, 100);
+  const second = await turn(2);
+  assert.equal(second.status, 200, second.text);
+  assert.equal(deltaUsage(second).input_tokens, 100, "the zero interim does not replace the turn's usage");
+  // read taken in the zero interval: the next request's lagged message_start, before its non-zero update
+  const third = await turn(3);
+  assert.equal(startUsage(third).input_tokens, 100, "usage read during the zero interval is the last non-zero figure");
+  assert.equal(deltaUsage(third).input_tokens, 80, "the next non-zero update is taken normally");
+});

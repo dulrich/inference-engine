@@ -91,5 +91,6 @@ fn pinned_files_load_from_the_sidecar_dir() {
     assert!(p.dir.join("preamble.txt").is_file());
     assert!(!p.preamble.ends_with('\n'));
     assert!(p.thread_config.is_object());
-    assert_eq!(INBAND_ITEM_TYPES.len(), 4);
+    assert_eq!(INBAND_ITEM_TYPES.len(), 5);
+    assert!(INBAND_ITEM_TYPES.contains(&"contextCompaction"));
 }

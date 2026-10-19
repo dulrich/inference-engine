@@ -408,10 +408,45 @@ fn nullish_or(v: Option<&Value>, prev: &Option<Value>) -> Option<Value> {
     }
 }
 
+/// codex's input-token fields: a usage figure whose every one of these is 0 (or absent) is
+/// a compaction interim, not a real occupancy reading.
+const INPUT_USAGE_FIELDS: &[&str] = &["inputTokens", "cachedInputTokens", "cacheWriteInputTokens"];
+
+fn input_is_zero(u: Option<&Value>) -> bool {
+    INPUT_USAGE_FIELDS.iter().all(|k| {
+        let v = js::present(js::prop(u, k))
+            .cloned()
+            .unwrap_or(Value::from(0));
+        let n = js::to_number(Some(&v));
+        n.is_nan() || n <= 0.0
+    })
+}
+
+/// A usage figure whose input fields are all zero never replaces a non-zero one: during a
+/// compaction codex emits such an interim, and reporting it would read as an empty context.
+fn usage_or_prev(v: Option<&Value>, prev: &Option<Value>) -> Option<Value> {
+    match v {
+        Some(x) if !x.is_null() => {
+            if input_is_zero(Some(x)) && prev.is_some() && !input_is_zero(prev.as_ref()) {
+                prev.clone()
+            } else {
+                Some(x.clone())
+            }
+        }
+        _ => prev.clone(),
+    }
+}
+
 fn take_usage(s: &mut Session, tu: &Value) {
-    s.usage_last = nullish_or(tu.get("last"), &s.usage_last);
-    s.usage_total = nullish_or(tu.get("total"), &s.usage_total);
-    s.context_window = nullish_or(tu.get("modelContextWindow"), &s.context_window);
+    s.usage_last = usage_or_prev(tu.get("last"), &s.usage_last);
+    s.usage_total = usage_or_prev(tu.get("total"), &s.usage_total);
+    // A zero window would clamp the projection to 0, so it never replaces a known one either.
+    s.context_window = match tu.get("modelContextWindow") {
+        Some(x) if js::to_number(Some(x)) == 0.0 && s.context_window.is_some() => {
+            s.context_window.clone()
+        }
+        v => nullish_or(v, &s.context_window),
+    };
 }
 
 /// `onFrame(ev)`: every app-server frame for this thread.

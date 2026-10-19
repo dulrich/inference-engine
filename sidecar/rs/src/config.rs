@@ -17,11 +17,14 @@ pub const VERSION: &str = "0.1.0";
 pub const BODY_LIMIT: usize = 32 * 1024 * 1024;
 
 /// The execution boundary: any other item type is out of band and trips it.
+/// `contextCompaction` is in band because it is codex's own context management (the
+/// `model_auto_compact_token_limit` lever in `thread-config.json`), not execution.
 pub const INBAND_ITEM_TYPES: &[&str] = &[
     "agentMessage",
     "reasoning",
     "dynamicToolCall",
     "userMessage",
+    "contextCompaction",
 ];
 
 /// The pinned files `preamble.txt` and `thread-config.json`, read at startup from the sidecar

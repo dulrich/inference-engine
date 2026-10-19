@@ -5,6 +5,8 @@
 
 pub mod codex;
 pub mod config;
+pub mod disposition;
+pub mod emission;
 pub mod errors;
 pub mod http;
 pub mod logging;

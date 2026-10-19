@@ -294,4 +294,22 @@ Cell ids (in table order): `g26nt-qat-c32k-f16-mtp-ctkf16-ctvf16-faauto-c32768-8
 - **64k:** Q5_K_M k8v4 (2851 MiB, the only 9/9).
 - **f16 KV, for full-speed prefill at shorter context:** IQ4_XS ~53k or Q4_K_M ~49k. This is the chat-model trade: half the context of k4v4 for twice the prefill speed.
 
+**Decode follow-up (2026-10-19 01:08–01:23Z, same setup, `decode.py` / `decode.jsonl`).** The recall run's answers were 2–24 tokens, so its decode figures were noise. This run forces exactly 512 generated tokens (`ignore_eos`) three times per config over the cached haystack (the first pays prefill, the next two are fully cached; the three agree within ±3%), plus one 512-token short-prompt generation at near-zero depth.
+
+| Config | Proj. MiB | Depth | Decode at depth (median of 3) | vs f16 KV | Short-prompt decode | Prefill |
+| --- | --- | --- | --- | --- | --- | --- |
+| IQ4_XS k4v4 128k | 2939 | 115.5k | **83.8 t/s** | +8% | 186 | 695 |
+| IQ4_XS f16 128k | 6803 | 115.5k | 77.7 | — | 198 | 1363 |
+| Q5_K_M k4v4 128k | 3335 | 115.5k | **85.6** | +16% | 172 | 691 |
+| Q5_K_M f16 128k | 7199 | 115.5k | 73.7 | — | 143* | 1355 |
+| Q5_K_M k8v4 64k | 2851 | 57.6k | **113.6** | +9% | 170 | 1287 |
+| Q5_K_M f16 64k | 4447 | 57.6k | 104.6 | — | 187 | 2362 |
+| Q4_K_M k8v8 64k | 2928 | 57.6k | **119.6** | +9% | 182 | 1335 |
+| Q4_K_M f16 64k | 4188 | 57.6k | 109.6 | — | 198 | 2374 |
+| IQ4_XS f16 48k | ~3500 | 43.1k | **129.1** | — | 204 | 2904 |
+
+(*The Q5_K_M f16 128k short-prompt figure is that config's first request after load and reads low against every other Q5_K_M row; treat it as a warm-up artefact.)
+
+**Reading.** At depth, decode is KV-read-bound, and the smaller quantized cache wins: +8–16% over f16 KV at the same weights and context. The prefill loss (≈ −50%) remains, so quantized KV trades slower time-to-first-token on a long context for faster streaming afterwards. At near-zero depth, quantized and f16 KV decode within noise of each other (170–204 t/s, weight-size-bound). With the KV loaded, these bartowski rows sit at or above ladder-v1's openbmb f16-KV decode (Q4_K_M 108 t/s at 64k, 74 at 128k), consistent within that run's different prompt set. For a chat model, the f16 IQ4_XS 48k config has the fastest decode (129 t/s at 43k depth) and the fastest prefill (2904 t/s) of any candidate, at the cost of capping context at ~48–53k.
+
 **Method note.** A cached-prefix, multi-question battery with logprob confidence answered in 26 minutes what the 27-independent-probe harness battery budgeted 5.5 h for. Recorded as a backlog candidate for the harness's default long-context battery (`INITIATIVE.md` Backlog).

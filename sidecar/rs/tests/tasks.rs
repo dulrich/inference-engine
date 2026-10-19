@@ -60,36 +60,15 @@ async fn a_long_sse_turn_keeps_the_live_task_count_flat() {
     .collect();
     let cfg = read_config(&env).unwrap();
     let h = sidecar::start(cfg, Pinned::load().unwrap()).await.unwrap();
+
+    // Warm-up turn on its own session: the persona child spawns on first use and keeps its
+    // reader/writer tasks for life, so the baseline is taken once they exist. Sampling right
+    // after boot both excludes them and races the boot tasks' registration.
+    stream_turn(h.port, "00000000-0000-0000-0000-000000000000").await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let before = alive();
 
-    let body = serde_json::json!({
-        "model": "gpt-5.6-luna", "max_tokens": 64, "stream": true,
-        "system": [{ "type": "text", "text": "You are a helpful coding assistant." }],
-        "messages": [{ "role": "user", "content": "hi" }],
-        "metadata": { "user_id": "{\"session_id\":\"11111111-2222-3333-4444-555555555555\"}" },
-    })
-    .to_string();
-    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", h.port))
-        .await
-        .unwrap();
-    let head = format!(
-        "POST /codex-a/v1/messages HTTP/1.1\r\nhost: x\r\nauthorization: Bearer test-key\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-        body.len()
-    );
-    s.write_all(head.as_bytes()).await.unwrap();
-    s.write_all(body.as_bytes()).await.unwrap();
-    let (mut text, mut buf, mut peak) = (String::new(), vec![0u8; 4096], before);
-    loop {
-        let n = tokio::time::timeout(std::time::Duration::from_secs(30), s.read(&mut buf))
-            .await
-            .expect("stream stalled")
-            .unwrap();
-        peak = peak.max(alive());
-        if n == 0 {
-            break;
-        }
-        text.push_str(&String::from_utf8_lossy(&buf[..n]));
-    }
+    let (text, peak) = stream_turn(h.port, "11111111-2222-3333-4444-555555555555").await;
     let deltas = text.matches("event: content_block_delta").count();
     assert_eq!(deltas, DELTAS, "every delta streamed");
     assert!(text.contains("event: message_stop"));
@@ -101,9 +80,43 @@ async fn a_long_sse_turn_keeps_the_live_task_count_flat() {
         "live tasks grew with frames: before={before} peak={peak}"
     );
     assert!(
-        after <= before + 4,
+        after <= before + 2,
         "tasks leaked: before={before} after={after}"
     );
     h.close().await;
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// One streamed `POST /codex-a/v1/messages` turn under `session_id`, read to EOF.
+/// Returns the SSE text and the peak live task count seen while reading.
+async fn stream_turn(port: u16, session_id: &str) -> (String, usize) {
+    let body = serde_json::json!({
+        "model": "gpt-5.6-luna", "max_tokens": 64, "stream": true,
+        "system": [{ "type": "text", "text": "You are a helpful coding assistant." }],
+        "messages": [{ "role": "user", "content": "hi" }],
+        "metadata": { "user_id": serde_json::json!({ "session_id": session_id }).to_string() },
+    })
+    .to_string();
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let head = format!(
+        "POST /codex-a/v1/messages HTTP/1.1\r\nhost: x\r\nauthorization: Bearer test-key\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+        body.len()
+    );
+    s.write_all(head.as_bytes()).await.unwrap();
+    s.write_all(body.as_bytes()).await.unwrap();
+    let (mut text, mut buf, mut peak) = (String::new(), vec![0u8; 4096], alive());
+    loop {
+        let n = tokio::time::timeout(std::time::Duration::from_secs(30), s.read(&mut buf))
+            .await
+            .expect("stream stalled")
+            .unwrap();
+        peak = peak.max(alive());
+        if n == 0 {
+            break;
+        }
+        text.push_str(&String::from_utf8_lossy(&buf[..n]));
+    }
+    (text, peak)
 }

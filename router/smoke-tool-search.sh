@@ -44,9 +44,9 @@
 #      WP-5-measured on-threshold for THIS leg (plus 2% of fixture drift: the throwaway profile's
 #      own paths and date move the system prompt by a few tokens), and above that same threshold
 #      under --control. Thresholds were measured with the pinned tool set (PINNED_TOOLS) on
-#      2026-10-19: local 3758 on / 6966 control, codex 3419 on / 6380 control. The margin is
-#      ~46%, so 2% cannot mask an eager expansion. The passthrough threshold predates the pin
-#      and is unmeasured under it (it needs one metered Claude turn). Cross-leg comparison is invalid (different catalogues, different tokenizers) and
+#      2026-10-19: local 3758 on / 6966 control, codex 3419 on / 6380 control, passthrough
+#      11465 on / 15111 control. The margins are ~46% (local, codex) and ~32% (passthrough), so
+#      2% cannot mask an eager expansion. Cross-leg comparison is invalid (different catalogues, different tokenizers) and
 #      is never attempted.
 #
 # How it observes request 1: Claude Code is pointed at a throwaway loopback capture proxy that
@@ -473,7 +473,7 @@ if [ "$WANT_PASSTHROUGH" -eq 1 ]; then
 	if [ -z "$m" ]; then
 		bad "passthrough: /v1/models lists no anthropic/* id"
 	else
-		run_leg "passthrough" "$m" 17745
+		run_leg "passthrough" "$m" 11470
 	fi
 else
 	note "--passthrough not passed: SKIPPING the metered hosted leg (one Claude-subscription turn)."

@@ -1,3 +1,10 @@
+// CONDITIONAL — lives in router/test/conditional/, outside the per-commit
+// `node --test router/test/*.test.mjs` glob, because every probe loads the Qwen3.8 27B on the GPU
+// tier (plans/test-qwen-load-minimization.md). Trigger surface (router/AGENTS.md "Gates" trigger
+// table): `router/gateway/src/local_leg.rs` effort handling; `effortKwargs` in gateway.config.json;
+// Qwen3.8 template/recipe changes in llama/config.yaml; this file. Run with EFFORT_MAPPING_LOCAL=1;
+// without it the file registers one failing test naming the variable (never skip).
+//
 // effort-mapping.test.mjs — black-box, render-level gate for patch 0007 (+ 0009): the client's
 // reasoning intent (Anthropic `output_config.effort` / `thinking`) reaching the local leg's
 // template as `chat_template_kwargs` (router/AGENTS.md, "The patches", 0007 and 0009;
@@ -44,18 +51,20 @@
 //
 // Env: ROUTER_BASE_URL (default http://127.0.0.1:4813), ROUTER_ENV_FILE, GATEWAY_KEY,
 //      LLAMA_UPSTREAM_URL (default http://127.0.0.1:4811 — the host port of the llama container),
-//      EFFORT_UPSTREAM_MODEL (default: the single model keyed in claude-local's effortKwargs).
+//      EFFORT_UPSTREAM_MODEL (default qwen38-27b-iq3s; must carry an effortKwargs row),
+//      EFFORT_MAPPING_LOCAL (must be "1": this file loads the 27B).
 
-import { routerEnvFile } from "../fleet-env.mjs";
+import { routerEnvFile } from "../../fleet-env.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
+const OPT_IN = process.env.EFFORT_MAPPING_LOCAL === "1";
 const BASE_URL = (process.env.ROUTER_BASE_URL || "http://127.0.0.1:4813").replace(/\/$/, "");
 const UPSTREAM_URL = (process.env.LLAMA_UPSTREAM_URL || "http://127.0.0.1:4811").replace(/\/$/, "");
 // ROUTER_ENV_FILE, else `fleet-env path router` under the fleet-env cutover, else the legacy file.
 const ENV_FILE = routerEnvFile();
-const CONFIG_FILE = new URL("../gateway.config.json", import.meta.url);
+const CONFIG_FILE = new URL("../../gateway.config.json", import.meta.url);
 // The engine's anthropic-type legs want *some* client bearer to build passthrough headers; the
 // provider's own apikey replaces it before the upstream (smoke-router.sh checks 7 and 8).
 const DUMMY_BEARER = "effort-mapping-dummy-client-bearer";
@@ -78,7 +87,7 @@ const BOGUS = "bogus-effort-level";
 const CONFIG = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
 const LOCAL = CONFIG.providers.find((p) => p.name === "claude-local");
 const EFFORT_MODELS = Object.keys(LOCAL?.effortKwargs ?? {});
-const UPSTREAM_MODEL = process.env.EFFORT_UPSTREAM_MODEL || EFFORT_MODELS[0];
+const UPSTREAM_MODEL = process.env.EFFORT_UPSTREAM_MODEL || "qwen38-27b-iq3s";
 const ROUTER_MODEL = `claude-local/${UPSTREAM_MODEL}`;
 
 function gatewayKey() {
@@ -97,7 +106,16 @@ function gatewayKey() {
   return hit[1].trim();              // never logged, never asserted on
 }
 
-const KEY = gatewayKey();
+const KEY = OPT_IN ? gatewayKey() : "";
+
+// Without the flag the file registers exactly one test, and it FAILS naming the variable; the real
+// tests are registered through `reg`, which is a no-op in that case.
+const reg = OPT_IN ? test : () => {};
+if (!OPT_IN) {
+  test("local effort mapping loads the 27B and did not run", () => {
+    assert.fail("not run — set EFFORT_MAPPING_LOCAL=1 (loads the Qwen3.8 27B on the GPU tier)");
+  });
+}
 
 async function post(url, headers, body, what) {
   const ac = new AbortController();
@@ -185,20 +203,21 @@ async function routerOccupancy(extra, label) {
   return occupancy(u);
 }
 
-test("config: claude-local's effortKwargs row equals the contract table", () => {
-  assert.ok(UPSTREAM_MODEL, `router/gateway.config.json claude-local carries no effortKwargs model (got ${JSON.stringify(EFFORT_MODELS)})`);
+reg("config: claude-local's effortKwargs row equals the contract table", () => {
+  assert.ok(LOCAL?.effortKwargs?.[UPSTREAM_MODEL],
+    `router/gateway.config.json claude-local has no effortKwargs row for ${UPSTREAM_MODEL} (rows: ${JSON.stringify(EFFORT_MODELS)})`);
   assert.deepEqual(LOCAL.effortKwargs[UPSTREAM_MODEL], EXPECTED,
     `gateway.config.json effortKwargs.${UPSTREAM_MODEL} drifted from this test's contract table`);
 });
 
-test("upstream control: an unknown reasoning_effort is a 500 Jinja exception at llama", async () => {
+reg("upstream control: an unknown reasoning_effort is a 500 Jinja exception at llama", async () => {
   const r = await upstreamCall({ reasoning_effort: BOGUS });
   assert.equal(r.status, 500, `upstream bogus effort: expected 500, got ${r.status}: ${r.text.slice(0, 400)}`);
   assert.match(r.text, /Jinja Exception: Unexpected reasoning effort/,
     `upstream bogus effort: 500 body lacks the Jinja exception: ${r.text.slice(0, 400)}`);
 });
 
-test("upstream control: low, medium and absent kwargs render pairwise-distinct prompts", async () => {
+reg("upstream control: low, medium and absent kwargs render pairwise-distinct prompts", async () => {
   const low = await upstreamPromptTokens(EXPECTED.low);
   const medium = await upstreamPromptTokens(EXPECTED.medium);
   const absent = await upstreamPromptTokens(undefined);
@@ -208,7 +227,7 @@ test("upstream control: low, medium and absent kwargs render pairwise-distinct p
 });
 
 for (const level of ["low", "medium", "high", "xhigh", "max"]) {
-  test(`output_config.effort ${level} delivers ${JSON.stringify(EXPECTED[level])}`, async () => {
+  reg(`output_config.effort ${level} delivers ${JSON.stringify(EXPECTED[level])}`, async () => {
     const want = await upstreamPromptTokens(EXPECTED[level]);
     const got = await routerOccupancy({ output_config: { effort: level } }, `effort ${level}`);
     console.log(`[effort] ${level}: router occupancy=${got} upstream=${want}`);
@@ -217,7 +236,7 @@ for (const level of ["low", "medium", "high", "xhigh", "max"]) {
   });
 }
 
-test(`thinking:{type:"disabled"} delivers ${JSON.stringify(EXPECTED.disabled)}`, async () => {
+reg(`thinking:{type:"disabled"} delivers ${JSON.stringify(EXPECTED.disabled)}`, async () => {
   const want = await upstreamPromptTokens(EXPECTED.disabled);
   const got = await routerOccupancy({ thinking: { type: "disabled" } }, "thinking disabled");
   console.log(`[effort] disabled: router occupancy=${got} upstream=${want}`);
@@ -225,7 +244,7 @@ test(`thinking:{type:"disabled"} delivers ${JSON.stringify(EXPECTED.disabled)}`,
     + "for enable_thinking:false.");
 });
 
-test("an unknown output_config.effort is a no-op (renders as absent kwargs, never a 500)", async () => {
+reg("an unknown output_config.effort is a no-op (renders as absent kwargs, never a 500)", async () => {
   const want = await upstreamPromptTokens(undefined);
   const got = await routerOccupancy({ output_config: { effort: BOGUS } }, "effort bogus");
   console.log(`[effort] bogus: router occupancy=${got} upstream(absent)=${want}`);

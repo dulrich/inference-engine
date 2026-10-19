@@ -34,7 +34,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { LEGS, call, modelIds, registerLegTests, resolveModel, roundTripBody } from "./tool-search-shared.mjs";
+import { LEGS, call, modelIds, registerLegTests, roundTripBody } from "./tool-search-shared.mjs";
 
 for (const leg of LEGS.filter(l => !l.hosted)) registerLegTests(leg);
 
@@ -48,7 +48,7 @@ for (const leg of LEGS.filter(l => !l.hosted)) registerLegTests(leg);
 
 test("local OpenAI-conversion: a tool_reference result and the grown catalogue are relayed, not rejected", async t => {
   const ids = await modelIds();
-  const { id: model } = resolveModel(ids, { preferred: "claude-local/qwen38-27b-iq3s", prefix: "claude-local/" });
+  const { id: model } = LEGS.find(l => l.cell === "local").pick(ids);
   t.diagnostic(`local relay probe on ${model}`);
   const r = await call("/v1/messages", roundTripBody(model), { timeoutMs: 180000 });
   assert.equal(r.status, 200, `the local leg rejected the discovery round-trip with ${r.status}: ${r.text.slice(0, 600)}${r.hint}`);

@@ -94,8 +94,10 @@ async function modelIds() {
 // the preferred id is used when the gateway reports it, otherwise the first id on that leg.
 function resolveModel(ids, { preferred, prefix, listedAs = preferred }) {
   if (ids.includes(listedAs)) return { id: preferred, exact: true };
-  const alt = ids.find(id => id.startsWith(prefix));
-  assert.ok(alt, `GET /v1/models lists no ${prefix}* id, so this leg cannot be exercised. Got: ${ids.join(", ")}`);
+  // Never fall back onto a Qwen3.6/3.8 id: loading one is what plans/test-qwen-load-minimization.md
+  // exists to prevent, so a missing preferred id fails loudly instead.
+  const alt = ids.find(id => id.startsWith(prefix) && !/qwen3[68]/i.test(id));
+  assert.ok(alt, `GET /v1/models lists no ${prefix}* id (other than a Qwen3.6/3.8 one, which this suite never loads), so this leg cannot be exercised. Got: ${ids.join(", ")}`);
   return { id: alt, exact: false };
 }
 
@@ -183,10 +185,10 @@ const LEGS = [
   {
     cell: "local",
     label: "local OpenAI-conversion",
-    pick: ids => resolveModel(ids, { preferred: "claude-local/qwen38-27b-iq3s", prefix: "claude-local/" }),
-    // Synthetic bodies on the exact model, measured 2026-10-19: system+tools on 920 / off 2014,
-    // tools-only ratio 2.28x (floor 2.0x, ~10% slack).
-    synth: { on: 920, off: 2014, minRatio: 2.0 },
+    pick: ids => resolveModel(ids, { preferred: "claude-local/nemotron-4b", prefix: "claude-local/" }),
+    // Synthetic bodies on the exact model, measured 2026-10-19 on nemotron-4b: on 897 / off 2233,
+    // tools-only 866/2202, ratio 2.54x (floor 2.3x, ~10% slack).
+    synth: { on: 897, off: 2233, minRatio: 2.3 },
   },
   {
     cell: "codex",

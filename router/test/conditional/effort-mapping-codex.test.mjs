@@ -1,8 +1,8 @@
 // effort-mapping-codex.test.mjs — black-box gate for the codex leg's effort precedence
 // (plans/codex-leg-effort-and-auditor-unpinning.md WP-1; the sidecar counterpart of
-// effort-mapping.test.mjs, which gates the local leg's patch 0007).
+// conditional/effort-mapping.test.mjs, which gates the local leg's patch 0007).
 //
-// BLACK BOX, same shape as effort-mapping.test.mjs and tool-search-conformance.test.mjs: nothing
+// BLACK BOX, same shape as effort-mapping.test.mjs (this directory) and tool-search-conformance.test.mjs: nothing
 // here imports the sidecar. Every assertion is made over HTTP against the running router at
 // :4813 plus the sidecar's own JSONL log on disk. When the router or the sidecar is unreachable
 // these tests FAIL; they never skip. A gate that quietly disappears when its target is down is

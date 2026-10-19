@@ -312,4 +312,21 @@ Cell ids (in table order): `g26nt-qat-c32k-f16-mtp-ctkf16-ctvf16-faauto-c32768-8
 
 **Reading.** At depth, decode is KV-read-bound, and the smaller quantized cache wins: +8–16% over f16 KV at the same weights and context. The prefill loss (≈ −50%) remains, so quantized KV trades slower time-to-first-token on a long context for faster streaming afterwards. At near-zero depth, quantized and f16 KV decode within noise of each other (170–204 t/s, weight-size-bound). With the KV loaded, these bartowski rows sit at or above ladder-v1's openbmb f16-KV decode (Q4_K_M 108 t/s at 64k, 74 at 128k), consistent within that run's different prompt set. For a chat model, the f16 IQ4_XS 48k config has the fastest decode (129 t/s at 43k depth) and the fastest prefill (2904 t/s) of any candidate, at the cost of capping context at ~48–53k.
 
+**Q6_K follow-up (2026-10-19 03:21–03:30Z, same setup, `q6.py` / `q6.jsonl` / `q6.log`).** External quant-quality research narrowed the serving candidates to Q6_K ("near perfect") and IQ4_XS, and Q6_K was the less-measured of the two. Each config ran the 9-question recall battery over a 0.9 × `-c` haystack, then the decode measurement (3 × 512 tokens over the same cached prefix, plus one short-prompt generation). VRAM is measured: the delta of `mem_info_vram_used` (card1) over a GPU-idle baseline, once after load and as the peak during the run.
+
+| Q6_K config | Projected MiB | VRAM loaded / peak (MiB) | Correct | Conf (mean / min) | Prefill | Decode at depth (median of 3) | Short-prompt decode |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| f16 32k | 3215 | 3229 / 3270 | 9/9 | 0.982 / 0.60 | 3458 t/s | 131.8 t/s | 188 |
+| f16 40k | ~3559 | 3573 / 3648 | 9/9 | 0.979 / 0.53 | 3076 | 125.1 | 185 |
+| k8v8 64k | 3331 | 3346 / 3391 | 7/9 | 0.980 / 0.74 | 1306 | 112.8 | 174 |
+| k8v4 64k | 2995 | 3010 / 3056 | 7/9 | 0.976 / 0.66 | 1262 | 112.0 | 169 |
+| k8v4 96k | 3573 | 3588 / 3664 | 7/9 | 0.967 / 0.56 | 896 | 96.1 | 169 |
+| k4v4 128k | 3479 | 3494 / 3536 | 7/9 | 0.952 / 0.56 | 682 | 84.0 | 170 |
+
+**Reading.**
+- **Projection holds:** loaded VRAM is the projection + ~15 MiB, and inference adds a further 40–75 MiB peak. The two edge configs (f16 40k, k8v4 96k) peak ~65–80 MiB over 3584. The envelope is a co-residency goal, not a hard card limit (user, 2026-10-19).
+- **The f16 9/9 is a context-length effect, not a KV-type effect.** The 32k/40k haystacks are ~29k/37k tokens. Every 64k/128k config misses the same two questions as the rest of the spike (Thornfield → Larkspur code, courier two-hop stops at "Teodor Vance"), and the f16 references at 64k/128k did too.
+- **Q6_K vs IQ4_XS:** at matched context and KV type, decode at depth is within ~2% (128k k4v4 84.0 vs 83.8; f16 40k/48k 125 vs 129). Q6_K costs ~340–540 MiB more and caps f16 KV at ~40k against IQ4_XS's ~48–53k.
+- **Sensible Q6_K serving configs:** f16 32k (fastest prefill, 314 MiB headroom at peak); k8v8 64k (middle, ~2.5× slower prefill); k4v4 128k (full context, fits at peak).
+
 **Method note.** A cached-prefix, multi-question battery with logprob confidence answered in 26 minutes what the 27-independent-probe harness battery budgeted 5.5 h for. Recorded as a backlog candidate for the harness's default long-context battery (`INITIATIVE.md` Backlog).

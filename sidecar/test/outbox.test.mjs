@@ -1,17 +1,16 @@
 // outbox.test.mjs — the sidecar's half of the tracker event seam (plan
 // `fleet-tools/plans/tracker-event-seam.md`, WP-2; append log per
 // `fleet-tools/plans/outbox-append-log.md`, WP-2). The reader lives in another repo, so
-// the line format is pinned by byte equality against its `serializeRow`, not a shared import.
+// the line format is pinned by byte equality against its `serializeRow` in
+// rs/tests/outbox.rs; this file keeps the black-box HTTP cases against the target binary.
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { withSidecar, req, msgBody, SIMPLE_TURN } from "./helpers.mjs";
-import { createOutboxWriter, serializeRow, logDirFor } from "../outbox.mjs";
 
 const scenario = { defaultTurn: SIMPLE_TURN };
-const REFERENCE = "<code-root>/fleet-tools/scripts/outbox.mjs";
 
 // The billing line is the only wire witness of a subagent (see session.test.mjs).
 const billing = subagent =>
@@ -23,40 +22,14 @@ const agentBody = ({ sessionId, subagent = false, system = "You are a helpful co
     messages: [{ role: "user", content: subagent ? "audit this plan" : "orchestrate the plan" }],
   });
 
-// Every row of every day-file under the log dir derived from the outbox path.
+// Every row of every day-file under the log dir derived from the outbox path
+// (`<dirname(path)>/log/`, rs/src/outbox.rs log_dir_for).
+const logDirFor = file => path.join(path.dirname(file), "log");
 function readOutbox(file) {
   const dir = logDirFor(file);
   return fs.readdirSync(dir).filter(n => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(n)).sort()
     .flatMap(n => fs.readFileSync(path.join(dir, n), "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l)));
 }
-
-test("rows are byte-identical to the fleet-tools serializeRow, in a 0600 day-file", async t => {
-  const ref = await import(REFERENCE);
-  const events = [
-    { ts: "2026-10-13T01:02:03.456Z", kind: "turn.completed", session_id: "s1", leg: "codex-a",
-      payload: { stop_reason: "end_turn", model: "m" } },
-    { ts: "2026-10-13T23:59:59.999Z", kind: "child.spawned", session_id: "s2", leg: "codex-b",
-      agent_id: "0123456789abcdef", agent_type: "", payload: {} },
-    { ts: "2026-10-14T00:00:00.000Z", kind: "usage", session_id: "s3" },
-  ];
-  for (const e of events) assert.equal(serializeRow(e), ref.serializeRow({ ...e, harness: "codex-sidecar" }));
-
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-sidecar-outbox-"));
-  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } });
-  const file = path.join(dir, "outbox", "events.db");
-  const w = createOutboxWriter({ path: file });
-  for (const e of events) assert.ok(w.record(e));
-  const log = logDirFor(file);
-  assert.equal(fs.statSync(log).mode & 0o777, 0o700);
-  const day13 = path.join(log, "2026-10-13.jsonl");
-  assert.equal(fs.statSync(day13).mode & 0o777, 0o600);
-  assert.equal(fs.readFileSync(day13, "utf8"),
-    ref.serializeRow({ ...events[0], harness: "codex-sidecar" }) + ref.serializeRow({ ...events[1], harness: "codex-sidecar" }));
-  assert.equal(fs.readFileSync(path.join(log, "2026-10-14.jsonl"), "utf8"), ref.serializeRow({ ...events[2], harness: "codex-sidecar" }));
-  assert.equal(fs.existsSync(file), false, "the legacy events.db is never created");
-  assert.equal(w.record({ kind: "turn.completed", session_id: "s4", payload: { big: "x".repeat(70 * 1024) } }), null,
-    "an oversize row is dropped whole");
-});
 
 test("a parent turn writes one turn.completed row to the day-file log", async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-sidecar-outbox-"));

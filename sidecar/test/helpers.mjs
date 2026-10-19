@@ -7,7 +7,6 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startSidecar } from "../codex-sidecar.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const FAKE = path.join(HERE, "fake-app-server.mjs");
@@ -27,9 +26,24 @@ process.on("exit", () => {
 
 const SIDECAR_DIR = path.dirname(HERE);
 
-// SIDECAR_TARGET (a whitespace-split command line, relative paths against sidecar/) runs the
-// suite out-of-process against that binary; unset/empty keeps the in-process startSidecar.
-// The handle keeps the in-process contract: `port` and `close()`.
+// The suite always runs out-of-process against a target: the Rust release binary by default,
+// or SIDECAR_TARGET (a whitespace-split command line, relative paths against sidecar/).
+// The handle exposes `port`, `pid` and `close()`.
+export const DEFAULT_TARGET = "rs/target/release/codex-sidecar";
+
+function resolveTarget(target) {
+  const cmdline = target?.trim() ? target : DEFAULT_TARGET;
+  const [cmd] = cmdline.trim().split(/\s+/);
+  if (cmd.includes("/")) {
+    const abs = path.resolve(SIDECAR_DIR, cmd);
+    try { fs.accessSync(abs, fs.constants.X_OK); } catch {
+      throw new Error(`sidecar target ${abs} is missing or not executable; run ` +
+        "`cargo build --release --manifest-path sidecar/rs/Cargo.toml` from the repo root first");
+    }
+  }
+  return cmdline;
+}
+
 export function spawnTarget(cmdline, env) {
   const [cmd, ...args] = cmdline.trim().split(/\s+/);
   const child = spawn(cmd, args, { cwd: SIDECAR_DIR, env: { PATH: process.env.PATH, ...env }, stdio: ["ignore", "pipe", "pipe"] });
@@ -83,7 +97,7 @@ export async function withSidecar({ scenario = {}, perPersona = null, env = {}, 
     SIDECAR_BACKOFF_MS: "150",
     ...env,
   };
-  const handle = target?.trim() ? await spawnTarget(target, sidecarEnv) : await startSidecar(sidecarEnv);
+  const handle = await spawnTarget(resolveTarget(target), sidecarEnv);
   return {
     port: handle.port,
     key: "test-key",

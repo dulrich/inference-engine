@@ -37,7 +37,9 @@ case "$1" in
   *) exit 2 ;;
 esac`);
   if (prepare) prepare({ root, home });
-  const run = () => spawnSync("bash", [INSTALL, "--home", home, ...args], {
+  // A stub "binary" stands in for the release build (no cargo in tests) unless args pass one.
+  const binArgs = args.includes("--rust-bin") ? [] : ["--rust-bin", rustStub(root, "v0")];
+  const run = () => spawnSync("bash", [INSTALL, "--home", home, ...binArgs, ...args], {
     encoding: "utf8",
     env: { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: root, FLEET_ENV_BIN: path.join(bin, "fleet-env") },
   });
@@ -84,7 +86,7 @@ test("switch on with the projection missing fails closed", () => {
   assert.ok(!fs.existsSync(r.legacyEnv));
 });
 
-// --impl rust: a stub "binary" stands in for the release build (no cargo in tests).
+// A stub "binary" stands in for the release build (no cargo in tests).
 function rustStub(root, tag) {
   const p = path.join(root, `stub-${tag}`);
   fs.writeFileSync(p, `#!/bin/sh\n# ${tag}\nexit 0\n`);
@@ -92,21 +94,11 @@ function rustStub(root, tag) {
   return p;
 }
 
-test("node default render: ExecStart is <node> <sidecar.mjs>, node dir on PATH", () => {
-  const r = setup({ on: false });
-  assert.equal(r.status, 0, r.stderr);
-  const sidecar = path.join(path.dirname(INSTALL), "codex-sidecar.mjs");
-  assert.match(r.unit, new RegExp(`^ExecStart=/\\S+/node ${sidecar.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
-  assert.match(r.unit, new RegExp(`^Environment=PATH=${path.dirname(process.execPath).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:`, "m"));
-  assert.doesNotMatch(r.unit, /@EXEC@|@NODE@|@SIDECAR@|@PATH@/);
-  assert.ok(!fs.existsSync(path.join(r.home, ".local", "lib", "codex-sidecar")), "node impl installs no binary");
-});
-
-test("rust render: ExecStart is the installed binary, no node path, binary 0755", () => {
+test("render: ExecStart is the installed binary, no node path, binary 0755", () => {
   let stub;
   const r = setup({ on: false, prepare: ({ root }) => { stub = rustStub(root, "v1"); }, args: [] });
-  // first run above was the node default; re-run as rust against the same home
-  const rr = spawnSync("bash", [INSTALL, "--home", r.home, "--impl", "rust", "--rust-bin", stub], {
+  // first run above installed the v0 stub; re-run with v1 against the same home
+  const rr = spawnSync("bash", [INSTALL, "--home", r.home, "--rust-bin", stub], {
     encoding: "utf8",
     env: { PATH: `${path.join(r.root, "bin")}:/usr/bin:/bin`, HOME: r.root, FLEET_ENV_BIN: path.join(r.root, "bin", "fleet-env") },
   });
@@ -115,20 +107,20 @@ test("rust render: ExecStart is the installed binary, no node path, binary 0755"
   const dest = path.join(r.home, ".local", "lib", "codex-sidecar", "codex-sidecar");
   assert.match(unit, new RegExp(`^ExecStart=${dest.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
   assert.match(unit, new RegExp(`^Environment=PATH=${path.join(r.root, "bin").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:/usr/local/bin:/usr/bin:/bin$`, "m"));
-  assert.doesNotMatch(unit, /\.nvm|node|@EXEC@/);
+  assert.doesNotMatch(unit, /\.nvm|node|@EXEC@|@PATH@/);
   assert.equal(fs.statSync(dest).mode & 0o777, 0o755);
   assert.match(fs.readFileSync(dest, "utf8"), /# v1/);
   assert.doesNotMatch(rr.stdout, /cargo build/);
 });
 
-test("rust reinstall keeps the previous build as codex-sidecar.prev", () => {
+test("reinstall keeps the previous build as codex-sidecar.prev", () => {
   let v1, v2;
-  const r = setup({ on: false, args: ["--impl", "rust", "--rust-bin", "PLACEHOLDER"], prepare: ({ root }) => { v1 = rustStub(root, "v1"); v2 = rustStub(root, "v2"); } });
+  const r = setup({ on: false, args: ["--rust-bin", "PLACEHOLDER"], prepare: ({ root }) => { v1 = rustStub(root, "v1"); v2 = rustStub(root, "v2"); } });
   assert.notEqual(r.status, 0, "placeholder path is rejected");
   assert.match(r.stderr, /--rust-bin is not an executable file/);
   const env = { PATH: `${path.join(r.root, "bin")}:/usr/bin:/bin`, HOME: r.root, FLEET_ENV_BIN: path.join(r.root, "bin", "fleet-env") };
   for (const b of [v1, v2]) {
-    const x = spawnSync("bash", [INSTALL, "--home", r.home, "--impl", "rust", "--rust-bin", b], { encoding: "utf8", env });
+    const x = spawnSync("bash", [INSTALL, "--home", r.home, "--rust-bin", b], { encoding: "utf8", env });
     assert.equal(x.status, 0, x.stderr);
   }
   const lib = path.join(r.home, ".local", "lib", "codex-sidecar");

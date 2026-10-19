@@ -4,14 +4,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-SIDECAR_JS="$SCRIPT_DIR/codex-sidecar.mjs"
 TEMPLATE="$SCRIPT_DIR/codex-sidecar.service.in"
 UNIT_NAME="codex-sidecar.service"
-MIN_NODE_MAJOR=24
 PERSONAS=(codex-a codex-b)
 
 INSTALL_HOME="${SIDECAR_INSTALL_HOME:-$HOME}"
-IMPL=node
 RUST_BIN="${SIDECAR_RUST_BIN:-}"
 
 # fleet-env cutover switch (plans/env-management.md). 0 = ON, 1 = OFF; exits loudly if
@@ -45,17 +42,17 @@ if fleet_env_on; then FLEET_ENV_MODE=1; fi
 
 usage() {
   cat <<'USAGE'
-usage: install.sh [--home <dir>] [--impl node|rust] [--rust-bin <path>]
+usage: install.sh [--home <dir>] [--rust-bin <path>]
+
+  Builds rs/ in release from this checkout and installs the binary atomically to
+  <home>/.local/lib/codex-sidecar/codex-sidecar (the previous build kept as
+  codex-sidecar.prev), then renders the unit to run it.
 
   --home <dir>      Install under <dir> instead of $HOME (also SIDECAR_INSTALL_HOME).
                     With a non-default home, `systemctl --user daemon-reload` is
                     skipped (test/dry mode); nothing is ever enabled or started.
-  --impl node|rust  Which sidecar the unit runs (default node). rust builds
-                    rs/ in release from this checkout and installs the binary
-                    atomically to <home>/.local/lib/codex-sidecar/codex-sidecar
-                    (the previous build kept as codex-sidecar.prev).
-  --rust-bin <path> With --impl rust: install this prebuilt binary instead of
-                    building (also SIDECAR_RUST_BIN; tests use a stub).
+  --rust-bin <path> Install this prebuilt binary instead of building
+                    (also SIDECAR_RUST_BIN; tests use a stub).
 USAGE
 }
 
@@ -70,15 +67,6 @@ while [ $# -gt 0 ]; do
       ;;
     --home=*)
       INSTALL_HOME="${1#--home=}"
-      shift
-      ;;
-    --impl)
-      [ $# -ge 2 ] || die "--impl requires node or rust"
-      IMPL="$2"
-      shift 2
-      ;;
-    --impl=*)
-      IMPL="${1#--impl=}"
       shift
       ;;
     --rust-bin)
@@ -97,12 +85,7 @@ done
 
 [ -n "$INSTALL_HOME" ] || die "install home resolves to an empty path"
 [ -f "$TEMPLATE" ]   || die "missing unit template: $TEMPLATE"
-case "$IMPL" in
-  node) [ -f "$SIDECAR_JS" ] || die "missing sidecar entrypoint: $SIDECAR_JS" ;;
-  rust) [ -z "$RUST_BIN" ] || [ -x "$RUST_BIN" ] || die "--rust-bin is not an executable file: $RUST_BIN" ;;
-  *) usage >&2; die "--impl must be node or rust, got: $IMPL" ;;
-esac
-[ "$IMPL" = rust ] || [ -z "$RUST_BIN" ] || die "--rust-bin only applies with --impl rust"
+[ -z "$RUST_BIN" ] || [ -x "$RUST_BIN" ] || die "--rust-bin is not an executable file: $RUST_BIN"
 
 REAL_HOME=0
 if [ "$INSTALL_HOME" = "${HOME:-}" ]; then
@@ -110,27 +93,8 @@ if [ "$INSTALL_HOME" = "${HOME:-}" ]; then
 fi
 
 # --- resolve the executables the unit needs by absolute path ------------------
-# The systemd --user PATH on this host contains neither the nvm node dir nor
-# ~/.local/sbin, so both must be baked in absolutely.
-# Prefer the version-stable ~/.nvm/current link (maintained by nvm under
-# NVM_SYMLINK_CURRENT=true, see the tracked bashrc) so the rendered unit survives
-# a node bump without a re-render; fall back to whatever node is on PATH.
-if [ "$IMPL" = node ]; then
-NODE_BIN="$INSTALL_HOME/.nvm/current/bin/node"
-[ -x "$NODE_BIN" ] || NODE_BIN="$(command -v node || true)"
-[ -n "$NODE_BIN" ] || die "node not found (no $INSTALL_HOME/.nvm/current/bin/node and none on PATH); need node >= ${MIN_NODE_MAJOR}"
-case "$NODE_BIN" in /*) ;; *) die "node resolved to a non-absolute path: $NODE_BIN" ;; esac
-
-NODE_VERSION="$("$NODE_BIN" --version)"          # e.g. v24.15.0
-NODE_MAJOR="${NODE_VERSION#v}"
-NODE_MAJOR="${NODE_MAJOR%%.*}"
-case "$NODE_MAJOR" in
-  ''|*[!0-9]*) die "cannot parse node version from '$NODE_VERSION'" ;;
-esac
-[ "$NODE_MAJOR" -ge "$MIN_NODE_MAJOR" ] \
-  || die "node $NODE_VERSION is too old; need >= ${MIN_NODE_MAJOR} (found at $NODE_BIN)"
-fi
-
+# The systemd --user PATH on this host does not contain ~/.local/sbin, so the persona
+# wrapper dirs must be baked in absolutely.
 WRAPPER_DIR=""
 for persona in "${PERSONAS[@]}"; do
   wrapper="$(command -v "$persona" || true)"
@@ -146,46 +110,38 @@ for persona in "${PERSONAS[@]}"; do
   fi
 done
 
-if [ "$IMPL" = node ]; then
-  NODE_DIR="$(dirname -- "$NODE_BIN")"
-  UNIT_PATH_VALUE="$NODE_DIR:$WRAPPER_DIR:/usr/local/bin:/usr/bin:/bin"
-  EXEC_VALUE="$NODE_BIN $SIDECAR_JS"
-else
-  UNIT_PATH_VALUE="$WRAPPER_DIR:/usr/local/bin:/usr/bin:/bin"
-fi
+UNIT_PATH_VALUE="$WRAPPER_DIR:/usr/local/bin:/usr/bin:/bin"
 
-# --- rust: build (or take the prebuilt) and install atomically ---------------
+# --- build (or take the prebuilt) and install atomically ---------------
 # The installed binary reads preamble.txt + thread-config.json from the checkout it was
 # built from (rs/src/config.rs pinned_dir: CARGO_MANIFEST_DIR/..), so the build always
 # runs against THIS script's directory, and the pinned files must exist here.
-if [ "$IMPL" = rust ]; then
-  for f in preamble.txt thread-config.json; do
-    [ -f "$SCRIPT_DIR/$f" ] || die "missing pinned file $SCRIPT_DIR/$f (the rust binary reads it at runtime)"
-  done
-  src_bin="$RUST_BIN"
-  if [ -z "$src_bin" ]; then
-    command -v cargo >/dev/null 2>&1 || die "cargo not found; needed to build --impl rust"
-    cargo build --release --manifest-path "$SCRIPT_DIR/rs/Cargo.toml" >&2 \
-      || die "cargo build --release --manifest-path $SCRIPT_DIR/rs/Cargo.toml failed"
-    src_bin="$SCRIPT_DIR/rs/target/release/codex-sidecar"
-    printf 'build   cargo build --release --manifest-path %s/rs/Cargo.toml (pinned files: %s)\n' "$SCRIPT_DIR" "$SCRIPT_DIR"
-  else
-    printf 'build   skipped: prebuilt %s (pinned files must resolve to its build checkout)\n' "$src_bin"
-  fi
-  [ -x "$src_bin" ] || die "rust binary not found or not executable: $src_bin"
-  LIB_DIR="$INSTALL_HOME/.local/lib/codex-sidecar"
-  BIN_DEST="$LIB_DIR/codex-sidecar"
-  mkdir -p -- "$LIB_DIR"
-  tmp_bin="$(mktemp -- "$LIB_DIR/.codex-sidecar.XXXXXX")"
-  cp -- "$src_bin" "$tmp_bin"
-  chmod 0755 -- "$tmp_bin"
-  if [ -f "$BIN_DEST" ]; then
-    cp -p -- "$BIN_DEST" "$LIB_DIR/codex-sidecar.prev"
-  fi
-  mv -f -- "$tmp_bin" "$BIN_DEST"
-  printf 'binary  %s (installed; previous kept as codex-sidecar.prev when present)\n' "$BIN_DEST"
-  EXEC_VALUE="$BIN_DEST"
+for f in preamble.txt thread-config.json; do
+  [ -f "$SCRIPT_DIR/$f" ] || die "missing pinned file $SCRIPT_DIR/$f (the rust binary reads it at runtime)"
+done
+src_bin="$RUST_BIN"
+if [ -z "$src_bin" ]; then
+  command -v cargo >/dev/null 2>&1 || die "cargo not found; needed to build the sidecar"
+  cargo build --release --manifest-path "$SCRIPT_DIR/rs/Cargo.toml" >&2 \
+    || die "cargo build --release --manifest-path $SCRIPT_DIR/rs/Cargo.toml failed"
+  src_bin="$SCRIPT_DIR/rs/target/release/codex-sidecar"
+  printf 'build   cargo build --release --manifest-path %s/rs/Cargo.toml (pinned files: %s)\n' "$SCRIPT_DIR" "$SCRIPT_DIR"
+else
+  printf 'build   skipped: prebuilt %s (pinned files must resolve to its build checkout)\n' "$src_bin"
 fi
+[ -x "$src_bin" ] || die "rust binary not found or not executable: $src_bin"
+LIB_DIR="$INSTALL_HOME/.local/lib/codex-sidecar"
+BIN_DEST="$LIB_DIR/codex-sidecar"
+mkdir -p -- "$LIB_DIR"
+tmp_bin="$(mktemp -- "$LIB_DIR/.codex-sidecar.XXXXXX")"
+cp -- "$src_bin" "$tmp_bin"
+chmod 0755 -- "$tmp_bin"
+if [ -f "$BIN_DEST" ]; then
+  cp -p -- "$BIN_DEST" "$LIB_DIR/codex-sidecar.prev"
+fi
+mv -f -- "$tmp_bin" "$BIN_DEST"
+printf 'binary  %s (installed; previous kept as codex-sidecar.prev when present)\n' "$BIN_DEST"
+EXEC_VALUE="$BIN_DEST"
 
 # --- render the unit ----------------------------------------------------------
 UNIT_DIR="$INSTALL_HOME/.config/systemd/user"

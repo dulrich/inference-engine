@@ -63,7 +63,7 @@ if [ -z "$key" ]; then
   exit 1
 fi
 
-# Same default as codex-sidecar.mjs readConfig(): unset → docker0 gateway; empty → no extra bind.
+# Same default as sidecar/rs/src/config.rs read_config(): unset → docker0 gateway; empty → no extra bind.
 if grep -q '^SIDECAR_BIND_EXTRA=' -- "$ENV_FILE"; then
   extra="$(sed -n 's/^SIDECAR_BIND_EXTRA=//p' -- "$ENV_FILE" | tail -n 1)"
 else

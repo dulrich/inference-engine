@@ -33,11 +33,13 @@ test("both binds present: /healthz is ok and lists them", async t => {
 
 test("extra bind fails then succeeds on retry: degraded until recovered, then ok", async t => {
   const blocker = await occupy(EXTRA);
-  const h = await withSidecar({ env: {
+  // Release the held port even if the target fails to start, or the run hangs instead of failing.
+  let h;
+  t.after(async () => { await h?.close(); await blocker.release().catch(() => {}); });
+  h = await withSidecar({ env: {
     SIDECAR_PORT: String(blocker.port), SIDECAR_BIND_EXTRA: EXTRA,
     SIDECAR_BIND_RETRY_MS: "50", SIDECAR_BIND_RETRY_BUDGET_MS: "5000",
   } });
-  t.after(async () => { await h.close(); await blocker.release().catch(() => {}); });
 
   const before = await req(h, "/healthz", { method: "GET" });
   assert.equal(before.status, 503, before.text);
@@ -67,11 +69,13 @@ test("extra bind fails then succeeds on retry: degraded until recovered, then ok
 
 test("extra bind never succeeds: gives up within budget, stays degraded", async t => {
   const blocker = await occupy(EXTRA);
-  const h = await withSidecar({ env: {
+  // Release the held port even if the target fails to start, or the run hangs instead of failing.
+  let h;
+  t.after(async () => { await h?.close(); await blocker.release().catch(() => {}); });
+  h = await withSidecar({ env: {
     SIDECAR_PORT: String(blocker.port), SIDECAR_BIND_EXTRA: EXTRA,
     SIDECAR_BIND_RETRY_MS: "20", SIDECAR_BIND_RETRY_BUDGET_MS: "200",
   } });
-  t.after(async () => { await h.close(); await blocker.release(); });
 
   await waitFor(() => h.log().some(l => l.kind === "bind-extra-failed"), 3000);
   const gaveUp = h.log().find(l => l.kind === "bind-extra-failed");

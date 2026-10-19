@@ -2,7 +2,7 @@
 
 An Anthropic-Messages front end over `codex app-server`. Claude Code talks to the router at `:4813`; the router's `codex-a` / `codex-b` providers talk to this sidecar; the sidecar drives one long-lived `<persona> app-server` child per persona over JSON-RPC on the child's stdio pipe.
 
-Node ≥ 24, `node:*` only, zero npm dependencies.
+A single Rust binary (`rs/`, binary `codex-sidecar`). The black-box test suite under `test/` is Node ≥ 24, `node:*` only, zero npm dependencies.
 
 ```
 Claude Code ──► router :4813 ──► codex-sidecar :4877 ──► codex-a app-server  (Luna / Sol / Astra)
@@ -23,24 +23,24 @@ Claude Code ──► router :4813 ──► codex-sidecar :4877 ──► codex
 
 ## Modules
 
-`codex-sidecar.mjs` is the composition root and the stable entry path (`install.sh` resolves it by name; the systemd unit is generated against it). It reads the config, builds `ctx`, constructs one `Persona` per configured name, binds the servers and owns shutdown — it holds no request logic. Everything else is a focused owner beside it, all `node:*`-only:
+`rs/src/main.rs` is the entry point and `rs/src/sidecar.rs` the composition root: it reads the config, builds the process-wide state (`World`), constructs one `Persona` per configured name, binds the servers and owns shutdown — it holds no request logic. `rs/src/js.rs` makes the JavaScript semantics the wire contract inherited explicit. Everything else is a focused owner under `rs/src/`:
 
 | Module | Owns |
 | --- | --- |
-| `config.mjs` | The pinned inputs (`preamble.txt`, `thread-config.json`, the in-band item-type allowlist) and the environment reading, plus the thread's cwd resolution. |
-| `errors.mjs` | `SidecarError` and the upstream `CodexErrorInfo` / `TurnError` / rate-limit-snapshot mapping onto Anthropic error shapes. |
-| `logging.mjs` | The day-rolled JSONL log, its retention prune, and the header-redaction rule. |
-| `protocol.mjs` | The Anthropic wire boundary as pure functions: model/effort identity, message and system-prompt reading, the session key, the title signature, the codex → Anthropic usage projection and its window clamp. |
-| `sinks.mjs` | The two response transports (`BufferSink`, `SseSink`) and the one-shot JSON/error writers. Nothing else writes to a client socket. |
-| `session.mjs` | One codex thread's state — thread/turn ids, parked calls, delivered ids, joiners, replayable last outcome, token figures — and the outcome protocol (`waitOutcome` / `settle` / `drain`) the request path awaits. |
-| `persona.mjs` | The app-server child: spawn, the newline-framed JSON-RPC codec, pending requests, the thread bus, rate-limit posture, the `tripBoundary` security response, and backoff restart. |
-| `thread-config.mjs` | Whether the thread the app-server actually started is the one declared: the instruction-source trim and the declared-vs-reported feature comparison. |
-| `request.mjs` | Phase 1–2 of the request path, all pure: `normalizeRequest`, `resolveIdentity`, `requestToken` (the digest that is a request's identity) and `dispositionOf` — the single decision site returning `replay`, `join` or `drive`. |
-| `turn.mjs` | Phase 3: `startThread` (with its fail-closed verification), `deliverToolResults`, `startTurn`. |
-| `messages.mjs` | `POST /<persona>/v1/messages` as the explicit sequence normalization → session disposition → turn execution → outcome emission. |
-| `outbox-events.mjs` | The tracker rows one completed turn produces (`turn.completed`, `child.spawned`, `usage`, `rate_limit`). |
-| `http.mjs` | Auth, the closed route table, body reading and the bind-aware `/healthz` payload. |
-| `outbox.mjs` | The event-outbox writer itself (appends JSONL day-files). |
+| `rs/src/config.rs` | The pinned inputs (`preamble.txt`, `thread-config.json`, the in-band item-type allowlist) and the environment reading, plus the thread's cwd resolution. |
+| `rs/src/errors.rs` | `SidecarError` and the upstream `CodexErrorInfo` / `TurnError` / rate-limit-snapshot mapping onto Anthropic error shapes. |
+| `rs/src/logging.rs` | The day-rolled JSONL log, its retention prune, and the header-redaction rule. |
+| `rs/src/protocol.rs` | The Anthropic wire boundary as pure functions: model/effort identity, message and system-prompt reading, the session key, the title signature, the codex → Anthropic usage projection and its window clamp. |
+| `rs/src/sinks.rs` | The two response transports (`BufferSink`, `SseSink`) and the one-shot JSON/error writers. Nothing else writes to a client socket. |
+| `rs/src/session.rs` | One codex thread's state — thread/turn ids, parked calls, delivered ids, joiners, replayable last outcome, token figures — and the outcome protocol (`waitOutcome` / `settle` / `drain`) the request path awaits. |
+| `rs/src/persona.rs` | The app-server child: spawn, the newline-framed JSON-RPC codec, pending requests, the thread bus, rate-limit posture, the `tripBoundary` security response, and backoff restart. |
+| `rs/src/thread_config.rs` | Whether the thread the app-server actually started is the one declared: the instruction-source trim and the declared-vs-reported feature comparison. |
+| `rs/src/request.rs` | Phase 1–2 of the request path, all pure: `normalizeRequest`, `resolveIdentity`, `requestToken` (the digest that is a request's identity) and `dispositionOf` — the single decision site returning `replay`, `join` or `drive`. |
+| `rs/src/turn.rs` | Phase 3: `startThread` (with its fail-closed verification), `deliverToolResults`, `startTurn`. |
+| `rs/src/messages.rs` | `POST /<persona>/v1/messages` as the explicit sequence normalization → session disposition → turn execution → outcome emission. |
+| `rs/src/outbox_events.rs` | The tracker rows one completed turn produces (`turn.completed`, `child.spawned`, `usage`, `rate_limit`). |
+| `rs/src/http.rs` | Auth, the closed route table, body reading and the bind-aware `/healthz` payload. |
+| `rs/src/outbox.rs` | The event-outbox writer itself (appends JSONL day-files). |
 
 ## Routes
 
@@ -119,7 +119,7 @@ These exist only so the suite can run without a real codex binary and without wa
 
 ## Rust binary
 
-`rs/` is the Rust port (`codex-sidecar` binary, plan `plans/codex-sidecar-rust-port.md`): same routes ([Routes](#routes)), same env ([Environment](#environment)), same log rows ([Logs](#logs)). Install it with `sidecar/install.sh --impl rust`, which runs `cargo build --release --manifest-path sidecar/rs/Cargo.toml` from this checkout, installs the binary atomically to `~/.local/lib/codex-sidecar/codex-sidecar` (previous build kept as `codex-sidecar.prev`) and renders `ExecStart=` to that path with no node directory on the unit `PATH`; `--rust-bin <path>` (or `SIDECAR_RUST_BIN`) installs a prebuilt binary instead. The installed binary reads the pinned files (`preamble.txt`, `thread-config.json`) from the checkout it was built from; moving the checkout requires a reinstall. Like the Node path, it never enables or restarts anything: run `systemctl --user daemon-reload && systemctl --user restart codex-sidecar.service` yourself. Rollback: `sidecar/install.sh --impl node` (the default) and the same reload + restart.
+`rs/` is the implementation (`codex-sidecar` binary; ported from the retired Node sidecar by `plans/codex-sidecar-rust-port.md`, Node retired by `plans/codex-sidecar-context-hygiene.md` WP-1). Install it with `sidecar/install.sh`, which runs `cargo build --release --manifest-path sidecar/rs/Cargo.toml` from this checkout, installs the binary atomically to `~/.local/lib/codex-sidecar/codex-sidecar` (previous build kept as `codex-sidecar.prev`) and renders `ExecStart=` to that path with no node directory on the unit `PATH`; `--rust-bin <path>` (or `SIDECAR_RUST_BIN`) installs a prebuilt binary instead. The installed binary reads the pinned files (`preamble.txt`, `thread-config.json`) from the checkout it was built from; moving the checkout requires a reinstall. It never enables or restarts anything: run `systemctl --user daemon-reload && systemctl --user restart codex-sidecar.service` yourself. Rollback: restore `codex-sidecar.prev` over the binary and check out the pinned files from the known-good commit, then the same reload + restart (`AGENTS.md` Rollback).
 
 ## Logs
 
@@ -128,7 +128,8 @@ One JSONL file per UTC day, `codex-sidecar-YYYY-MM-DD.jsonl`, mode `0600` inside
 ## Running it by hand
 
 ```sh
-SIDECAR_KEY=$(openssl rand -hex 32) node sidecar/codex-sidecar.mjs
+cargo build --release --manifest-path sidecar/rs/Cargo.toml
+SIDECAR_KEY=$(openssl rand -hex 32) sidecar/rs/target/release/codex-sidecar
 curl -sS -H "authorization: Bearer $SIDECAR_KEY" http://127.0.0.1:4877/healthz
 ```
 
@@ -138,20 +139,23 @@ Without a real codex binary (no metered turns), point it at the fake app-server:
 printf '%s' '{"defaultTurn":[{"text":"hi"},{"complete":{}}]}' > /tmp/scn.json
 SIDECAR_KEY=x SIDECAR_PORT=4899 SIDECAR_BIND_EXTRA= SIDECAR_LOG_DIR=/tmp/sclogs \
   SIDECAR_APP_SERVER_CMD="node sidecar/test/fake-app-server.mjs /tmp/scn.json" \
-  node sidecar/codex-sidecar.mjs
+  sidecar/rs/target/release/codex-sidecar
 ```
 
 ## Tests
 
 ```sh
+cargo build --release --manifest-path sidecar/rs/Cargo.toml
 cd sidecar && bun run test      # node --test 'test/**/*.test.mjs'
 ```
+
+The suite spawns `rs/target/release/codex-sidecar` out-of-process by default (a missing binary is a loud error, never a skip); `SIDECAR_TARGET` (a command line, relative to `sidecar/`) overrides it. Pure-function and serialization cases live in the crate's own tests (`rs/tests/*.rs`, `cargo test`).
 
 `test/fake-app-server.mjs` is a scripted stdio JSON-RPC stand-in for `codex app-server`: it answers `initialize` / `thread/start` / `turn/start` / `turn/interrupt`, plays per-turn action scripts (deltas, tool-call requests, token usage, delays, `turn/completed`), can forge a `hook/started`, an extra `instructionSources` entry or an out-of-band `commandExecution` item, and can exit mid-turn for the child-death path. Every frame it sees is appended to a trace file so tests can assert on what the sidecar actually sent. No test binds `4877`, spawns a real codex, or touches `~/.config/codex-sidecar`.
 
 ## Launch
 
-The sidecar runs as a `systemd --user` service. The unit template lives here (`codex-sidecar.service.in`); `install.sh` renders it with absolute paths, because the systemd user PATH on this host contains neither the nvm node dir nor the persona-wrapper dir.
+The sidecar runs as a `systemd --user` service. The unit template lives here (`codex-sidecar.service.in`); `install.sh` renders it with absolute paths, because the systemd user PATH on this host does not contain the persona-wrapper dir.
 
 **Install** (safe to re-run; a second run reports `unchanged`):
 
@@ -160,7 +164,7 @@ sidecar/install.sh                 # renders ~/.config/systemd/user/codex-sideca
 sidecar/install.sh --home /tmp/x   # test render into a throwaway root; skips daemon-reload
 ```
 
-It resolves `node` (refuses below major 24) and both persona wrappers (`codex-a`, `codex-b`), creates `~/.config/codex-sidecar/` (`0700`) and `env` (`0600`), and generates a `SIDECAR_KEY` **only when the env file is absent** — an existing key is never overwritten. The generated key is printed exactly once, at generation; after that it lives only in the env file and is never echoed again. Nothing is enabled or started: the installer ends by printing the lines below for you to run. Under the fleet-env cutover switch (`fleet-env enabled`; transitional default off, which is everything above) the installer instead renders `EnvironmentFile=%t/fleet-env/codex-sidecar.env` with `After=`/`Requires=fleet-env-project.service`, checks `CODEX_SIDECAR_KEY` is present via `fleet-env run sidecar-install` (never printed) and the projection exists, and creates no legacy env file; `status.sh` reads `fleet-env path codex-sidecar`. Post-cutover the store is the only copy of the key.
+It builds and installs the binary (see [Rust binary](#rust-binary)), resolves both persona wrappers (`codex-a`, `codex-b`), creates `~/.config/codex-sidecar/` (`0700`) and `env` (`0600`), and generates a `SIDECAR_KEY` **only when the env file is absent** — an existing key is never overwritten. The generated key is printed exactly once, at generation; after that it lives only in the env file and is never echoed again. Nothing is enabled or started: the installer ends by printing the lines below for you to run. Under the fleet-env cutover switch (`fleet-env enabled`; transitional default off, which is everything above) the installer instead renders `EnvironmentFile=%t/fleet-env/codex-sidecar.env` with `After=`/`Requires=fleet-env-project.service`, checks `CODEX_SIDECAR_KEY` is present via `fleet-env run sidecar-install` (never printed) and the projection exists, and creates no legacy env file; `status.sh` reads `fleet-env path codex-sidecar`. Post-cutover the store is the only copy of the key.
 
 The fleet value for `SIDECAR_OUTBOX_PATH` is `<code-root>/fleet-tools/data/outbox/events.db`; it is added to `~/.config/codex-sidecar/env` by hand and takes effect on `systemctl --user restart codex-sidecar`.
 

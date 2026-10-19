@@ -237,3 +237,61 @@ Cell ids (in table order): `g26nt-qat-c32k-f16-mtp-ctkf16-ctvf16-faauto-c32768-8
 **Serving read (input to WP-4).** The QAT UD-Q4_K_XL + MTP recipe is clean through 64k (27/27 twice) and holds a 22–26/27 band at 128k and 23/27 at 256k with `single_needle` perfect everywhere; every rung fits the headless budget with ≥0.9 GiB to spare at the pinned `-ncmoe`, and `-ncmoe 24` at 256k costs 38 t/s decode against 51 t/s at 128k. The 128k rung (`-ncmoe 18`, 13.6 GiB, 51 t/s, ~1.46k t/s prefill) is the served-entry candidate; 256k is a working rung, not a free one.
 
 **Verifier:** exit 1, solely from the carried `prompt_tokens_tolerance` calibration check on all 6 cells (same 11–15% tokenizer overshoot as v1: 30,897 at 32k; 62.9–63.0k at 64k; 126.9–127.9k at 128k; 245,233 at 256k — every prompt under its `-c`). `records_present`, `schema_conformant`, `vram_arithmetic` (ratios 0.70–0.86) and `wilson_min_trials` pass on all 6; `abort_state` pass. Totals: 37 checks, 25 pass / 6 fail / 0 unknown / 6 informational. Dashboard: ingested via the operator command; all six `g26nt-*` ids (and v1's six `g26-*`) present in `/api/export/scoreboard-capture`. `llama/smoke-inference.sh` green after the router returned. Source: `llama/bakeoff/records/gemma4-26b-a4b-ladder-v2/verify_report.md`.
+
+## minicpm5-2b-4gb-fit spike (scratch, outside the harness, 2026-10-18/19 00:26–00:53Z)
+
+**Question (user, 2026-10-18):** which MiniCPM5-2B weight quant + KV cache type + context fits a **3584 MiB** VRAM envelope (4 GB cards), and does quantized KV cost recall? The full-harness ladder planned for this (`plans/minicpm5-2b-4gb-fit-ladder.md`, 13 cells, ~5.5 h) was dropped unexecuted in favour of this fast test. **No harness records, no dashboard ingest.** Scripts and raw data: `runs/minicpm5-2b-4gb-fast-spike/` (untracked: `fast.py`, `grid.sh`, `fast.jsonl`, `grid.txt`).
+
+**Setup.** Weights: `bartowski/MiniCPM5-2B-GGUF` imatrix quants under `/models/bartowski/MiniCPM5-2B-GGUF/` (Q8_0 2679712992, Q6_K 2107305184, Q5_K_M 1920175328, Q4_K_M 1615826144, IQ4_XS 1463942368, Q3_K_M 1236085984 B). Image `b10534-swap243`, bare `llama-server -ngl 99 -fa on --jinja -np 1`, greedy (`temperature 0`, `top_k 1`), thinking off via `chat_template_kwargs`. RAM state B. The GPU tier was stopped for the 26-minute run (bake-off lock held).
+
+**Method: one prefill per config, cached questions.** Each config prefills one seeded, varied-filler haystack of 0.9 × `-c` (115,798 tokens at 128k, 57,865 at 64k) once. It then asks 9 questions over the same cached prefix: 7 single-needle questions at depths 0.05–0.95 (five near-identical "vault access code" needles plus two other fact types), and 2 two-hop questions. Each question after the first prefilled only 42 new tokens (`cache_prompt`, single slot). Scored on correctness plus answer-token logprob confidence (geometric-mean and minimum per config, via `logprobs`). A config takes ~30 s at 64k and ~90–175 s at 128k, against the harness's 15 / 50 min per cell for 27 independent prefills. The harness's 3 greedy trials are redundant by construction.
+
+**Fit is measured, not modelled.** llama.cpp's own device-memory projection (`common_params_fit_impl: projected to use N MiB`, `-lv 9`) was swept over 6 quants × {f16, q8_0/q8_0, q8_0/q4_0, q4_0/q4_0} × {32k, 48k, 64k, 96k, 128k}, 120/120 points. It matches ladder-v1's measured VRAM delta within 1.3% (Q4_K_M c32k f16: 2812 MiB projected for bartowski, 2776 MiB measured for openbmb's slightly smaller file). Measured usage sits below weights + KV because the token embedding stays in host memory. KV per token at f16 is 43,008 B.
+
+| Quant | f16 | k8v8 | k8v4 | k4v4 | max ctx in 3584 MiB (f16 / k8v8 / k8v4 / k4v4) |
+| --- | --- | --- | --- | --- | --- |
+| Q8_0 | 5075 / 7827 | 3815 / 5307 | 3479 / 4635 | 3143 / 3963 | 29k / 54k / 69k / 98k |
+| Q6_K | 4591 / 7343 | 3331 / 4823 | 2995 / 4151 | 2659 / 3479 | 40k / 74k / 96k / 128k |
+| Q5_K_M | 4447 / 7199 | 3187 / 4679 | 2851 / 4007 | 2515 / 3335 | 43k / 81k / 104k / 128k |
+| Q4_K_M | 4188 / 6940 | 2928 / 4420 | 2592 / 3748 | 2256 / 3076 | 49k / 92k / 118k / 128k |
+| IQ4_XS | 4051 / 6803 | 2791 / 4283 | 2455 / 3611 | 2119 / 2939 | 53k / 98k / 126k / 128k |
+| Q3_K_M | 3826 / 6578 | 2566 / 4058 | 2230 / 3386 | 1894 / 2714 | 58k / 107k / 128k / 128k |
+
+(Cells are projected MiB at 64k / 128k. kXvY = K cache qX_0, V cache qY_0. Max ctx is linear interpolation over the five measured rungs; the full grid is in `grid.txt`.)
+
+**Results.**
+
+| Config | Proj. MiB | Correct | Conf (mean / min) | Prefill | Fits 3584 |
+| --- | --- | --- | --- | --- | --- |
+| **128k** Q4_K_M f16 (reference) | 6940 | 7/9 | 0.973 / 0.59 | 1374 t/s | no |
+| IQ4_XS k4v4 | 2939 | **8/9** | 0.942 / 0.54 | 691 | yes |
+| Q5_K_M k4v4 | 3335 | 7/9 | 0.966 / 0.61 | 688 | yes |
+| Q6_K k4v4 | 3479 | 7/9 | 0.952 / 0.56 | 680 | yes |
+| Q3_K_M k4v4 | 2714 | 7/9 | 0.977 / 0.65 | 680 | yes |
+| Q4_K_M k8v4 | 3748 | 7/9 | 0.946 / 0.52 | 693 | no |
+| Q4_K_M k4v4 | 3076 | **6/9** | 0.970 / **0.42** | 690 | yes |
+| **64k** Q8_0 f16 (reference) | 5075 | 7/9 | 0.974 / 0.61 | 2385 | no |
+| Q5_K_M k8v4 | 2851 | **9/9** | 0.980 / 0.52 | 1289 | yes |
+| Q3_K_M k8v4 | 2230 | 8/9 | 0.982 / 0.80 | 1245 | yes |
+| IQ4_XS k8v4 | 2455 | 8/9 | 0.964 / 0.44 | 1288 | yes |
+| Q4_K_M f16 | 4188 | 7/9 | 0.983 / 0.72 | 2341 | no |
+| Q4_K_M k8v8 | 2928 | 7/9 | 0.984 / 0.74 | 1323 | yes |
+| Q4_K_M k8v4 | 2592 | 7/9 | 0.989 / 0.80 | 1287 | yes |
+| Q4_K_M k4v4 | 2256 | 7/9 | 0.994 / 0.90 | 1274 | yes |
+| Q6_K k8v4 | 2995 | 7/9 | 0.976 / 0.66 | 1262 | yes |
+| Q8_0 k8v4 | 3479 | 7/9 | 0.983 / 0.73 | 1309 | yes |
+
+**Reading.**
+- **7/9 is the model's ceiling on this battery, not a quantization effect.** Both f16 references, and nearly every config, miss the same two questions:
+  - the Thornfield vault code (answered with the Larkspur vault's code, a distractor confusion between near-identical needles);
+  - the courier → call-sign two-hop (answered "Teodor Vance", stopping at hop one).
+- **Quantized KV shows no recall cost this battery can resolve.** The one possible exception is Q4_K_M k4v4 at 128k: one extra miss (Wexley → Larkspur code) and the run's lowest minimum confidence. At 64k every quantized config matches or beats its reference. With 9 questions per config, a ±1 difference is within greedy-perturbation noise; nothing here is a Wilson-bounded ranking.
+- **The real cost of quantized KV on Vulkan is prefill: roughly halved** (128k 1374 → ~690 t/s; 64k ~2360 → ~1280 t/s), uniformly across quants and KV types. This agrees with `docs/gfx1201-kv-fa-mtp-findings.md` (Vulkan quantized-KV FA −29% to −63% at depth; HIP flat). Asymmetric k8v4 runs the non-fused attention path there, and here it showed the same prefill as k4v4/k8v8. Decode figures (55–105 t/s) come from 2–24-token answers and are too noisy to rank.
+- **No f16-KV configuration reaches 64k inside 3584 MiB.** The largest are Q3_K_M ~58k, IQ4_XS ~53k and Q4_K_M ~49k. Extrapolating, IQ2_M (0.97 GB) would land at ~3570 MiB at 64k, inside the envelope by about 14 MiB, at 2-bit weights on a 2B model. Not fetched or measured.
+
+**4 GB-card candidates (3584 MiB).**
+- **Full 128k:** IQ4_XS k4v4 (2939 MiB, best scorer at 128k, most headroom), or Q5_K_M k4v4 (3335 MiB) for more weight precision.
+- **64k:** Q5_K_M k8v4 (2851 MiB, the only 9/9).
+- **f16 KV, for full-speed prefill at shorter context:** IQ4_XS ~53k or Q4_K_M ~49k. This is the chat-model trade: half the context of k4v4 for twice the prefill speed.
+
+**Method note.** A cached-prefix, multi-question battery with logprob confidence answered in 26 minutes what the 27-independent-probe harness battery budgeted 5.5 h for. Recorded as a backlog candidate for the harness's default long-context battery (`INITIATIVE.md` Backlog).

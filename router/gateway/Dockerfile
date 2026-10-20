@@ -20,7 +20,7 @@ ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.revision=${GIT_SHA}
 COPY --from=rust-base /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=rust-build /inference-router /inference-router
-ENV GATEWAY_CONFIG_PATH=/app/gateway.config.json SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV GATEWAY_CONFIG_PATH=/app/gateway.config.json GATEWAY_CATALOG_PATH=/app/catalog/catalog.json SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 USER 1001:1001
 EXPOSE 4813
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 CMD ["/inference-router","healthcheck"]

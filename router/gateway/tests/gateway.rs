@@ -4,7 +4,7 @@
 use axum::body::{Body, Bytes};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::Response;
-use inference_router::{app, config, healthcheck, telemetry};
+use inference_router::{app, catalog, config, healthcheck, telemetry};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -102,7 +102,7 @@ async fn gateway(up: &Stub, extra_env: &[(&str, &str)]) -> String {
     .collect();
     let get = move |k: &str| env.get(k).cloned();
     let settings = config::from_json(&raw, &get).unwrap();
-    let state = app::state(settings, &get).unwrap();
+    let state = legacy_state(settings, &get);
     let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
     format!("http://{}", rx.await.unwrap())
@@ -124,6 +124,12 @@ async fn post(
     let r = req.send().await.unwrap();
     let (s, h) = (r.status().as_u16(), r.headers().clone());
     (s, h, r.text().await.unwrap())
+}
+
+/// App state whose catalog is derived from the fixture config's legacy per-model keys.
+fn legacy_state(settings: config::Settings, env: config::Env) -> Arc<app::AppState> {
+    let holder = catalog::legacy_holder(&settings).unwrap();
+    app::state_with(settings, holder, telemetry::from_env(env)).unwrap()
 }
 
 fn keys_env(k: &str) -> Option<String> {
@@ -573,7 +579,8 @@ async fn telemetry_finalizes_once_on_success_and_client_disconnect() {
         {"name": "anthropic", "type": "anthropic", "credential": "caller-oauth-passthrough", "baseurl": format!("http://{}/anthropic", up.addr), "models": ["claude-x"]}]});
     let log: Arc<Mutex<Vec<String>>> = Arc::default();
     let settings = config::from_json(&raw, &keys_env).unwrap();
-    let state = app::state_with(settings, Arc::new(Recorder(log.clone()))).unwrap();
+    let holder = catalog::legacy_holder(&settings).unwrap();
+    let state = app::state_with(settings, holder, Arc::new(Recorder(log.clone()))).unwrap();
     let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
     let gw = format!("http://{}", rx.await.unwrap());
@@ -680,7 +687,7 @@ async fn connect_error_is_retried_once_after_150ms() {
     let raw = json!({"host": "127.0.0.1", "port": 0, "providers": [
         {"name": "side", "type": "anthropic", "apikey": "k", "baseurl": format!("http://{addr}/cd"), "models": ["gpt-x"]}]});
     let settings = config::from_json(&raw, &keys_env).unwrap();
-    let state = app::state(settings, &|_| None).unwrap();
+    let state = legacy_state(settings, &|_| None);
     let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
     let gw = format!("http://{}", rx.await.unwrap());
@@ -801,7 +808,7 @@ async fn reset_after_request_written_is_not_retried() {
     let raw = json!({"host": "127.0.0.1", "port": 0, "providers": [
         {"name": "side", "type": "anthropic", "apikey": "k", "baseurl": format!("http://{addr}/cd"), "models": ["gpt-x"]}]});
     let settings = config::from_json(&raw, &keys_env).unwrap();
-    let state = app::state(settings, &|_| None).unwrap();
+    let state = legacy_state(settings, &|_| None);
     let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
     let gw = format!("http://{}", rx.await.unwrap());

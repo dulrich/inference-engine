@@ -3,6 +3,7 @@
 
 use crate::app::AppState;
 use crate::auth;
+use crate::catalog::Catalog;
 use crate::config::Kind;
 use crate::local_leg::{self, LocalLegContext};
 use crate::routing::{self, Attempt, Candidate, Ingress, Leg, Resolved, Target};
@@ -109,7 +110,7 @@ fn request_id() -> String {
     format!("{prefix:016x}-{seq:016x}")
 }
 
-fn start(st: &AppState, route: Route, body: &Value) -> Guard {
+fn start(st: &AppState, cat: &Catalog, route: Route, body: &Value) -> Guard {
     let id = request_id();
     let started = Instant::now();
     let handle = st.telemetry.request_start(&RequestStart {
@@ -120,6 +121,7 @@ fn start(st: &AppState, route: Route, body: &Value) -> Guard {
         streaming: is_streaming(body),
         started_at: started,
         started_wall: SystemTime::now(),
+        catalog_revision: &cat.revision,
     });
     Guard {
         handle: Some(handle),
@@ -343,12 +345,12 @@ fn requested_model(body: &Value) -> String {
 /// Ordered target resolution shared by the Messages-family and chat routes.
 #[allow(clippy::result_large_err)]
 fn resolve(
-    st: &AppState,
+    cat: &Catalog,
     guard: &mut Guard,
     ingress: Ingress,
     requested: &str,
 ) -> Result<Vec<Target>, Response> {
-    match routing::resolve(&st.settings, ingress, requested) {
+    match routing::resolve(&cat.providers, ingress, requested) {
         Resolved::Mismatch { model, provider } => Err(refuse(
             guard,
             400,
@@ -380,8 +382,9 @@ async fn fallthrough(
     inbound: &HeaderMap,
     body: Value,
 ) -> Response {
-    let mut guard = start(st, route, &body);
-    let targets = match resolve(st, &mut guard, ingress, &requested_model(&body)) {
+    let cat = st.catalog.snapshot();
+    let mut guard = start(st, &cat, route, &body);
+    let targets = match resolve(&cat, &mut guard, ingress, &requested_model(&body)) {
         Ok(t) => t,
         Err(r) => return r,
     };
@@ -478,9 +481,10 @@ pub async fn count_tokens(State(st): St, headers: HeaderMap, raw: Bytes) -> Resp
         Ok(b) => b,
         Err(r) => return r,
     };
-    let mut guard = start(&st, Route::CountTokens, &body);
+    let cat = st.catalog.snapshot();
+    let mut guard = start(&st, &cat, Route::CountTokens, &body);
     let requested = requested_model(&body);
-    let candidate = match resolve(&st, &mut guard, Ingress::CountTokens, &requested) {
+    let candidate = match resolve(&cat, &mut guard, Ingress::CountTokens, &requested) {
         Ok(t) => t
             .into_iter()
             .find_map(|t| t.plan.ok())
@@ -506,14 +510,14 @@ pub async fn systemone(State(st): St, headers: HeaderMap, raw: Bytes) -> Respons
         Ok(b) => b,
         Err(r) => return r,
     };
-    let mut guard = start(&st, Route::Systemone, &body);
+    let cat = st.catalog.snapshot();
+    let mut guard = start(&st, &cat, Route::Systemone, &body);
     let requested = body.get("model").and_then(Value::as_str);
     let target = requested
         .map(str::trim)
         .and_then(|m| m.split_once('/'))
         .and_then(|(name, model)| {
-            let p = st
-                .settings
+            let p = cat
                 .providers
                 .iter()
                 .find(|p| p.name == name && p.kind == Kind::Systemone)?;
@@ -552,7 +556,7 @@ pub async fn models(State(st): St, headers: HeaderMap) -> Response {
     let anthropic =
         hdr(&headers, "anthropic-version").is_some() || hdr(&headers, "anthropic-beta").is_some();
     let mut ids: Vec<(String, String, String)> = Vec::new();
-    for p in &st.settings.providers {
+    for p in &st.catalog.snapshot().providers {
         for m in p.models.iter().filter(|m| !m.is_empty()) {
             let id = format!("{}/{m}", p.name);
             if !ids.iter().any(|(i, _, _)| *i == id) {
@@ -573,9 +577,17 @@ pub async fn models(State(st): St, headers: HeaderMap) -> Response {
     json_response(200, &body)
 }
 
-/// Unauthenticated liveness.
-pub async fn health() -> Response {
-    json_response(200, &json!({"status": "ok", "timestamp": iso_now()}))
+/// Unauthenticated liveness, plus the live catalog revision and the last reload rejection.
+pub async fn health(State(st): St) -> Response {
+    json_response(
+        200,
+        &json!({
+            "status": "ok",
+            "timestamp": iso_now(),
+            "catalogRevision": st.catalog.snapshot().revision,
+            "catalogError": st.catalog.error(),
+        }),
+    )
 }
 
 fn iso_now() -> String {

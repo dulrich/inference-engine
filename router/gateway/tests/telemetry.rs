@@ -89,6 +89,7 @@ fn start(t: &JsonlTelemetry, b: &Value, streaming: bool) -> Box<dyn RequestTelem
         streaming,
         started_at: Instant::now(),
         started_wall: SystemTime::now(),
+        catalog_revision: "rev0",
     })
 }
 
@@ -154,7 +155,12 @@ async fn terminal_record_carries_the_pinned_fields() {
     }
     assert!(rec["ttftMs"].is_u64() && rec["upstreamFirstByteMs"].is_u64());
     assert!(rec["ts"].as_str().unwrap().ends_with('Z'));
-    assert_eq!(rec.as_object().unwrap().len(), 25, "0006 has 25 keys");
+    assert_eq!(
+        rec.as_object().unwrap().len(),
+        26,
+        "0006 has 25 keys + catalogRevision"
+    );
+    assert_eq!(rec["catalogRevision"], "rev0");
 }
 
 #[tokio::test]
@@ -512,6 +518,7 @@ fn systemone_body_is_never_read() {
         streaming: false,
         started_at: Instant::now(),
         started_wall: SystemTime::now(),
+        catalog_revision: "rev0",
     });
     r.finalize(&outcome(OutcomeKind::Completed, 200, None));
     s.flush();

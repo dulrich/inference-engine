@@ -32,6 +32,8 @@ pub struct RequestStart<'a> {
     pub streaming: bool,
     pub started_at: Instant,
     pub started_wall: SystemTime,
+    /// Revision of the catalog snapshot this request routes on.
+    pub catalog_revision: &'a str,
 }
 
 pub struct Resolution<'a> {

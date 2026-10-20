@@ -1,5 +1,6 @@
 //! The single composition point: state assembly + route table.
 
+use crate::catalog::{self, Holder};
 use crate::config::{Env, Settings};
 use crate::relay;
 use crate::telemetry::{self, Telemetry};
@@ -12,6 +13,8 @@ use std::time::Duration;
 
 pub struct AppState {
     pub settings: Settings,
+    /// The live model catalog; handlers take one `snapshot()` per request.
+    pub catalog: Arc<Holder>,
     pub client: reqwest::Client,
     pub telemetry: Arc<dyn Telemetry>,
 }
@@ -28,18 +31,23 @@ fn client(settings: &Settings) -> Result<reqwest::Client, String> {
 
 pub fn state_with(
     settings: Settings,
+    catalog: Arc<Holder>,
     telemetry: Arc<dyn Telemetry>,
 ) -> Result<Arc<AppState>, String> {
     Ok(Arc::new(AppState {
         client: client(&settings)?,
         settings,
+        catalog,
         telemetry,
     }))
 }
 
+/// Production state: the catalog from `GATEWAY_CATALOG_PATH` (missing/invalid = fatal).
 pub fn state(settings: Settings, env: Env) -> Result<Arc<AppState>, String> {
+    let path = catalog::path_from_env(env);
+    let holder = Holder::load(settings.providers.clone(), path)?;
     let tel = telemetry::from_env(env);
-    state_with(settings, tel)
+    state_with(settings, Arc::new(holder), tel)
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -62,6 +70,7 @@ pub async fn serve(state: Arc<AppState>, on_bound: impl FnOnce(SocketAddr)) -> R
         .await
         .map_err(|e| format!("bind {addr}: {e}"))?;
     on_bound(listener.local_addr().map_err(|e| e.to_string())?);
+    state.catalog.spawn_reloader(catalog::POLL_INTERVAL);
     axum::serve(listener, router(state))
         .await
         .map_err(|e| e.to_string())

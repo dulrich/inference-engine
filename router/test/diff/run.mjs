@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Differential contract harness runner (router/test/diff/README.md).
 //   node router/test/diff/run.mjs --target image:<tag>|bin:<path>
-//        [--case <glob>] [--slow] [--config-source <path>] [--keep] [--stub-image <tag>]
+//        [--case <glob>] [--slow] [--config-source <path>] [--catalog-source <path>] [--keep] [--stub-image <tag>]
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -16,12 +16,13 @@ export const GW_KEY = 'test-gw-key';
 const DEFAULT_STUB_IMAGE = 'node:24-slim';
 
 function parseArgs(argv) {
-  const a = { slow: false, keep: false, caseGlob: '*', configSource: path.join(repoRouter, 'gateway.config.json') };
+  const a = { slow: false, keep: false, caseGlob: '*', configSource: path.join(repoRouter, 'gateway.config.json'), catalogSource: path.join(repoRouter, 'catalog', 'catalog.json') };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === '--target') a.target = argv[++i];
     else if (k === '--case') a.caseGlob = argv[++i];
     else if (k === '--config-source') a.configSource = path.resolve(argv[++i]);
+    else if (k === '--catalog-source') a.catalogSource = path.resolve(argv[++i]);
     else if (k === '--slow') a.slow = true;
     else if (k === '--keep') a.keep = true;
     else if (k === '--stub-image') a.stubImage = argv[++i];
@@ -53,6 +54,27 @@ export function generateConfig(sourceText, stubBase) {
   out = `${out.slice(0, close).replace(/\s*$/, '')},\n${extra.map((p) => `    ${JSON.stringify(p)}`).join(',\n')}\n  ${out.slice(close)}`;
   JSON.parse(out);
   return out;
+}
+
+// Catalog generation: the source catalog plus one entry per fixture provider (its `models[]`,
+// and its `consumers` per model), written as <tmp>/catalog/catalog.json.
+export function generateCatalog(sourceText) {
+  const catalog = JSON.parse(sourceText);
+  const fixture = JSON.parse(fs.readFileSync(path.join(here, 'fixture-providers.json'), 'utf8'));
+  for (const p of fixture) {
+    catalog.providers[p.name] = {
+      models: p.models.map((id) => {
+        const consumers = Array.isArray(p.consumers) ? p.consumers : p.consumers?.[id];
+        return consumers ? { id, consumers } : { id };
+      }),
+    };
+  }
+  return `${JSON.stringify(catalog, null, 2)}\n`;
+}
+
+function writeCatalog(run) {
+  fs.mkdirSync(run.catalogDir, { recursive: true });
+  fs.writeFileSync(path.join(run.catalogDir, 'catalog.json'), generateCatalog(fs.readFileSync(run.catalogSource, 'utf8')));
 }
 
 // The gateway's auth is always on (x-gateway-key, raw key).
@@ -111,10 +133,12 @@ async function startImage(tag, stubImage, run, cleanups) {
   run.stubUrl = `http://${ip(stubName)}:8080`;
   await waitFor(`${run.stubUrl}/_log`, 20000, 'stub');
   fs.writeFileSync(run.configPath, generateConfig(fs.readFileSync(run.configSource, 'utf8'), `http://${stubName}:8080`));
+  writeCatalog(run);
   const gwName = `rrdiff-gw-${id}`;
   const envArgs = Object.entries(fakeEnv('/var/log/inference-router')).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
   docker('run', '-d', '--name', gwName, '--network', netName, '--user', `${process.getuid()}:${process.getgid()}`,
-    '-v', `${run.configPath}:/app/gateway.config.json:ro`, '-v', `${run.telemetryDir}:/var/log/inference-router`,
+    '-v', `${run.configPath}:/app/gateway.config.json:ro`, '-v', `${run.catalogDir}:/app/catalog:ro`,
+    '-v', `${run.telemetryDir}:/var/log/inference-router`,
     ...envArgs, tag);
   cleanups.push(() => {
     if (process.env.RRDIFF_GW_LOG) fs.writeFileSync(process.env.RRDIFF_GW_LOG, execFileSync('docker', ['logs', gwName], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
@@ -138,10 +162,11 @@ async function startBin(binPath, run, cleanups) {
   });
   run.stubUrl = `http://127.0.0.1:${stubPort}`;
   fs.writeFileSync(run.configPath, generateConfig(fs.readFileSync(run.configSource, 'utf8'), run.stubUrl));
+  writeCatalog(run);
   const gwPort = await freePort();
   const gw = spawn(path.resolve(binPath), [], {
     stdio: ['ignore', process.env.RRDIFF_GW_LOG ? fs.openSync(process.env.RRDIFF_GW_LOG, 'w') : 'ignore', 'inherit'],
-    env: { PATH: process.env.PATH, HOST: '127.0.0.1', PORT: String(gwPort), GATEWAY_CONFIG_PATH: run.configPath, ...fakeEnv(run.telemetryDir) },
+    env: { PATH: process.env.PATH, HOST: '127.0.0.1', PORT: String(gwPort), GATEWAY_CONFIG_PATH: run.configPath, GATEWAY_CATALOG_PATH: path.join(run.catalogDir, 'catalog.json'), ...fakeEnv(run.telemetryDir) },
   });
   cleanups.push(() => gw.kill('SIGTERM'));
   run.gwUrl = `http://127.0.0.1:${gwPort}`;
@@ -156,7 +181,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const id = `${process.pid}-${Math.random().toString(36).slice(2, 7)}`;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rrdiff-'));
-  const run = { id, configSource: args.configSource, configPath: path.join(tmp, 'gateway.config.json'), telemetryDir: path.join(tmp, 'telemetry') };
+  const run = { id, configSource: args.configSource, configPath: path.join(tmp, 'gateway.config.json'), catalogSource: args.catalogSource, catalogDir: path.join(tmp, 'catalog'), telemetryDir: path.join(tmp, 'telemetry') };
   fs.mkdirSync(run.telemetryDir, { mode: 0o777 });
   const cleanups = [];
   let cleaned = false;

@@ -1,8 +1,8 @@
 //! Model → ordered targets: an explicit `provider/model` prefix, else the `default_routes`,
-//! each validated against the provider's model list, then filtered to the providers that
+//! each validated against the provider's model list (from the live catalog snapshot), then filtered to the providers that
 //! speak the ingress protocol (a request never crosses protocols).
 
-use crate::config::{Kind, Provider, Settings};
+use crate::config::{Kind, Provider};
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
 
@@ -69,17 +69,16 @@ fn leg_for(p: &Provider, ingress: Ingress) -> Option<Leg> {
 
 /// Provider by name, case-insensitive (names only; there are no `openai`/`anthropic` type
 /// routes).
-fn route_by(s: &Settings, sel: &str) -> Option<Arc<Provider>> {
+fn route_by(s: &[Arc<Provider>], sel: &str) -> Option<Arc<Provider>> {
     let sel = sel.trim();
-    s.providers
-        .iter()
+    s.iter()
         .find(|p| !sel.is_empty() && p.name.eq_ignore_ascii_case(sel))
         .cloned()
 }
 
 /// Split a model reference into `(provider prefix, model)`; a prefix naming no provider leaves
 /// the whole string as a bare model.
-fn model_ref(s: &Settings, raw: &str) -> (Option<Arc<Provider>>, String) {
+fn model_ref(s: &[Arc<Provider>], raw: &str) -> (Option<Arc<Provider>>, String) {
     if let Some((hint, model)) = raw
         .split_once('/')
         .filter(|(h, m)| !h.trim().is_empty() && !m.trim().is_empty())
@@ -92,10 +91,10 @@ fn model_ref(s: &Settings, raw: &str) -> (Option<Arc<Provider>>, String) {
 }
 
 /// First provider per kind, config order, never `systemone`.
-fn default_routes(s: &Settings) -> Vec<(Arc<Provider>, bool)> {
+fn default_routes(s: &[Arc<Provider>]) -> Vec<(Arc<Provider>, bool)> {
     let mut seen: Vec<&Kind> = Vec::new();
     let mut out = Vec::new();
-    for p in s.providers.iter().filter(|p| p.kind != Kind::Systemone) {
+    for p in s.iter().filter(|p| p.kind != Kind::Systemone) {
         if !seen.contains(&&p.kind) {
             seen.push(&p.kind);
             out.push((p.clone(), false));
@@ -108,7 +107,8 @@ fn validates(p: &Provider, model: &str) -> bool {
     p.models.is_empty() || p.models.iter().any(|m| m == model)
 }
 
-pub fn resolve(s: &Settings, ingress: Ingress, requested: &str) -> Resolved {
+/// `s`: the routing providers of one catalog snapshot (`Catalog::providers`).
+pub fn resolve(s: &[Arc<Provider>], ingress: Ingress, requested: &str) -> Resolved {
     let requested = requested.trim();
     let (mref, model) = model_ref(s, requested);
     let routes = match mref {
@@ -198,10 +198,14 @@ mod tests {
     use super::*;
     use crate::config::from_json;
 
-    fn settings() -> Settings {
+    fn settings() -> Vec<Arc<Provider>> {
         let text = include_str!("../../gateway.config.json");
         let env = |k: &str| (k == "AUTH_STATIC_API_KEYS").then(|| "gk".to_string());
-        from_json(&serde_json::from_str(text).unwrap(), &env).unwrap()
+        let s = from_json(&serde_json::from_str(text).unwrap(), &env).unwrap();
+        let cat = include_str!("../../catalog/catalog.json");
+        crate::catalog::check(&s.providers, cat.as_bytes())
+            .unwrap()
+            .providers
     }
 
     fn ok(r: &Resolved) -> Vec<(String, String, Leg)> {

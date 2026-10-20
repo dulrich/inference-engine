@@ -67,6 +67,7 @@ fn ctx(route: Route, streaming: bool) -> LocalLegContext {
             baseurl: None,
             models: vec![M.into()],
             native_messages: true,
+            credentialed: true,
             effort_kwargs: six_rows(),
             max_output_tokens: MaxOutputTokens::from([(M.into(), 32000)]),
         }),

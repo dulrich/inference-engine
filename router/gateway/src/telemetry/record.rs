@@ -140,6 +140,7 @@ enum BodyMode {
 struct State {
     started: Instant,
     req_id: String,
+    catalog_revision: String,
     route: &'static str,
     source_adapter_key: &'static str,
     model_requested: Option<String>,
@@ -364,6 +365,7 @@ impl State {
             "upstreamTimings": Value::Null,
             "stopReason": self.stop_reason,
             "error": o.error.as_ref().map(|(stage, message)| json!({"stage": stage, "message": message})),
+            "catalogRevision": self.catalog_revision,
         })
     }
 }
@@ -385,6 +387,7 @@ impl Telemetry for JsonlTelemetry {
         let state = State {
             started: Instant::now(),
             req_id: s.request_id.to_string(),
+            catalog_revision: s.catalog_revision.to_string(),
             route,
             source_adapter_key: key,
             model_requested: s

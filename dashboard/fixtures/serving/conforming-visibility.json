@@ -1,9 +1,0 @@
-{
-  "schema": "serving-visibility-v1",
-  "models": {
-    "fixture-chat-UD-Q4_K_XL": { "gateway_id": "fixture-chat", "consumers": ["cc", "openwebui"] },
-    "fixture-vision-UD-Q4_K_XL": { "gateway_id": null, "consumers": ["openwebui"] },
-    "fixture-moe-UD-IQ3_S": { "gateway_id": "fixture-moe", "consumers": [] },
-    "fixture-embed-f16": { "gateway_id": null, "consumers": [] }
-  }
-}

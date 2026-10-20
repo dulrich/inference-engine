@@ -6,74 +6,36 @@
       "name": "claude-local",
       "type": "openai_chat_completions",
       "apikey": "local-dummy-key-not-a-secret",
-      "baseurl": "http://inference-engine-llama:4806/v1",
-      "models": [
-        "qwen38-27b-iq3s",
-        "qwen38-27b-iq3s-off",
-        "qwen38-27b-iq3s-low",
-        "qwen38-27b-iq3s-medium",
-        "qwen38-27b-iq3s-high",
-        "nemotron-4b",
-        "some-future-model-9b"
-      ],
-      "maxOutputTokens": {
-        "qwen38-27b-iq3s": 32000,
-        "qwen38-27b-iq3s-off": 32000,
-        "qwen38-27b-iq3s-low": 32000,
-        "qwen38-27b-iq3s-medium": 32000,
-        "qwen38-27b-iq3s-high": 32000,
-        "nemotron-4b": 32000,
-        "some-future-model-9b": 32000
-      }
+      "baseurl": "http://inference-engine-llama:4806/v1"
     },
     {
       "name": "anthropic",
       "type": "anthropic",
-      "baseurl": "https://api.anthropic.com",
-      "models": [
-        "claude-sonnet-5",
-        "claude-opus-5"
-      ]
+      "baseurl": "https://api.anthropic.com"
     },
     {
       "name": "openrouter",
       "type": "openai_chat_completions",
       "apiKeyEnv": "OPENROUTER_API_KEY",
-      "baseurl": "https://openrouter.ai/api/v1",
-      "models": [
-        "z-ai/glm-5.2:free"
-      ],
-      "consumers": ["openwebui"]
+      "baseurl": "https://openrouter.ai/api/v1"
     },
     {
       "name": "or-anthropic",
       "type": "anthropic",
       "apiKeyEnv": "OPENROUTER_API_KEY",
-      "baseurl": "https://openrouter.ai/api",
-      "models": [
-        "z-ai/glm-5.3"
-      ]
+      "baseurl": "https://openrouter.ai/api"
     },
     {
       "name": "codex-a",
       "type": "anthropic",
       "apiKeyEnv": "CODEX_SIDECAR_KEY",
-      "baseurl": "http://host.docker.internal:4877/codex-a",
-      "models": [
-        "gpt-5.6-luna",
-        "gpt-6-astra-low"
-      ]
+      "baseurl": "http://host.docker.internal:4877/codex-a"
     },
     {
       "name": "codex-b",
       "type": "anthropic",
       "apiKeyEnv": "CODEX_SIDECAR_KEY",
-      "baseurl": "http://host.docker.internal:4877/codex-b",
-      "models": [
-        "gpt-5.6-sol",
-        "gpt-5.6-luna-high"
-      ],
-      "consumers": ["cc", "openwebui"]
+      "baseurl": "http://host.docker.internal:4877/codex-b"
     }
   ]
 }

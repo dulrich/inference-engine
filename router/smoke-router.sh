@@ -25,7 +25,7 @@
 #      effort ids — still listed, no longer picker rows) and the hosted anthropic/* ids.
 #   2. POST /v1/messages via claude-local/nemotron-4b with thinking:{"type":"disabled"}
 #      returns 2xx and NO thinking content block — the deterministic half of the router's
-#      effort mapping (the nemotron-4b effortKwargs row). The low-vs-medium token delta is prompt- and slot-state-
+#      effort mapping (the nemotron-4b effortKwargs row in catalog/catalog.json). The low-vs-medium token delta is prompt- and slot-state-
 #      dependent, so no gate asserts it.
 #   3. A request with a missing gateway key, and one with a wrong gateway key, each return a
 #      401 error body (asserted on the body's error message, not just the status).
@@ -112,7 +112,7 @@ models_local_ok=1
 # hard-cap surface (plans/local-leg-claude-code-serving-fit.md WP-2; retagged router-internal by
 # plans/router-effort-mapping-claude-local.md WP-3 — still listed here, no longer picker rows):
 # each is a llama-swap alias whose own cmd carries the reasoning flags, so an id missing here
-# means llama/config.yaml and router/gateway.config.json have drifted apart and a caller naming
+# means llama/config.yaml and router/catalog/catalog.json have drifted apart and a caller naming
 # that id 400s at model_resolution.
 for id in \
 	claude-local/qwen36-a3b \
@@ -145,7 +145,7 @@ else
 fi
 
 # ── 2. Effort mapping, deterministic half: thinking disabled ⇒ no thinking block ────────────
-# Thinking-disabled mapping: the nemotron-4b `effortKwargs` row in gateway.config.json turns
+# Thinking-disabled mapping: the nemotron-4b `effortKwargs` row in catalog/catalog.json turns
 # thinking:{"type":"disabled"} into enable_thinking:false on the upstream body (measured
 # 2026-10-19: enable_thinking:false gives reasoning length 0 versus 71). That is the one level
 # whose effect is deterministic — the low-vs-medium token delta is prompt-dependent and

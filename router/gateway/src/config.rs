@@ -5,7 +5,6 @@
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
-use std::num::NonZeroU64;
 use std::sync::Arc;
 
 pub use crate::env::Env;
@@ -80,25 +79,12 @@ pub struct Provider {
     pub max_output_tokens: MaxOutputTokens,
 }
 
-/// The legacy per-model keys of one provider, parsed and validated but never routed on
-/// (plans/serving-control-redesign.md WP-2 B1; WP-3 deletes them with their other readers).
-#[derive(Clone, Debug)]
-pub struct LegacyModelKeys {
-    pub name: String,
-    pub models: Vec<String>,
-    pub effort_kwargs: EffortKwargs,
-    pub max_output_tokens: MaxOutputTokens,
-    /// Read by `router/model-picker-lineup.mjs`; the gateway ignores it.
-    pub consumers: Option<Value>,
-}
-
 #[derive(Debug)]
 pub struct Settings {
     pub host: String,
     pub port: u16,
     /// Static providers in config order; model fields empty (see `Provider`).
     pub providers: Vec<Arc<Provider>>,
-    pub legacy: Vec<LegacyModelKeys>,
     /// `AUTH_STATIC_API_KEYS`, never empty: client auth is always on (`auth.rs`).
     pub gateway_keys: Vec<String>,
     pub body_limit: usize,
@@ -127,16 +113,8 @@ struct FileProvider {
     #[serde(rename = "apiKeyEnv")]
     api_key_env: Option<String>,
     baseurl: Option<String>,
-    #[serde(default)]
-    models: Vec<String>,
     #[serde(rename = "localLeg")]
     local_leg: Option<LocalLeg>,
-    #[serde(default, rename = "effortKwargs")]
-    effort_kwargs: EffortKwargs,
-    #[serde(default, rename = "maxOutputTokens")]
-    max_output_tokens: HashMap<String, NonZeroU64>,
-    /// Read by `router/model-picker-lineup.mjs`; the gateway ignores it.
-    consumers: Option<Value>,
 }
 
 fn list(raw: Option<String>) -> Vec<String> {
@@ -150,7 +128,7 @@ fn list(raw: Option<String>) -> Vec<String> {
     out
 }
 
-fn parse_provider(item: &Value, env: Env) -> Result<(Provider, LegacyModelKeys), String> {
+fn parse_provider(item: &Value, env: Env) -> Result<Provider, String> {
     let f = FileProvider::deserialize(item).map_err(|e| e.to_string())?;
     let apikey = read_str(f.apikey);
     let key_env = read_str(f.api_key_env);
@@ -175,35 +153,11 @@ fn parse_provider(item: &Value, env: Env) -> Result<(Provider, LegacyModelKeys),
     }
     let credentialed =
         apikey.is_some() || key_env.is_some() || f.credential == Credential::CallerOauthPassthrough;
-    let models: Vec<String> = f.models.iter().map(|m| m.trim().to_string()).collect();
-    let mut keyed = f
-        .effort_kwargs
-        .keys()
-        .map(|k| ("effortKwargs", k))
-        .chain(f.max_output_tokens.keys().map(|k| ("maxOutputTokens", k)));
-    if let Some((map, k)) = keyed.find(|(_, k)| !models.contains(k)) {
-        return Err(format!("{map} key {k:?} is not one of models[]"));
-    }
-    for (model, levels) in &f.effort_kwargs {
-        check_effort_levels(model, levels)?;
-    }
     // An `apiKeyEnv` unset at runtime leaves the leg uncredentialed (per-request 503), never a
     // startup error: optional legs must not stop the gateway.
     let apikey = apikey.or_else(|| key_env.and_then(|e| read_str(env(&e))));
-    let name = f.name.trim().to_string();
-    let legacy = LegacyModelKeys {
-        name: name.clone(),
-        models,
-        effort_kwargs: f.effort_kwargs,
-        max_output_tokens: f
-            .max_output_tokens
-            .into_iter()
-            .map(|(k, v)| (k, v.get()))
-            .collect(),
-        consumers: f.consumers,
-    };
-    let provider = Provider {
-        name,
+    Ok(Provider {
+        name: f.name.trim().to_string(),
         kind: f.kind,
         credential: f.credential,
         apikey,
@@ -213,8 +167,7 @@ fn parse_provider(item: &Value, env: Env) -> Result<(Provider, LegacyModelKeys),
         credentialed,
         effort_kwargs: EffortKwargs::new(),
         max_output_tokens: MaxOutputTokens::new(),
-    };
-    Ok((provider, legacy))
+    })
 }
 
 /// Every level an `effortKwargs` row names is in the closed `EFFORT_LEVELS` set.
@@ -230,31 +183,29 @@ pub(crate) fn check_effort_levels(
     }
 }
 
-type Parsed = (FileConfig, Vec<Arc<Provider>>, Vec<LegacyModelKeys>);
+type Parsed = (FileConfig, Vec<Arc<Provider>>);
 
 fn parse_file(raw: &Value, env: Env) -> Result<Parsed, String> {
     let file = FileConfig::deserialize(raw).map_err(|e| format!("gateway config: {e}"))?;
     let mut providers = Vec::new();
-    let mut legacy = Vec::new();
     for (i, p) in file.providers.iter().enumerate() {
         let label = p.get("name").and_then(Value::as_str).unwrap_or("?");
-        let (p, l) = parse_provider(p, env)
+        let p = parse_provider(p, env)
             .map_err(|e| format!("gateway config providers[{i}] ({label}): {e}"))?;
         providers.push(Arc::new(p));
-        legacy.push(l);
     }
-    Ok((file, providers, legacy))
+    Ok((file, providers))
 }
 
 /// The static providers only — no server env (`AUTH_STATIC_API_KEYS`, `PORT`, …) is required.
 /// Used by `inference-router check-catalog`.
 pub fn load_static_providers(env: Env) -> Result<Vec<Arc<Provider>>, String> {
     let raw = read_file(env)?;
-    parse_file(&raw, env).map(|(_, p, _)| p)
+    parse_file(&raw, env).map(|(_, p)| p)
 }
 
 pub fn from_json(raw: &Value, env: Env) -> Result<Settings, String> {
-    let (file, providers, legacy) = parse_file(raw, env)?;
+    let (file, providers) = parse_file(raw, env)?;
     let host = read_str(env("HOST"))
         .or_else(|| read_str(file.host))
         .unwrap_or_else(|| "0.0.0.0".into());
@@ -280,7 +231,6 @@ pub fn from_json(raw: &Value, env: Env) -> Result<Settings, String> {
         host,
         port,
         providers,
-        legacy,
         gateway_keys,
         body_limit,
         upstream_timeout_ms,
@@ -328,7 +278,7 @@ mod tests {
     #[test]
     fn env_beats_config_and_api_key_env_resolves() {
         let raw = json!({"host":"0.0.0.0","port":4813,"providers":[
-            {"name":"or","type":"openai_chat_completions","apiKeyEnv":"OR_KEY","baseurl":"https://x/v1/","models":["m"],"consumers":{"m":["router"]}},
+            {"name":"or","type":"openai_chat_completions","apiKeyEnv":"OR_KEY","baseurl":"https://x/v1/"},
             {"name":"anthropic","type":"anthropic","credential":"caller-oauth-passthrough","baseurl":"https://api.anthropic.com"}]});
         let env = env_of(&[
             ("HOST", "127.0.0.1"),
@@ -360,10 +310,8 @@ mod tests {
             .find(|p| p.name == "claude-local")
             .unwrap();
         assert!(local.native_messages && local.apikey.is_some() && local.credentialed);
-        // Legacy per-model keys parse but never reach the routing providers (WP-2 B1).
+        // Model fields come only from the catalog.
         assert!(local.models.is_empty() && local.effort_kwargs.is_empty());
-        let legacy = s.legacy.iter().find(|l| l.name == "claude-local").unwrap();
-        assert!(!legacy.effort_kwargs.is_empty() && !legacy.max_output_tokens.is_empty());
         assert!(s
             .providers
             .iter()
@@ -392,6 +340,21 @@ mod tests {
         );
         let e = err_of(json!({"Providers": []}), &[]);
         assert!(e.contains("unknown field `Providers`"), "{e}");
+    }
+
+    #[test]
+    fn legacy_per_model_keys_are_a_startup_error() {
+        for (k, v) in [
+            ("models", json!(["m"])),
+            ("effortKwargs", json!({"m": {"low": {}}})),
+            ("maxOutputTokens", json!({"m": 1})),
+            ("consumers", json!(["router"])),
+        ] {
+            let mut p = json!({"name": "x", "type": "anthropic", "apikey": "k"});
+            p[k] = v;
+            let e = err_of(one(p), &[]);
+            assert!(e.contains(&format!("unknown field `{k}`")), "{e}");
+        }
     }
 
     #[test]

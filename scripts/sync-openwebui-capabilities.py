@@ -26,10 +26,12 @@ WebUI's update route replaces `name`/`meta`/`params` wholesale rather than patch
                                         round-trips untouched)
 
 It also owns `is_active` for every router-served id (user decision 2026-09-14,
-`plans/bench-dashboard-serving-control.md` WP-3), driven by the visibility declaration
-`router/visibility.json` (`--visibility`, default resolved from this file's own location, never
-from the cwd). `is_active` is desired-true exactly when that model key's declared `consumers`
-include `openwebui`. The route is a TOGGLE, not a setter, so the script compares the desired
+`plans/bench-dashboard-serving-control.md` WP-3), driven by the visibility the model catalog
+`router/catalog/catalog.json` carries (`--catalog`, default resolved from this file's own
+location, never from the cwd; `plans/serving-control-redesign.md` WP-3): each `claude-local`
+entry's `modelKey` + `consumers`, and the top-level `exposures` records for the llama keys the
+gateway does not route. `is_active` is desired-true exactly when that model key's declared
+`consumers` include `openwebui`. The route is a TOGGLE, not a setter, so the script compares the desired
 value against the one it already read off `/api/v1/models/base` and posts only on a difference;
 a row it had to create is RE-READ first, because a created row's default is not assumed. Every
 other Open WebUI setting stays admin-owned.
@@ -53,8 +55,8 @@ everything else" rule:
     minus that policy's `retire_tool_ids`/`retire_feature_ids`. The merge is append-only against
     what the row already carries, so a human-added extra id survives. A row driven INACTIVE gets
     no arming change at all — its lists round-trip untouched.
-  * **Derived effort rows.** For every router model whose `router/visibility.json` `gateway_id`
-    has an `effortKwargs` entry in `router/gateway.config.json` (`--gateway-config`), this script
+  * **Derived effort rows.** For every router model whose catalog entry (the `claude-local`
+    entry naming it as `modelKey`) carries `effortKwargs`, this script
     owns one Open WebUI row per reasoning level, id `<model key>--effort-<level>`, name
     `<router display name> · <level>`, `base_model_id` = the model key, `params` = the base's
     sampling keys plus `reasoning_effort: <level>`, `meta` = the same three managed fields as the
@@ -86,15 +88,15 @@ model with NO existing row the dry-run prints `CREATE` plus the INTENDED `is_act
 no observed value to transition from, so it never prints a fabricated transition. `--apply`
 performs the sync; running `--apply` twice in a row must show an empty diff on the second run
 (the desired state is a pure function of the router's live capability block plus
-`router/visibility.json`).
+`router/catalog/catalog.json`).
 
-Fail-closed: a missing, unparseable or unknown-schema declaration (visibility OR policy), a
-malformed gateway config, an entry carrying a consumer token outside the closed vocabulary, or a
+Fail-closed: a missing, unparseable or unknown-schema declaration (catalog OR policy), an
+entry carrying a consumer token outside the closed vocabulary, or a
 router id no entry declares, all stop the run before any mutating call.
 
 Module map (`scripts/openwebui_sync/`, one synchronization domain, four seams):
 
-  * `declarations.py` -- the repo-owned inputs above (visibility, policy, effort ladder) and
+  * `declarations.py` -- the repo-owned inputs above (catalog visibility + effort ladder, policy) and
                          their fail-closed loaders and default paths.
   * `planner.py`      -- pure decisions: the managed-field contract, the create/update/toggle
                          matrix, arming merges, derived ids, the retirement partition. No I/O.
@@ -139,13 +141,13 @@ from openwebui_sync.declarations import (  # noqa: E402
     OPENWEBUI_CONSUMER,
     POLICY_LIST_FIELDS,
     POLICY_SCHEMA,
-    VISIBILITY_SCHEMA,
-    default_gateway_config_path,
+    CATALOG_SCHEMA,
+    default_catalog_path,
     default_policy_path,
-    default_visibility_path,
     desired_is_active,
     effort_levels_for,
     gateway_id_for,
+    load_catalog,
     load_effort_levels,
     load_policy,
     load_visibility,
@@ -174,21 +176,20 @@ __all__ = [
     "DEFAULT_ROUTER_URL",
     "DERIVED_ID_MARKER",
     "DERIVED_NAME_SEPARATOR",
+    "CATALOG_SCHEMA",
     "CONSUMER_VOCABULARY",
     "EFFORT_LEVEL_ORDER",
     "OPENWEBUI_CONSUMER",
     "POLICY_LIST_FIELDS",
     "POLICY_SCHEMA",
     "SAMPLING_PARAM_KEYS",
-    "VISIBILITY_SCHEMA",
     "SyncError",
     "apply_model",
     "build_description",
     "client",
     "compute_desired",
-    "default_gateway_config_path",
+    "default_catalog_path",
     "default_policy_path",
-    "default_visibility_path",
     "derived_row_id",
     "derived_row_name",
     "desired_is_active",
@@ -198,6 +199,7 @@ __all__ = [
     "fetch_router_models",
     "gateway_id_for",
     "is_retirement_candidate",
+    "load_catalog",
     "load_effort_levels",
     "load_policy",
     "load_visibility",
@@ -211,6 +213,9 @@ __all__ = [
     "runner",
     "toggle_is_active",
 ]
+
+
+RETIRED_FLAGS = ("--visibility", "--gateway-config")
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
@@ -241,14 +246,20 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         help="Open WebUI admin API key (default: $OPENWEBUI_API_KEY; required, never logged)",
     )
     p.add_argument(
-        "--visibility",
+        "--catalog",
         default=None,
         metavar="PATH",
         help=(
-            "visibility declaration path (default: <repo>/router/visibility.json, resolved "
-            "from this script's own location, never from the cwd)"
+            "model catalog path, the visibility + effort-ladder source (default: "
+            "<repo>/router/catalog/catalog.json, resolved from this script's own location, "
+            "never from the cwd)"
         ),
     )
+    # Retired with `router/visibility.json` and the gateway config's `effortKwargs`
+    # (plans/serving-control-redesign.md WP-3): still parsed so naming one is a clear error
+    # rather than an argparse usage dump or a silently ignored path.
+    for retired in RETIRED_FLAGS:
+        p.add_argument(retired, default=None, metavar="PATH", help=argparse.SUPPRESS)
     p.add_argument(
         "--policy",
         default=None,
@@ -256,15 +267,6 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         help=(
             "arming/retirement policy path (default: <repo>/scripts/openwebui-policy.json, "
             "resolved from this script's own location, never from the cwd)"
-        ),
-    )
-    p.add_argument(
-        "--gateway-config",
-        default=None,
-        metavar="PATH",
-        help=(
-            "gateway config carrying the `effortKwargs` ladder (default: "
-            "<repo>/router/gateway.config.json, resolved from this script's own location)"
         ),
     )
     p.add_argument(
@@ -284,18 +286,16 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
 
 def print_header(
     args: argparse.Namespace,
-    visibility_path: Path,
+    catalog_path: Path,
     policy_path: Path,
-    gateway_config_path: Path,
     model_count: int,
 ) -> None:
     """The run banner: mode plus every input this run resolved, before the first row."""
     print(f"=== sync-openwebui-capabilities: {'APPLY' if args.apply else 'DRY-RUN'} ===")
     print(f"router:     {args.router_url}")
     print(f"open webui: {args.openwebui_url}")
-    print(f"visibility: {visibility_path}")
+    print(f"catalog:    {catalog_path}")
     print(f"policy:     {policy_path}")
-    print(f"gateway:    {gateway_config_path}")
     print(f"models:     {model_count}")
     print()
 
@@ -317,20 +317,24 @@ def main(argv: List[str]) -> int:
         )
         return 2
 
-    visibility_path = (
-        Path(args.visibility) if args.visibility else default_visibility_path()
-    )
-    policy_path = Path(args.policy) if args.policy else default_policy_path()
-    gateway_config_path = (
-        Path(args.gateway_config) if args.gateway_config else default_gateway_config_path()
-    )
+    for retired in RETIRED_FLAGS:
+        if getattr(args, retired.lstrip("-").replace("-", "_")) is not None:
+            print(
+                f"error: {retired} is retired -- visibility and the effort ladder come from the "
+                "model catalog; pass --catalog <path>",
+                file=sys.stderr,
+            )
+            return 2
 
-    # Fail-closed, and deliberately BEFORE the first HTTP call: a malformed declaration, policy
-    # or gateway config must stop the run without a single mutating request having been possible.
+    catalog_path = Path(args.catalog) if args.catalog else default_catalog_path()
+    policy_path = Path(args.policy) if args.policy else default_policy_path()
+
+    # Fail-closed, and deliberately BEFORE the first HTTP call: a malformed catalog or policy
+    # must stop the run without a single mutating request having been possible.
     try:
-        visibility_models = load_visibility(visibility_path)
+        visibility_models = load_visibility(catalog_path)
         policy = load_policy(policy_path)
-        effort_levels = load_effort_levels(gateway_config_path)
+        effort_levels = load_effort_levels(catalog_path)
     except SyncError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -354,7 +358,7 @@ def main(argv: List[str]) -> int:
             print(f"warning: --only {mid} not found in router /v1/models", file=sys.stderr)
 
     router_models = sorted(router_models, key=lambda m: m["id"])
-    print_header(args, visibility_path, policy_path, gateway_config_path, len(router_models))
+    print_header(args, catalog_path, policy_path, len(router_models))
 
     counts: Dict[str, int] = {"create": 0, "derive": 0, "update": 0, "toggle": 0, "noop": 0}
     failures = 0

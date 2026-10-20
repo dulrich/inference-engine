@@ -101,8 +101,7 @@ async fn gateway(up: &Stub, extra_env: &[(&str, &str)]) -> String {
     .map(|(k, v)| (k.to_string(), v.to_string()))
     .collect();
     let get = move |k: &str| env.get(k).cloned();
-    let settings = config::from_json(&raw, &get).unwrap();
-    let state = legacy_state(settings, &get);
+    let state = fixture_state(raw, &get);
     let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
     format!("http://{}", rx.await.unwrap())
@@ -126,9 +125,55 @@ async fn post(
     (s, h, r.text().await.unwrap())
 }
 
-/// App state whose catalog is derived from the fixture config's legacy per-model keys.
-fn legacy_state(settings: config::Settings, env: config::Env) -> Arc<app::AppState> {
-    let holder = catalog::legacy_holder(&settings).unwrap();
+/// Split a fixture written with per-provider `models` (and the claude-local
+/// `effortKwargs`/`maxOutputTokens` maps) into the static config and a catalog JSON.
+fn split_fixture(mut raw: Value) -> (Value, String) {
+    let mut providers = serde_json::Map::new();
+    for p in raw["providers"].as_array_mut().unwrap() {
+        let p = p.as_object_mut().unwrap();
+        let effort = p.remove("effortKwargs").unwrap_or(json!({}));
+        let max = p.remove("maxOutputTokens").unwrap_or(json!({}));
+        let models: Vec<Value> = p
+            .remove("models")
+            .and_then(|m| m.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|id| {
+                let mut e = json!({"id": id});
+                let id = id.as_str().unwrap();
+                if let Some(k) = effort.get(id) {
+                    e["effortKwargs"] = k.clone();
+                }
+                if let Some(t) = max.get(id) {
+                    e["maxOutputTokens"] = t.clone();
+                }
+                e
+            })
+            .collect();
+        providers.insert(
+            p["name"].as_str().unwrap().into(),
+            json!({"models": models}),
+        );
+    }
+    let cat = json!({"schema": "model-catalog-v1", "providers": providers}).to_string();
+    (raw, cat)
+}
+
+/// Settings plus a non-reloading catalog holder from a split fixture.
+fn fixture(raw: Value, env: config::Env) -> (config::Settings, Arc<catalog::Holder>) {
+    let (raw, cat) = split_fixture(raw);
+    let settings = config::from_json(&raw, env).unwrap();
+    let parsed = catalog::check(&settings.providers, cat.as_bytes()).unwrap();
+    let holder = Arc::new(catalog::Holder::new(
+        settings.providers.clone(),
+        parsed,
+        None,
+    ));
+    (settings, holder)
+}
+
+fn fixture_state(raw: Value, env: config::Env) -> Arc<app::AppState> {
+    let (settings, holder) = fixture(raw, env);
     app::state_with(settings, holder, telemetry::from_env(env)).unwrap()
 }
 
@@ -578,8 +623,7 @@ async fn telemetry_finalizes_once_on_success_and_client_disconnect() {
         {"name": "codex-a", "type": "anthropic", "apikey": "k", "baseurl": format!("http://{}/codex-a", up.addr), "models": ["gpt-x"]},
         {"name": "anthropic", "type": "anthropic", "credential": "caller-oauth-passthrough", "baseurl": format!("http://{}/anthropic", up.addr), "models": ["claude-x"]}]});
     let log: Arc<Mutex<Vec<String>>> = Arc::default();
-    let settings = config::from_json(&raw, &keys_env).unwrap();
-    let holder = catalog::legacy_holder(&settings).unwrap();
+    let (settings, holder) = fixture(raw, &keys_env);
     let state = app::state_with(settings, holder, Arc::new(Recorder(log.clone()))).unwrap();
     let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
@@ -686,8 +730,7 @@ async fn connect_error_is_retried_once_after_150ms() {
     drop(reserved);
     let raw = json!({"host": "127.0.0.1", "port": 0, "providers": [
         {"name": "side", "type": "anthropic", "apikey": "k", "baseurl": format!("http://{addr}/cd"), "models": ["gpt-x"]}]});
-    let settings = config::from_json(&raw, &keys_env).unwrap();
-    let state = legacy_state(settings, &|_| None);
+    let state = fixture_state(raw, &keys_env);
     let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
     let gw = format!("http://{}", rx.await.unwrap());
@@ -807,8 +850,7 @@ async fn reset_after_request_written_is_not_retried() {
     });
     let raw = json!({"host": "127.0.0.1", "port": 0, "providers": [
         {"name": "side", "type": "anthropic", "apikey": "k", "baseurl": format!("http://{addr}/cd"), "models": ["gpt-x"]}]});
-    let settings = config::from_json(&raw, &keys_env).unwrap();
-    let state = legacy_state(settings, &|_| None);
+    let state = fixture_state(raw, &keys_env);
     let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
     let gw = format!("http://{}", rx.await.unwrap());

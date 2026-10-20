@@ -1,7 +1,7 @@
 // CONDITIONAL — lives in router/test/conditional/, outside the per-commit
 // `node --test router/test/*.test.mjs` glob, because every probe loads the Qwen3.8 27B on the GPU
 // tier (plans/test-qwen-load-minimization.md). Trigger surface (router/AGENTS.md "Gates" trigger
-// table): `router/gateway/src/local_leg.rs` effort handling; `effortKwargs` in gateway.config.json;
+// table): `router/gateway/src/local_leg.rs` effort handling; `effortKwargs` in router/catalog/catalog.json;
 // Qwen3.8 template/recipe changes in llama/config.yaml; this file. Run with EFFORT_MAPPING_LOCAL=1;
 // without it the file registers one failing test naming the variable (never skip).
 //
@@ -25,14 +25,14 @@
 // upstream-direct `prompt_tokens` for the kwargs that row is expected to deliver. Both legs are
 // measured in the same run; no count is hardcoded.
 //
-// Coverage (the six-row `effortKwargs` map of router/gateway.config.json plus the no-op):
+// Coverage (the six-row `effortKwargs` map of router/catalog/catalog.json plus the no-op):
 //   - low, medium, high (→ medium since 0009), xhigh, max (→ xhigh), thinking disabled
 //     (→ enable_thinking:false): router occupancy == upstream prompt_tokens for the expected kwargs.
 //   - an unknown effort value: the router forwards nothing (no-op invariant), so occupancy ==
 //     upstream with NO kwargs — and the upstream-direct negative control proves forwarding it
 //     would have mattered: llama 500s with `Jinja Exception: Unexpected reasoning effort`.
 //   - upstream low / medium / absent are pairwise distinct, so the oracle can tell those rows apart.
-//   - the contract table below equals the config's effortKwargs row (config drift is a red).
+//   - the contract table below equals the catalog's effortKwargs row (config drift is a red).
 // Limit: xhigh (and max → xhigh) is the template DEFAULT, so it renders identically to absent
 // kwargs — this oracle cannot tell a delivered xhigh from a dropped one. Forwarding identity for
 // those two rows is owned by the crate tests in router/gateway/tests/local_leg.rs
@@ -64,7 +64,7 @@ const BASE_URL = (process.env.ROUTER_BASE_URL || "http://127.0.0.1:4813").replac
 const UPSTREAM_URL = (process.env.LLAMA_UPSTREAM_URL || "http://127.0.0.1:4811").replace(/\/$/, "");
 // ROUTER_ENV_FILE, else `fleet-env path router` under the fleet-env cutover, else the legacy file.
 const ENV_FILE = routerEnvFile();
-const CONFIG_FILE = new URL("../../gateway.config.json", import.meta.url);
+const CATALOG_FILE = new URL("../../catalog/catalog.json", import.meta.url);
 // The engine's anthropic-type legs want *some* client bearer to build passthrough headers; the
 // provider's own apikey replaces it before the upstream (smoke-router.sh checks 7 and 8).
 const DUMMY_BEARER = "effort-mapping-dummy-client-bearer";
@@ -84,9 +84,14 @@ const EXPECTED = {
 };
 const BOGUS = "bogus-effort-level";
 
-const CONFIG = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
-const LOCAL = CONFIG.providers.find((p) => p.name === "claude-local");
-const EFFORT_MODELS = Object.keys(LOCAL?.effortKwargs ?? {});
+const CATALOG = JSON.parse(fs.readFileSync(CATALOG_FILE, "utf8"));
+// claude-local's per-model effortKwargs rows, keyed by gateway id (the catalog's entries).
+const LOCAL_EFFORT = Object.fromEntries(
+  (CATALOG.providers?.["claude-local"]?.models ?? [])
+    .filter((e) => e.effortKwargs)
+    .map((e) => [e.id, e.effortKwargs]),
+);
+const EFFORT_MODELS = Object.keys(LOCAL_EFFORT);
 const UPSTREAM_MODEL = process.env.EFFORT_UPSTREAM_MODEL || "qwen38-27b-iq3s";
 const ROUTER_MODEL = `claude-local/${UPSTREAM_MODEL}`;
 
@@ -203,11 +208,11 @@ async function routerOccupancy(extra, label) {
   return occupancy(u);
 }
 
-reg("config: claude-local's effortKwargs row equals the contract table", () => {
-  assert.ok(LOCAL?.effortKwargs?.[UPSTREAM_MODEL],
-    `router/gateway.config.json claude-local has no effortKwargs row for ${UPSTREAM_MODEL} (rows: ${JSON.stringify(EFFORT_MODELS)})`);
-  assert.deepEqual(LOCAL.effortKwargs[UPSTREAM_MODEL], EXPECTED,
-    `gateway.config.json effortKwargs.${UPSTREAM_MODEL} drifted from this test's contract table`);
+reg("catalog: claude-local's effortKwargs row equals the contract table", () => {
+  assert.ok(LOCAL_EFFORT[UPSTREAM_MODEL],
+    `router/catalog/catalog.json claude-local has no effortKwargs row for ${UPSTREAM_MODEL} (rows: ${JSON.stringify(EFFORT_MODELS)})`);
+  assert.deepEqual(LOCAL_EFFORT[UPSTREAM_MODEL], EXPECTED,
+    `catalog.json effortKwargs of ${UPSTREAM_MODEL} drifted from this test's contract table`);
 });
 
 reg("upstream control: an unknown reasoning_effort is a 500 Jinja exception at llama", async () => {

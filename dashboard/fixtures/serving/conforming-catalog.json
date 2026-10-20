@@ -1,0 +1,15 @@
+{
+  "schema": "model-catalog-v1",
+  "providers": {
+    "claude-local": {
+      "models": [
+        {"id": "fixture-chat", "modelKey": "fixture-chat-UD-Q4_K_XL", "consumers": ["cc", "openwebui"], "maxOutputTokens": 32000},
+        {"id": "fixture-moe", "modelKey": "fixture-moe-UD-IQ3_S", "consumers": [], "maxOutputTokens": 8192}
+      ]
+    }
+  },
+  "exposures": {
+    "fixture-vision-UD-Q4_K_XL": {"consumers": ["openwebui"]},
+    "fixture-embed-f16": {"consumers": []}
+  }
+}

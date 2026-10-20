@@ -1,4 +1,5 @@
-"""Repo-owned declaration inputs: visibility, arming/retirement policy, effort ladder.
+"""Repo-owned declaration inputs: the model catalog (visibility + effort ladder) and the
+arming/retirement policy.
 
 Every loader here is FAIL-CLOSED by contract: a missing, unparseable or unknown-schema
 document raises `SyncError` rather than yielding an empty default. An empty-by-accident
@@ -7,14 +8,14 @@ silently un-arm every row -- both are "the run was healthy and did the wrong thi
 
 Default paths are resolved from THIS PACKAGE's location on disk (which is
 `<repo>/scripts/openwebui_sync/`), never from the cwd, so an operator invoking the script
-from anywhere reads the same three files.
+from anywhere reads the same two files.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from .errors import SyncError
 from .types import EffortLevels, Policy, VisibilityModels
@@ -23,14 +24,18 @@ from .types import EffortLevels, Policy, VisibilityModels
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = SCRIPTS_DIR.parent
 
-# The visibility declaration (`plans/bench-dashboard-serving-control.md` WP-3). Keyed by
-# `llama/config.yaml` model key — which is also `/v1/models` `id` and the Open WebUI row id, so
-# no crosswalk is needed on this side (`gateway_id` is the Claude Code picker's business).
-VISIBILITY_SCHEMA = "serving-visibility-v1"
+# The model catalog (`router/catalog/catalog.json`, `plans/serving-control-redesign.md` WP-3)
+# carries the visibility this sync reads: every `claude-local` entry names its `llama/config.yaml`
+# `modelKey` (which is also `/v1/models` `id` and the Open WebUI row id) and its `consumers`, and
+# every llama key the gateway does not route sits in the top-level `exposures` map. The loader
+# projects both back into the `{model key: {gateway_id, consumers}}` shape the planner reads.
+CATALOG_SCHEMA = "model-catalog-v1"
+VISIBILITY_PROVIDER = "claude-local"
 
 
-# Closed vocabulary, canonical order. There is deliberately no `router` token: "router-only" is
-# the COMPLEMENT — an entry with `[]` is reachable by id through the gateway and appears in
+# Closed vocabulary for llama-key visibility, canonical order. The catalog's own vocabulary also
+# carries the gateway-only `router` tag, which never belongs on a llama-key entry: "router-only"
+# is the COMPLEMENT — an entry with `[]` is reachable by id through the gateway and appears in
 # neither the Claude Code picker nor Open WebUI's active set.
 CONSUMER_VOCABULARY = ("cc", "openwebui")
 
@@ -55,16 +60,16 @@ POLICY_LIST_FIELDS = (
 
 
 # Canonical print/creation order for the derived effort rows. The ladder's CONTENT comes from
-# `router/gateway.config.json`'s `effortKwargs` (nothing is forked here); this tuple only fixes
+# the catalog entries' `effortKwargs` (nothing is forked here); this tuple only fixes
 # the order, so the picker reads low-to-high instead of dict-insertion order. `none` is always
 # present for a model that has a ladder at all -- it is the one level with a measured, binary
 # effect (WP-1: 0 reasoning chars), so it is never conditional on the table listing it.
 EFFORT_LEVEL_ORDER = ("none", "low", "medium", "high", "xhigh")
 
 
-def default_visibility_path() -> Path:
-    """`<repo>/router/visibility.json`, resolved from THIS FILE, never from the cwd."""
-    return REPO_ROOT / "router" / "visibility.json"
+def default_catalog_path() -> Path:
+    """`<repo>/router/catalog/catalog.json`, resolved from THIS FILE, never from the cwd."""
+    return REPO_ROOT / "router" / "catalog" / "catalog.json"
 
 
 def default_policy_path() -> Path:
@@ -72,55 +77,84 @@ def default_policy_path() -> Path:
     return SCRIPTS_DIR / "openwebui-policy.json"
 
 
-def default_gateway_config_path() -> Path:
-    """`<repo>/router/gateway.config.json`, resolved from THIS FILE, never from the cwd."""
-    return REPO_ROOT / "router" / "gateway.config.json"
-
-
-def load_visibility(path: Path) -> VisibilityModels:
-    """Return the declaration's `models` map. Fail-closed on every malformed shape.
-
-    Raises SyncError for: a missing or unreadable file, invalid JSON, a schema literal this
-    script does not understand, a non-mapping `models`, an entry that is not a mapping, a
-    `consumers` value that is not a list, and any consumer token outside CONSUMER_VOCABULARY.
-    Treating any of these as "no declaration" would silently deactivate every model, which is
-    why none of them degrades to a default.
-    """
+def load_catalog(path: Path) -> Dict[str, Any]:
+    """Return the parsed catalog document. Fail-closed on a missing or unreadable file, invalid
+    JSON, a non-object document, a schema literal this script does not understand, and a
+    missing or non-mapping `providers`/`exposures`."""
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise SyncError(f"cannot read visibility declaration {path}: {exc}") from exc
+        raise SyncError(f"cannot read model catalog {path}: {exc}") from exc
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise SyncError(f"visibility declaration {path} is not valid JSON: {exc}") from exc
+        raise SyncError(f"model catalog {path} is not valid JSON: {exc}") from exc
     if not isinstance(parsed, dict):
-        raise SyncError(f"visibility declaration {path} is not a JSON object")
-    if parsed.get("schema") != VISIBILITY_SCHEMA:
+        raise SyncError(f"model catalog {path} is not a JSON object")
+    if parsed.get("schema") != CATALOG_SCHEMA:
         raise SyncError(
-            f"visibility declaration {path} carries schema {parsed.get('schema')!r}, "
-            f"expected {VISIBILITY_SCHEMA!r}"
+            f"model catalog {path} carries schema {parsed.get('schema')!r}, "
+            f"expected {CATALOG_SCHEMA!r}"
         )
-    models = parsed.get("models")
-    if not isinstance(models, dict):
-        raise SyncError(f"visibility declaration {path} has no `models` mapping")
-    for model_key, entry in models.items():
-        if not isinstance(entry, dict):
-            raise SyncError(
-                f"visibility declaration {path}: entry {model_key!r} is not a mapping"
-            )
-        consumers = entry.get("consumers")
-        if not isinstance(consumers, list):
-            raise SyncError(
-                f"visibility declaration {path}: {model_key!r} has no `consumers` list"
-            )
-        unknown = [c for c in consumers if c not in CONSUMER_VOCABULARY]
-        if unknown:
-            raise SyncError(
-                f"visibility declaration {path}: {model_key!r} carries unknown consumer "
-                f"token(s) {', '.join(repr(u) for u in unknown)} -- the closed vocabulary is "
-                f"{', '.join(CONSUMER_VOCABULARY)}"
-            )
+    if not isinstance(parsed.get("providers"), dict):
+        raise SyncError(f"model catalog {path} has no `providers` mapping")
+    if not isinstance(parsed.get("exposures", {}), dict):
+        raise SyncError(f"model catalog {path} has a non-mapping `exposures`")
+    return parsed
+
+
+def _catalog_entries(catalog: Dict[str, Any], provider: str) -> List[Dict[str, Any]]:
+    block = catalog["providers"].get(provider)
+    models = block.get("models") if isinstance(block, dict) else None
+    return [e for e in models if isinstance(e, dict)] if isinstance(models, list) else []
+
+
+def _checked_consumers(path: Path, model_key: str, consumers: Any) -> List[str]:
+    if not isinstance(consumers, list):
+        raise SyncError(f"model catalog {path}: {model_key!r} has no `consumers` list")
+    unknown = [c for c in consumers if c not in CONSUMER_VOCABULARY]
+    if unknown:
+        raise SyncError(
+            f"model catalog {path}: {model_key!r} carries unknown consumer "
+            f"token(s) {', '.join(repr(u) for u in unknown)} -- the closed vocabulary is "
+            f"{', '.join(CONSUMER_VOCABULARY)}"
+        )
+    return list(consumers)
+
+
+def load_visibility(path: Path) -> VisibilityModels:
+    """Return `{model key: {gateway_id, consumers}}` projected from the catalog: every
+    `claude-local` entry carrying a `modelKey` (gateway_id = its id), then every `exposures`
+    record (gateway_id = None). Fail-closed on every malformed shape.
+
+    Raises SyncError for everything `load_catalog` refuses, plus: an exposure that is not a
+    mapping, a `consumers` value that is not a list, any consumer token outside
+    CONSUMER_VOCABULARY, and a model key declared twice. Treating any of these as "no
+    declaration" would silently deactivate every model, which is why none of them degrades to a
+    default.
+    """
+    catalog = load_catalog(path)
+    models: VisibilityModels = {}
+    for entry in _catalog_entries(catalog, VISIBILITY_PROVIDER):
+        model_key = entry.get("modelKey")
+        if model_key is None:
+            continue
+        if not isinstance(model_key, str) or model_key in models:
+            raise SyncError(f"model catalog {path}: bad or duplicate modelKey {model_key!r}")
+        gateway_id = entry.get("id")
+        models[model_key] = {
+            "gateway_id": gateway_id if isinstance(gateway_id, str) else None,
+            "consumers": _checked_consumers(path, model_key, entry.get("consumers")),
+        }
+    for model_key, record in catalog.get("exposures", {}).items():
+        if not isinstance(record, dict):
+            raise SyncError(f"model catalog {path}: exposure {model_key!r} is not a mapping")
+        if model_key in models:
+            raise SyncError(f"model catalog {path}: model key {model_key!r} declared twice")
+        models[model_key] = {
+            "gateway_id": None,
+            "consumers": _checked_consumers(path, model_key, record.get("consumers")),
+        }
     return models
 
 
@@ -168,40 +202,26 @@ def load_policy(path: Path) -> Policy:
 
 
 def load_effort_levels(path: Path) -> EffortLevels:
-    """Return {gateway id: [effort level, ...]} derived from the gateway's `effortKwargs`.
+    """Return {gateway id: [effort level, ...]} derived from the catalog entries' `effortKwargs`.
 
     The ladder is NOT re-declared for Open WebUI: it is read off the table the Claude Code leg
-    already uses, keyed by gateway id, by walking every provider object for an `effortKwargs`
-    mapping (the provider index is not hardcoded). A level's Open WebUI value is the
+    already uses, keyed by gateway id, by walking every catalog provider's entries for an
+    `effortKwargs` mapping (the provider is not hardcoded). A level's Open WebUI value is the
     `reasoning_effort` string that entry maps to -- so `high -> {reasoning_effort: medium}` and
     `max -> {reasoning_effort: xhigh}` collapse onto `medium`/`xhigh` rather than forking two
     more rows, and an entry carrying only `enable_thinking` contributes nothing (its effect is
     `none`, which is always present anyway).
 
-    A file with no `effortKwargs` anywhere yields `{}` -- that means "no derived rows anywhere",
-    which is a valid state, not an error. Unreadable or invalid JSON IS an error.
+    A catalog with no `effortKwargs` anywhere yields `{}` -- that means "no derived rows
+    anywhere", which is a valid state, not an error. An unreadable or malformed catalog IS one.
     """
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise SyncError(f"cannot read gateway config {path}: {exc}") from exc
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise SyncError(f"gateway config {path} is not valid JSON: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise SyncError(f"gateway config {path} is not a JSON object")
-
+    catalog = load_catalog(path)
     levels: EffortLevels = {}
-    providers = parsed.get("providers")
-    for provider in providers if isinstance(providers, list) else []:
-        if not isinstance(provider, dict):
-            continue
-        table = provider.get("effortKwargs")
-        if not isinstance(table, dict):
-            continue
-        for gateway_id, by_level in table.items():
-            if not isinstance(by_level, dict):
+    for provider in catalog["providers"]:
+        for entry in _catalog_entries(catalog, provider):
+            gateway_id = entry.get("id")
+            by_level = entry.get("effortKwargs")
+            if not isinstance(gateway_id, str) or not isinstance(by_level, dict):
                 continue
             seen: List[str] = []
             for kwargs in by_level.values():
@@ -252,7 +272,8 @@ def desired_is_active(visibility_models: VisibilityModels, router_id: str) -> bo
     entry = visibility_models.get(router_id)
     if entry is None:
         raise SyncError(
-            f"router model id {router_id!r} has no entry in the visibility declaration -- "
+            f"router model id {router_id!r} has no entry in the visibility declaration "
+            "(the model catalog's claude-local modelKeys + exposures) -- "
             "the declaration must carry every served key (`bun run check:recipes` gates this)"
         )
     return OPENWEBUI_CONSUMER in entry["consumers"]

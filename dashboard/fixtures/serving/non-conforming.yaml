@@ -393,7 +393,7 @@ models:
 
 # ── WP-3 visibility cases ───────────────────────────────────────────────────────────────────
 # Every entry below is RECIPE-conforming and carries exactly one VISIBILITY defect, in
-# `non-conforming-visibility.json` / `non-conforming-gateway.json` beside this file. Same
+# `non-conforming-catalog.json` beside this file. Same
 # one-line-per-entry contract as above.
 
   undeclared-chat:

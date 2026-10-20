@@ -1,0 +1,47 @@
+{
+  "schema": "model-catalog-v1",
+  "providers": {
+    "claude-local": {
+      "models": [
+        {"id": "qwen38-27b-iq3s", "modelKey": "Fixture-Qwen-27B-UD-IQ3_S", "consumers": ["cc", "openwebui"], "maxOutputTokens": 32000},
+        {"id": "qwen38-27b-iq3s-off", "modelKey": "Fixture-Qwen-27B-UD-IQ3_S-reasoning-off", "consumers": ["cc"], "maxOutputTokens": 32000},
+        {"id": "qwen38-27b-iq3s-low", "modelKey": "Fixture-Qwen-27B-UD-IQ3_S-reasoning-low", "consumers": ["cc"], "maxOutputTokens": 32000},
+        {"id": "qwen38-27b-iq3s-medium", "modelKey": "Fixture-Qwen-27B-UD-IQ3_S-reasoning-medium", "consumers": ["cc"], "maxOutputTokens": 32000},
+        {"id": "qwen38-27b-iq3s-high", "modelKey": "Fixture-Qwen-27B-UD-IQ3_S-reasoning-high", "consumers": ["cc"], "maxOutputTokens": 32000},
+        {"id": "nemotron-4b", "modelKey": "Fixture-Nemotron-4B-UD-Q4_K_XL", "consumers": ["openwebui"], "maxOutputTokens": 32000},
+        {"id": "some-future-model-9b", "modelKey": "Fixture-Future-9B", "consumers": ["cc"], "maxOutputTokens": 32000}
+      ]
+    },
+    "anthropic": {
+      "models": [
+        {"id": "claude-sonnet-5"},
+        {"id": "claude-opus-5"}
+      ]
+    },
+    "openrouter": {
+      "models": [
+        {"id": "z-ai/glm-5.2:free", "consumers": ["openwebui"]}
+      ]
+    },
+    "or-anthropic": {
+      "models": [
+        {"id": "z-ai/glm-5.3"}
+      ]
+    },
+    "codex-a": {
+      "models": [
+        {"id": "gpt-5.6-luna"},
+        {"id": "gpt-6-astra-low"}
+      ]
+    },
+    "codex-b": {
+      "models": [
+        {"id": "gpt-5.6-sol", "consumers": ["cc", "openwebui"]},
+        {"id": "gpt-5.6-luna-high", "consumers": ["cc", "openwebui"]}
+      ]
+    }
+  },
+  "exposures": {
+    "Fixture-Embed-f16": {"consumers": []}
+  }
+}

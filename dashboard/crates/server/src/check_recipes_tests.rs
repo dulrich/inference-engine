@@ -16,8 +16,7 @@ fn read(name: &str) -> String {
 fn file_findings(prefix: &str) -> Vec<Finding> {
     check_serving_recipes_file(
         &fixture(&format!("{prefix}.yaml")),
-        &fixture(&format!("{prefix}-visibility.json")),
-        &fixture(&format!("{prefix}-gateway.json")),
+        &fixture(&format!("{prefix}-catalog.json")),
     )
     .expect("fixture parses")
 }
@@ -102,62 +101,58 @@ fn the_default_config_path_resolves_to_the_repos_own_llama_config_not_the_cwd() 
 }
 
 #[test]
-fn the_visibility_and_gateway_paths_resolve_relative_to_the_config_and_are_overridable() {
+fn the_catalog_path_resolves_relative_to_the_config_and_is_overridable() {
     let default = default_config_path();
-    assert!(resolve_visibility_path(&default).ends_with("/router/visibility.json"));
-    assert!(resolve_gateway_path(&default).ends_with("/router/gateway.config.json"));
+    assert!(resolve_catalog_path(&default).ends_with("/router/catalog/catalog.json"));
     assert_eq!(
-        resolve_visibility_path("/r/llama/config.yaml"),
-        "/r/router/visibility.json"
+        resolve_catalog_path("/r/llama/config.yaml"),
+        "/r/router/catalog/catalog.json"
     );
     assert_eq!(
-        resolve_gateway_path("config.yaml"),
-        "../router/gateway.config.json"
+        resolve_catalog_path("config.yaml"),
+        "../router/catalog/catalog.json"
     );
     let args = |a: &[&str]| a.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
     assert_eq!(
-        parse_path_arg(
-            &args(&["--visibility", "/tmp/v.json"]),
-            "visibility",
-            "fallback"
-        ),
-        "/tmp/v.json"
+        parse_path_arg(&args(&["--catalog", "/tmp/c.json"]), "catalog", "fallback"),
+        "/tmp/c.json"
     );
     assert_eq!(
-        parse_path_arg(&args(&["--gateway=/tmp/g.json"]), "gateway", "fallback"),
-        "/tmp/g.json"
+        parse_path_arg(&args(&["--catalog=/tmp/d.json"]), "catalog", "fallback"),
+        "/tmp/d.json"
     );
-    assert_eq!(parse_path_arg(&[], "visibility", "fallback"), "fallback");
+    assert_eq!(parse_path_arg(&[], "catalog", "fallback"), "fallback");
 }
 
 #[test]
 fn a_missing_malformed_or_wrong_schema_declaration_is_one_finding_not_silence() {
     let config = read("conforming.yaml");
-    let gateway = read("conforming-gateway.json");
     for declaration in [
         None,
         Some("{not json"),
-        Some(r#"{"schema":"serving-visibility-v2","models":{}}"#),
+        Some(r#"{"schema":"model-catalog-v2","providers":{}}"#),
+        Some(r#"{"schema":"model-catalog-v1"}"#),
+        Some(r#"{"schema":"model-catalog-v1","providers":{"claude-local":{}}}"#),
+        Some(r#"{"schema":"model-catalog-v1","providers":{},"exposures":[]}"#),
         Some("[]"),
     ] {
-        let findings = check_serving_recipes(&config, declaration, Some(&gateway)).unwrap();
+        let findings = check_serving_recipes(&config, declaration).unwrap();
         assert_eq!(
             findings.iter().map(|f| f.rule.as_str()).collect::<Vec<_>>(),
             ["visibility-unreadable"]
         );
-        assert_eq!(findings[0].model_key, "router/visibility.json");
+        assert_eq!(findings[0].model_key, "router/catalog/catalog.json");
     }
 }
 
 #[test]
 fn an_off_vocabulary_consumers_token_reports_on_its_own_key_and_does_not_blind_the_rest() {
     let config = read("non-conforming.yaml");
-    let gateway = read("non-conforming-gateway.json");
     let mut declaration: Value =
-        serde_json::from_str(&read("non-conforming-visibility.json")).unwrap();
-    declaration["models"]["bad-consumers-chat"]["consumers"] = serde_json::json!(["crucible"]);
+        serde_json::from_str(&read("non-conforming-catalog.json")).unwrap();
+    declaration["exposures"]["bad-consumers-chat"]["consumers"] = serde_json::json!(["crucible"]);
     let text = declaration.to_string();
-    let findings = check_serving_recipes(&config, Some(&text), Some(&gateway)).unwrap();
+    let findings = check_serving_recipes(&config, Some(&text)).unwrap();
     assert!(!findings.iter().any(|f| f.rule == "visibility-unreadable"));
     let vis: Vec<Finding> = findings
         .iter()
@@ -188,18 +183,12 @@ fn an_off_vocabulary_consumers_token_reports_on_its_own_key_and_does_not_blind_t
 #[test]
 fn a_wrong_typed_gateway_id_reports_on_its_own_key() {
     let config = read("conforming.yaml");
-    let gateway = read("conforming-gateway.json");
-    let mut declaration: Value = serde_json::from_str(&read("conforming-visibility.json")).unwrap();
-    let key = declaration["models"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .next()
-        .unwrap()
-        .clone();
-    declaration["models"][&key]["gateway_id"] = serde_json::json!(42);
+    let mut declaration: Value = serde_json::from_str(&read("conforming-catalog.json")).unwrap();
+    let entry = &mut declaration["providers"]["claude-local"]["models"][0];
+    let key = entry["modelKey"].as_str().unwrap().to_string();
+    entry["id"] = serde_json::json!(42);
     let text = declaration.to_string();
-    let findings = check_serving_recipes(&config, Some(&text), Some(&gateway)).unwrap();
+    let findings = check_serving_recipes(&config, Some(&text)).unwrap();
     assert!(!findings.iter().any(|f| f.rule == "visibility-unreadable"));
     let own = findings
         .iter()
@@ -211,15 +200,14 @@ fn a_wrong_typed_gateway_id_reports_on_its_own_key() {
 #[test]
 fn findings_are_grouped_by_checker_not_interleaved_per_alias() {
     let config = read("non-conforming.yaml");
-    let gateway = read("non-conforming-gateway.json");
     let mut declaration: Value =
-        serde_json::from_str(&read("non-conforming-visibility.json")).unwrap();
-    declaration["models"]
+        serde_json::from_str(&read("non-conforming-catalog.json")).unwrap();
+    declaration["exposures"]
         .as_object_mut()
         .unwrap()
         .shift_remove("missing-mtp-chat");
     let text = declaration.to_string();
-    let findings = check_serving_recipes(&config, Some(&text), Some(&gateway)).unwrap();
+    let findings = check_serving_recipes(&config, Some(&text)).unwrap();
     let own: Vec<(usize, &str)> = findings
         .iter()
         .enumerate()
@@ -238,11 +226,17 @@ fn findings_are_grouped_by_checker_not_interleaved_per_alias() {
 }
 
 #[test]
-fn a_gateway_config_with_no_max_output_tokens_map_fails_the_crosswalk_for_every_declared_id() {
+fn a_catalog_with_no_max_output_tokens_fails_the_crosswalk_for_every_declared_id() {
     let config = read("conforming.yaml");
-    let visibility = read("conforming-visibility.json");
-    let findings =
-        check_serving_recipes(&config, Some(&visibility), Some(r#"{"providers":[]}"#)).unwrap();
+    let mut catalog: Value = serde_json::from_str(&read("conforming-catalog.json")).unwrap();
+    for e in catalog["providers"]["claude-local"]["models"]
+        .as_array_mut()
+        .unwrap()
+    {
+        e.as_object_mut().unwrap().remove("maxOutputTokens");
+    }
+    let text = catalog.to_string();
+    let findings = check_serving_recipes(&config, Some(&text)).unwrap();
     assert_eq!(
         keys_rules(&findings),
         pairs(&[
@@ -258,10 +252,8 @@ fn run_prints_the_ok_line_or_the_count_line_with_the_exit_code() {
     let args = |prefix: &str| {
         vec![
             format!("--config={}", fixture(&format!("{prefix}.yaml"))),
-            "--visibility".to_string(),
-            fixture(&format!("{prefix}-visibility.json")),
-            "--gateway".to_string(),
-            fixture(&format!("{prefix}-gateway.json")),
+            "--catalog".to_string(),
+            fixture(&format!("{prefix}-catalog.json")),
         ]
     };
     let (lines, code) = run(&args("conforming")).unwrap();
@@ -274,6 +266,29 @@ fn run_prints_the_ok_line_or_the_count_line_with_the_exit_code() {
         .last()
         .unwrap()
         .starts_with("15 non-conforming entries in "));
+}
+
+#[test]
+fn every_served_key_is_checked_against_model_keys_and_exposures_alike() {
+    let config = read("conforming.yaml");
+    let mut catalog: Value = serde_json::from_str(&read("conforming-catalog.json")).unwrap();
+    // Dropping the modelKey of a routed entry and an exposure record each surface as missing.
+    catalog["providers"]["claude-local"]["models"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("modelKey");
+    catalog["exposures"]
+        .as_object_mut()
+        .unwrap()
+        .shift_remove("fixture-vision-UD-Q4_K_XL");
+    let findings = check_serving_recipes(&config, Some(&catalog.to_string())).unwrap();
+    assert_eq!(
+        keys_rules(&findings),
+        pairs(&[
+            ("fixture-vision-UD-Q4_K_XL", "visibility-missing"),
+            ("fixture-moe-UD-IQ3_S", "visibility-missing"),
+        ])
+    );
 }
 
 #[test]

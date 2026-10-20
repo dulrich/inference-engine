@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Unit tests for `openwebui_sync/declarations.py`: fail-closed loading of the visibility,
-policy and gateway (effort-ladder) declarations. No network, no live Open WebUI or router calls
+"""Unit tests for `openwebui_sync/declarations.py`: fail-closed loading of the model catalog
+(visibility + effort ladder) and the policy declaration. No network, no live Open WebUI or router calls
 anywhere in this suite -- fixtures only.
 
 Split from the monolithic `test_sync_openwebui_capabilities.py` (WP-R6a); see
@@ -26,7 +26,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sync_test_helpers import _gateway, _policy, _vis_doc, _write_json_once
+from sync_test_helpers import _catalog_doc, _gateway, _policy, _vis_doc, _write_json_once
 
 MODULE_PATH = Path(__file__).resolve().parent / "sync-openwebui-capabilities.py"
 _spec = importlib.util.spec_from_file_location("sync_openwebui_capabilities", MODULE_PATH)
@@ -36,11 +36,10 @@ _spec.loader.exec_module(sync)  # type: ignore[union-attr]
 
 
 def _visibility(**models):
-    """A `serving-visibility-v1` document over the given `key=consumers` pairs."""
-    return {
-        "schema": sync.VISIBILITY_SCHEMA,
-        "models": {k: {"gateway_id": None, "consumers": v} for k, v in models.items()},
-    }
+    """A catalog document over the given `key=consumers` pairs (all `exposures` records)."""
+    return _catalog_doc(
+        {"models": {k: {"gateway_id": None, "consumers": v} for k, v in models.items()}}
+    )
 
 
 def _write_visibility(doc):
@@ -51,23 +50,30 @@ def _write_visibility(doc):
 
 
 class VisibilityDeclarationTest(unittest.TestCase):
-    """WP-3: `is_active` is owned by the sync and driven by `router/visibility.json`."""
+    """`is_active` is owned by the sync and driven by the model catalog's visibility."""
 
     def _doc(self, **models):
         return _visibility(**models)
 
+    def _models(self, **models):
+        path = _write_visibility(self._doc(**models))
+        self.addCleanup(path.unlink)
+        return sync.load_visibility(path)
+
     def test_default_path_is_resolved_from_the_script_not_the_cwd(self):
-        path = sync.default_visibility_path()
+        path = sync.default_catalog_path()
         self.assertTrue(path.is_absolute())
-        self.assertEqual(path.parts[-2:], ("router", "visibility.json"))
-        self.assertEqual(path.parent.parent, Path(sync.__file__).resolve().parent.parent)
+        self.assertEqual(path.parts[-3:], ("router", "catalog", "catalog.json"))
+        self.assertEqual(path.parent.parent.parent, Path(sync.__file__).resolve().parent.parent)
 
     def test_desired_is_active_follows_the_declared_consumers(self):
-        models = self._doc(
-            visible=["cc", "openwebui"],
-            owui_only=["openwebui"],
-            cc_only=["cc"],
-            router_only=[],
+        models = _vis_doc(
+            {
+                "visible": (["cc", "openwebui"], "gw-v"),
+                "owui_only": (["openwebui"], None),
+                "cc_only": (["cc"], "gw-c"),
+                "router_only": ([], None),
+            }
         )["models"]
         self.assertTrue(sync.desired_is_active(models, "visible"))
         self.assertTrue(sync.desired_is_active(models, "owui_only"))
@@ -75,7 +81,7 @@ class VisibilityDeclarationTest(unittest.TestCase):
         self.assertFalse(sync.desired_is_active(models, "router_only"))
 
     def test_an_undeclared_router_id_is_an_error_not_a_default(self):
-        models = self._doc(declared=["openwebui"])["models"]
+        models = self._models(declared=["openwebui"])
         with self.assertRaises(sync.SyncError) as ctx:
             sync.desired_is_active(models, "some-new-key")
         self.assertIn("no entry in the visibility declaration", str(ctx.exception))
@@ -89,7 +95,7 @@ class VisibilityDeclarationTest(unittest.TestCase):
         self.assertIn("unknown consumer token", str(ctx.exception))
 
     def test_missing_unparseable_and_wrong_schema_are_all_fail_closed(self):
-        missing = Path(tempfile.gettempdir()) / "definitely-not-a-visibility-file-9e3f.json"
+        missing = Path(tempfile.gettempdir()) / "definitely-not-a-catalog-file-9e3f.json"
         with self.assertRaises(sync.SyncError):
             sync.load_visibility(missing)
 
@@ -102,7 +108,7 @@ class VisibilityDeclarationTest(unittest.TestCase):
         self.assertIn("not valid JSON", str(ctx.exception))
 
         doc = self._doc(model_a=["openwebui"])
-        doc["schema"] = "serving-visibility-v2"
+        doc["schema"] = "model-catalog-v2"
         path = _write_visibility(doc)
         self.addCleanup(path.unlink)
         with self.assertRaises(sync.SyncError) as ctx:
@@ -116,6 +122,36 @@ class VisibilityDeclarationTest(unittest.TestCase):
         self.assertEqual(sorted(models), ["model_a", "model_b"])
         self.assertTrue(sync.desired_is_active(models, "model_a"))
         self.assertFalse(sync.desired_is_active(models, "model_b"))
+
+    def test_claude_local_model_keys_and_exposures_project_into_one_map(self):
+        doc = _catalog_doc(
+            _vis_doc({"Key-A": (["cc", "openwebui"], "gw-a"), "Key-B": ([], None)})
+        )
+        doc["providers"]["claude-local"]["models"].append({"id": "no-key"})
+        path = _write_visibility(doc)
+        self.addCleanup(path.unlink)
+        self.assertEqual(
+            sync.load_visibility(path),
+            {
+                "Key-A": {"gateway_id": "gw-a", "consumers": ["cc", "openwebui"]},
+                "Key-B": {"gateway_id": None, "consumers": []},
+            },
+        )
+        doc["exposures"]["Key-A"] = {"consumers": []}
+        path = _write_visibility(doc)
+        self.addCleanup(path.unlink)
+        with self.assertRaises(sync.SyncError) as ctx:
+            sync.load_visibility(path)
+        self.assertIn("declared twice", str(ctx.exception))
+
+    def test_the_shipped_catalog_matches_the_retired_declaration(self):
+        models = sync.load_visibility(sync.default_catalog_path())
+        self.assertEqual(len(models), 20)
+        self.assertEqual(
+            models["Qwen3.8-27B-UD-IQ3_S"],
+            {"gateway_id": "qwen38-27b-iq3s", "consumers": ["cc", "openwebui"]},
+        )
+        self.assertEqual(models["bge-m3-f16"], {"gateway_id": None, "consumers": []})
 
 
 class PolicyLoaderTest(unittest.TestCase):
@@ -168,7 +204,8 @@ class EffortLadderTest(unittest.TestCase):
     def test_levels_are_the_distinct_reasoning_efforts_plus_none_in_canonical_order(self):
         path = _write_json_once(
             self,
-            _gateway(
+            _catalog_doc(
+                ladders=_gateway(
                 **{
                     # Deliberately out of canonical order, with two gateway levels collapsing
                     # onto one `reasoning_effort` value and one entry carrying none at all.
@@ -181,13 +218,15 @@ class EffortLadderTest(unittest.TestCase):
                         "disabled": {"enable_thinking": False},
                     }
                 }
-            ),
+            )),
         )
         levels = sync.load_effort_levels(path)
         self.assertEqual(levels["gw-a"], ["none", "low", "medium", "xhigh"])
 
     def test_no_entry_yields_no_levels_and_a_ladderless_config_is_not_an_error(self):
-        path = _write_json_once(self, _gateway(**{"gw-a": {"low": {"reasoning_effort": "low"}}}))
+        path = _write_json_once(
+            self, _catalog_doc(ladders=_gateway(**{"gw-a": {"low": {"reasoning_effort": "low"}}}))
+        )
         levels = sync.load_effort_levels(path)
         self.assertIsNone(levels.get("gw-b"))
 
@@ -202,19 +241,18 @@ class EffortLadderTest(unittest.TestCase):
         self.assertEqual(sync.effort_levels_for({"x": {"gateway_id": None}}, levels, "x"), [])
 
         ladderless = _write_json_once(
-            self, {"host": "127.0.0.1", "port": 1, "providers": [{"name": "p"}]}
+            self, {"schema": sync.CATALOG_SCHEMA, "providers": {"p": {"models": [{"id": "m"}]}}}
         )
         self.assertEqual(sync.load_effort_levels(ladderless), {})
 
         with self.assertRaises(sync.SyncError):
-            sync.load_effort_levels(Path(tempfile.gettempdir()) / "no-gateway-config-3b91.json")
+            sync.load_effort_levels(Path(tempfile.gettempdir()) / "no-catalog-3b91.json")
 
-    def test_the_shipped_gateway_config_yields_the_qwen_ladder(self):
-        path = sync.default_gateway_config_path()
-        self.assertEqual(path.parts[-2:], ("router", "gateway.config.json"))
+    def test_the_shipped_catalog_yields_the_qwen_ladder(self):
+        path = sync.default_catalog_path()
         levels = sync.load_effort_levels(path)
         self.assertEqual(levels["qwen38-27b-iq3s"], ["none", "low", "medium", "xhigh"])
-        visibility = sync.load_visibility(sync.default_visibility_path())
+        visibility = sync.load_visibility(path)
         self.assertEqual(
             sync.effort_levels_for(visibility, levels, "Qwen3.8-27B-UD-IQ3_S"),
             ["none", "low", "medium", "xhigh"],

@@ -14,8 +14,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 pub const SCHEMA: &str = "model-catalog-v1";
-/// The closed `consumers` vocabulary (the values present in the legacy config at WP-2).
-pub const CONSUMERS: [&str; 2] = ["cc", "router"];
+/// The closed `consumers` vocabulary, in the canonical order `control/serving_protocol.py` uses
+/// (`cc`, `openwebui`), then the gateway-only `router` tag.
+pub const CONSUMERS: [&str; 3] = ["cc", "openwebui", "router"];
 /// Providers that accept the OpenRouter `@preset/<slug>` id form (measured, WP-0).
 pub const PRESET_PROVIDERS: [&str; 2] = ["openrouter", "or-anthropic"];
 pub const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -31,6 +32,10 @@ pub struct Entry {
     pub max_output_tokens: Option<NonZeroU64>,
     #[serde(default)]
     pub consumers: Option<Vec<String>>,
+    /// The `llama/config.yaml` model key this id serves (`claude-local` only); the serving
+    /// dispatcher addresses visibility by it. Never a routing input.
+    #[serde(default, rename = "modelKey")]
+    pub model_key: Option<String>,
     /// Display label for catalog editors; the gateway ignores it.
     #[serde(default)]
     pub label: Option<String>,
@@ -49,7 +54,21 @@ pub struct CatalogFile {
     /// Keyed by static provider name (JSON object order is kept but routing order is the
     /// static config's).
     pub providers: serde_json::Map<String, Value>,
+    /// Visibility records for llama model keys with no gateway id, keyed by model key. Parsed
+    /// strictly, never routed on.
+    #[serde(default)]
+    pub exposures: Map<String, Value>,
 }
+
+/// One exposure record: a llama model key the gateway does not route, with its consumers.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Exposure {
+    pub consumers: Vec<String>,
+}
+
+/// The provider whose entries may carry `modelKey`.
+pub const MODEL_KEY_PROVIDER: &str = "claude-local";
 
 /// A validated catalog: the routing providers (static provider + catalog model fields, in
 /// static config order) and the content revision.
@@ -58,6 +77,8 @@ pub struct Catalog {
     pub revision: String,
     pub providers: Vec<Arc<Provider>>,
     pub entries: Vec<(String, Vec<Entry>)>,
+    /// Exposure records in file order (never routed on).
+    pub exposures: Vec<(String, Exposure)>,
 }
 
 /// FNV-1a 64 over the file bytes, 16 hex digits: stable across processes and builds.
@@ -116,16 +137,81 @@ fn check_provider(p: &Provider, entries: &[Entry]) -> Result<(), String> {
         if let Some(levels) = &e.effort_kwargs {
             check_effort_levels(&e.id, levels)?;
         }
-        for c in e.consumers.iter().flatten() {
-            if !CONSUMERS.contains(&c.as_str()) {
+        check_consumers(&format!("model {:?}", e.id), e.consumers.iter().flatten())?;
+        if let Some(k) = &e.model_key {
+            if p.name != MODEL_KEY_PROVIDER {
                 return Err(format!(
-                    "model {:?}: consumer {c:?} is not one of {CONSUMERS:?}",
+                    "model {:?}: modelKey is accepted only on {MODEL_KEY_PROVIDER:?}",
+                    e.id
+                ));
+            }
+            check_model_key(k)?;
+            if e.consumers.is_none() {
+                return Err(format!(
+                    "model {:?}: an entry with a modelKey must carry consumers",
                     e.id
                 ));
             }
         }
     }
     Ok(())
+}
+
+fn check_consumers<'a>(
+    what: &str,
+    consumers: impl Iterator<Item = &'a String>,
+) -> Result<(), String> {
+    for c in consumers {
+        if !CONSUMERS.contains(&c.as_str()) {
+            return Err(format!(
+                "{what}: consumer {c:?} is not one of {CONSUMERS:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn check_model_key(k: &str) -> Result<(), String> {
+    if k.is_empty() || k.trim() != k {
+        return Err(format!(
+            "model key {k:?} is empty or has surrounding whitespace"
+        ));
+    }
+    Ok(())
+}
+
+/// Exposure records: strict shape, known consumers, no `cc` (a picker row needs a gateway id),
+/// and no model key shared with a routed entry.
+fn check_exposures(
+    raw: &Map<String, Value>,
+    entries: &[(String, Vec<Entry>)],
+) -> Result<Vec<(String, Exposure)>, String> {
+    let mut keys: Vec<&str> = Vec::new();
+    for (_, models) in entries {
+        for k in models.iter().filter_map(|e| e.model_key.as_deref()) {
+            if keys.contains(&k) {
+                return Err(format!("duplicate model key {k:?}"));
+            }
+            keys.push(k);
+        }
+    }
+    let mut out = Vec::new();
+    for (key, v) in raw {
+        let x = Exposure::deserialize(v).map_err(|e| format!("exposure {key:?}: {e}"))?;
+        check_model_key(key)?;
+        if keys.contains(&key.as_str()) {
+            return Err(format!(
+                "exposure {key:?}: model key is already on a routed entry"
+            ));
+        }
+        let what = format!("exposure {key:?}");
+        check_consumers(&what, x.consumers.iter())?;
+        if x.consumers.iter().any(|c| c == "cc") {
+            return Err(format!("{what}: consumer \"cc\" needs a routed gateway id"));
+        }
+        out.push((key.clone(), x));
+    }
+    Ok(out)
 }
 
 /// Parse and validate a candidate against the static providers.
@@ -171,10 +257,12 @@ pub fn check(static_providers: &[Arc<Provider>], bytes: &[u8]) -> Result<Catalog
         providers.push(Arc::new(routed));
         entries.push((p.name.clone(), pe.models));
     }
+    let exposures = check_exposures(&file.exposures, &entries)?;
     Ok(Catalog {
         revision: revision(bytes),
         providers,
         entries,
+        exposures,
     })
 }
 
@@ -314,60 +402,11 @@ impl Holder {
     }
 }
 
-/// Derive a catalog file from the legacy per-model keys of a parsed config. Test fixtures and
-/// the B1 equality guard only; never a routing source in the server. Deleted in WP-3.
-#[doc(hidden)]
-pub fn legacy_catalog_json(settings: &crate::config::Settings) -> Value {
-    let mut providers = Map::new();
-    for l in &settings.legacy {
-        let models: Vec<Value> = l
-            .models
-            .iter()
-            .map(|m| {
-                let mut e = Map::new();
-                e.insert("id".into(), Value::String(m.clone()));
-                if let Some(k) = l.effort_kwargs.get(m) {
-                    e.insert(
-                        "effortKwargs".into(),
-                        serde_json::to_value(k).unwrap_or_default(),
-                    );
-                }
-                if let Some(t) = l.max_output_tokens.get(m) {
-                    e.insert("maxOutputTokens".into(), Value::from(*t));
-                }
-                let consumers = match &l.consumers {
-                    Some(Value::Object(map)) => map.get(m).cloned(),
-                    Some(list @ Value::Array(_)) => Some(list.clone()),
-                    _ => None,
-                };
-                if let Some(c) = consumers {
-                    e.insert("consumers".into(), c);
-                }
-                Value::Object(e)
-            })
-            .collect();
-        let mut p = Map::new();
-        p.insert("models".into(), Value::Array(models));
-        providers.insert(l.name.clone(), Value::Object(p));
-    }
-    let mut root = Map::new();
-    root.insert("schema".into(), Value::String(SCHEMA.into()));
-    root.insert("providers".into(), Value::Object(providers));
-    Value::Object(root)
-}
-
-/// A non-reloading holder from the legacy keys (test fixtures only; deleted in WP-3).
-#[doc(hidden)]
-pub fn legacy_holder(settings: &crate::config::Settings) -> Result<Arc<Holder>, String> {
-    let bytes = legacy_catalog_json(settings).to_string().into_bytes();
-    let cat = check(&settings.providers, &bytes)?;
-    Ok(Arc::new(Holder::new(settings.providers.clone(), cat, None)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::from_json;
+    use serde_json::json;
 
     fn keys(k: &str) -> Option<String> {
         (k == "AUTH_STATIC_API_KEYS").then(|| "gk".to_string())
@@ -379,29 +418,6 @@ mod tests {
     }
 
     const CATALOG: &str = include_str!("../../catalog/catalog.json");
-
-    /// B1 guard: the committed catalog equals the legacy per-model keys exactly, provider by
-    /// provider, in order. WP-3 deletes this test with the legacy keys.
-    #[test]
-    fn committed_catalog_equals_legacy_keys() {
-        let s = settings();
-        let cat = check(&s.providers, CATALOG.as_bytes()).unwrap();
-        let committed: Value = serde_json::from_str(CATALOG).unwrap();
-        assert_eq!(committed, legacy_catalog_json(&s));
-        let names: Vec<_> = committed["providers"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect();
-        let static_names: Vec<_> = s.providers.iter().map(|p| p.name.clone()).collect();
-        assert_eq!(names, static_names);
-        for (p, l) in cat.providers.iter().zip(&s.legacy) {
-            assert_eq!(p.models, l.models, "{}", p.name);
-            assert_eq!(p.effort_kwargs, l.effort_kwargs, "{}", p.name);
-            assert_eq!(p.max_output_tokens, l.max_output_tokens, "{}", p.name);
-        }
-    }
 
     fn with(provider: &str, models: Value) -> Result<Catalog, String> {
         let s = settings();
@@ -442,7 +458,7 @@ mod tests {
         assert!(e.contains("duplicate model id"), "{e}");
         let e = with(
             "openrouter",
-            serde_json::json!([{"id": "a", "consumers": ["openwebui"]}]),
+            serde_json::json!([{"id": "a", "consumers": ["webui"]}]),
         )
         .unwrap_err();
         assert!(e.contains("is not one of"), "{e}");
@@ -469,5 +485,74 @@ mod tests {
     fn revision_is_stable_hex() {
         assert_eq!(revision(b""), "cbf29ce484222325");
         assert_eq!(revision(CATALOG.as_bytes()).len(), 16);
+    }
+
+    #[test]
+    fn committed_exposures_parse_and_are_never_routed() {
+        let s = settings();
+        let cat = check(&s.providers, CATALOG.as_bytes()).unwrap();
+        assert_eq!(cat.exposures.len(), 13);
+        let routed: Vec<&String> = cat.providers.iter().flat_map(|p| &p.models).collect();
+        for (key, _) in &cat.exposures {
+            assert!(!routed.contains(&key), "{key} is routed");
+        }
+        let local = &cat
+            .entries
+            .iter()
+            .find(|(n, _)| n == "claude-local")
+            .unwrap()
+            .1;
+        assert!(local
+            .iter()
+            .all(|e| e.model_key.is_some() && e.consumers.is_some()));
+        let qwen = local.iter().find(|e| e.id == "qwen36-a3b").unwrap();
+        assert_eq!(
+            qwen.model_key.as_deref(),
+            Some("Qwen3.6-35B-A3B-UD-Q4_K_XL")
+        );
+        assert_eq!(qwen.consumers.as_deref().unwrap(), ["cc", "openwebui"]);
+    }
+
+    #[test]
+    fn openwebui_is_a_consumer_and_model_key_rules_hold() {
+        let ok = with(
+            "openrouter",
+            json!([{"id": "a", "consumers": ["cc", "openwebui", "router"]}]),
+        );
+        assert!(ok.is_ok(), "{ok:?}");
+        let e = with(
+            "openrouter",
+            json!([{"id": "a", "modelKey": "k", "consumers": []}]),
+        )
+        .unwrap_err();
+        assert!(e.contains("modelKey is accepted only on"), "{e}");
+        let e = with("claude-local", json!([{"id": "a", "modelKey": "k"}])).unwrap_err();
+        assert!(e.contains("must carry consumers"), "{e}");
+        let e = with(
+            "claude-local",
+            json!([{"id": "a", "modelKey": "k", "consumers": []}, {"id": "b", "modelKey": "k", "consumers": []}]),
+        )
+        .unwrap_err();
+        assert!(e.contains("duplicate model key"), "{e}");
+    }
+
+    #[test]
+    fn exposure_records_are_strict() {
+        let s = settings();
+        let base: Value = serde_json::from_str(CATALOG).unwrap();
+        let try_exp = |key: &str, rec: Value| {
+            let mut v = base.clone();
+            v["exposures"][key] = rec;
+            check(&s.providers, v.to_string().as_bytes())
+        };
+        assert!(try_exp("new-key", json!({"consumers": []})).is_ok());
+        let e = try_exp("new-key", json!({"consumers": ["webui"]})).unwrap_err();
+        assert!(e.contains("is not one of"), "{e}");
+        let e = try_exp("new-key", json!({"consumers": ["cc"]})).unwrap_err();
+        assert!(e.contains("needs a routed gateway id"), "{e}");
+        let e = try_exp("new-key", json!({"consumers": [], "gateway_id": null})).unwrap_err();
+        assert!(e.contains("unknown field `gateway_id`"), "{e}");
+        let e = try_exp("nemotron-3-nano-4B-UD-Q4_K_XL", json!({"consumers": []})).unwrap_err();
+        assert!(e.contains("already on a routed entry"), "{e}");
     }
 }

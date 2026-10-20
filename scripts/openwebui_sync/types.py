@@ -18,19 +18,21 @@ except ImportError:  # pragma: no cover - Python < 3.8
 
 
 class VisibilityEntry(TypedDict, total=False):
-    """One `router/visibility.json` `models` entry (validated by `declarations.load_visibility`)."""
+    """One llama model key's visibility, projected from the model catalog
+    (`declarations.load_visibility`): `gateway_id` is the `claude-local` entry's id, or None for an
+    `exposures` record."""
 
     consumers: List[str]
     gateway_id: Optional[str]
 
 
-# `router/visibility.json`'s `models` map, keyed by `llama/config.yaml` model key.
+# The catalog's visibility projection, keyed by `llama/config.yaml` model key.
 VisibilityModels = Dict[str, VisibilityEntry]
 
 # `scripts/openwebui-policy.json` after validation: exactly POLICY_LIST_FIELDS -> list of str.
 Policy = Dict[str, List[str]]
 
-# {gateway id: [effort level, ...]} from the gateway config's `effortKwargs`.
+# {gateway id: [effort level, ...]} from the catalog entries' `effortKwargs`.
 EffortLevels = Dict[str, List[str]]
 
 # One `GET <router>/v1/models` `data` entry, and one Open WebUI `/api/v1/models/*` row.

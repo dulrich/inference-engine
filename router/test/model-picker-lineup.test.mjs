@@ -13,13 +13,13 @@ import test from "node:test";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(HERE, "..", "model-picker-lineup.mjs");
 const FIXTURE_CONFIG = path.join(HERE, "fixtures", "gateway.config.fixture.json");
-const FIXTURE_VISIBILITY = path.join(HERE, "fixtures", "visibility.fixture.json");
-// Every fixture run pins BOTH files: `claude-local` rows come from the declaration since WP-3
-// (plans/bench-dashboard-serving-control.md), so a run that named only --config would silently
-// read the repo's own visibility.json against a fixture config.
-const FIXTURE_ARGS = ["--config", FIXTURE_CONFIG, "--visibility", FIXTURE_VISIBILITY];
+const FIXTURE_CATALOG = path.join(HERE, "fixtures", "catalog.fixture.json");
+// Every fixture run pins BOTH files: ids and visibility come from the catalog
+// (plans/serving-control-redesign.md WP-3), so a run that named only --config would silently
+// read the repo's own catalog against a fixture config.
+const FIXTURE_ARGS = ["--config", FIXTURE_CONFIG, "--catalog", FIXTURE_CATALOG];
 const REAL_CONFIG = path.join(HERE, "..", "gateway.config.json");
-const REAL_VISIBILITY = path.join(HERE, "..", "visibility.json");
+const REAL_CATALOG = path.join(HERE, "..", "catalog", "catalog.json");
 const DUMMY_KEY = "fixture-dummy-key-not-a-secret";
 
 function tempHome(t) {
@@ -88,7 +88,7 @@ test("renders one row per Claude-Code-visible non-anthropic id, with the documen
 });
 
 test("the real config yields 16 Claude-Code rows: every effort id out, the openwebui ids out", () => {
-  const rows = JSON.parse(run(["--config", REAL_CONFIG, "--visibility", REAL_VISIBILITY]).stdout);
+  const rows = JSON.parse(run(["--config", REAL_CONFIG, "--catalog", REAL_CATALOG]).stdout);
   assert.equal(rows.length, 16);
   assert.equal(rows.filter((r) => r.model.startsWith("anthropic/")).length, 0);
   const models = rows.map((r) => r.model);
@@ -115,7 +115,7 @@ test("the real config yields 16 Claude-Code rows: every effort id out, the openw
   // Reasoning effort on the local leg is a request field since router patch 0007
   // (plans/router-effort-mapping-claude-local.md): the harness's own effort control maps onto
   // chat_template_kwargs, so the picker carries exactly ONE Qwen3.8 row and the four suffix ids —
-  // the server-enforced hard-cap surface, declared `consumers: []` in visibility.json since
+  // the server-enforced hard-cap surface, declared `consumers: []` in the catalog since
   // WP-3 — are not rows.
   assert.ok(models.includes("claude-local/qwen38-27b-iq3s"), "the unsuffixed qwen38 row must stay");
   assert.equal(models.filter((m) => m.startsWith("claude-local/qwen38-27b-iq3s")).length, 1);
@@ -133,13 +133,13 @@ test("the real config yields 16 Claude-Code rows: every effort id out, the openw
     ["or-anthropic/z-ai/glm-5.3-flash", "or-anthropic/qwen/qwen3.8-flash"]);
   assert.deepEqual(models.filter((m) => m.startsWith("openrouter/")), []);
   // Not a picker row is not "gone": the four must stay RESOLVABLE ids, i.e. still listed in the
-  // same provider's models[] (an id dropped from there 400s at model_resolution for the callers
-  // that want the hard cap). /v1/models on the live router is smoke-router.sh check 1's job.
-  const config = JSON.parse(fs.readFileSync(REAL_CONFIG, "utf8"));
-  const claudeLocal = config.providers.find((p) => p.name === "claude-local");
+  // same provider's catalog models[] (an id dropped from there 400s at model_resolution for the
+  // callers that want the hard cap). /v1/models on the live router is smoke-router.sh check 1's job.
+  const catalog = JSON.parse(fs.readFileSync(REAL_CATALOG, "utf8"));
+  const idsOf = (name) => catalog.providers[name].models.map((e) => e.id);
   for (const effort of ["off", "low", "medium", "high"]) {
     assert.ok(
-      claudeLocal.models.includes(`qwen38-27b-iq3s-${effort}`),
+      idsOf("claude-local").includes(`qwen38-27b-iq3s-${effort}`),
       `effort id ${effort} must stay resolvable in claude-local.models[]`,
     );
   }
@@ -162,12 +162,12 @@ test("the real config yields 16 Claude-Code rows: every effort id out, the openw
     "gpt-6-luna-high",
   ];
   for (const persona of CODEX_PERSONAS) {
-    const provider = config.providers.find((p) => p.name === persona);
+    const providerIds = idsOf(persona);
     for (const id of CODEX_SUFFIX_IDS) {
       assert.equal(models.includes(`${persona}/${id}`), false, `${persona}/${id} must not be a picker row`);
       // Not a picker row is not "gone" — the suffix ids stay resolvable (alias contract) and are
       // the explicit-effort escape hatch that outranks the request field.
-      assert.ok(provider.models.includes(id), `${persona}/${id} must stay resolvable in models[]`);
+      assert.ok(providerIds.includes(id), `${persona}/${id} must stay resolvable in models[]`);
     }
     for (const bare of ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna"]) {
       const row = rows.find((r) => r.model === `${persona}/${bare}`);
@@ -177,18 +177,17 @@ test("the real config yields 16 Claude-Code rows: every effort id out, the openw
   }
   // TOMBSTONE GATE (user decision 2026-09-14, router/AGENTS.md): z-ai/glm-5.2:free and z-ai/glm-5.3
   // were retired from serving. Not-a-picker-row is too weak an assertion for a retired id — assert
-  // they are gone from the CONFIG entirely, on both legs, so a future edit cannot quietly re-add
+  // they are gone from the CATALOG entirely, on both legs, so a future edit cannot quietly re-add
   // one. The names stay reserved forever; re-adding either string for different weights is the
   // append-only violation this gate exists to catch.
   for (const legName of ["openrouter", "or-anthropic"]) {
-    const leg = config.providers.find((p) => p.name === legName);
     for (const id of ["z-ai/glm-5.2:free", "z-ai/glm-5.3"]) {
-      assert.equal(leg.models.includes(id), false, `retired id ${legName}/${id} must stay removed`);
+      assert.equal(idsOf(legName).includes(id), false, `retired id ${legName}/${id} must stay removed`);
     }
   }
   // The conversion leg keeps a resolvable id (never an empty models[] — that is a WILDCARD on a
   // credentialed OR provider), but tagged `router`, so it contributes no picker row.
-  assert.deepEqual(config.providers.find((p) => p.name === "openrouter").models, ["qwen/qwen3.8-flash"]);
+  assert.deepEqual(idsOf("openrouter"), ["qwen/qwen3.8-flash"]);
   assert.equal(models.includes("claude-local/nemotron-4b"), false);
 });
 
@@ -198,18 +197,17 @@ test("consumer tags still govern every provider EXCEPT claude-local, unchanged",
   // Untagged provider: unchanged, every id renders (the pre-tag behaviour of every provider).
   assert.ok(models.has("or-anthropic/z-ai/glm-5.3"));
   assert.ok(models.has("codex-a/gpt-5.6-luna"));
-  // Provider-level ["openwebui"]: every id of that provider disappears.
+  // ["openwebui"] on every id of a provider: every id of that provider disappears.
   assert.equal([...models].some((m) => m.startsWith("openrouter/")), false);
-  // Provider-level ["cc","openwebui"]: a multi-consumer tag that includes cc keeps its rows.
+  // ["cc","openwebui"]: a multi-consumer tag that includes cc keeps its rows.
   assert.ok(models.has("codex-b/gpt-5.6-sol"));
   assert.ok(models.has("codex-b/gpt-5.6-luna-high"));
 });
 
-// WP-3: for claude-local the declaration, not the tag, decides. `some-future-model-9b` is the
-// case that proves the semantics CHANGED rather than merely moved: an id nothing declares used
-// to render (absent tag = every consumer) and now renders only because the fixture declares it
-// `cc` — see the undeclared-id case below for the other half.
-test("claude-local rows come from visibility.json: cc declared in, openwebui-only out", () => {
+// For claude-local an absent tag is NOT "every consumer". `some-future-model-9b` is the case that
+// proves it: it renders only because the fixture catalog declares it `cc` — see the
+// undeclared-id case below for the other half.
+test("claude-local rows come from declared catalog consumers: cc declared in, openwebui-only out", () => {
   const rows = JSON.parse(run([...FIXTURE_ARGS]).stdout);
   const models = new Set(rows.map((r) => r.model));
   // Declared ["cc","openwebui"] and ["cc"]: rows.
@@ -220,62 +218,79 @@ test("claude-local rows come from visibility.json: cc declared in, openwebui-onl
   assert.equal(models.has("claude-local/nemotron-4b"), false);
 });
 
-test("a claude-local id no declaration entry claims is not a row, and --check says so", (t) => {
+test("a claude-local id with no declared consumers is not a row, and --check says so", (t) => {
   const { dir } = tempHome(t);
-  const visibility = JSON.parse(fs.readFileSync(FIXTURE_VISIBILITY, "utf8"));
-  delete visibility.models["Fixture-Qwen-27B-UD-IQ3_S-reasoning-low"];
-  const file = path.join(dir, "visibility.undeclared.json");
-  fs.writeFileSync(file, `${JSON.stringify(visibility, null, 2)}\n`);
+  const catalog = JSON.parse(fs.readFileSync(FIXTURE_CATALOG, "utf8"));
+  const low = catalog.providers["claude-local"].models.find((e) => e.id === "qwen38-27b-iq3s-low");
+  delete low.consumers;
+  delete low.modelKey;
+  const file = path.join(dir, "catalog.undeclared.json");
+  fs.writeFileSync(file, `${JSON.stringify(catalog, null, 2)}\n`);
 
-  const rows = JSON.parse(run(["--config", FIXTURE_CONFIG, "--visibility", file]).stdout);
+  const rows = JSON.parse(run(["--config", FIXTURE_CONFIG, "--catalog", file]).stdout);
   const models = new Set(rows.map((r) => r.model));
   assert.equal(models.has("claude-local/qwen38-27b-iq3s-low"), false);
   assert.equal(rows.length, 10);
 
-  // Drift, not a quiet omission: the two files disagree and --check is the gate that says it.
-  const res = run(["--config", FIXTURE_CONFIG, "--visibility", file, "--home", dir, "--check"], 1);
-  assert.match(res.stderr, /qwen38-27b-iq3s-low.*no matching `gateway_id`/);
+  // Drift, not a quiet omission: --check is the gate that says it.
+  const res = run(["--config", FIXTURE_CONFIG, "--catalog", file, "--home", dir, "--check"], 1);
+  assert.match(res.stderr, /qwen38-27b-iq3s-low.*no declared `consumers`/);
 });
 
-test("--check fails when claude-local carries the retired `consumers` key", (t) => {
+test("--check fails when the static config carries a retired per-model key", (t) => {
   const { dir } = tempHome(t);
   run([...FIXTURE_ARGS, "--home", dir, "--write"]);
   run([...FIXTURE_ARGS, "--home", dir, "--check"]);
 
-  const config = JSON.parse(fs.readFileSync(FIXTURE_CONFIG, "utf8"));
-  config.providers.find((p) => p.name === "claude-local").consumers = { "qwen38-27b-iq3s": ["cc"] };
-  const file = path.join(dir, "gateway.consumers.json");
-  fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
-
-  const res = run(["--config", file, "--visibility", FIXTURE_VISIBILITY, "--home", dir, "--check"], 1);
-  assert.match(res.stderr, /still carries a `consumers` key/);
+  for (const [key, value] of [["consumers", { "qwen38-27b-iq3s": ["cc"] }], ["models", ["qwen38-27b-iq3s"]]]) {
+    const config = JSON.parse(fs.readFileSync(FIXTURE_CONFIG, "utf8"));
+    config.providers.find((p) => p.name === "claude-local")[key] = value;
+    const file = path.join(dir, `gateway.${key}.json`);
+    fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+    const res = run(["--config", file, "--catalog", FIXTURE_CATALOG, "--home", dir, "--check"], 1);
+    assert.match(res.stderr, new RegExp(`still carries a \`${key}\` key`));
+  }
 });
 
-test("--check fails when a claude-local id has no maxOutputTokens entry (patch 0010's clamp)", (t) => {
+test("--check fails when a claude-local id has no maxOutputTokens entry (the local clamp)", (t) => {
   const { dir } = tempHome(t);
-  const config = JSON.parse(fs.readFileSync(FIXTURE_CONFIG, "utf8"));
-  delete config.providers.find((p) => p.name === "claude-local").maxOutputTokens["nemotron-4b"];
-  const file = path.join(dir, "gateway.uncapped.json");
-  fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+  const catalog = JSON.parse(fs.readFileSync(FIXTURE_CATALOG, "utf8"));
+  delete catalog.providers["claude-local"].models.find((e) => e.id === "nemotron-4b").maxOutputTokens;
+  const file = path.join(dir, "catalog.uncapped.json");
+  fs.writeFileSync(file, `${JSON.stringify(catalog, null, 2)}\n`);
 
-  const res = run(["--config", file, "--visibility", FIXTURE_VISIBILITY, "--home", dir, "--check"], 1);
+  const res = run(["--config", FIXTURE_CONFIG, "--catalog", file, "--home", dir, "--check"], 1);
   assert.match(res.stderr, /nemotron-4b.*no `maxOutputTokens` entry/);
 });
 
-test("a missing or malformed declaration is fail-closed, never an empty map", (t) => {
+test("reverse drift: a catalog provider no static provider serves fails --check", (t) => {
   const { dir } = tempHome(t);
-  const missing = run([...["--config", FIXTURE_CONFIG, "--visibility", path.join(dir, "nope.json")]], 2);
-  assert.match(missing.stderr, /cannot read visibility declaration/);
+  run([...FIXTURE_ARGS, "--home", dir, "--write"]);
+  const catalog = JSON.parse(fs.readFileSync(FIXTURE_CATALOG, "utf8"));
+  catalog.providers["codex-gone"] = { models: [{ id: "gpt-x", consumers: ["cc"] }] };
+  const file = path.join(dir, "catalog.orphan.json");
+  fs.writeFileSync(file, `${JSON.stringify(catalog, null, 2)}\n`);
+  // Not a row: rows follow the static providers only.
+  const rows = JSON.parse(run(["--config", FIXTURE_CONFIG, "--catalog", file]).stdout);
+  assert.equal(rows.some((r) => r.model.startsWith("codex-gone/")), false);
+  const res = run(["--config", FIXTURE_CONFIG, "--catalog", file, "--home", dir, "--check"], 1);
+  assert.match(res.stderr, /codex-gone.*no provider .* serves: codex-gone\/gpt-x/);
+});
+
+test("a missing or malformed catalog is fail-closed, never an empty map", (t) => {
+  const { dir } = tempHome(t);
+  const missing = run([...["--config", FIXTURE_CONFIG, "--catalog", path.join(dir, "nope.json")]], 2);
+  assert.match(missing.stderr, /cannot read model catalog/);
 
   const badJson = path.join(dir, "bad.json");
   fs.writeFileSync(badJson, "{not json");
-  assert.match(run(["--config", FIXTURE_CONFIG, "--visibility", badJson], 2).stderr, /is not valid JSON/);
+  assert.match(run(["--config", FIXTURE_CONFIG, "--catalog", badJson], 2).stderr, /is not valid JSON/);
 
   const badSchema = path.join(dir, "schema.json");
-  fs.writeFileSync(badSchema, JSON.stringify({ schema: "serving-visibility-v2", models: {} }));
+  fs.writeFileSync(badSchema, JSON.stringify({ schema: "model-catalog-v2", providers: {} }));
   assert.match(
-    run(["--config", FIXTURE_CONFIG, "--visibility", badSchema], 2).stderr,
-    /expected serving-visibility-v1/,
+    run(["--config", FIXTURE_CONFIG, "--catalog", badSchema], 2).stderr,
+    /expected model-catalog-v1/,
   );
 });
 

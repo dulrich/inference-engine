@@ -1,22 +1,21 @@
 #!/usr/bin/env node
-// Generate Claude Code `modelPicker.options` rows from the router's gateway.config.json.
+// Generate Claude Code `modelPicker.options` rows from the router's model catalog.
 //
-// The config is the single source of truth for the id list: there is no hand-maintained one
-// here, only the family/label table below. Every `<provider>/<model>` id in the config becomes
-// one picker row, except the hosted `anthropic` provider (its ids duplicate Claude Code's
-// built-in rows, and the bare id is what Claude Code sends anyway) and any id Claude Code is not
-// a declared consumer of. `replaceBuiltInOptions` is never written, so the built-in subscription
-// rows stay first.
+// The catalog (`router/catalog/catalog.json`, schema `model-catalog-v1`) is the single source of
+// truth for the id list and for visibility: there is no hand-maintained list here, only the
+// family/label table below. Every `<provider>/<model>` id in the catalog becomes one picker row,
+// except the hosted `anthropic` provider (its ids duplicate Claude Code's built-in rows, and the
+// bare id is what Claude Code sends anyway) and any id Claude Code is not a declared consumer of.
+// Provider order is the static `gateway.config.json`'s (the gateway's routing order).
+// `replaceBuiltInOptions` is never written, so the built-in subscription rows stay first.
 //
-// VISIBILITY HAS TWO HOMES, on purpose (plans/bench-dashboard-serving-control.md WP-3). For the
-// `claude-local` provider it comes from `router/visibility.json` — the one declaration the bench
-// dashboard writes and the Open WebUI sync also reads — keyed by `llama/config.yaml` model key,
-// crosswalked to a gateway id. For every OTHER provider it is still the `consumers` tag on the
-// provider in gateway.config.json (see CLAUDE_CODE_CONSUMER below): those ids have no
-// llama/config.yaml key to declare, so the declaration has nothing to say about them.
+// VISIBILITY (plans/serving-control-redesign.md WP-3): every catalog entry may carry `consumers`.
+// On `claude-local` it is REQUIRED (each entry carries the `llama/config.yaml` `modelKey` the
+// serving dispatcher writes it by), and absent there is drift, not "every consumer". On every
+// other provider an absent `consumers` means every consumer (see CLAUDE_CODE_CONSUMER below).
 //
 // Usage:
-//   model-picker-lineup.mjs [--config <path>] [--visibility <path>] [--home <dir>]
+//   model-picker-lineup.mjs [--config <path>] [--catalog <path>] [--home <dir>]
 //                           [--env-file <path>]   (default: fleet-tools/.env; under the
 //                                                  fleet-env cutover, the environment via
 //                                                  `fleet-env run model-picker`)
@@ -32,32 +31,29 @@ import { fleetEnvReexec } from "./fleet-env.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG = path.join(SCRIPT_DIR, "gateway.config.json");
-const DEFAULT_VISIBILITY = path.join(SCRIPT_DIR, "visibility.json");
+const DEFAULT_CATALOG = path.join(SCRIPT_DIR, "catalog", "catalog.json");
 const DEFAULT_ENV_FILE = "<code-root>/fleet-tools/.env";
 const GATEWAY_KEY_VAR = "INFERENCE_ROUTER_GATEWAY_KEY";
 const ROUTER_URL = "http://127.0.0.1:4813";
 
 // Providers whose ids never become picker rows.
 const EXCLUDED_PROVIDERS = new Set(["anthropic"]);
-// Consumer tagging (plans/local-leg-claude-code-serving-fit.md WP-2). `consumers` is an OPTIONAL,
-// additive annotation on a provider in gateway.config.json, in either of two shapes:
-//   "consumers": ["openwebui"]                      — a provider-level default for every id
-//   "consumers": {"<model-id>": ["cc","openwebui"]} — per model id, others fall through to untagged
-// ABSENT MEANS EVERY CONSUMER: an untagged provider, and an untagged id inside a tagged provider,
-// keep their rows exactly as before — so the annotation can be rolled out one provider at a time.
-// A row is emitted only when the id is untagged or carries this tag. Motivation: the OpenRouter
-// legs and the local haiku-slot model are OpenWebUI's routes, not Claude Code's, and every one of
-// them used to land in the `/model` picker. The key is unknown to the gateway engine and ignored
-// by it — verified live 2026-09-12 by running the shipped router image against this config on a
-// throwaway port: GET /v1/models still listed all 35 ids and the container logged no config error.
+// Consumer tagging (plans/local-leg-claude-code-serving-fit.md WP-2; moved onto catalog entries in
+// plans/serving-control-redesign.md WP-2/WP-3). `consumers` is an optional per-entry list in the
+// catalog. ABSENT MEANS EVERY CONSUMER on every provider except `claude-local` (DECLARED_PROVIDER),
+// so the annotation stays additive. A row is emitted only when the id is untagged or carries this
+// tag. Motivation: the OpenRouter legs and the codex effort-suffix ids are other consumers'
+// routes, not Claude Code's, and every one of them used to land in the `/model` picker.
 const CLAUDE_CODE_CONSUMER = "cc";
 // Provider name -> the word used as the "leg" in a label.
 const LEG_NAMES = { "claude-local": "local" };
-// The one provider whose visibility is declared in visibility.json rather than tagged in the
-// gateway config. Same string the LEG_NAMES table and the label rules already key off.
+// The one provider whose entries must declare `consumers` (and a `modelKey`): the serving
+// dispatcher writes them. Same string the LEG_NAMES table and the label rules already key off.
 const DECLARED_PROVIDER = "claude-local";
-// The declaration schema this generator understands.
-const VISIBILITY_SCHEMA = "serving-visibility-v1";
+// The catalog schema this generator understands.
+const CATALOG_SCHEMA = "model-catalog-v1";
+// Per-model keys retired from gateway.config.json (they live in the catalog since WP-2/WP-3).
+const RETIRED_CONFIG_KEYS = ["models", "effortKwargs", "maxOutputTokens", "consumers"];
 // Credential env keys the generator must never write (OAuth stays the credential).
 const FORBIDDEN_ENV_KEYS = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"];
 // Static env keys the generator owns under --launch-profile, alongside the dynamic
@@ -131,7 +127,7 @@ function die(message, code = 2) {
 function parseArgs(argv) {
   const opts = {
     config: DEFAULT_CONFIG,
-    visibility: DEFAULT_VISIBILITY,
+    catalog: DEFAULT_CATALOG,
     home: os.homedir(),
     envFile: null, // null = default source (see gatewayKeySource)
     mode: "print",
@@ -147,7 +143,7 @@ function parseArgs(argv) {
       return v;
     };
     if (arg === "--config") opts.config = value();
-    else if (arg === "--visibility") opts.visibility = value();
+    else if (arg === "--catalog") opts.catalog = value();
     else if (arg === "--home") opts.home = value();
     else if (arg === "--env-file") opts.envFile = value();
     else if (arg === "--check") opts.mode = "check";
@@ -156,7 +152,7 @@ function parseArgs(argv) {
     else if (arg === "--canonicalize") opts.canonicalize = true;
     else if (arg === "--help" || arg === "-h") {
       process.stdout.write(
-        "usage: model-picker-lineup.mjs [--config <path>] [--visibility <path>] [--home <dir>] [--env-file <path>] [--check | --write [--launch-profile] [--canonicalize]]\n",
+        "usage: model-picker-lineup.mjs [--config <path>] [--catalog <path>] [--home <dir>] [--env-file <path>] [--check | --write [--launch-profile] [--canonicalize]]\n",
       );
       process.exit(0);
     } else die(`unknown argument: ${arg}`);
@@ -204,46 +200,29 @@ function describeRow(providerName, leg, modelId, effort) {
   return `${providerName} leg via the router (:4813)`;
 }
 
-// The `consumers` tag for one id: the provider-level array, else the per-model map entry, else
-// null for "untagged" (= every consumer).
-function consumersFor(provider, modelId) {
-  const tags = provider.consumers;
-  if (Array.isArray(tags)) return tags;
-  if (tags && typeof tags === "object") {
-    const perModel = tags[modelId];
-    if (Array.isArray(perModel)) return perModel;
-  }
-  return null;
+// The catalog entries of one static provider ([] when the catalog has none).
+function catalogEntries(catalog, providerName) {
+  const models = catalog.providers?.[providerName]?.models;
+  return Array.isArray(models) ? models.filter((e) => e && typeof e.id === "string") : [];
 }
 
-// The declared consumers of one gateway id, from visibility.json: the entry whose `gateway_id`
-// equals it. `null` when no entry claims that id — which for the declared provider is drift, not
-// "every consumer" (--check reports it; buildRows treats it as not-a-row so a stale declaration
-// can never silently add one).
-function declaredConsumersFor(visibility, modelId) {
-  for (const entry of Object.values(visibility?.models ?? {})) {
-    if (entry?.gateway_id === modelId) return Array.isArray(entry.consumers) ? entry.consumers : [];
-  }
-  return null;
-}
-
-function isClaudeCodeModel(provider, modelId, visibility) {
-  if (provider.name === DECLARED_PROVIDER) {
-    const declared = declaredConsumersFor(visibility, modelId);
-    return declared !== null && declared.includes(CLAUDE_CODE_CONSUMER);
-  }
-  const tags = consumersFor(provider, modelId);
+function isClaudeCodeModel(providerName, entry) {
+  const tags = Array.isArray(entry.consumers) ? entry.consumers : null;
+  // claude-local: an undeclared entry is drift (--check reports it), never "every consumer", so a
+  // stale catalog can never silently add a row.
+  if (providerName === DECLARED_PROVIDER) return tags !== null && tags.includes(CLAUDE_CODE_CONSUMER);
   return tags === null || tags.includes(CLAUDE_CODE_CONSUMER);
 }
 
-export function buildRows(config, visibility) {
+export function buildRows(config, catalog) {
   const rows = [];
   for (const provider of config.providers ?? []) {
     if (!provider || typeof provider.name !== "string") continue;
     if (EXCLUDED_PROVIDERS.has(provider.name)) continue;
     const leg = LEG_NAMES[provider.name] ?? provider.name;
-    for (const modelId of provider.models ?? []) {
-      if (!isClaudeCodeModel(provider, modelId, visibility)) continue;
+    for (const catalogEntry of catalogEntries(catalog, provider.name)) {
+      const modelId = catalogEntry.id;
+      if (!isClaudeCodeModel(provider.name, catalogEntry)) continue;
       const entry = describeFamily(modelId);
       const effort = effortOf(modelId, entry);
       // Codex bare ids carry the proper model name only (user, 2026-09-13): effort is the
@@ -275,55 +254,61 @@ function readConfig(configPath) {
   }
 }
 
-// Fail-closed: an unreadable or malformed declaration is an error, never an empty map. Silently
-// treating it as empty would drop every local row from the picker and report "in sync".
-function readVisibility(visibilityPath) {
+// Fail-closed: an unreadable or malformed catalog is an error, never an empty map. Silently
+// treating it as empty would drop every row from the picker and report "in sync".
+function readCatalog(catalogPath) {
   let raw;
   try {
-    raw = fs.readFileSync(visibilityPath, "utf8");
+    raw = fs.readFileSync(catalogPath, "utf8");
   } catch {
-    die(`cannot read visibility declaration ${visibilityPath}`);
+    die(`cannot read model catalog ${catalogPath}`);
   }
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    die(`visibility declaration ${visibilityPath} is not valid JSON: ${err.message}`);
+    die(`model catalog ${catalogPath} is not valid JSON: ${err.message}`);
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    die(`visibility declaration ${visibilityPath} is not a JSON object`);
+    die(`model catalog ${catalogPath} is not a JSON object`);
   }
-  if (parsed.schema !== VISIBILITY_SCHEMA) {
-    die(`visibility declaration ${visibilityPath} carries schema ${JSON.stringify(parsed.schema ?? null)}, expected ${VISIBILITY_SCHEMA}`);
+  if (parsed.schema !== CATALOG_SCHEMA) {
+    die(`model catalog ${catalogPath} carries schema ${JSON.stringify(parsed.schema ?? null)}, expected ${CATALOG_SCHEMA}`);
   }
-  if (parsed.models === null || typeof parsed.models !== "object" || Array.isArray(parsed.models)) {
-    die(`visibility declaration ${visibilityPath} has no \`models\` map`);
+  if (parsed.providers === null || typeof parsed.providers !== "object" || Array.isArray(parsed.providers)) {
+    die(`model catalog ${catalogPath} has no \`providers\` map`);
   }
   return parsed;
 }
 
-// The two files the declaration split can drift between, checked in the direction gateway.config
-// owns: every id the declared provider serves must be declared, and (WP-3 clamp, patch 0010) must
-// carry the answer-token cap the clamp reads. The retired `consumers` key reappearing on that
-// provider is the third mode — the primitive this declaration replaced.
-function configDriftFailure(config, visibility, configPath, visibilityPath) {
-  const provider = (config.providers ?? []).find((p) => p?.name === DECLARED_PROVIDER);
-  if (!provider) return null;
-  if (provider.consumers !== undefined) {
-    return `provider ${DECLARED_PROVIDER} in ${configPath} still carries a \`consumers\` key — visibility for that provider lives in ${visibilityPath} since WP-3; delete the key`;
+// The drift modes between the static config and the catalog, both directions:
+//   - a retired per-model key reappearing in gateway.config.json (the primitive the catalog
+//     replaced; the gateway's strict loader refuses it too);
+//   - REVERSE: a catalog provider no static provider serves — its ids and `consumers` name routes
+//     nothing serves;
+//   - a claude-local entry with no declared `consumers`/`modelKey`, or no `maxOutputTokens` (the
+//     local leg's clamp reads it; value = the key's `max_output.answer_tokens`).
+function configDriftFailure(config, catalog, configPath, catalogPath) {
+  for (const provider of config.providers ?? []) {
+    const retired = RETIRED_CONFIG_KEYS.filter((k) => provider?.[k] !== undefined);
+    if (retired.length > 0) {
+      return `provider ${provider.name} in ${configPath} still carries a \`${retired[0]}\` key — per-model data lives in ${catalogPath} since WP-3; delete the key`;
+    }
   }
-  const undeclared = (provider.models ?? []).filter(
-    (modelId) => declaredConsumersFor(visibility, modelId) === null,
-  );
+  const served = new Set((config.providers ?? []).map((p) => p?.name));
+  const orphans = Object.keys(catalog.providers).filter((name) => !served.has(name));
+  if (orphans.length > 0) {
+    const ids = orphans.flatMap((name) => catalogEntries(catalog, name).map((e) => `${name}/${e.id}`));
+    return `catalog provider(s) ${orphans.join(", ")} in ${catalogPath} name id(s) no provider in ${configPath} serves: ${ids.join(", ") || "(none)"}`;
+  }
+  const local = catalogEntries(catalog, DECLARED_PROVIDER);
+  const undeclared = local.filter((e) => !Array.isArray(e.consumers) || typeof e.modelKey !== "string").map((e) => e.id);
   if (undeclared.length > 0) {
-    return `${DECLARED_PROVIDER} model id(s) ${undeclared.join(", ")} have no matching \`gateway_id\` in ${visibilityPath}`;
+    return `${DECLARED_PROVIDER} model id(s) ${undeclared.join(", ")} have no declared \`consumers\`/\`modelKey\` in ${catalogPath}`;
   }
-  const caps = provider.maxOutputTokens;
-  const uncapped = (provider.models ?? []).filter(
-    (modelId) => typeof (caps ?? {})[modelId] !== "number",
-  );
+  const uncapped = local.filter((e) => typeof e.maxOutputTokens !== "number").map((e) => e.id);
   if (uncapped.length > 0) {
-    return `${DECLARED_PROVIDER} model id(s) ${uncapped.join(", ")} have no \`maxOutputTokens\` entry in ${configPath} — patch 0010's clamp reads that map (value = the key's \`max_output.answer_tokens\`)`;
+    return `${DECLARED_PROVIDER} model id(s) ${uncapped.join(", ")} have no \`maxOutputTokens\` entry in ${catalogPath} — the local leg's clamp reads it (value = the key's \`max_output.answer_tokens\`)`;
   }
   return null;
 }
@@ -452,8 +437,8 @@ function gatewayKeySource(envFile) {
 function main() {
   const opts = parseArgs(process.argv.slice(2));
   const config = readConfig(opts.config);
-  const visibility = readVisibility(opts.visibility);
-  const rows = buildRows(config, visibility);
+  const catalog = readCatalog(opts.catalog);
+  const rows = buildRows(config, catalog);
 
   if (opts.mode === "print") {
     process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
@@ -464,7 +449,7 @@ function main() {
   const gatewayKey = opts.launchProfile ? gatewayKeySource(opts.envFile) : null;
 
   if (opts.mode === "check") {
-    const drift = configDriftFailure(config, visibility, opts.config, opts.visibility);
+    const drift = configDriftFailure(config, catalog, opts.config, opts.catalog);
     if (drift) {
       process.stderr.write(`model-picker-lineup: ${drift}\n`);
       process.exit(1);

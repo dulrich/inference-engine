@@ -4,8 +4,10 @@
 //! by [`crate::serving::parse_served_aliases`] (the same reader `GET /api/serving` uses):
 //!   - the capability-recipe policy: every served CHAT entry against
 //!     `docs/model-capabilities.md`'s required key set;
-//!   - the visibility/gateway policy: EVERY served key against `router/visibility.json` and the
-//!     `router/gateway.config.json` max-tokens crosswalk.
+//!   - the visibility/gateway policy: EVERY served key against the model catalog
+//!     `router/catalog/catalog.json` (a `claude-local` entry's `modelKey` + `consumers`, its `id`
+//!     the gateway id, or an `exposures` record with no gateway id; plans/serving-control-redesign.md
+//!     WP-3 retired `router/visibility.json`) and the catalog's `maxOutputTokens` crosswalk.
 //!
 //! Findings are domain-authored text and byte-exact with the TS: same order (every recipe
 //! finding, then every visibility finding, each in config order), same wording. The aliases are
@@ -17,7 +19,7 @@
 use crate::jsrt;
 use bd_domain::contract::{
     SERVING_CONSUMER_ORDER, SERVING_VERIFIED_DATE_PATTERN, SERVING_VISIBILITY_ENTRY,
-    SERVING_VISIBILITY_ENVELOPE, SERVING_VISIBILITY_SCHEMA_V1,
+    SERVING_VISIBILITY_SCHEMA_V1,
 };
 use bd_domain::validate::{self, pattern_regex, Seg};
 use serde_json::{Map, Value};
@@ -64,14 +66,9 @@ fn dirname(p: &str) -> String {
     }
 }
 
-/// `resolveVisibilityPath`: relative to the CONFIG, so a fixture run resolves its own siblings.
-pub fn resolve_visibility_path(config_path: &str) -> String {
-    jsrt::path_join(&dirname(config_path), "../router/visibility.json")
-}
-
-/// `resolveGatewayPath`.
-pub fn resolve_gateway_path(config_path: &str) -> String {
-    jsrt::path_join(&dirname(config_path), "../router/gateway.config.json")
+/// The catalog path, relative to the CONFIG, so a fixture run resolves its own siblings.
+pub fn resolve_catalog_path(config_path: &str) -> String {
+    jsrt::path_join(&dirname(config_path), "../router/catalog/catalog.json")
 }
 
 /// `parsePathArg`: `--<name> <path>` (first occurrence, needs a following arg), else
@@ -808,50 +805,74 @@ pub fn check_recipe_conformance(aliases: &[Value]) -> Result<Vec<Finding>, Strin
 
 const CLAMP_PROVIDER: &str = "claude-local";
 
-fn issue_path(path: &[Seg]) -> String {
-    path.iter()
-        .map(|s| match s {
-            Seg::Key(k) => k.clone(),
-            Seg::Index(i) => i.to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join(".")
-}
+/// The catalog schema literal this gate understands.
+const CATALOG_SCHEMA: &str = "model-catalog-v1";
+/// Where findings about the declaration file itself are reported.
+const CATALOG_LABEL: &str = "router/catalog/catalog.json";
 
-/// `parseVisibility`: the `models` map, or the problem naming why the file is unusable.
-fn parse_visibility(text: Option<&str>) -> Result<Map<String, Value>, String> {
+/// The catalog's visibility projection — `{model key: {gateway_id, consumers}}` from every
+/// `claude-local` entry carrying a `modelKey` (gateway id = its `id`) and every `exposures`
+/// record (gateway id null), values carried raw so the entry checks below still see a
+/// malformed one — plus the `claude-local` `maxOutputTokens` caps keyed by id. `Err` names why
+/// the file is unusable as a whole.
+type Projection = (Map<String, Value>, Map<String, Value>);
+
+fn parse_catalog(text: Option<&str>) -> Result<Projection, String> {
     let Some(text) = text else {
-        return Err("the visibility declaration is missing or unreadable".into());
+        return Err("the model catalog is missing or unreadable".into());
     };
     let parsed = jsrt::json_parse_js(text)
-        .map_err(|m| format!("the visibility declaration is not valid JSON: {m}"))?;
-    match validate::parse(&SERVING_VISIBILITY_ENVELOPE.node, &parsed) {
-        Ok(v) => Ok(v
-            .get("models")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default()),
-        Err(issues) => {
-            let (path, detail) = match issues.first() {
-                None => (String::new(), "does not match".to_string()),
-                Some(i) if i.path.is_empty() => (String::new(), i.message.clone()),
-                Some(i) => (format!(" at `{}`", issue_path(&i.path)), i.message.clone()),
-            };
-            Err(format!(
-                "the visibility declaration does not match the `{SERVING_VISIBILITY_SCHEMA_V1}` schema{path}: {detail}"
-            ))
-        }
+        .map_err(|m| format!("the model catalog is not valid JSON: {m}"))?;
+    if parsed.get("schema").and_then(Value::as_str) != Some(CATALOG_SCHEMA) {
+        return Err(format!(
+            "the model catalog does not carry the `{CATALOG_SCHEMA}` schema"
+        ));
     }
-}
-
-/// `parseGatewayCaps`: `claude-local.maxOutputTokens`, or `None` (fail-closed).
-fn parse_gateway_caps(text: Option<&str>) -> Option<Map<String, Value>> {
-    let parsed = jsrt::json_parse(text?).ok()?;
-    let providers = parsed.get("providers")?.as_array()?;
-    let provider = providers
-        .iter()
-        .find(|p| p.get("name").and_then(Value::as_str) == Some(CLAMP_PROVIDER))?;
-    provider.get("maxOutputTokens")?.as_object().cloned()
+    let Some(providers) = parsed.get("providers").and_then(Value::as_object) else {
+        return Err("the model catalog has no `providers` map".into());
+    };
+    let entries = match providers.get(CLAMP_PROVIDER) {
+        None => Vec::new(),
+        Some(p) => match p.get("models").and_then(Value::as_array) {
+            Some(a) => a.clone(),
+            None => {
+                return Err(format!(
+                    "the model catalog's `{CLAMP_PROVIDER}` provider has no `models` list"
+                ))
+            }
+        },
+    };
+    let exposures = match parsed.get("exposures") {
+        None => Map::new(),
+        Some(Value::Object(m)) => m.clone(),
+        Some(_) => return Err("the model catalog's `exposures` is not a map".into()),
+    };
+    let mut models = Map::new();
+    let mut caps = Map::new();
+    for e in &entries {
+        let id = e.get("id").cloned().unwrap_or(Value::Null);
+        if let (Some(i), Some(cap)) = (id.as_str(), e.get("maxOutputTokens")) {
+            caps.insert(i.to_string(), cap.clone());
+        }
+        let Some(key) = e.get("modelKey").and_then(Value::as_str) else {
+            continue;
+        };
+        let mut rec = Map::new();
+        rec.insert("gateway_id".into(), id);
+        if let Some(c) = e.get("consumers") {
+            rec.insert("consumers".into(), c.clone());
+        }
+        models.insert(key.to_string(), Value::Object(rec));
+    }
+    for (key, record) in exposures {
+        let mut rec = Map::new();
+        rec.insert("gateway_id".into(), Value::Null);
+        if let Some(c) = record.get("consumers") {
+            rec.insert("consumers".into(), c.clone());
+        }
+        models.insert(key, Value::Object(rec));
+    }
+    Ok((models, caps))
 }
 
 fn consumers_order_problem(consumers: &[Value]) -> Option<String> {
@@ -881,7 +902,7 @@ fn check_visibility_entry(
     let Some(raw) = models.get(&model_key) else {
         out.push(
             "visibility-missing",
-            "no entry in `router/visibility.json` — every served key must be declared there".into(),
+            "no entry in `router/catalog/catalog.json` (a `claude-local` `modelKey` or an `exposures` record) — every served key must be declared there".into(),
         );
         return Ok(());
     };
@@ -984,7 +1005,7 @@ fn check_visibility_entry(
     match caps.and_then(|c| c.get(gid)) {
         None => out.push(
             "max-tokens-crosswalk",
-            format!("`{CLAMP_PROVIDER}.maxOutputTokens[\"{gid}\"]` is missing from `router/gateway.config.json` — patch 0010's clamp reads that map"),
+            format!("`{CLAMP_PROVIDER}.maxOutputTokens[\"{gid}\"]` is missing from `router/catalog/catalog.json` — the local leg's clamp reads that entry field"),
         ),
         Some(cap) if declared.is_null() => out.push(
             "max-tokens-crosswalk",
@@ -1003,22 +1024,21 @@ fn check_visibility_entry(
 /// one finding for the whole file.
 pub fn check_visibility_conformance(
     aliases: &[Value],
-    visibility_text: Option<&str>,
-    gateway_text: Option<&str>,
+    catalog_text: Option<&str>,
 ) -> Result<Vec<Finding>, String> {
     let mut findings = Vec::new();
-    let models = match parse_visibility(visibility_text) {
+    let (models, caps) = match parse_catalog(catalog_text) {
         Ok(m) => m,
         Err(problem) => {
             findings.push(Finding {
-                model_key: "router/visibility.json".into(),
+                model_key: CATALOG_LABEL.into(),
                 rule: "visibility-unreadable".into(),
                 detail: problem,
             });
             return Ok(findings);
         }
     };
-    let caps = parse_gateway_caps(gateway_text);
+    let caps = Some(caps);
     let mut claimed = HashMap::new();
     for alias in aliases {
         let model_key = alias.get("modelKey").and_then(Value::as_str).unwrap_or("");
@@ -1035,16 +1055,11 @@ pub fn check_visibility_conformance(
 /// TS's uncaught throw (YAML error, a TypeError on a malformed value).
 pub fn check_serving_recipes(
     config_text: &str,
-    visibility_text: Option<&str>,
-    gateway_text: Option<&str>,
+    catalog_text: Option<&str>,
 ) -> Result<Vec<Finding>, String> {
     let aliases = crate::serving::parse_served_aliases(config_text)?;
     let mut findings = check_recipe_conformance(&aliases)?;
-    findings.extend(check_visibility_conformance(
-        &aliases,
-        visibility_text,
-        gateway_text,
-    )?);
+    findings.extend(check_visibility_conformance(&aliases, catalog_text)?);
     Ok(findings)
 }
 
@@ -1060,17 +1075,12 @@ fn read_text(path: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// `checkServingRecipesFile`: an unreadable companion is `null` (a finding), an unreadable
+/// `checkServingRecipesFile`: an unreadable catalog is `null` (a finding), an unreadable
 /// config is an error.
-pub fn check_serving_recipes_file(
-    path: &str,
-    visibility_path: &str,
-    gateway_path: &str,
-) -> Result<Vec<Finding>, String> {
+pub fn check_serving_recipes_file(path: &str, catalog_path: &str) -> Result<Vec<Finding>, String> {
     let config = read_text(path)?;
-    let visibility = read_text(visibility_path).ok();
-    let gateway = read_text(gateway_path).ok();
-    check_serving_recipes(&config, visibility.as_deref(), gateway.as_deref())
+    let catalog = read_text(catalog_path).ok();
+    check_serving_recipes(&config, catalog.as_deref())
 }
 
 /// The CLI: stdout lines and exit code, exactly as `check-serving-recipes.ts` prints them.
@@ -1078,8 +1088,7 @@ pub fn run(argv: &[String]) -> Result<(Vec<String>, i32), String> {
     let path = parse_path_arg(argv, "config", &default_config_path());
     let findings = check_serving_recipes_file(
         &path,
-        &parse_path_arg(argv, "visibility", &resolve_visibility_path(&path)),
-        &parse_path_arg(argv, "gateway", &resolve_gateway_path(&path)),
+        &parse_path_arg(argv, "catalog", &resolve_catalog_path(&path)),
     )?;
     let mut lines: Vec<String> = findings.iter().map(format_finding).collect();
     if !findings.is_empty() {
@@ -1090,7 +1099,7 @@ pub fn run(argv: &[String]) -> Result<(Vec<String>, i32), String> {
         ));
         return Ok((lines, 1));
     }
-    lines.push(format!("ok — every served chat entry in {path} conforms to docs/model-capabilities.md, and every served key is declared in router/visibility.json"));
+    lines.push(format!("ok — every served chat entry in {path} conforms to docs/model-capabilities.md, and every served key is declared in router/catalog/catalog.json"));
     Ok((lines, 0))
 }
 

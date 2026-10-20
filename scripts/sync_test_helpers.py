@@ -73,25 +73,43 @@ def _policy(**overrides):
 
 
 def _gateway(**tables):
-    """A gateway config whose SECOND provider carries `effortKwargs` (index is never hardcoded)."""
-    return {
-        "host": "127.0.0.1",
-        "port": 4321,
-        "providers": [
-            {"name": "no-ladder-here", "type": "openai", "models": []},
-            {"name": "llama", "type": "openai", "models": [], "effortKwargs": dict(tables)},
-        ],
-    }
+    """The effort ladders, {gateway id: effortKwargs}; `_catalog_doc` places each on a catalog
+    entry of that id (the provider is never hardcoded by the loader)."""
+    return dict(tables)
 
 
 def _vis_doc(models):
-    """`models` is {model key: (consumers, gateway_id)}."""
+    """`models` is {model key: (consumers, gateway_id)} -> the loader's visibility projection
+    under `models` (what `load_visibility` returns); `_catalog_doc` turns it into a catalog."""
     return {
-        "schema": sync.VISIBILITY_SCHEMA,
         "models": {
             key: {"gateway_id": gateway_id, "consumers": list(consumers)}
             for key, (consumers, gateway_id) in models.items()
         },
+    }
+
+
+def _catalog_doc(visibility=None, ladders=None):
+    """A `model-catalog-v1` document: every visibility key with a gateway id becomes a
+    `claude-local` entry (`id` = gateway id, `modelKey`, `consumers`, plus its ladder if any),
+    every null-gateway key an `exposures` record, and a ladder whose id no key claims rides on a
+    second provider (proving the loader walks every provider)."""
+    ladders = dict(ladders or {})
+    entries = []
+    exposures = {}
+    for key, entry in ((visibility or {}).get("models") or {}).items():
+        if entry["gateway_id"] is None:
+            exposures[key] = {"consumers": list(entry["consumers"])}
+            continue
+        row = {"id": entry["gateway_id"], "modelKey": key, "consumers": list(entry["consumers"])}
+        if entry["gateway_id"] in ladders:
+            row["effortKwargs"] = ladders.pop(entry["gateway_id"])
+        entries.append(row)
+    other = [{"id": gid, "effortKwargs": table} for gid, table in ladders.items()]
+    return {
+        "schema": sync.CATALOG_SCHEMA,
+        "providers": {"claude-local": {"models": entries}, "other": {"models": other}},
+        "exposures": exposures,
     }
 
 

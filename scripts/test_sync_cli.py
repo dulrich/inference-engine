@@ -32,6 +32,7 @@ from pathlib import Path
 from sync_test_helpers import (
     _FakeOpenWebUI,
     _RecordingHttp,
+    _catalog_doc,
     _gateway,
     _policy,
     _router_entry,
@@ -56,8 +57,8 @@ class _MainHarness(unittest.TestCase):
 
     def _run(self, fake, visibility, *, policy=None, gateway=None, extra=()):
         self._patch(fake)
-        docs = (visibility, policy or _policy(), gateway if gateway is not None else _gateway())
-        paths = [_write_json_once(self, doc) for doc in docs]
+        catalog = _catalog_doc(visibility, gateway if gateway is not None else _gateway())
+        paths = [_write_json_once(self, doc) for doc in (catalog, policy or _policy())]
         argv = [
             "--openwebui-url",
             "http://owui",
@@ -65,12 +66,10 @@ class _MainHarness(unittest.TestCase):
             "k",
             "--router-url",
             "http://router",
-            "--visibility",
+            "--catalog",
             str(paths[0]),
             "--policy",
             str(paths[1]),
-            "--gateway-config",
-            str(paths[2]),
             *extra,
         ]
         buffer = io.StringIO()
@@ -86,20 +85,35 @@ class MainFailClosedTest(unittest.TestCase):
         sync.client._http_json = http
         self.addCleanup(lambda: setattr(sync.client, "_http_json", original))
 
-        missing = Path(tempfile.gettempdir()) / "definitely-not-a-visibility-file-4a71.json"
+        missing = Path(tempfile.gettempdir()) / "definitely-not-a-catalog-file-4a71.json"
         code = sync.main(
             [
                 "--openwebui-url",
                 "http://owui",
                 "--openwebui-key",
                 "k",
-                "--visibility",
+                "--catalog",
                 str(missing),
                 "--apply",
             ]
         )
         self.assertEqual(code, 1)
         self.assertEqual(http.calls, [], "a fail-closed declaration must make no call at all")
+
+    def test_the_retired_input_flags_are_an_error_before_any_http_call(self):
+        http = _RecordingHttp([])
+        original = sync.client._http_json
+        sync.client._http_json = http
+        self.addCleanup(lambda: setattr(sync.client, "_http_json", original))
+        for flag in ("--visibility", "--gateway-config"):
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors):
+                code = sync.main(
+                    ["--openwebui-url", "http://owui", "--openwebui-key", "k", flag, "x.json"]
+                )
+            self.assertEqual(code, 2)
+            self.assertIn(f"{flag} is retired", errors.getvalue())
+        self.assertEqual(http.calls, [])
 
 
 # ---------------------------------------------------------------------------
@@ -357,14 +371,17 @@ class CliSelectionTest(_MainHarness):
 
 
 class FailClosedLoadPathTest(_MainHarness):
-    """A malformed policy or gateway config stops the run before the first HTTP call."""
+    """A malformed policy or catalog stops the run before the first HTTP call."""
 
     def _run_with(self, **docs):
         fake = _FakeOpenWebUI()
         self._patch(fake)
+        catalog = docs.get("catalog")
+        if catalog is None:
+            catalog = _catalog_doc(docs["visibility"], docs["gateway"])
         paths = {
-            name: _write_json_once(self, doc)
-            for name, doc in docs.items()
+            "catalog": _write_json_once(self, catalog),
+            "policy": _write_json_once(self, docs["policy"]),
         }
         errors = io.StringIO()
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(errors):
@@ -374,12 +391,10 @@ class FailClosedLoadPathTest(_MainHarness):
                     "http://owui",
                     "--openwebui-key",
                     "k",
-                    "--visibility",
-                    str(paths["visibility"]),
+                    "--catalog",
+                    str(paths["catalog"]),
                     "--policy",
                     str(paths["policy"]),
-                    "--gateway-config",
-                    str(paths["gateway"]),
                     "--apply",
                 ]
             )
@@ -395,11 +410,10 @@ class FailClosedLoadPathTest(_MainHarness):
         self.assertIn("must be a list of strings", errors)
         self.assertEqual(fake.calls, [])
 
-    def test_a_malformed_gateway_config_stops_the_run_before_any_http_call(self):
+    def test_a_malformed_catalog_stops_the_run_before_any_http_call(self):
         code, errors, fake = self._run_with(
-            visibility=_vis_doc({"model-a": (["openwebui"], None)}),
+            catalog=["not", "an", "object"],
             policy=_policy(),
-            gateway=["not", "an", "object"],
         )
         self.assertEqual(code, 1)
         self.assertIn("not a JSON object", errors)

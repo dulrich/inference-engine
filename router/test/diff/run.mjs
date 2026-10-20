@@ -49,7 +49,8 @@ export function generateConfig(sourceText, stubBase) {
   });
   if (i !== providers.length) throw new Error(`rewrote ${i} baseurls for ${providers.length} providers`);
   const fixture = JSON.parse(fs.readFileSync(path.join(here, 'fixture-providers.json'), 'utf8'));
-  const extra = fixture.map((p) => ({ ...p, baseurl: `${stubBase}/p/${p.name}${p.baseurl}` }));
+  // `models`/`consumers` are catalog fields (generateCatalog); the strict loader rejects them here.
+  const extra = fixture.map(({ models: _m, consumers: _c, ...p }) => ({ ...p, baseurl: `${stubBase}/p/${p.name}${p.baseurl}` }));
   const close = out.lastIndexOf(']');
   out = `${out.slice(0, close).replace(/\s*$/, '')},\n${extra.map((p) => `    ${JSON.stringify(p)}`).join(',\n')}\n  ${out.slice(close)}`;
   JSON.parse(out);

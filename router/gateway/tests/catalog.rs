@@ -36,7 +36,7 @@ fn replace(dir: &Path, text: &str) {
 
 fn settings(base: &str) -> config::Settings {
     let raw = json!({"host": "127.0.0.1", "port": 0, "providers": [
-        {"name": "or-anthropic", "type": "anthropic", "apiKeyEnv": "OR_KEY", "baseurl": format!("{base}/or"), "models": ["legacy-ignored"]}
+        {"name": "or-anthropic", "type": "anthropic", "apiKeyEnv": "OR_KEY", "baseurl": format!("{base}/or")}
     ]});
     let env = |k: &str| match k {
         "AUTH_STATIC_API_KEYS" => Some(KEY.to_string()),
@@ -123,7 +123,6 @@ async fn rename_into_directory_reloads_and_invalid_keeps_last_good() {
     assert_eq!(rev1, catalog::revision(catalog_json(&["a"]).as_bytes()));
     assert_eq!(h["catalogError"], Value::Null);
     assert_eq!(h["status"], "ok");
-    // The legacy `models[]` in the static config is not a routing source.
     assert_eq!(model_ids(&gw).await, ["or-anthropic/a"]);
 
     replace(&dir, &catalog_json(&["a", "b"]));
@@ -228,6 +227,24 @@ async fn missing_or_invalid_catalog_at_startup_is_fatal() {
         .unwrap();
     assert!(e.contains("empty on a credentialed provider"), "{e}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn exposure_records_never_route_or_list() {
+    let mut v: Value = serde_json::from_str(&catalog_json(&["a"])).unwrap();
+    v["exposures"] =
+        json!({"some-llama-key": {"consumers": ["openwebui"]}, "a": {"consumers": []}});
+    let s = settings("http://127.0.0.1:9");
+    let cat = catalog::check(&s.providers, v.to_string().as_bytes()).unwrap();
+    assert_eq!(cat.exposures.len(), 2);
+    let holder = Arc::new(Holder::new(s.providers.clone(), cat, None));
+    let state = app::state_with(s, holder, Arc::new(Recorder(Arc::default()))).unwrap();
+    let gw = serve(state).await;
+    assert_eq!(model_ids(&gw).await, ["or-anthropic/a"]);
+    let (status, body) = post_model(&gw, "or-anthropic/some-llama-key").await;
+    assert_eq!(status, 400, "{body}");
+    let (status, _) = post_model(&gw, "some-llama-key").await;
+    assert_ne!(status, 200);
 }
 
 #[test]

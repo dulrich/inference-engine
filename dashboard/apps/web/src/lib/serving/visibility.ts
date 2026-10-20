@@ -3,9 +3,9 @@
 // DOM-free functions so `Serving.svelte` stays markup-thin (the `lib/router/*.ts` division).
 //
 // THE CHIP STATE HAS EXACTLY ONE SOURCE: `GET /api/serving/status`'s `visibility` map, which
-// is the host dispatcher's republication of `router/visibility.json`. It is never derived
+// is the host dispatcher's republication of the model catalog's visibility (`router/catalog/catalog.json`). It is never derived
 // from the `GET /api/serving` YAML parse (that file carries no visibility at all) and never
-// from `router/visibility.json` directly (not mounted into this container). When the status
+// from the catalog file directly (not mounted into this container). When the status
 // is unavailable — disabled, unreadable, empty or STALE — the chips render disabled with the
 // reason in words rather than guessing a state, because a click over a silently frozen map
 // would record a write nobody will execute.

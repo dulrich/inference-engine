@@ -27,7 +27,7 @@
   //
   // Visibility chips (WP-4, `plans/bench-dashboard-serving-control.md`): two per row, `cc`
   // and `openwebui`, whose ONLY source is `GET /api/serving/status`'s `visibility` map -- the
-  // host dispatcher's republication of `router/visibility.json`, never this view's YAML parse
+  // host dispatcher's republication of the model catalog's visibility (`router/catalog/catalog.json`), never this view's YAML parse
   // (which carries no visibility at all). Toggling POSTs the full desired `consumers` array
   // for that model, which only RECORDS a request; the chip enters an optimistic "requested"
   // state keyed by the returned `requestId` and settles when a later status shows that id in

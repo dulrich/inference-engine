@@ -1,0 +1,9 @@
+{
+  "schema": "serving-request-v2",
+  "request_id": "srv-20261019T120100Z-00000000000000c2",
+  "action": "catalog.add",
+  "provider": "openrouter",
+  "id": " spaced id",
+  "consumers": [],
+  "requested_at": "2026-10-19T12:01:00.000Z"
+}

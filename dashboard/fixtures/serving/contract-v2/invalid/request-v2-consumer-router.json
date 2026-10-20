@@ -1,0 +1,11 @@
+{
+  "schema": "serving-request-v2",
+  "request_id": "srv-20261019T120100Z-00000000000000c4",
+  "action": "catalog.consumers",
+  "provider": "codex-a",
+  "id": "gpt-6-sol",
+  "consumers": [
+    "router"
+  ],
+  "requested_at": "2026-10-19T12:01:00.000Z"
+}

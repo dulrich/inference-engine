@@ -1,0 +1,104 @@
+{
+  "schema": "model-catalog-v1",
+  "providers": {
+    "claude-local": {
+      "models": [
+        {"id": "qwen36-a3b", "modelKey": "Qwen3.6-35B-A3B-UD-Q4_K_XL", "consumers": ["cc", "openwebui"], "maxOutputTokens": 32000},
+        {"id": "qwen38-27b-iq3s", "modelKey": "Qwen3.8-27B-UD-IQ3_S", "consumers": ["cc", "openwebui"], "effortKwargs": {"low": {"reasoning_effort": "low"}, "medium": {"reasoning_effort": "medium"}, "high": {"reasoning_effort": "medium"}, "xhigh": {"reasoning_effort": "xhigh"}, "max": {"reasoning_effort": "xhigh"}, "disabled": {"enable_thinking": false}}, "maxOutputTokens": 32000},
+        {"id": "qwen38-27b-iq3s-off", "modelKey": "Qwen3.8-27B-UD-IQ3_S-reasoning-off", "consumers": [], "maxOutputTokens": 32000},
+        {"id": "qwen38-27b-iq3s-low", "modelKey": "Qwen3.8-27B-UD-IQ3_S-reasoning-low", "consumers": [], "maxOutputTokens": 32000},
+        {"id": "qwen38-27b-iq3s-medium", "modelKey": "Qwen3.8-27B-UD-IQ3_S-reasoning-medium", "consumers": [], "maxOutputTokens": 32000},
+        {"id": "qwen38-27b-iq3s-high", "modelKey": "Qwen3.8-27B-UD-IQ3_S-reasoning-high", "consumers": [], "maxOutputTokens": 32000},
+        {"id": "nemotron-4b", "modelKey": "nemotron-3-nano-4B-UD-Q4_K_XL", "consumers": ["openwebui"], "effortKwargs": {"disabled": {"enable_thinking": false}}, "maxOutputTokens": 32000}
+      ]
+    },
+    "anthropic": {
+      "models": [
+        {"id": "claude-sonnet-5"},
+        {"id": "claude-sonnet-5-5"},
+        {"id": "claude-opus-5"},
+        {"id": "claude-opus-5-5"},
+        {"id": "claude-fable-5"},
+        {"id": "claude-fable-5-1"},
+        {"id": "claude-haiku-4-5"},
+        {"id": "claude-haiku-4-5-20251001"},
+        {"id": "claude-haiku-5-5"}
+      ]
+    },
+    "openrouter": {
+      "models": [
+        {"id": "qwen/qwen3.8-flash", "consumers": ["router"]}
+      ]
+    },
+    "or-anthropic": {
+      "models": [
+        {"id": "z-ai/glm-5.3-flash", "consumers": ["cc"]},
+        {"id": "qwen/qwen3.8-flash", "consumers": ["cc"]}
+      ]
+    },
+    "openrouter-decide": {
+      "models": [
+        {"id": "typesafe/jev-1.13", "consumers": ["router"]}
+      ]
+    },
+    "codex-a": {
+      "models": [
+        {"id": "gpt-5.6-luna", "consumers": ["cc"]},
+        {"id": "gpt-5.6-luna-medium", "consumers": ["router"]},
+        {"id": "gpt-5.6-luna-high", "consumers": ["router"]},
+        {"id": "gpt-5.6-sol", "consumers": ["cc"]},
+        {"id": "gpt-5.6-sol-low", "consumers": ["router"]},
+        {"id": "gpt-5.6-sol-high", "consumers": ["router"]},
+        {"id": "gpt-6-astra", "consumers": ["cc"]},
+        {"id": "gpt-6-astra-low", "consumers": ["router"]},
+        {"id": "gpt-6-astra-high", "consumers": ["router"]},
+        {"id": "gpt-6-sol", "consumers": ["cc"]},
+        {"id": "gpt-6-sol-low", "consumers": ["router"]},
+        {"id": "gpt-6-sol-high", "consumers": ["router"]},
+        {"id": "gpt-6.1-sol", "consumers": ["cc"]},
+        {"id": "gpt-6.1-sol-low", "consumers": ["router"]},
+        {"id": "gpt-6.1-sol-high", "consumers": ["router"]},
+        {"id": "gpt-6-luna", "consumers": ["cc"]},
+        {"id": "gpt-6-luna-medium", "consumers": ["router"]},
+        {"id": "gpt-6-luna-high", "consumers": ["router"]}
+      ]
+    },
+    "codex-b": {
+      "models": [
+        {"id": "gpt-5.6-luna", "consumers": ["cc"]},
+        {"id": "gpt-5.6-luna-medium", "consumers": ["router"]},
+        {"id": "gpt-5.6-luna-high", "consumers": ["router"]},
+        {"id": "gpt-5.6-sol", "consumers": ["cc"]},
+        {"id": "gpt-5.6-sol-low", "consumers": ["router"]},
+        {"id": "gpt-5.6-sol-high", "consumers": ["router"]},
+        {"id": "gpt-6-astra", "consumers": ["cc"]},
+        {"id": "gpt-6-astra-low", "consumers": ["router"]},
+        {"id": "gpt-6-astra-high", "consumers": ["router"]},
+        {"id": "gpt-6-sol", "consumers": ["cc"]},
+        {"id": "gpt-6-sol-low", "consumers": ["router"]},
+        {"id": "gpt-6-sol-high", "consumers": ["router"]},
+        {"id": "gpt-6.1-sol", "consumers": ["cc"]},
+        {"id": "gpt-6.1-sol-low", "consumers": ["router"]},
+        {"id": "gpt-6.1-sol-high", "consumers": ["router"]},
+        {"id": "gpt-6-luna", "consumers": ["cc"]},
+        {"id": "gpt-6-luna-medium", "consumers": ["router"]},
+        {"id": "gpt-6-luna-high", "consumers": ["router"]}
+      ]
+    }
+  },
+  "exposures": {
+    "bge-m3-f16": {"consumers": []},
+    "bge-reranker-v2-m3-Q8_0": {"consumers": []},
+    "bge-small-en-v1.5-f16": {"consumers": []},
+    "Ling-3.0-tiny-UD-Q4_K_XL": {"consumers": ["openwebui"]},
+    "Ling-3.0-tiny-UD-Q6_K_XL": {"consumers": []},
+    "Ling-3.0-tiny-Q8_0": {"consumers": []},
+    "MiniCPM5-2B-Q6_K-c32k-f16": {"consumers": ["openwebui"]},
+    "MiniCPM5-2B-Q6_K-c64k-q8_0": {"consumers": ["openwebui"]},
+    "MiniCPM5-2B-Q6_K-c128k-q4_0": {"consumers": ["openwebui"]},
+    "gemma-4-12B-it-qat-UD-Q4_K_XL": {"consumers": ["openwebui"]},
+    "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL": {"consumers": ["openwebui"]},
+    "Qwen3.8-27B-UD-IQ3_XXS": {"consumers": ["openwebui"]},
+    "Qwen3.8-27B-UD-Q3_K_XL": {"consumers": []}
+  }
+}

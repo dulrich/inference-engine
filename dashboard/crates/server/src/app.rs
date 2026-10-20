@@ -42,6 +42,9 @@ pub fn router(state: Shared) -> Router {
         .route("/api/serving", get(serving))
         .route("/api/serving/status", get(serving_status))
         .route("/api/serving/visibility", post(serving_visibility))
+        .route("/api/catalog/add", post(catalog_add))
+        .route("/api/catalog/remove", post(catalog_remove))
+        .route("/api/catalog/consumers", post(catalog_consumers))
         .route("/api/queue", get(queue))
         .route("/api/control/arm", post(control_arm))
         .route("/api/control/disarm", post(control_disarm))
@@ -323,6 +326,36 @@ async fn serving_visibility(State(s): State<Shared>, body: Bytes) -> Result<Resp
         s,
         body,
         control::record_serving_visibility_action,
+        control::generate_serving_request_id,
+    )
+    .await
+}
+
+async fn catalog_add(State(s): State<Shared>, body: Bytes) -> Result<Response, RouteError> {
+    drop_box(
+        s,
+        body,
+        control::record_catalog_add_action,
+        control::generate_serving_request_id,
+    )
+    .await
+}
+
+async fn catalog_remove(State(s): State<Shared>, body: Bytes) -> Result<Response, RouteError> {
+    drop_box(
+        s,
+        body,
+        control::record_catalog_remove_action,
+        control::generate_serving_request_id,
+    )
+    .await
+}
+
+async fn catalog_consumers(State(s): State<Shared>, body: Bytes) -> Result<Response, RouteError> {
+    drop_box(
+        s,
+        body,
+        control::record_catalog_consumers_action,
         control::generate_serving_request_id,
     )
     .await

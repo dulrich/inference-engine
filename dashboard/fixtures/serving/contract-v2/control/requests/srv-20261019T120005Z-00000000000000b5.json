@@ -1,0 +1,11 @@
+{
+  "schema": "serving-request-v2",
+  "request_id": "srv-20261019T120005Z-00000000000000b5",
+  "action": "catalog.add",
+  "provider": "claude-local",
+  "id": "gemma-4-12b-qat",
+  "consumers": [
+    "openwebui"
+  ],
+  "requested_at": "2026-10-19T12:00:05.000Z"
+}

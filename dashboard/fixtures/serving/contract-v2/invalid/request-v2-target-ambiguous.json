@@ -1,0 +1,10 @@
+{
+  "schema": "serving-request-v2",
+  "request_id": "srv-20261019T120100Z-00000000000000c3",
+  "action": "catalog.consumers",
+  "provider": "codex-a",
+  "id": "gpt-6-sol",
+  "model_key": "bge-m3-f16",
+  "consumers": [],
+  "requested_at": "2026-10-19T12:01:00.000Z"
+}

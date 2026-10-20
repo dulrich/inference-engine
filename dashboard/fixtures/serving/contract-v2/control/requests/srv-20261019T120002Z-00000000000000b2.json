@@ -1,0 +1,8 @@
+{
+  "schema": "serving-request-v2",
+  "request_id": "srv-20261019T120002Z-00000000000000b2",
+  "action": "catalog.remove",
+  "provider": "or-anthropic",
+  "id": "z-ai/glm-5.3-flash",
+  "requested_at": "2026-10-19T12:00:02.000Z"
+}

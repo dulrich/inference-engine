@@ -23,6 +23,9 @@ import {
   type RouterSidecarResponse,
   type RouterSlotsResponse,
   type RouterTelemetryResponse,
+  type ServingCatalogAddRequest,
+  type ServingCatalogConsumersRequest,
+  type ServingCatalogRemoveRequest,
   type ServingResponse,
   type ServingStatusResponse,
   type ServingTimingRow,
@@ -149,6 +152,22 @@ export function getServingStatus(): Promise<ServingStatusResponse> {
 
 export function postServingVisibility(body: ServingVisibilityRequest): Promise<ControlAcceptedResponse> {
   return postControlAction("/api/serving/visibility", body);
+}
+
+// `POST /api/catalog/{add,remove,consumers}` (WP-4, `plans/serving-control-redesign.md`) --
+// the model-catalog intents (`serving-request-v2`). Same posture as the visibility POST: the
+// API writes a drop-box file and returns the request id; the dispatcher validates the
+// candidate catalog, applies it, and reports the outcome in the status file's `recent[]`.
+export function postCatalogAdd(body: ServingCatalogAddRequest): Promise<ControlAcceptedResponse> {
+  return postControlAction("/api/catalog/add", body);
+}
+
+export function postCatalogRemove(body: ServingCatalogRemoveRequest): Promise<ControlAcceptedResponse> {
+  return postControlAction("/api/catalog/remove", body);
+}
+
+export function postCatalogConsumers(body: ServingCatalogConsumersRequest): Promise<ControlAcceptedResponse> {
+  return postControlAction("/api/catalog/consumers", body);
 }
 
 // `GET /api/router/{telemetry,slots,sidecar}` (WP-3/WP-4, `plans/router-observability-and-

@@ -1,14 +1,16 @@
 //! The drop-box write planes: `routes/control.ts` (`POST /api/control/*`, `control-request-v1`
 //! files) and `routes/servingControl.ts` (`POST /api/serving/visibility`, `serving-request-v1`
-//! files; `GET /api/serving/status`). Every write is collision-safe exclusive creation: a temp
+//! files; `GET /api/serving/status`), plus the catalog intents (`POST /api/catalog/{add,remove,
+//! consumers}`, `serving-request-v2` files; plans/serving-control-redesign.md WP-4). Every write is collision-safe exclusive creation: a temp
 //! file in the requests dir, `link(tmp, dst)` (EEXIST on an id collision -> a fresh id, bounded),
 //! then `unlink(tmp)` — never a rename over an existing request. `accepted: true` means
 //! *recorded*; the host dispatcher (Python) reads the bytes, so they are `JSON.stringify`'s.
 use crate::jsrt;
 use bd_domain::contract::{
     CONTROL_CANCEL_REQUEST, CONTROL_REQUEST_SCHEMA_V1, CONTROL_START_REQUEST,
-    SERVING_REQUEST_SCHEMA_V1, SERVING_STATUS_FILE, SERVING_STATUS_STALE_MS,
-    SERVING_VISIBILITY_REQUEST,
+    SERVING_CATALOG_ADD_REQUEST, SERVING_CATALOG_CONSUMERS_REQUEST, SERVING_CATALOG_REMOVE_REQUEST,
+    SERVING_REQUEST_SCHEMA_V1, SERVING_REQUEST_SCHEMA_V2, SERVING_STATUS_FILE,
+    SERVING_STATUS_STALE_MS, SERVING_VISIBILITY_REQUEST,
 };
 use bd_domain::validate;
 use serde_json::{json, Map, Value};
@@ -22,6 +24,10 @@ pub const UNCONFIGURED: &str = "control plane not configured: CONTROL_REQUESTS_D
 
 pub const SERVING_REQUEST_ACCEPTED_MESSAGE: &str =
     "Visibility change recorded; the effect lands on the next dispatcher pass (about a minute).";
+pub const SERVING_CATALOG_ACCEPTED_MESSAGE: &str =
+    "Catalog change recorded; the dispatcher validates and applies it on its next pass (about a minute).";
+/// The one cross-field rule the shape cannot express (`catalog.consumers`' either/or target).
+pub const CATALOG_TARGET_MESSAGE: &str = "give provider and id, or modelKey alone";
 const STOP_MESSAGE: &str =
     "Stop delivered to the live run; effect is pause-after-current-cell, or a no-op if the run completes first.";
 const CANCEL_MESSAGE: &str = "Cancellation is effective only before dispatch claim.";
@@ -245,6 +251,93 @@ pub fn record_serving_visibility_action(
         id_factory,
     )?;
     Ok(accepted(request_id, Some(SERVING_REQUEST_ACCEPTED_MESSAGE)))
+}
+
+/// The three catalog intents (`serving-request-v2`). `action` names the intent; the body is
+/// shape-checked here and every semantic rule (provider exists, duplicate or protected id, alias
+/// lookup) is the dispatcher's, which records the outcome in `serving-status.json`.
+pub fn record_catalog_action(
+    action: &'static str,
+    requests_dir: Option<&str>,
+    body: &Value,
+    id_factory: IdFactory,
+) -> Result<ActionResult, String> {
+    let Some(dir) = configured(requests_dir) else {
+        return Ok(unconfigured());
+    };
+    let node = match action {
+        "catalog.add" => &SERVING_CATALOG_ADD_REQUEST.node,
+        "catalog.remove" => &SERVING_CATALOG_REMOVE_REQUEST.node,
+        _ => &SERVING_CATALOG_CONSUMERS_REQUEST.node,
+    };
+    let parsed = match validate::parse(node, body) {
+        Ok(v) => v,
+        Err(issues) => return Ok(bad_request(&issues)),
+    };
+    let has = |k: &str| parsed.get(k).is_some_and(|v| !v.is_null());
+    if action == "catalog.consumers" {
+        let by_id = has("provider") && has("id");
+        let by_key = has("modelKey");
+        if by_id == by_key || (by_key && (has("provider") || has("id"))) {
+            return Ok(ActionResult {
+                status: 400,
+                body: json!({ "error": CATALOG_TARGET_MESSAGE }),
+            });
+        }
+    }
+    let request_id = write_exclusive(
+        dir,
+        &|id, at| {
+            let mut out = Map::new();
+            out.insert("schema".into(), json!(SERVING_REQUEST_SCHEMA_V2));
+            out.insert("request_id".into(), json!(id));
+            out.insert("action".into(), json!(action));
+            for (wire, api) in [
+                ("provider", "provider"),
+                ("id", "id"),
+                ("model_key", "modelKey"),
+            ] {
+                if let Some(v) = parsed.get(api).filter(|v| !v.is_null()) {
+                    out.insert(wire.into(), v.clone());
+                }
+            }
+            if action != "catalog.remove" {
+                let consumers = parsed
+                    .get("consumers")
+                    .cloned()
+                    .unwrap_or_else(|| json!([]));
+                out.insert("consumers".into(), consumers);
+            }
+            out.insert("requested_at".into(), json!(at));
+            Value::Object(out)
+        },
+        id_factory,
+    )?;
+    Ok(accepted(request_id, Some(SERVING_CATALOG_ACCEPTED_MESSAGE)))
+}
+
+pub fn record_catalog_add_action(
+    requests_dir: Option<&str>,
+    body: &Value,
+    id_factory: IdFactory,
+) -> Result<ActionResult, String> {
+    record_catalog_action("catalog.add", requests_dir, body, id_factory)
+}
+
+pub fn record_catalog_remove_action(
+    requests_dir: Option<&str>,
+    body: &Value,
+    id_factory: IdFactory,
+) -> Result<ActionResult, String> {
+    record_catalog_action("catalog.remove", requests_dir, body, id_factory)
+}
+
+pub fn record_catalog_consumers_action(
+    requests_dir: Option<&str>,
+    body: &Value,
+    id_factory: IdFactory,
+) -> Result<ActionResult, String> {
+    record_catalog_action("catalog.consumers", requests_dir, body, id_factory)
 }
 
 /// `SERVING_STATUS_BASENAME`.

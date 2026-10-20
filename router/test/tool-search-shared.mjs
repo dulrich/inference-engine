@@ -179,8 +179,9 @@ const LEGS = [
     label: "Claude passthrough",
     hosted: true,
     pick: ids => resolveModel(ids, { preferred: "claude-haiku-4-5", listedAs: "anthropic/claude-haiku-4-5", prefix: "anthropic/" }),
-    // No synthetic-body thresholds measured for the hosted leg: ordering only.
-    synth: null,
+    // Synthetic bodies on the exact model, measured 2026-10-19 on claude-haiku-4-5: system+tools
+    // on 1110 / off 2330, tools-only ratio 2.12x (floor 1.9x, ~10% slack).
+    synth: { on: 1110, off: 2330, minRatio: 1.9 },
   },
   {
     cell: "local",
@@ -200,13 +201,24 @@ const LEGS = [
   },
 ];
 
+// $ROUTER_HOSTED_BEARER, else the router env file's ROUTER_HOSTED_BEARER line (resolved like
+// gatewayKey()). Missing in both fails the cell rather than skipping it.
 function hostedBearer() {
-  const b = process.env.ROUTER_HOSTED_BEARER;
-  assert.ok(b && b.trim(), "the hosted passthrough leg forwards the caller's own OAuth bearer, and the gateway key alone "
-    + "gets \"ANTHROPIC_API_KEY is missing.\" (measured, WP-5). Set $ROUTER_HOSTED_BEARER to a bearer from an "
-    + "authenticated session before running the passthrough cells. This cell fails rather than skips on purpose: "
-    + "a silently-skipped conformance cell is the failure mode this file exists to prevent.");
-  return b.trim();
+  const fromEnv = process.env.ROUTER_HOSTED_BEARER;
+  if (fromEnv && fromEnv.trim()) return fromEnv.trim();
+  let text = "";
+  try {
+    text = fs.readFileSync(ENV_FILE, "utf8");
+  } catch {
+    text = "";
+  }
+  const hit = /^ROUTER_HOSTED_BEARER=(.*)$/m.exec(text);
+  assert.ok(hit && hit[1].trim(), "the hosted passthrough leg forwards the caller's own OAuth bearer, and the gateway key alone "
+    + "gets \"ANTHROPIC_API_KEY is missing.\" (measured, WP-5). Set $ROUTER_HOSTED_BEARER, or a ROUTER_HOSTED_BEARER line in "
+    + `${ENV_FILE} (ROUTER_ENV_FILE overrides the path), to a bearer from an authenticated session before running the `
+    + "passthrough cells. This cell fails rather than skips on purpose: a silently-skipped conformance cell is the "
+    + "failure mode this file exists to prevent.");
+  return hit[1].trim();          // never logged, never asserted on
 }
 
 async function countTokens(leg, model, src, opts = {}) {
@@ -268,7 +280,7 @@ export function registerLegTests(leg) {
       + `one (${onToolsOnly}); deferral is not reducing the tool block at all.`);
 
     // Absolute thresholds: measured on these byte-fixed synthetic bodies, so they hold only on the
-    // exact model they were measured with, and only for legs that have them (not the hosted leg).
+    // exact model they were measured with, and only for legs that have them.
     if (!exact || !leg.synth) {
       t.diagnostic(`${leg.cell}: absolute thresholds not asserted (exact model=${exact}, `
         + `measured=${Boolean(leg.synth)}); ordering only.`);

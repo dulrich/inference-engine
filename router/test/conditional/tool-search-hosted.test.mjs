@@ -9,7 +9,8 @@
 // (plus `router/smoke-tool-search.sh` default and `--passthrough`).
 //
 // Credential. The passthrough leg forwards the caller's own OAuth bearer, so its token-gate cell
-// needs $ROUTER_HOSTED_BEARER; without it that cell FAILS loudly naming the variable — never
+// needs $ROUTER_HOSTED_BEARER, else a ROUTER_HOSTED_BEARER line in the router env file (the same
+// file and order gatewayKey() uses); without either that cell FAILS loudly naming the variable — never
 // skips. A triggered run without the bearer is reported to the user as not run, naming
 // ROUTER_HOSTED_BEARER.
 //

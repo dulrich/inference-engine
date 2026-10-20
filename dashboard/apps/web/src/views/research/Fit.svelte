@@ -6,9 +6,9 @@
   // only these three measured snapshots -- so this view shows measured values and their
   // deltas, never a fabricated prediction.
   import type { ExperimentSummary } from "@bench-dashboard/shared";
-  import { getExperimentDetail } from "../api.ts";
-  import { computeVramFitRow, type VramFitRow } from "../lib/fit/vram.ts";
-  import { formatGiB, formatSignedGiB } from "../lib/format.ts";
+  import { getExperimentDetail } from "../../api.ts";
+  import { computeVramFitRow, type VramFitRow } from "../../lib/fit/vram.ts";
+  import { formatGiB, formatSignedGiB } from "../../lib/format.ts";
 
   let {
     experiments,

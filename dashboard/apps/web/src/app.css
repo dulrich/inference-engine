@@ -26,6 +26,28 @@
  * again with the capability-metadata column (`.serving-capabilities`/`.serving-cap-*`) --
  * `.pill`/`.pill-tag` reuse only, no new chip chrome. */
 
+/* ---- Nav areas (serving-control-redesign WP-7) --------------------------- */
+
+.nav-group {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.nav-group + .nav-group {
+  border-left: 1px solid var(--line);
+  padding-left: 10px;
+}
+
+.nav-group-label {
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 /* ---- Shared view chrome ------------------------------------------------- */
 
 .run-lede {

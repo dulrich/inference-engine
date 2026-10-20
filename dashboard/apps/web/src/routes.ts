@@ -17,6 +17,32 @@
 
 export type Tab = "runs" | "ladders" | "longcontext" | "fit" | "serving" | "queue" | "router";
 
+/** The three nav areas (serving-control-redesign WP-7): Serving, Router, Research. Research's
+ * views live under `views/research/` -- the seam Phase 3 lifts out into eval-harness. URLs are
+ * unchanged by the grouping; only the nav renders the areas. */
+export type NavArea = "serving" | "router" | "research";
+
+export const NAV_GROUPS: { area: NavArea; label: string; tabs: { tab: Tab; label: string }[] }[] = [
+  { area: "serving", label: "Serving", tabs: [{ tab: "serving", label: "Serving" }] },
+  { area: "router", label: "Router", tabs: [{ tab: "router", label: "Router" }] },
+  {
+    area: "research",
+    label: "Research",
+    tabs: [
+      { tab: "runs", label: "Runs" },
+      { tab: "ladders", label: "Ladders" },
+      { tab: "longcontext", label: "Long-context" },
+      { tab: "fit", label: "Fit" },
+      { tab: "queue", label: "Queue" },
+    ],
+  },
+];
+
+/** The area a tab belongs to (drives the active-group highlight). */
+export function tabArea(tab: Tab): NavArea {
+  return (NAV_GROUPS.find((g) => g.tabs.some((t) => t.tab === tab)) as (typeof NAV_GROUPS)[number]).area;
+}
+
 const TAB_PATHS: Record<Tab, string> = {
   runs: "/runs",
   ladders: "/ladders",

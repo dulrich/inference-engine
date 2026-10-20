@@ -1,7 +1,6 @@
 // Fixtures: the committed fixtures/ tree copied into per-run temp dirs (never mounted
 // directly), plus clock-relative files written at run start, the compose-shaped subject env, the
-// ingest seed, and the pre-ALTER `experiments` DB for db-compat. No live data.
-import { Database } from "bun:sqlite";
+// ingest seed. No live data.
 import { chmod, cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { check, execIngest, work, type AppSpec, type Instance, type Pair } from "./lib.ts";
@@ -154,53 +153,3 @@ export async function seedOne(target: Instance) {
 export const seedPair = async (pair: Pair) => {
   for (const target of pair) await seedOne(target);
 };
-
-// ---- pre-ALTER experiments DB ------------------------------------------------------------
-/** apps/api/src/db/schema.ts RECONCILED_EXPERIMENTS_COLUMNS, in ALTER order. */
-export const RECONCILED = ["sampling_arm", "battery_json", "vram_profile", "schema_origin", "model_host_path"];
-
-/**
- * A DB whose `experiments` table predates the guarded ALTERs: the schema.ts CREATE TABLE column
- * set without RECONCILED; trials/metrics/summaries as today. Rows copied by column name from a
- * seeded DB. The subject must reconcile it at boot (schema_origin lands as its DDL default 'v2').
- */
-export async function buildPreAlter(seededDir: string, dir: string) {
-  await mkdir(dir, { recursive: true });
-  await chmod(dir, 0o777);
-  const scratch = join(work, `prealter-src-${Math.random().toString(36).slice(2)}`);
-  await mkdir(scratch);
-  for (const suffix of ["", "-wal", "-shm"]) await cp(join(seededDir, `bench.db${suffix}`), join(scratch, `bench.db${suffix}`)).catch(() => undefined);
-  const src = new Database(join(scratch, "bench.db"));
-  const db = new Database(join(dir, "bench.db"));
-  try {
-    db.exec(`CREATE TABLE experiments (id TEXT PRIMARY KEY, schema_version INTEGER NOT NULL, description TEXT, timestamp TEXT,
-  hf_repo TEXT, hf_revision TEXT, filename TEXT, file_size INTEGER, sha256 TEXT, llama_cpp_build TEXT, sweep_cell_id TEXT,
-  sweep_alias TEXT, sweep_server_flags TEXT, sweep_command TEXT, wilson_summary_json TEXT, raw_config_json TEXT NOT NULL,
-  raw_prompts_json TEXT NOT NULL, raw_completions_json TEXT NOT NULL, ingested_at TEXT NOT NULL);
-CREATE INDEX idx_experiments_hf_repo ON experiments(hf_repo);
-CREATE TABLE trials (id INTEGER PRIMARY KEY AUTOINCREMENT, experiment_id TEXT NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
-  line_index INTEGER NOT NULL, type TEXT NOT NULL, trial INTEGER, sampling_arm TEXT, temperature REAL, top_p REAL, top_k INTEGER,
-  sampler_seed REAL, haystack_seed REAL, corpus_manifest_id TEXT, haystack_sha256 TEXT, classifier_verdict TEXT, classifier_shape TEXT,
-  prompt_tokens INTEGER, completion_tokens INTEGER, finish_reason TEXT, position_fraction REAL, task TEXT, cell_id TEXT, correct INTEGER,
-  raw_json TEXT NOT NULL);
-CREATE INDEX idx_trials_experiment_id ON trials(experiment_id);
-CREATE INDEX idx_trials_type ON trials(type);
-CREATE TABLE metrics (id INTEGER PRIMARY KEY AUTOINCREMENT, experiment_id TEXT NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
-  line_index INTEGER, metric_type TEXT NOT NULL, round_type TEXT, round_index INTEGER, bytes INTEGER, first_generation_token_ms REAL,
-  observed_decode_tok_s REAL, prompt_tokens INTEGER, cached_tokens INTEGER, cache_hit_ratio REAL, cache_assertion_passed INTEGER,
-  raw_json TEXT NOT NULL);
-CREATE INDEX idx_metrics_experiment_id ON metrics(experiment_id);
-CREATE TABLE summaries (experiment_id TEXT PRIMARY KEY REFERENCES experiments(id) ON DELETE CASCADE, n INTEGER, k INTEGER, rate REAL,
-  sided TEXT, confidence REAL, lower REAL, upper REAL, raw_json TEXT NOT NULL);`);
-    for (const table of ["experiments", "trials", "metrics", "summaries"]) {
-      for (const row of src.query(`SELECT * FROM ${table}`).all() as Record<string, string | number | null>[]) {
-        const cols = Object.keys(row).filter((c) => table !== "experiments" || !RECONCILED.includes(c));
-        db.query(`INSERT INTO ${table} (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`).run(...cols.map((c) => row[c] ?? null));
-      }
-    }
-  } finally {
-    src.close();
-    db.close();
-  }
-  await chmod(join(dir, "bench.db"), 0o666);
-}

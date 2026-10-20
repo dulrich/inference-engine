@@ -39,7 +39,7 @@ fn fixture_queue_list() {
             "malformed-truncated",
             "no-state-queue",
             "synth-joined",
-            "wp5-validation"
+            "synthetic-legacy"
         ]
     );
     assert_eq!(
@@ -65,14 +65,14 @@ fn fixture_queue_list() {
     assert_eq!(joined["queueState"], "completed");
     let keys: Vec<&String> = joined["cellCounts"].as_object().unwrap().keys().collect();
     assert_eq!(keys, CELL_STATE_VALUES.to_vec());
-    // wp5-validation's state file predates top-level aliases: counted, never joined.
-    let wp5 = entry(&v, "wp5-validation");
-    assert!(wp5["cells"]
+    // synthetic-legacy's state file predates top-level aliases: counted, never joined.
+    let legacy = entry(&v, "synthetic-legacy");
+    assert!(legacy["cells"]
         .as_array()
         .unwrap()
         .iter()
         .all(|c| c["state"].is_null()));
-    assert!(wp5["cellCounts"]["completed"].as_f64().unwrap() > 0.0);
+    assert!(legacy["cellCounts"]["completed"].as_f64().unwrap() > 0.0);
 }
 
 #[test]

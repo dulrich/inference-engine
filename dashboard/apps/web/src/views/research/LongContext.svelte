@@ -8,12 +8,12 @@
   // empty state naming the deferred measurement campaign, never a blank panel or a crash.
   import type { CurveSeriesPoint, ExperimentSummary } from "@bench-dashboard/shared";
   import type uPlot from "uplot";
-  import { getCurves, getExperimentDetail } from "../api.ts";
-  import { buildCurveChartData } from "../lib/longcontext/curveChart.ts";
-  import { taskSeriesColor } from "../lib/longcontext/chartData.ts";
-  import { buildTokenBinChartData, groupByPromptTokens, type LongcontextTrialLike } from "../lib/longcontext/tokenBins.ts";
-  import { formatCount, formatPct } from "../lib/format.ts";
-  import UPlotChart from "../lib/uplot/UPlotChart.svelte";
+  import { getCurves, getExperimentDetail } from "../../api.ts";
+  import { buildCurveChartData } from "../../lib/longcontext/curveChart.ts";
+  import { taskSeriesColor } from "../../lib/longcontext/chartData.ts";
+  import { buildTokenBinChartData, groupByPromptTokens, type LongcontextTrialLike } from "../../lib/longcontext/tokenBins.ts";
+  import { formatCount, formatPct } from "../../lib/format.ts";
+  import UPlotChart from "../../lib/uplot/UPlotChart.svelte";
 
   let {
     experiments,

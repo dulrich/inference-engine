@@ -3,15 +3,17 @@
   import { AppHeader, PollControl } from "@fleet-tools/signalworks";
   import type { ExperimentSummary } from "@bench-dashboard/shared";
   import { getExperiments } from "./api.ts";
-  import { guardedNavClick, parsePath, runDetailPath, tabToPath, type Tab } from "./routes.ts";
-  import Runs from "./views/Runs.svelte";
-  import Ladders from "./views/Ladders.svelte";
-  import LongContext from "./views/LongContext.svelte";
-  import Fit from "./views/Fit.svelte";
+  import { guardedNavClick, NAV_GROUPS, parsePath, runDetailPath, tabArea, tabToPath, type Tab } from "./routes.ts";
+  import Runs from "./views/research/Runs.svelte";
+  import Ladders from "./views/research/Ladders.svelte";
+  import LongContext from "./views/research/LongContext.svelte";
+  import Fit from "./views/research/Fit.svelte";
   import Serving from "./views/Serving.svelte";
-  import Queue from "./views/Queue.svelte";
+  import Queue from "./views/research/Queue.svelte";
   import Router from "./views/Router.svelte";
 
+  // serving-control-redesign WP-7: the nav renders three labelled areas (Serving / Router /
+  // Research, `routes.ts` NAV_GROUPS); the research views live under `views/research/`.
   // WP-2: the five real views (Runs/Ladders/Long-context/Fit/Serving) on top of the full
   // API WP-1 already ships. `experiments` is fetched ONCE here (App owns it, same shape as
   // model_scoreboard's App.svelte owning `catalog`) and passed down -- every view that needs
@@ -23,16 +25,6 @@
   // `{refreshToken}`-only shape -- it self-fetches the three `GET /api/router/*` feeds and
   // owns NO timer of its own: the single PollControl below is still the only refresh clock
   // in the app (CC-06/07).
-
-  const NAV_TABS: { tab: Tab; label: string }[] = [
-    { tab: "runs", label: "Runs" },
-    { tab: "ladders", label: "Ladders" },
-    { tab: "longcontext", label: "Long-context" },
-    { tab: "fit", label: "Fit" },
-    { tab: "serving", label: "Serving" },
-    { tab: "queue", label: "Queue" },
-    { tab: "router", label: "Router" },
-  ];
 
   // Serving is the default landing tab (WP-2, `plans/capability-surfacing-and-local-agent-
   // endpoints.md`: "Serving becomes the default landing route of the SPA", `routes.ts`
@@ -96,15 +88,22 @@
 
 <AppHeader tool="Bench Dashboard" icon={Activity} appId="bench-dashboard">
   <nav class="sw-nav" slot="nav" aria-label="Bench Dashboard views">
-    {#each NAV_TABS as { tab, label } (tab)}
-      <a
-        href={tabToPath(tab)}
-        class:active={activeTab === tab}
-        aria-current={activeTab === tab ? "page" : undefined}
-        onclick={(event) => guardedNavClick(event, () => goToTab(tab))}
-      >
-        {label}
-      </a>
+    {#each NAV_GROUPS as group (group.area)}
+      <div class="nav-group" class:nav-group-active={tabArea(activeTab) === group.area} role="group" aria-label={group.label}>
+        {#if group.tabs.length > 1}
+          <span class="nav-group-label">{group.label}</span>
+        {/if}
+        {#each group.tabs as { tab, label } (tab)}
+          <a
+            href={tabToPath(tab)}
+            class:active={activeTab === tab}
+            aria-current={activeTab === tab ? "page" : undefined}
+            onclick={(event) => guardedNavClick(event, () => goToTab(tab))}
+          >
+            {label}
+          </a>
+        {/each}
+      </div>
     {/each}
   </nav>
   <PollControl slot="poll" storageKey="bench-dashboard.poll.v1" defaultMs={0} busy={loading} onTick={refresh} />

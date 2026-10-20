@@ -11,9 +11,9 @@
   // control POST also triggers an immediate `loadQueue()` re-fetch (Accepted != executed --
   // the UI learns real outcomes only from `control`, never from the POST response alone).
   import type { ControlSection, QueueEntry, QueueErrorEntry, QueueListItem } from "@bench-dashboard/shared";
-  import { getQueue, postControlArm, postControlCancel, postControlDisarm, postControlStart, postControlStop } from "../api.ts";
-  import { cellStateLabel, cellStatePillClass, queueStateLabel, queueStatePillClass } from "../lib/queue/status.ts";
-  import { formatNextWindowEstimate, formatQueueEtaLine } from "../lib/queue/eta.ts";
+  import { getQueue, postControlArm, postControlCancel, postControlDisarm, postControlStart, postControlStop } from "../../api.ts";
+  import { cellStateLabel, cellStatePillClass, queueStateLabel, queueStatePillClass } from "../../lib/queue/status.ts";
+  import { formatNextWindowEstimate, formatQueueEtaLine } from "../../lib/queue/eta.ts";
   import {
     armedLabel,
     armedPillClass,
@@ -24,9 +24,9 @@
     START_MINUTES_MAX,
     START_MINUTES_MIN,
     validateStartForm,
-  } from "../lib/queue/control.ts";
-  import { vramProfileLabel, vramProfilePillClass } from "../lib/profile.ts";
-  import { formatCount, formatTimestamp } from "../lib/format.ts";
+  } from "../../lib/queue/control.ts";
+  import { vramProfileLabel, vramProfilePillClass } from "../../lib/profile.ts";
+  import { formatCount, formatTimestamp } from "../../lib/format.ts";
 
   let { refreshToken }: { refreshToken: number } = $props();
 

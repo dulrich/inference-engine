@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { guardedNavClick, parsePath, runDetailPath, tabToPath } from "./routes.ts";
+import { guardedNavClick, NAV_GROUPS, parsePath, runDetailPath, tabArea, tabToPath } from "./routes.ts";
 
 describe("tabToPath / runDetailPath", () => {
   test("every tab maps to its own path -- Serving owns \"/\" (WP-2 default landing route)", () => {
@@ -95,5 +95,22 @@ describe("guardedNavClick", () => {
       called = true;
     });
     expect(called).toBe(false);
+  });
+});
+
+describe("nav areas (serving-control-redesign WP-7)", () => {
+  test("three labelled areas: Serving, Router, Research", () => {
+    expect(NAV_GROUPS.map((g) => g.label)).toEqual(["Serving", "Router", "Research"]);
+    expect(NAV_GROUPS[2]?.tabs.map((t) => t.tab)).toEqual(["runs", "ladders", "longcontext", "fit", "queue"]);
+  });
+
+  test("every tab is in exactly one area and the default route stays Serving", () => {
+    const all = NAV_GROUPS.flatMap((g) => g.tabs.map((t) => t.tab));
+    expect([...all].sort()).toEqual(["fit", "ladders", "longcontext", "queue", "router", "runs", "serving"]);
+    expect(tabArea("serving")).toBe("serving");
+    expect(tabArea("router")).toBe("router");
+    for (const tab of ["runs", "ladders", "longcontext", "fit", "queue"] as const) expect(tabArea(tab)).toBe("research");
+    expect(parsePath("/").tab).toBe("serving");
+    expect(parsePath("/queue").tab).toBe("queue");
   });
 });

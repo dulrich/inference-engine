@@ -1,13 +1,11 @@
 // Read-side phases: routes (every route registered in apps/api/src/app.ts + routes/*.ts, under the
-// full compose env and under the degraded env), spa, and db-compat (a --db-image-built DB, and the
-// pre-ALTER `experiments` column set).
-import { cp, mkdir } from "node:fs/promises";
+// full compose env and under the degraded env) and spa.
 import { join } from "node:path";
-import { dumpOf, ISO_8601 } from "./dump.ts";
-import { buildPreAlter, composeSpec, degradedSpec, RECONCILED, seedPair, type Fx } from "./fixtures.ts";
-import { both, check, checkEqual, contentType, diff, execIngest, expectStatus, pin, request, routeIncluded, run, skip, startPair, stopPair, work, type Json, type Pair } from "./lib.ts";
+import { ISO_8601 } from "./dump.ts";
+import { degradedSpec, seedPair, type Fx } from "./fixtures.ts";
+import { both, check, checkEqual, contentType, diff, expectStatus, pin, request, routeIncluded, run, skip, startPair, stopPair, work, type Json, type Pair } from "./lib.ts";
 
-/** Every GET read route against a seeded pair (the shared battery of routes and db-compat). */
+/** Every GET read route against a seeded pair (the routes phase battery). */
 export async function readBattery(pair: Pair, label: string) {
   const ids: string[] = ((await request(pair[0], "GET", "/api/experiments")).json ?? []).map((e: Json) => e.id);
   const health = await both(pair, `${label} health`, "GET", "/health");
@@ -102,8 +100,7 @@ export async function spaPhase(pair: Pair) {
     const [s, r] = [await request(pair[0], "GET", path), await request(pair[1], "GET", refPath)];
     // Status + headers are compared to the reference twin; body bytes are NOT. Plan WP-6's
     // required apps/web/src/api.ts edit (and the generated shared module) changed the web bundle
-    // bytes and hashed asset names, while the reference (--db-image inference-dashboard:bun-dev,
-    // kept through WP-7) was built pre-edit. SPA content is instead checked against the subject
+    // bytes and hashed asset names, so the reference twin (the same --image) is not a byte oracle for them. SPA content is instead checked against the subject
     // image's own /web tree below.
     const facts = (x: typeof s) => ({ status: x.status, type: contentType(x), cache: x.headers.get("cache-control") });
     const d = diff(facts(s), facts(r));
@@ -137,47 +134,5 @@ export async function spaPhase(pair: Pair) {
   for (const path of ["/runs", "/serving/some-model", "/assets/missing-0000.js", "/..%2f..%2f..%2fetc%2fpasswd", "/%2e%2e%2fpackage.json", "/assets/..%2f..%2f..%2fpackage.json"]) {
     const reply = await view(path);
     if (reply) check(`spa ${path}: index fallback, no-cache (no root escape)`, reply.status === 200 && reply.headers.get("cache-control") === "no-cache" && sha(reply.bytes) === sha(index.bytes), `${reply.status} ${reply.headers.get("cache-control")} ${reply.text.slice(0, 80)}`);
-  }
-}
-
-/**
- * (a) a pair booted on copies of the --db-image-built DB serves the battery identically and boot
- * leaves the DB content unchanged; (b) the pre-ALTER `experiments` column set is reconciled at boot
- * (schema.ts RECONCILED_EXPERIMENTS_COLUMNS) and re-ingest restores the fresh rows.
- */
-export async function dbCompatPhase(fx: Fx, seededDir: string) {
-  const seeded = await dumpOf(seededDir);
-  const dirs: [string, string] = [join(work, "data", "compat-s"), join(work, "data", "compat-r")];
-  for (const d of dirs) {
-    await mkdir(d, { recursive: true });
-    await cp(seededDir, d, { recursive: true });
-  }
-  const pair = await startPair("compat", composeSpec(fx), dirs);
-  try {
-    await readBattery(pair, "db-image DB");
-    checkEqual("db-image DB: subject boot leaves the DB content unchanged", (await dumpOf(dirs[0])).tables, seeded.tables);
-  } finally {
-    await stopPair(pair);
-  }
-
-  const pre: [string, string] = [join(work, "data", "prealter-s"), join(work, "data", "prealter-r")];
-  for (const d of pre) await buildPreAlter(seededDir, d);
-  const old = await startPair("prealter", composeSpec(fx), pre);
-  try {
-    const after = await dumpOf(pre[0]);
-    checkEqual("pre-ALTER: subject schema equals the reference's", after.schema, (await dumpOf(pre[1])).schema);
-    checkEqual("pre-ALTER: experiments columns reconciled to the fresh set", after.schema.tables.experiments, seeded.schema.tables.experiments);
-    check("pre-ALTER: reconciled rows read schema_origin 'v2' (DDL default), other added columns NULL",
-      (after.tables.experiments ?? []).every((row) => row.schema_origin === "v2" && RECONCILED.filter((c) => c !== "schema_origin").every((c) => row[c] === null)), JSON.stringify(after.tables.experiments?.[0]).slice(0, 300));
-    await readBattery(old, "pre-ALTER DB");
-    for (const target of old) {
-      const result = await execIngest(target);
-      check(`pre-ALTER ${target.name}: ingest exit 0`, result.code === 0, result.err.slice(0, 300));
-    }
-    const [s, r] = [await dumpOf(pre[0]), await dumpOf(pre[1])];
-    checkEqual("pre-ALTER after ingest: subject dump equals reference", s, r);
-    checkEqual("pre-ALTER after ingest: experiments rows equal the fresh ingest", s.tables.experiments, seeded.tables.experiments);
-  } finally {
-    await stopPair(old);
   }
 }

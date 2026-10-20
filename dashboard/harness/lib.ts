@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeResponse } from "./dump.ts";
 
-export const ALL_PHASES = ["routes", "ingest", "control", "feeds", "spa", "db-compat"];
+export const ALL_PHASES = ["routes", "ingest", "control", "feeds", "spa"];
 /** apps/api/src/config.ts `port: Number(process.env.PORT ?? 4810)`; the compose block sets 4810. */
 export const PORT = 4810;
 
@@ -21,15 +21,14 @@ function fail(message: string): never {
   console.error(`harness: ${message}`);
   process.exit(2);
 }
-export const image = argValue("--image") ?? "inference-dashboard:bun-dev";
-export const dbImage = argValue("--db-image") ?? image;
+export const image = argValue("--image") ?? "inference-dashboard:dev";
 export const phases = (argValue("--phases") ?? ALL_PHASES.join(",")).split(",").filter(Boolean);
 for (const phase of phases) if (!ALL_PHASES.includes(phase)) fail(`unknown phase ${phase}`);
 export const wants = (...names: string[]) => names.some((name) => phases.includes(name));
 /**
  * --subject-db fresh|golden: `fresh` (default) ingests the fixture records through each twin's own
  * ingest CLI; `golden` serves the subject (and its reference twin) a copy of the /data tree the
- * --db-image built by the same ingest, so a partial port can be gated on reads. The ingest phase
+ * --image built by the same ingest, so a partial port can be gated on reads. The ingest phase
  * always runs its own fresh pair (it is the thing under test there).
  */
 export const subjectDb = argValue("--subject-db") ?? "fresh";
@@ -253,10 +252,10 @@ export async function startApp(key: string, tag: string, spec: AppSpec, dataDir?
   }
   throw new Error(`${name} never became ready:\n${await logs(instance)}`);
 }
-/** Subject (`--image`) + reference twin (`--db-image`); `specFor(i)` lets each twin own its drop-box. */
+/** Subject (`--image`) + reference twin (the same `--image`); `specFor(i)` lets each twin own its drop-box. */
 export async function startPair(key: string, specFor: (twin: number) => AppSpec | Promise<AppSpec>, dirs: [string?, string?] = []): Promise<Pair> {
   const [s, r] = [await specFor(0), await specFor(1)];
-  return Promise.all([startApp(`${key}-s`, image, s, dirs[0]), startApp(`${key}-r`, dbImage, r, dirs[1])]);
+  return Promise.all([startApp(`${key}-s`, image, s, dirs[0]), startApp(`${key}-r`, image, r, dirs[1])]);
 }
 export async function stopApp(instance: { name: string }) {
   await run(["docker", "stop", "-t", "10", instance.name], true);

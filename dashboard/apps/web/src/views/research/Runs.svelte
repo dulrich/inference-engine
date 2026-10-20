@@ -6,12 +6,12 @@
   // component's own, keyed on `runId` so switching runs re-triggers it exactly once per
   // switch); every list loop below is keyed on its row id.
   import type { ExperimentSummary } from "@bench-dashboard/shared";
-  import { getExperimentDetail, type ExperimentFullDetail } from "../api.ts";
-  import { formatCount, formatGiB, formatMs, formatPct, formatShortHash, formatTimestamp, formatTokS } from "../lib/format.ts";
-  import { extractClassifierFlags, formatClassifierFlags, verdictLabel, verdictPillClass } from "../lib/runs/verdict.ts";
-  import { flattenResponseCaps, summarizeCompletionTokens, summarizeFinishReasons } from "../lib/runs/outputLength.ts";
-  import { vramProfileLabel, vramProfilePillClass } from "../lib/profile.ts";
-  import { guardedNavClick, runDetailPath, tabToPath } from "../routes.ts";
+  import { getExperimentDetail, type ExperimentFullDetail } from "../../api.ts";
+  import { formatCount, formatGiB, formatMs, formatPct, formatShortHash, formatTimestamp, formatTokS } from "../../lib/format.ts";
+  import { extractClassifierFlags, formatClassifierFlags, verdictLabel, verdictPillClass } from "../../lib/runs/verdict.ts";
+  import { flattenResponseCaps, summarizeCompletionTokens, summarizeFinishReasons } from "../../lib/runs/outputLength.ts";
+  import { vramProfileLabel, vramProfilePillClass } from "../../lib/profile.ts";
+  import { guardedNavClick, runDetailPath, tabToPath } from "../../routes.ts";
 
   let {
     experiments,

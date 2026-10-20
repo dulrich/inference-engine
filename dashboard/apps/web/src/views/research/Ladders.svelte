@@ -3,9 +3,9 @@
   // list is derived client-side from `experiments` (no dedicated API route); rows come from
   // `GET /api/ladders/<hfRepo>`, re-fetched whenever the picked repo or refreshToken changes.
   import type { ExperimentSummary, LadderRow } from "@bench-dashboard/shared";
-  import { getLadders } from "../api.ts";
-  import { formatCount, formatMs, formatPct, formatTokS } from "../lib/format.ts";
-  import { deriveHfRepos } from "../lib/ladders/hfRepos.ts";
+  import { getLadders } from "../../api.ts";
+  import { formatCount, formatMs, formatPct, formatTokS } from "../../lib/format.ts";
+  import { deriveHfRepos } from "../../lib/ladders/hfRepos.ts";
 
   let {
     experiments,

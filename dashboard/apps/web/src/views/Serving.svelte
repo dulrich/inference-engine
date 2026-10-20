@@ -35,8 +35,10 @@
   // chips with the reason in words rather than guessing. No restart banner: nothing on this
   // path requires one. All derivations live in `lib/serving/visibility.ts`; this file stays
   // markup-thin, and owns NO timer (refresh is `refreshToken`, CC-06/07).
-  import type { ExperimentSummary, ServingStatusResponse, ServingTimingRow } from "@bench-dashboard/shared";
-  import { getServing, getServingStatus, getServingTiming, postServingVisibility } from "../api.ts";
+  import type { ExperimentSummary, ServingLiveResponse, ServingStatusResponse, ServingTimingRow } from "@bench-dashboard/shared";
+  import { getServing, getServingLive, getServingStatus, getServingTiming, postServingVisibility } from "../api.ts";
+  import { TIER_LABELS, eventPill, liveUnavailableMessage, recentEvents, residencyDetail, residentPill, tierView } from "../lib/serving/live.ts";
+  import { formatAge } from "../lib/router/format.ts";
   import {
     rowChips,
     settlePending,
@@ -81,6 +83,10 @@
   let timingRows = $state<ServingTimingRow[]>([]);
   let servingLoading = $state(false);
   let servingError = $state("");
+  // Live residency (WP-6): an independent feed -- its failure never blanks the alias table.
+  let live = $state<ServingLiveResponse | null>(null);
+  let liveError = $state("");
+  let asOf = $state(Date.now());
 
   // Visibility control state. `servingStatus` stays `null` until a status response parses --
   // null is "unknown", and the chips render disabled rather than inventing a value.
@@ -108,11 +114,19 @@
   async function loadServing(exps: ExperimentSummary[]) {
     servingLoading = true;
     servingError = "";
-    const [servingResult, timingResult, statusResult] = await Promise.allSettled([
+    const [servingResult, timingResult, statusResult, liveResult] = await Promise.allSettled([
       getServing(),
       getServingTiming(),
       getServingStatus(),
+      getServingLive(),
     ]);
+    if (liveResult.status === "fulfilled") {
+      live = liveResult.value;
+      liveError = "";
+    } else {
+      liveError = liveResult.reason instanceof Error ? liveResult.reason.message : "Unable to load live residency";
+    }
+    asOf = Date.now();
     if (servingResult.status === "fulfilled" && timingResult.status === "fulfilled") {
       configPath = servingResult.value.configPath;
       rows = matchServingToMeasured(servingResult.value.models, exps);
@@ -178,6 +192,47 @@
   Aliases currently served by the llama router, joined to their most recent measured cell where one exists.
   {#if configPath}<code>{configPath}</code>{/if}
 </p>
+
+<section class="router-panel">
+  <div class="router-panel-head">
+    <h2>Live residency</h2>
+    {#if live !== null && live.available}<span class="router-ambient">as of {formatAge(live.generated_at, asOf)}</span>{/if}
+  </div>
+  {#if liveError}<p class="error-text">{liveError}</p>{/if}
+  {#if live === null}
+    <p class="run-empty">No residency feed has been read yet.</p>
+  {:else if !live.available}
+    <p class="run-empty">Live residency unavailable — {liveUnavailableMessage(live.reason)}.</p>
+  {:else}
+    {#each [["gpu", live.gpu], ["onnx", live.onnx]] as const as [tier, status] (tier)}
+      {@const view = tierView(status)}
+      <h3>
+        {TIER_LABELS[tier]}
+        {#if view.sampledAt !== null}<span class="router-ambient">sampled {formatAge(view.sampledAt, asOf)}</span>{/if}
+      </h3>
+      {#if view.note}<p class="run-empty">{view.note}</p>{/if}
+      {#if view.models.length > 0}
+        <ul>
+          {#each view.models as m (m.model)}
+            {@const pill = residentPill(m)}
+            <li><code>{m.model}</code> <span class="pill {pill.cls}">{pill.label}</span> <span class="router-ambient">{residencyDetail(m)}</span></li>
+          {/each}
+        </ul>
+      {/if}
+    {/each}
+    <h3>Recent loads / unloads</h3>
+    {#if live.recent.length === 0}
+      <p class="run-empty">No transitions in the feed window.</p>
+    {:else}
+      <ul>
+        {#each recentEvents(live.recent) as ev, index (`${ev.ts}#${ev.tier}#${ev.model}#${index}`)}
+          {@const pill = eventPill(ev)}
+          <li><span class="pill {pill.cls}">{pill.label}</span> <code>{ev.model}</code> <span class="router-ambient">{TIER_LABELS[ev.tier]} · {formatAge(ev.ts, asOf)}</span></li>
+        {/each}
+      </ul>
+    {/if}
+  {/if}
+</section>
 
 {#if visibilityNote}
   <p class="run-table-muted">{visibilityNote}</p>

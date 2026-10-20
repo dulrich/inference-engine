@@ -8,7 +8,7 @@ use crate::jsrt;
 use crate::serving::{read_served_models, read_serving_config};
 use crate::spa;
 use crate::wilson::{wilson_interval, Sided};
-use crate::{control, router_feeds};
+use crate::{control, router_feeds, serving_live};
 use axum::body::Body;
 use axum::body::Bytes;
 use axum::extract::{RawQuery, Request, State};
@@ -41,6 +41,7 @@ pub fn router(state: Shared) -> Router {
         .route("/api/export/scoreboard-capture", get(capture_export))
         .route("/api/serving", get(serving))
         .route("/api/serving/status", get(serving_status))
+        .route("/api/serving/live", get(serving_live))
         .route("/api/serving/visibility", post(serving_visibility))
         .route("/api/catalog/add", post(catalog_add))
         .route("/api/catalog/remove", post(catalog_remove))
@@ -52,7 +53,6 @@ pub fn router(state: Shared) -> Router {
         .route("/api/control/start", post(control_start))
         .route("/api/control/cancel", post(control_cancel))
         .route("/api/router/telemetry", get(router_telemetry))
-        .route("/api/router/slots", get(router_slots))
         .route("/api/router/sidecar", get(router_sidecar))
         // A known path with an unrouted method falls through to Hono's `app.all("/api/*")`
         // JSON 404, not a 405.
@@ -291,6 +291,17 @@ async fn serving_status(State(s): State<Shared>) -> Result<Response, RouteError>
     .await
 }
 
+/// `GET /api/serving/live` (WP-6): the status collector's feed, always 200.
+async fn serving_live(State(s): State<Shared>) -> Result<Response, RouteError> {
+    blocking(move || {
+        Ok(ok(&serving_live::build_serving_live_response(
+            s.cfg.serving_feed_dir.as_deref(),
+            jsrt::now_ms(),
+        )))
+    })
+    .await
+}
+
 fn action_reply(r: control::ActionResult) -> Response {
     reply(
         StatusCode::from_u16(r.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
@@ -432,20 +443,6 @@ async fn router_telemetry(
 ) -> Result<Response, RouteError> {
     blocking(move || {
         Ok(ok(&router_feeds::build_router_telemetry_response(
-            s.cfg.router_telemetry_dir.as_deref(),
-            stale_ms(q.as_deref()),
-            jsrt::now_ms(),
-        )))
-    })
-    .await
-}
-
-async fn router_slots(
-    State(s): State<Shared>,
-    RawQuery(q): RawQuery,
-) -> Result<Response, RouteError> {
-    blocking(move || {
-        Ok(ok(&router_feeds::build_router_slots_response(
             s.cfg.router_telemetry_dir.as_deref(),
             stale_ms(q.as_deref()),
             jsrt::now_ms(),

@@ -33,6 +33,7 @@ export async function readBattery(pair: Pair, label: string) {
   const serving = await both(pair, `${label} serving`, "GET", "/api/serving");
   const timing = await both(pair, `${label} serving timing`, "GET", "/api/serving/timing");
   await both(pair, `${label} serving status`, "GET", "/api/serving/status");
+  const live = await both(pair, `${label} serving live`, "GET", "/api/serving/live");
   const capture = await both(pair, `${label} capture export`, "GET", "/api/export/scoreboard-capture");
   pin(capture, `${label} capture: v1 envelope, one record per experiment`, (j) => capture?.status !== 200 || j?.captureVersion === 1 && j?.stability === "v1" && j?.recordCount === ids.length && ISO_8601.test(j?.generatedAt ?? ""));
   if (ids.length > 1) {
@@ -41,18 +42,16 @@ export async function readBattery(pair: Pair, label: string) {
   }
   await both(pair, `${label} capture ?id unknown`, "GET", "/api/export/scoreboard-capture?id=no-such-experiment");
   const queue = await both(pair, `${label} queue`, "GET", "/api/queue");
-  for (const q of ["telemetry", "slots"]) {
-    for (const query of ["", "?staleMs=999", "?staleMs=abc", "?staleMs=600000", "?staleMs=600001"]) {
-      await both(pair, `${label} router ${q}${query}`, "GET", `/api/router/${q}${query}`);
-    }
+  for (const query of ["", "?staleMs=999", "?staleMs=abc", "?staleMs=600000", "?staleMs=600001"]) {
+    await both(pair, `${label} router telemetry${query}`, "GET", `/api/router/telemetry${query}`);
   }
   await both(pair, `${label} router sidecar`, "GET", "/api/router/sidecar");
-  return { serving, timing, queue, capture };
+  return { serving, timing, queue, capture, live };
 }
 
 /** The JSON 404 for unknown /api/* (app.ts `app.all("/api/*")`) under every method. */
 async function notFoundBattery(pair: Pair) {
-  for (const [method, path] of [["GET", "/api/nope"], ["GET", "/api"], ["POST", "/api/experiments"], ["GET", "/api/control/arm"], ["DELETE", "/api/queue/x"], ["PUT", "/api/serving/visibility"]] as const) {
+  for (const [method, path] of [["GET", "/api/router/slots"], ["GET", "/api/nope"], ["GET", "/api"], ["POST", "/api/experiments"], ["GET", "/api/control/arm"], ["DELETE", "/api/queue/x"], ["PUT", "/api/serving/visibility"]] as const) {
     const reply = await both(pair, "unknown api route", method, path);
     pin(reply, `${method} ${path}: JSON 404 {error:"not found"}`, (j) => reply?.status === 404 && contentType(reply) === "application/json" && j?.error === "not found");
   }
@@ -68,10 +67,7 @@ export async function routesPhase(main: Pair, fx: Fx) {
     const telemetry = await request(main[0], "GET", "/api/router/telemetry");
     check("committed telemetry: newest day file, every in-flight aged out", telemetry.json?.available === true && telemetry.json?.file === "router-2026-09-13.10.jsonl" && telemetry.json?.inFlight?.length === 0, telemetry.text.slice(0, 300));
   }
-  if (routeIncluded("/api/router/slots")) {
-    const slots = await request(main[0], "GET", "/api/router/slots");
-    check("committed slots: stale", slots.json?.available === true && slots.json?.stale === true, slots.text.slice(0, 300));
-  }
+  pin(r.live, "committed serving feed (2026-10-19): typed stale", (j) => r.live?.status !== 200 || j?.available === false && j?.reason === "stale");
   await notFoundBattery(main);
 
   const degraded = await startPair("degraded", () => degradedSpec(fx));
@@ -82,7 +78,7 @@ export async function routesPhase(main: Pair, fx: Fx) {
       pin(reply, `degraded ${name}: 502 {error} on an absent LLAMA_CONFIG_PATH`, (j) => reply?.status === 502 && typeof j?.error === "string");
     }
     pin(d.queue, "degraded queue: no queues, control null", (j) => Array.isArray(j?.queues) && j.queues.length === 0 && j?.control === null);
-    for (const path of ["/api/router/telemetry", "/api/router/slots", "/api/router/sidecar", "/api/serving/status"]) {
+    for (const path of ["/api/router/telemetry", "/api/router/sidecar", "/api/serving/status", "/api/serving/live"]) {
       if (!routeIncluded(path)) continue;
       const reply = await request(degraded[0], "GET", path);
       checkEqual(`degraded ${path}: 200 disabled`, { status: reply.status, body: reply.json }, { status: 200, body: { available: false, reason: "disabled" } });

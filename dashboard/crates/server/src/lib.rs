@@ -15,5 +15,6 @@ pub mod record;
 pub mod router_feeds;
 pub mod schema;
 pub mod serving;
+pub mod serving_live;
 pub mod spa;
 pub mod wilson;

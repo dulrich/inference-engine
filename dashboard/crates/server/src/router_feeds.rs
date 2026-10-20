@@ -1,12 +1,11 @@
-//! The router-status plane: `apps/api/src/router/{tailReader,currentFile,cmdRecipe,
-//! telemetryFeed,slotsFeed,sidecarFeed}.ts` and `routes/routerStatus.ts`'s `parseStaleMsQuery`.
-//! Every jsonl read is a bounded byte-window tail (1 MiB telemetry/sidecar, 256 KiB slots) —
-//! never a whole-file read; every reply is 200, `{available: false, reason}` when off/unreadable/
-//! empty. No outbound HTTP: the slots jsonl is written by the host poller.
+//! The router-status plane: `apps/api/src/router/{tailReader,currentFile,telemetryFeed,
+//! sidecarFeed}.ts` and `routes/routerStatus.ts`'s `parseStaleMsQuery`. Every jsonl read is a
+//! bounded byte-window tail (1 MiB) — never a whole-file read; every reply is 200,
+//! `{available: false, reason}` when off/unreadable/empty. No outbound HTTP. (The slots feed
+//! retired at plans/serving-control-redesign.md WP-6; residency is `serving_live.rs`.)
 use crate::jsrt;
 use bd_domain::contract::{
     Export, ROUTER_PROGRESS_RECORD, ROUTER_REQUEST_RECORD, ROUTER_SIDECAR_RECORD,
-    ROUTER_SLOTS_RECORD,
 };
 use bd_domain::validate;
 use serde::Serialize;
@@ -15,8 +14,6 @@ use std::io::{Read, Seek, SeekFrom};
 
 /// 1 MiB — the telemetry and sidecar window.
 pub const DEFAULT_TAIL_WINDOW_BYTES: u64 = 1024 * 1024;
-/// 256 KiB — the slots window.
-pub const SLOTS_TAIL_WINDOW_BYTES: u64 = 256 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TailRead {
@@ -142,7 +139,7 @@ pub fn select_router_telemetry_file(names: &[String], now_ms: f64) -> Option<Str
     pick(candidates, &utc_day_stamp(now_ms))
 }
 
-fn select_daily(names: &[String], prefix: &str, now_ms: f64) -> Option<String> {
+pub(crate) fn select_daily(names: &[String], prefix: &str, now_ms: f64) -> Option<String> {
     let candidates = names
         .iter()
         .filter_map(|n| {
@@ -153,63 +150,9 @@ fn select_daily(names: &[String], prefix: &str, now_ms: f64) -> Option<String> {
     pick(candidates, &utc_day_stamp(now_ms))
 }
 
-/// `selectSlotsFile`.
-pub fn select_slots_file(names: &[String], now_ms: f64) -> Option<String> {
-    select_daily(names, "slots-", now_ms)
-}
-
 /// `selectSidecarFile`.
 pub fn select_sidecar_file(names: &[String], now_ms: f64) -> Option<String> {
     select_daily(names, "codex-sidecar-", now_ms)
-}
-
-// ---- cmdRecipe.ts -------------------------------------------------------------------------
-
-/// `RouterSlotRecipe`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RouterSlotRecipe {
-    pub ctk: Option<String>,
-    pub ctv: Option<String>,
-    pub fa: Option<String>,
-    pub reasoning_budget: Option<f64>,
-    pub mtp: Option<bool>,
-    pub moe_cpu_layers: Option<f64>,
-}
-
-/// `parseRouterRecipe`: a null/blank `cmd` is all-null (including `mtp`).
-pub fn parse_router_recipe(cmd: Option<&str>) -> RouterSlotRecipe {
-    let Some(cmd) = cmd.filter(|c| !bd_domain::js::trim(c).is_empty()) else {
-        return RouterSlotRecipe {
-            ctk: None,
-            ctv: None,
-            fa: None,
-            reasoning_budget: None,
-            mtp: None,
-            moe_cpu_layers: None,
-        };
-    };
-    let tokens = crate::serving::tokenize_cmd(cmd);
-    let after = |flag: &str| -> Option<&str> {
-        let i = tokens.iter().position(|t| *t == flag)?;
-        tokens
-            .get(i + 1)
-            .copied()
-            .filter(|n| !crate::serving::is_flag_token(n))
-    };
-    let int_after = |flag: &str| -> Option<f64> {
-        after(flag)
-            .filter(|r| !r.is_empty() && r.bytes().all(|b| b.is_ascii_digit()))
-            .and_then(|r| r.parse().ok())
-    };
-    RouterSlotRecipe {
-        ctk: after("-ctk").map(str::to_string),
-        ctv: after("-ctv").map(str::to_string),
-        fa: after("-fa").map(str::to_string),
-        reasoning_budget: int_after("--reasoning-budget"),
-        mtp: Some(tokens.contains(&"--spec-type") || tokens.contains(&"-md")),
-        moe_cpu_layers: int_after("-ncmoe"),
-    }
 }
 
 // ---- routerStatus.ts ----------------------------------------------------------------------
@@ -223,12 +166,12 @@ pub fn parse_stale_ms_query(raw: Option<&str>) -> Option<f64> {
     (v.is_finite() && (STALE_MS_MIN..=STALE_MS_MAX).contains(&v)).then_some(v)
 }
 
-fn unavailable(reason: &str) -> Value {
+pub(crate) fn unavailable(reason: &str) -> Value {
     json!({ "available": false, "reason": reason })
 }
 
-/// Shared prologue of the three feeds: dir -> selected file -> tail lines, or the reply.
-fn tail_of(
+/// Shared prologue of the feeds: dir -> selected file -> tail lines, or the reply.
+pub(crate) fn tail_of(
     dir: Option<&str>,
     select: fn(&[String], f64) -> Option<String>,
     window: u64,
@@ -415,107 +358,6 @@ pub fn build_router_telemetry_response(
         "recent": recent,
         "inFlight": in_flight,
         "legs": serde_json::to_value(legs).unwrap_or(Value::Null),
-    })
-}
-
-// ---- slotsFeed.ts -------------------------------------------------------------------------
-
-pub const DEFAULT_SLOTS_STALE_MS: f64 = 30_000.0;
-
-/// `RouterSlot` (`projectSlot`).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RouterSlot {
-    pub id: Option<f64>,
-    pub n_ctx: Option<f64>,
-    pub is_processing: Option<bool>,
-    pub prompt_tokens: Option<f64>,
-    pub prompt_tokens_cache: Option<f64>,
-    pub cache_hit_ratio: Option<f64>,
-}
-
-/// `projectSlot`.
-pub fn project_slot(raw: &Map<String, Value>) -> RouterSlot {
-    let n = |k: &str| jsrt::as_number(raw.get(k));
-    let prompt = n("n_prompt_tokens");
-    let cache = n("n_prompt_tokens_cache");
-    RouterSlot {
-        id: n("id"),
-        n_ctx: n("n_ctx"),
-        is_processing: raw.get("is_processing").and_then(Value::as_bool),
-        prompt_tokens: prompt,
-        prompt_tokens_cache: cache,
-        cache_hit_ratio: match (prompt, cache) {
-            (Some(p), Some(c)) if p > 0.0 => Some(c / p),
-            _ => None,
-        },
-    }
-}
-
-/// `RouterSlotModel`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RouterSlotModel {
-    pub model: String,
-    pub state: Option<String>,
-    pub ttl: Option<f64>,
-    pub n_ctx: Option<f64>,
-    pub recipe: RouterSlotRecipe,
-    pub slots: Vec<RouterSlot>,
-    pub error: Option<String>,
-}
-
-/// `projectSlotsRecord`.
-pub fn project_slots_record(record: &Value) -> Vec<RouterSlotModel> {
-    let models = record.get("models").and_then(Value::as_array);
-    models
-        .into_iter()
-        .flatten()
-        .map(|m| {
-            let s = |k: &str| m.get(k).and_then(Value::as_str).map(str::to_string);
-            let slots: Vec<RouterSlot> = m
-                .get("slots")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_object)
-                .map(project_slot)
-                .collect();
-            RouterSlotModel {
-                model: s("model").unwrap_or_default(),
-                state: s("state"),
-                ttl: m.get("ttl").and_then(Value::as_f64),
-                n_ctx: slots.iter().find_map(|x| x.n_ctx),
-                recipe: parse_router_recipe(m.get("cmd").and_then(Value::as_str)),
-                slots,
-                error: s("error"),
-            }
-        })
-        .collect()
-}
-
-/// `buildRouterSlotsResponse`: the newest `kind: "slots"` record in the tail.
-pub fn build_router_slots_response(dir: Option<&str>, stale_ms: Option<f64>, now_ms: f64) -> Value {
-    let (_, lines) = match tail_of(dir, select_slots_file, SLOTS_TAIL_WINDOW_BYTES, now_ms) {
-        Ok(x) => x,
-        Err(reply) => return reply,
-    };
-    let (records, _) = parse_jsonl_lines(&lines, &ROUTER_SLOTS_RECORD);
-    let Some(newest) = records.last() else {
-        return unavailable("empty");
-    };
-    let sampled_at = newest
-        .get("sampledAt")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let age_ms = jsrt::date_parse(sampled_at)
-        .map_or(bd_domain::js::MAX_SAFE_INTEGER as f64, |ms| now_ms - ms);
-    json!({
-        "available": true,
-        "sampledAt": sampled_at,
-        "ageMs": bd_domain::js::json_number(age_ms),
-        "stale": age_ms > stale_ms.unwrap_or(DEFAULT_SLOTS_STALE_MS),
-        "models": serde_json::to_value(project_slots_record(newest)).unwrap_or(Value::Null),
     })
 }
 

@@ -13,6 +13,7 @@ mod metric;
 mod queue;
 mod router_status;
 mod serving;
+mod serving_live;
 mod serving_request;
 mod trial;
 
@@ -27,6 +28,7 @@ pub use metric::*;
 pub use queue::*;
 pub use router_status::*;
 pub use serving::*;
+pub use serving_live::*;
 pub use serving_request::*;
 pub use trial::*;
 

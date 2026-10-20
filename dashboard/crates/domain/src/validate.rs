@@ -552,22 +552,22 @@ mod tests {
     fn discriminated_union_selects_by_literal() {
         let off = json!({"available": false, "reason": "disabled", "x": 1});
         assert_eq!(
-            parse(&ROUTER_SLOTS_RESPONSE, &off).unwrap(),
+            parse(&ROUTER_TELEMETRY_RESPONSE, &off).unwrap(),
             json!({"available": false, "reason": "disabled"})
         );
-        let bad = parse(&ROUTER_SLOTS_RESPONSE, &json!({"available": "yes"})).unwrap_err();
+        let bad = parse(&ROUTER_TELEMETRY_RESPONSE, &json!({"available": "yes"})).unwrap_err();
         assert_eq!(
             bad[0].to_json(),
             json!({"code": "invalid_union_discriminator", "options": [true, false],
                 "path": ["available"], "message": "Invalid discriminator value. Expected true | false"})
         );
         assert_eq!(
-            codes(parse(&ROUTER_SLOTS_RESPONSE, &json!([]))),
+            codes(parse(&ROUTER_TELEMETRY_RESPONSE, &json!([]))),
             vec![("invalid_type", json!([]))]
         );
         assert_eq!(
             codes(parse(
-                &ROUTER_SLOTS_RESPONSE,
+                &ROUTER_TELEMETRY_RESPONSE,
                 &json!({"available": false, "reason": "nope"})
             )),
             vec![("invalid_enum_value", json!(["reason"]))]

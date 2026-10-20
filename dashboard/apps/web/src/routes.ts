@@ -12,7 +12,7 @@
 // a non-empty id segment, so it never matches the bare `/runs`).
 //
 // Router (WP-4, `plans/router-observability-and-tool-search-conformance.md`) is the seventh
-// view -- read-only over `GET /api/router/{telemetry,slots,sidecar}`, no drill-down path of
+// view -- read-only over `GET /api/router/{telemetry,sidecar}`, no drill-down path of
 // its own, same `{refreshToken}`-only prop shape as Queue.
 
 export type Tab = "runs" | "ladders" | "longcontext" | "fit" | "serving" | "queue" | "router";

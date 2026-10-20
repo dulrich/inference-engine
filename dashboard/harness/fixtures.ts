@@ -12,8 +12,8 @@ export const FIXTURE_ROOT = join(import.meta.dir, "../fixtures");
 /**
  * Run-start clock. Fresh/stale verdicts are placed an hour either side of it so they sit far from
  * every threshold: 180 s control/serving (routes/queue.ts CONTROL_STALE_THRESHOLD_MS,
- * shared SERVING_STATUS_STALE_MS), 15 s telemetry in-flight (router/telemetryFeed.ts:21), 30 s slots
- * (router/slotsFeed.ts:18), and the 600 000 ms `?staleMs=` ceiling (routes/routerStatus.ts:20).
+ * shared SERVING_STATUS_STALE_MS), 15 s telemetry in-flight (router/telemetryFeed.ts:21), 60 s serving
+ * live residency (SERVING_LIVE_STALE_MS), and the 600 000 ms `?staleMs=` ceiling (routes/routerStatus.ts:20).
  * "Fresh" is a future timestamp: every reader computes `now - ts > threshold`, so a future ts is
  * fresh for any run length. queue/eta.ts reads no clock (only record timestamps and the fixture
  * `live.started_at`), so its inputs are fixed.
@@ -32,6 +32,7 @@ export interface Fx {
   host: string;
   router: string;
   sidecar: string;
+  servingFeed: string;
 }
 
 async function copyChildren(from: string, to: string) {
@@ -64,6 +65,7 @@ export async function writeFixtures(): Promise<Fx> {
     host: join(root, "host"),
     router: join(root, "router"),
     sidecar: join(root, "sidecar"),
+    servingFeed: join(root, "serving-feed"),
   };
   // One /records holding the v2/v1 set, the legacy-timing side door and the projection record.
   for (const set of ["records", "records-legacy-timing", "records-projections"]) await copyChildren(join(FIXTURE_ROOT, set), fx.records);
@@ -87,9 +89,11 @@ export async function writeFixtures(): Promise<Fx> {
   await copyChildren(join(FIXTURE_ROOT, "control/contract-v1/control/host"), fx.host);
   await writeHostFiles(fx.host, FRESH);
   // The committed router/sidecar jsonl (2026-09-13: never today, so the newest-day pick applies
-  // and every progress line / slots sample is stale against the run clock).
+  // and every progress line is stale against the run clock). The committed serving feed
+  // (2026-10-19) is likewise never fresh: /api/serving/live answers `stale`.
   await copyChildren(join(FIXTURE_ROOT, "router/logs"), fx.router);
   await copyChildren(join(FIXTURE_ROOT, "router/sidecar"), fx.sidecar);
+  await copyChildren(join(FIXTURE_ROOT, "serving-feed"), fx.servingFeed);
   await run755(root);
   return fx;
 }
@@ -120,6 +124,7 @@ export const COMPOSE_ENV = {
   CONTROL_HOST_DIR: "/control/host",
   ROUTER_TELEMETRY_DIR: "/var/log/inference-router",
   CODEX_SIDECAR_LOG_DIR: "/var/log/codex-sidecar",
+  SERVING_FEED_DIR: "/var/log/inference-serving",
 };
 /** The compose mounts (all ro except the per-twin drop-box). */
 export const composeMounts = (fx: Fx) => [
@@ -130,10 +135,11 @@ export const composeMounts = (fx: Fx) => [
   `${fx.host}:/control/host:ro`,
   `${fx.router}:/var/log/inference-router:ro`,
   `${fx.sidecar}:/var/log/codex-sidecar:ro`,
+  `${fx.servingFeed}:/var/log/inference-serving:ro`,
 ];
 /** Full compose env + mounts, each twin with its own drop-box. */
 export const composeSpec = (fx: Fx) => async (): Promise<AppSpec> => ({ env: COMPOSE_ENV, mounts: composeMounts(fx), requestsDir: await requestsBox() });
-/** Every optional var unset (config.ts: CONTROL_*, ROUTER_TELEMETRY_DIR, CODEX_SIDECAR_LOG_DIR stay
+/** Every optional var unset (config.ts: CONTROL_*, ROUTER_TELEMETRY_DIR, CODEX_SIDECAR_LOG_DIR, SERVING_FEED_DIR stay
  * undefined), LLAMA_CONFIG_PATH and QUEUES_DIR pointing at absent paths (502 / empty-queue states). */
 export const degradedSpec = (fx: Fx): AppSpec => ({
   env: { PORT: "4810", APP_DB_PATH: "/data/bench.db", RECORDS_DIR: "/records", LLAMA_CONFIG_PATH: "/absent/config.yaml", QUEUES_DIR: "/absent/queues" },

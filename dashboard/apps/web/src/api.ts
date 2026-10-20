@@ -7,9 +7,9 @@ import {
   LadderRowSchema,
   QueueListResponseSchema,
   RouterSidecarResponseSchema,
-  RouterSlotsResponseSchema,
   RouterTelemetryResponseSchema,
   ServingResponseSchema,
+  ServingLiveResponseSchema,
   ServingStatusResponseSchema,
   ServingTimingRowSchema,
   type ControlAcceptedResponse,
@@ -21,12 +21,12 @@ import {
   type LadderRow,
   type QueueListResponse,
   type RouterSidecarResponse,
-  type RouterSlotsResponse,
   type RouterTelemetryResponse,
   type ServingCatalogAddRequest,
   type ServingCatalogConsumersRequest,
   type ServingCatalogRemoveRequest,
   type ServingResponse,
+  type ServingLiveResponse,
   type ServingStatusResponse,
   type ServingTimingRow,
   type ServingVisibilityRequest,
@@ -150,6 +150,12 @@ export function getServingStatus(): Promise<ServingStatusResponse> {
   return getJson("/api/serving/status", ServingStatusResponseSchema);
 }
 
+// `GET /api/serving/live` (serving-control-redesign WP-6): resident models per tier from the
+// host status collector's feed; a typed `{available:false, reason}` at 200 when off/stale.
+export function getServingLive(): Promise<ServingLiveResponse> {
+  return getJson("/api/serving/live", ServingLiveResponseSchema);
+}
+
 export function postServingVisibility(body: ServingVisibilityRequest): Promise<ControlAcceptedResponse> {
   return postControlAction("/api/serving/visibility", body);
 }
@@ -170,19 +176,16 @@ export function postCatalogConsumers(body: ServingCatalogConsumersRequest): Prom
   return postControlAction("/api/catalog/consumers", body);
 }
 
-// `GET /api/router/{telemetry,slots,sidecar}` (WP-3/WP-4, `plans/router-observability-and-
-// tool-search-conformance.md`) -- the Router tab's three independent read-only feeds. Each
+// `GET /api/router/{telemetry,sidecar}` (WP-3/WP-4, `plans/router-observability-and-
+// tool-search-conformance.md`; `/slots` retired at serving-control-redesign WP-6) -- the
+// Router tab's independent read-only feeds. Each
 // is a discriminated union on `available`: an unset env var or an unreadable/empty source
 // directory is a typed `{available:false, reason}` at 200, NOT an error, so only a genuine
-// transport/parse failure ever throws out of these. Both `/telemetry` and `/slots` accept an
+// transport/parse failure ever throws out of these. `/telemetry` accepts an
 // optional `?staleMs`; the UI deliberately does not surface it -- the API's defaults are the
 // contract.
 export function getRouterTelemetry(): Promise<RouterTelemetryResponse> {
   return getJson("/api/router/telemetry", RouterTelemetryResponseSchema);
-}
-
-export function getRouterSlots(): Promise<RouterSlotsResponse> {
-  return getJson("/api/router/slots", RouterSlotsResponseSchema);
 }
 
 export function getRouterSidecar(): Promise<RouterSidecarResponse> {

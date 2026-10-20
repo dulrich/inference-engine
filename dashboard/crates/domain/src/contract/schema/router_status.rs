@@ -1,4 +1,4 @@
-//! `routerStatus.ts`. The three responses are discriminated unions on `available`; the four
+//! `routerStatus.ts`. The two responses are discriminated unions on `available`; the four
 //! `.passthrough()` objects keep unknown sink keys.
 use super::*;
 
@@ -130,81 +130,6 @@ pub const ROUTER_TELEMETRY_RESPONSE: Export = Export::out(
             &Node::Ref(&ROUTER_UNAVAILABLE),
         ],
     },
-);
-
-pub const ROUTER_SLOT: Export = Export::out(
-    "RouterSlot",
-    obj(&[
-        f("id", &NULL_NUM),
-        f("nCtx", &NULL_NUM),
-        f("isProcessing", &NULL_BOOL),
-        f("promptTokens", &NULL_NUM),
-        f("promptTokensCache", &NULL_NUM),
-        f("cacheHitRatio", &NULL_NUM),
-    ]),
-);
-
-pub const ROUTER_SLOT_RECIPE: Export = Export::out(
-    "RouterSlotRecipe",
-    obj(&[
-        f("ctk", &NULL_STR),
-        f("ctv", &NULL_STR),
-        f("fa", &NULL_STR),
-        f("reasoningBudget", &NULL_NUM),
-        f("mtp", &NULL_BOOL),
-        f("moeCpuLayers", &NULL_NUM),
-    ]),
-);
-
-pub const ROUTER_SLOT_MODEL: Export = Export::out(
-    "RouterSlotModel",
-    obj(&[
-        f("model", &STR),
-        f("state", &NULL_STR),
-        f("ttl", &NULL_NUM),
-        f("nCtx", &NULL_NUM),
-        f("recipe", &Node::Ref(&ROUTER_SLOT_RECIPE)),
-        f("slots", &Node::Array(&Node::Ref(&ROUTER_SLOT))),
-        f("error", &NULL_STR),
-    ]),
-);
-
-pub const ROUTER_SLOTS_RESPONSE: Export = Export::out(
-    "RouterSlotsResponse",
-    Node::DiscUnion {
-        key: "available",
-        options: &[
-            &obj(&[
-                f("available", &AVAILABLE),
-                f("sampledAt", &STR),
-                f("ageMs", &NUM),
-                f("stale", &BOOL),
-                f("models", &Node::Array(&Node::Ref(&ROUTER_SLOT_MODEL))),
-            ]),
-            &Node::Ref(&ROUTER_UNAVAILABLE),
-        ],
-    },
-);
-
-pub const ROUTER_SLOTS_RECORD: Export = Export::out(
-    "RouterSlotsRecord",
-    obj(&[
-        f("kind", &Node::Lit(Lit::Str("slots"))),
-        f("ts", &STR),
-        f("sampledAt", &STR),
-        f("error", &NULL_STR),
-        f(
-            "models",
-            &Node::Array(&obj(&[
-                f("model", &STR),
-                f("state", &NULL_STR),
-                f("ttl", &NULL_NUM),
-                f("cmd", &NULL_STR),
-                f("slots", &Node::Nullable(&Node::Array(&UNKNOWN_RECORD))),
-                f("error", &NULL_STR),
-            ])),
-        ),
-    ]),
 );
 
 pub const ROUTER_SIDECAR_RECORD: Export = Export::out(

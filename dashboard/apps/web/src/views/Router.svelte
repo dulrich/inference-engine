@@ -2,7 +2,8 @@
   // Router -- the model router's read-only status plane (WP-4, `plans/router-observability-
   // and-tool-search-conformance.md`), over the three feeds WP-3 froze in
   // `packages/shared/src/routerStatus.ts`. Everything here is FILE-derived: the dashboard API
-  // makes zero outbound HTTP, the slot samples come from the host poller unit, and this view
+  // makes zero outbound HTTP (the slot panel retired at serving-control-redesign WP-6; live
+  // residency is the Serving view's), and this view
   // adds no clock of its own -- refresh is App.svelte's single PollControl, arriving as
   // `refreshToken` (CC-06/07), exactly the `{refreshToken}`-only shape Queue.svelte uses.
   //
@@ -20,7 +21,6 @@
   // `lib/router/catalog.ts` owns every decision.
   import type {
     RouterSidecarResponse,
-    RouterSlotsResponse,
     RouterTelemetryResponse,
     ServingCatalogModel,
     ServingCatalogProvider,
@@ -29,7 +29,6 @@
   } from "@bench-dashboard/shared";
   import {
     getRouterSidecar,
-    getRouterSlots,
     getRouterTelemetry,
     getServingStatus,
     postCatalogAdd,
@@ -64,16 +63,14 @@
     resolveLegFilter,
   } from "../lib/router/legs.ts";
   import { elapsedLabel, phasePill, splitLabel, tokPerSecLabel, tokenSplit } from "../lib/router/inflight.ts";
-  import { cacheRatioLabel, modelStatePill, processingPill, recipeFlags, sampleAgeLabel, unavailableMessage } from "../lib/router/slots.ts";
+  import { unavailableMessage } from "../lib/router/status.ts";
   import { formatCount } from "../lib/format.ts";
 
   let { refreshToken }: { refreshToken: number } = $props();
 
   let telemetry = $state<RouterTelemetryResponse | null>(null);
-  let slots = $state<RouterSlotsResponse | null>(null);
   let sidecar = $state<RouterSidecarResponse | null>(null);
   let telemetryError = $state("");
-  let slotsError = $state("");
   let sidecarError = $state("");
   let loading = $state(false);
   let loaded = $state(false);
@@ -113,9 +110,8 @@
 
   async function loadRouter() {
     loading = true;
-    const [telemetryResult, slotsResult, sidecarResult, statusResult] = await Promise.allSettled([
+    const [telemetryResult, sidecarResult, statusResult] = await Promise.allSettled([
       getRouterTelemetry(),
-      getRouterSlots(),
       getRouterSidecar(),
       getServingStatus(),
     ]);
@@ -131,12 +127,6 @@
       telemetryError = "";
     } else {
       telemetryError = reason(telemetryResult.reason, "Unable to load router telemetry");
-    }
-    if (slotsResult.status === "fulfilled") {
-      slots = slotsResult.value;
-      slotsError = "";
-    } else {
-      slotsError = reason(slotsResult.reason, "Unable to load slot samples");
     }
     if (sidecarResult.status === "fulfilled") {
       sidecar = sidecarResult.value;
@@ -160,15 +150,11 @@
   function availableTelemetry(value: RouterTelemetryResponse | null) {
     return value !== null && value.available ? value : null;
   }
-  function availableSlots(value: RouterSlotsResponse | null) {
-    return value !== null && value.available ? value : null;
-  }
   function availableSidecar(value: RouterSidecarResponse | null) {
     return value !== null && value.available ? value : null;
   }
 
   const tele = $derived(availableTelemetry(telemetry));
-  const slotData = $derived(availableSlots(slots));
   const sidecarData = $derived(availableSidecar(sidecar));
 
   const legOptions = $derived(tele === null ? [ALL_LEGS] : legFilterOptions(tele.legs));
@@ -248,9 +234,9 @@
 <h1>Router</h1>
 <p class="run-lede">
   Read-only status for the inference router, derived entirely from files: the router's own request sink
-  (<code>/api/router/telemetry</code>), the host slot poller's samples (<code>/api/router/slots</code>), and the codex
-  sidecar's log (<code>/api/router/sidecar</code>). Each feed reports its own availability -- one being off never
-  hides the other two. Refresh interval is the header's poll control.
+  (<code>/api/router/telemetry</code>) and the codex sidecar's log (<code>/api/router/sidecar</code>). Each feed
+  reports its own availability -- one being off never hides the other. Live model residency is on the Serving
+  view. Refresh interval is the header's poll control.
 </p>
 
 {#if !loaded && loading}
@@ -259,75 +245,6 @@
   {#if tele !== null}
     <p class="queue-generated router-ambient">telemetry as of {formatAge(tele.generatedAt, asOf)} ({tele.file})</p>
   {/if}
-
-  <section class="router-panel">
-    <div class="router-panel-head">
-      <h2>Cache &amp; slots</h2>
-      {#if slotData !== null}
-        <span class="router-ambient">{sampleAgeLabel(slotData.ageMs)}</span>
-        {#if slotData.stale}<span class="pill pill-warn">stale</span>{/if}
-      {/if}
-    </div>
-    {#if slotsError}<p class="error-text">{slotsError}</p>{/if}
-    {#if slots === null}
-      <p class="run-empty">No slot sample has been read yet.</p>
-    {:else if !slots.available}
-      <p class="run-empty">Slot sampling unavailable — {unavailableMessage(slots.reason)}.</p>
-    {:else if slots.models.length === 0}
-      <p class="run-empty">The newest sample lists no models.</p>
-    {:else}
-      <div class="router-card-list">
-        {#each slots.models as model (model.model)}
-          {@const statePill = modelStatePill(model.state)}
-          <div class="router-card">
-            <div class="router-card-head">
-              <span class="router-card-name">{model.model}</span>
-              <span class="pill {statePill.cls}">{statePill.label}</span>
-            </div>
-            <div class="router-meta-line router-ambient">
-              <span>ttl {formatCount(model.ttl)}</span>
-              <span>n_ctx {formatCount(model.nCtx)}</span>
-              {#each recipeFlags(model.recipe) as flag (flag.label)}
-                <span>{flag.label} {flag.value}</span>
-              {/each}
-            </div>
-            {#if model.error}<p class="error-text">{model.error}</p>{/if}
-            {#if model.slots.length === 0}
-              <p class="run-empty">No slots sampled — only models the router reports as ready are ever polled.</p>
-            {:else}
-              <div class="run-table-wrap">
-                <table class="run-table">
-                  <thead>
-                    <tr>
-                      <th>Slot</th>
-                      <th>State</th>
-                      <th class="run-table-num">n_ctx</th>
-                      <th class="run-table-num">Prompt tok</th>
-                      <th class="run-table-num">Cached tok</th>
-                      <th class="run-table-num">Cache hit</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {#each model.slots as slot, index (`${model.model}#${slot.id ?? index}`)}
-                      {@const busy = processingPill(slot.isProcessing)}
-                      <tr>
-                        <td>{formatCount(slot.id)}</td>
-                        <td><span class="pill {busy.cls}">{busy.label}</span></td>
-                        <td class="run-table-num">{formatCount(slot.nCtx)}</td>
-                        <td class="run-table-num">{formatCount(slot.promptTokens)}</td>
-                        <td class="run-table-num">{formatCount(slot.promptTokensCache)}</td>
-                        <td class="run-table-num">{cacheRatioLabel(slot)}</td>
-                      </tr>
-                    {/each}
-                  </tbody>
-                </table>
-              </div>
-            {/if}
-          </div>
-        {/each}
-      </div>
-    {/if}
-  </section>
 
   <section class="router-panel">
     <div class="router-panel-head">

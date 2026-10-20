@@ -1,5 +1,5 @@
 // File-plane phases: ingest (through the command seam), control (drop-box POSTs + host status
-// reads), feeds (router telemetry / slots / sidecar over clock-relative jsonl).
+// reads), feeds (router telemetry / sidecar / serving live residency over clock-relative jsonl).
 import { chmod, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { contentOf, dumpOf, ISO_8601, normalizeResponse } from "./dump.ts";
@@ -227,15 +227,19 @@ export async function feedsPhase() {
   const feeds = join(work, "feeds");
   const router = join(feeds, "router");
   const sidecar = join(feeds, "sidecar");
+  const serving = join(feeds, "serving");
   const committed = join(FIXTURE_ROOT, "router");
   const routerLines = await lines(join(committed, "logs/router-2026-09-13.10.jsonl"));
   const requestTpl = routerLines.find((l: Json) => l.kind === "request");
   const progressTpl = routerLines.find((l: Json) => l.kind === "progress");
-  const slotsTpl = (await lines(join(committed, "logs/slots-2026-09-13.jsonl"))).at(-1);
+  const servingLines = await lines(join(FIXTURE_ROOT, "serving-feed/serving-feed-2026-10-19.jsonl"));
+  const gpuTpl = servingLines.find((l: Json) => l.kind === "snapshot" && l.tier === "gpu");
+  const onnxTpl = servingLines.find((l: Json) => l.kind === "snapshot" && l.tier === "onnx");
+  const loadTpl = servingLines.find((l: Json) => l.kind === "load");
   const sidecarLines = await lines(join(committed, "sidecar/codex-sidecar-2026-09-13.jsonl"));
   const progress = (reqId: string, ts: string, elapsedMs: number, tokens: number) => ({ ...progressTpl, reqId, ts, elapsedMs, responseTokens: tokens, reasoningTokens: tokens });
   const telemetryFile = join(router, `router-${TODAY}.10.jsonl`);
-  const slotsFile = join(router, `slots-${TODAY}.jsonl`);
+  const servingFile = join(serving, `serving-feed-${TODAY}.jsonl`);
   const sidecarFile = join(sidecar, `codex-sidecar-${TODAY}.jsonl`);
   const MiB = 1024 * 1024;
   /** Records with distinct ids until the byte size passes `bytes`. */
@@ -250,10 +254,11 @@ export async function feedsPhase() {
     return out;
   };
   /** Live state: each jsonl past its tail window (router/tailReader.ts: 1 MiB telemetry/sidecar,
-   * 256 KiB slots), with a fresh-looking record before the window that must never be read. */
+   * and the serving feed's 1 MiB), with a fresh-looking record before the window that must never be read. */
   const writeLive = async (progressTs: string, sampledAt: string) => {
     await mkdir(router, { recursive: true });
     await mkdir(sidecar, { recursive: true });
+    await mkdir(serving, { recursive: true });
     await writeFile(join(router, "router-2026-01-01.99.jsonl"), jsonl([{ ...requestTpl, reqId: "older-day" }]));
     await writeFile(join(router, `router-${TODAY}.2.jsonl`), jsonl([{ ...requestTpl, reqId: "lower-index" }]));
     await writeFile(join(router, "notes.txt"), "not a sink file\n");
@@ -267,10 +272,13 @@ export async function feedsPhase() {
       progress("abandoned", STALE, 9000, 99),
       progress("bad-ts", "yesterday-ish", 100, 1),
     ]));
-    await writeFile(slotsFile, jsonl([
-      { ...slotsTpl, sampledAt: FRESH, ts: FRESH, models: [] },
-      ...pad((i) => ({ ...slotsTpl, sampledAt: STALE, ts: STALE, models: slotsTpl.models.slice(i % 2) }), 300 * 1024),
-      { ...slotsTpl, sampledAt, ts: sampledAt },
+    await writeFile(join(serving, "serving-feed-2026-01-01.jsonl"), jsonl([{ ...gpuTpl, ts: FRESH }]));
+    await writeFile(servingFile, jsonl([
+      { ...gpuTpl, ts: FRESH, models: [{ model: "pre-window", state: "ready", ttl: 1 }] },
+      ...pad((i) => ({ ...(i % 2 ? onnxTpl : gpuTpl), ts: STALE }), 1.1 * MiB),
+      { ...gpuTpl, ts: sampledAt },
+      { ...onnxTpl, ts: sampledAt },
+      { ...loadTpl, ts: sampledAt },
     ]));
     await writeFile(sidecarFile, jsonl([
       { ...sidecarLines[0], persona: "pre-window-persona" },
@@ -280,13 +288,12 @@ export async function feedsPhase() {
   };
   await writeLive(FRESH, FRESH);
   await chmod(feeds, 0o755);
-  const pair = await startPair("feeds", () => ({ env: { ...COMPOSE_ENV, ROUTER_TELEMETRY_DIR: "/feeds/router", CODEX_SIDECAR_LOG_DIR: "/feeds/sidecar" }, mounts: [`${feeds}:/feeds:ro`] }));
+  const pair = await startPair("feeds", () => ({ env: { ...COMPOSE_ENV, ROUTER_TELEMETRY_DIR: "/feeds/router", CODEX_SIDECAR_LOG_DIR: "/feeds/sidecar", SERVING_FEED_DIR: "/feeds/serving" }, mounts: [`${feeds}:/feeds:ro`] }));
   try {
     const read = async (label: string) => {
       const t = await both(pair, `${label}: telemetry`, "GET", "/api/router/telemetry");
       await both(pair, `${label}: telemetry ?staleMs=600000`, "GET", "/api/router/telemetry?staleMs=600000");
-      const s = await both(pair, `${label}: slots`, "GET", "/api/router/slots");
-      await both(pair, `${label}: slots ?staleMs=1000`, "GET", "/api/router/slots?staleMs=1000");
+      const s = await both(pair, `${label}: serving live`, "GET", "/api/serving/live");
       const c = await both(pair, `${label}: sidecar`, "GET", "/api/router/sidecar");
       return { t: t?.json, s: s?.json, c: c?.json, ran: Boolean(t && s && c) };
     };
@@ -296,43 +303,48 @@ export async function feedsPhase() {
       check("live telemetry: today's highest index, 1 MiB window, recent capped at 200", r.t?.file === `router-${TODAY}.10.jsonl` && r.t?.windowBytes === MiB && r.t?.recent?.length === 200, JSON.stringify({ file: r.t?.file, w: r.t?.windowBytes, n: r.t?.recent?.length }));
       checkEqual("live telemetry: in-flight = the fresh progress-only ids (pre-window line never read)", r.t?.inFlight?.map((x: Json) => x.reqId).sort(), ["live-1", "live-2"]);
       check("live telemetry: tokPerSec from the last two samples", r.t?.inFlight?.find((x: Json) => x.reqId === "live-1")?.tokPerSec === 40, JSON.stringify(r.t?.inFlight).slice(0, 300));
-      check("live slots: newest record, not stale", r.s?.available === true && r.s?.stale === false && r.s?.sampledAt === FRESH && Array.isArray(r.s?.models) && r.s.models.length > 0, JSON.stringify(r.s).slice(0, 300));
+      check("live serving: today's file, newest snapshot per tier, pre-window line never read", r.s?.available === true && r.s?.file === `serving-feed-${TODAY}.jsonl` && r.s?.gpu?.sampled_at === FRESH && r.s?.gpu?.models?.length > 0 && r.s?.onnx?.available === true && !JSON.stringify(r.s).includes("pre-window"), JSON.stringify(r.s).slice(0, 300));
+      check("live serving: the load event is recent", r.s?.recent?.[0]?.kind === "load" && r.s?.recent?.[0]?.ts === FRESH, JSON.stringify(r.s?.recent).slice(0, 300));
       check("live sidecar: pre-window persona never read", r.c?.available === true && JSON.stringify(r.c).includes("codex-b") && !JSON.stringify(r.c).includes("pre-window-persona"), JSON.stringify(r.c).slice(0, 300));
     }
     await writeLive(STALE, STALE);
     r = await read("stale");
     if (r.ran) {
       check("stale telemetry: every in-flight aged out", r.t?.available === true && r.t?.inFlight?.length === 0, JSON.stringify(r.t?.inFlight));
-      check("stale slots: stale", r.s?.available === true && r.s?.stale === true, JSON.stringify(r.s).slice(0, 200));
+      check("stale serving: typed stale", unavailable(r.s, "stale"), JSON.stringify(r.s).slice(0, 200));
     }
     // Only the pre-window line is a record: a whole-file read would find it, the window must not.
     await writeFile(telemetryFile, `${JSON.stringify(progress("pre-window-inflight", FRESH, 1, 1))}\n${"x".repeat(80)}\n`.padEnd(1.2 * MiB, "y\n"));
-    await writeFile(slotsFile, `${JSON.stringify({ ...slotsTpl, sampledAt: FRESH })}\n`.padEnd(300 * 1024, "z\n"));
+    await writeFile(servingFile, `${JSON.stringify({ ...gpuTpl, ts: FRESH })}\n`.padEnd(1.1 * MiB, "z\n"));
     await writeFile(sidecarFile, `${JSON.stringify(sidecarLines[0])}\n`.padEnd(1.1 * MiB, "w\n"));
     r = await read("records only before the window");
     if (r.ran) check("window-bounded: all three empty", unavailable(r.t, "empty") && unavailable(r.s, "empty") && unavailable(r.c, "empty"), JSON.stringify(r));
-    for (const f of [telemetryFile, slotsFile, sidecarFile]) await writeFile(f, "");
+    for (const f of [telemetryFile, servingFile, sidecarFile]) await writeFile(f, "");
     r = await read("zero-byte files");
     if (r.ran) check("zero-byte: all three empty", unavailable(r.t, "empty") && unavailable(r.s, "empty") && unavailable(r.c, "empty"), JSON.stringify(r));
-    for (const f of [telemetryFile, slotsFile, sidecarFile]) await writeFile(f, "{bad\n[1,2]\n{\"kind\":\"request\"}\n");
+    for (const f of [telemetryFile, servingFile, sidecarFile]) await writeFile(f, "{bad\n[1,2]\n{\"kind\":\"request\"}\n");
     r = await read("schema-invalid lines");
     if (r.ran) check("invalid lines: all three empty", unavailable(r.t, "empty") && unavailable(r.s, "empty") && unavailable(r.c, "empty"), JSON.stringify(r));
     await rm(router, { recursive: true });
     await rm(sidecar, { recursive: true });
+    await rm(serving, { recursive: true });
     await mkdir(router);
     await mkdir(sidecar);
+    await mkdir(serving);
     await writeFile(join(router, "notes.txt"), "x\n");
     await writeFile(join(router, "router-today.jsonl"), "{}\n");
-    for (const d of [router, sidecar]) await chmod(d, 0o755);
+    await writeFile(join(serving, "serving-feed-today.jsonl"), "{}\n");
+    for (const d of [router, sidecar, serving]) await chmod(d, 0o755);
     r = await read("no matching file names");
     if (r.ran) check("no sink file: all three empty", unavailable(r.t, "empty") && unavailable(r.s, "empty") && unavailable(r.c, "empty"), JSON.stringify(r));
     await writeLive(FRESH, FRESH);
-    for (const f of [telemetryFile, slotsFile, sidecarFile]) await chmod(f, 0o000);
+    for (const f of [telemetryFile, servingFile, sidecarFile]) await chmod(f, 0o000);
     r = await read("selected file unreadable");
     if (r.ran) check("unreadable file: all three unreadable", unavailable(r.t, "unreadable") && unavailable(r.s, "unreadable") && unavailable(r.c, "unreadable"), JSON.stringify(r));
-    for (const f of [telemetryFile, slotsFile, sidecarFile]) await chmod(f, 0o644);
+    for (const f of [telemetryFile, servingFile, sidecarFile]) await chmod(f, 0o644);
     await rm(router, { recursive: true });
     await rm(sidecar, { recursive: true });
+    await rm(serving, { recursive: true });
     r = await read("dirs missing");
     if (r.ran) check("missing dir: all three unreadable", unavailable(r.t, "unreadable") && unavailable(r.s, "unreadable") && unavailable(r.c, "unreadable"), JSON.stringify(r));
   } finally {

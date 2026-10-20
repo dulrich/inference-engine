@@ -76,7 +76,6 @@ fn tail_window_edges() {
         .lines
         .is_empty());
     assert_eq!(DEFAULT_TAIL_WINDOW_BYTES, 1024 * 1024);
-    assert_eq!(SLOTS_TAIL_WINDOW_BYTES, 256 * 1024);
 }
 
 fn ms(iso: &str) -> f64 {
@@ -110,19 +109,7 @@ fn current_file_selection() {
         select_router_telemetry_file(&n, ms("2026-09-12T23:59:59.999Z")).as_deref(),
         Some("router-2026-09-12.99.jsonl")
     );
-    let d = names(&[
-        "slots-2026-09-12.jsonl",
-        "slots-2026-09-13.jsonl",
-        "codex-sidecar-2026-09-12.jsonl",
-    ]);
-    assert_eq!(
-        select_slots_file(&d, ms("2026-09-12T23:59:59Z")).as_deref(),
-        Some("slots-2026-09-12.jsonl")
-    );
-    assert_eq!(
-        select_slots_file(&d, ms("2026-09-14T00:00:00Z")).as_deref(),
-        Some("slots-2026-09-13.jsonl")
-    );
+    let d = names(&["codex-sidecar-2026-09-12.jsonl"]);
     assert_eq!(
         select_sidecar_file(&d, ms("2026-09-13T00:00:00Z")).as_deref(),
         Some("codex-sidecar-2026-09-12.jsonl")
@@ -226,65 +213,6 @@ fn summarise_legs_ties_null_and_even_median() {
     assert_eq!((legs[2].errors, legs[2].p50_ttft_ms), (1.0, None));
     // An absent `error` is `undefined !== null`: counted as an error.
     assert_eq!(legs[4].errors, 1.0);
-}
-
-#[test]
-fn router_recipe() {
-    let r = parse_router_recipe(Some(
-        "/app/llama-server -c 131072 -ctk q8_0 -ctv q8_0 -fa on -ncmoe 12 --spec-type mtp",
-    ));
-    assert_eq!(
-        serde_json::to_value(r).unwrap(),
-        json!({"ctk": "q8_0", "ctv": "q8_0", "fa": "on", "reasoningBudget": null, "mtp": true, "moeCpuLayers": 12.0})
-    );
-    assert_eq!(
-        parse_router_recipe(Some("/app/llama-server -c 8192 --embeddings")).mtp,
-        Some(false)
-    );
-    assert_eq!(
-        parse_router_recipe(Some("x -ctk -fa on --reasoning-budget -1")).ctk,
-        None
-    );
-    assert_eq!(
-        parse_router_recipe(Some("x --reasoning-budget -1")).reasoning_budget,
-        None
-    );
-    for blank in [None, Some(""), Some("  \n")] {
-        assert_eq!(parse_router_recipe(blank).mtp, None);
-    }
-}
-
-#[test]
-fn slots_over_fixtures() {
-    let r = build_router_slots_response(Some(&logs()), None, ms(NOW));
-    assert_eq!(r["available"], true);
-    assert_eq!(r["stale"], false);
-    let stale =
-        build_router_slots_response(Some(&logs()), Some(1000.0), ms("2026-09-13T05:00:00Z"));
-    assert_eq!(stale["stale"], true);
-    let t = TempDir::new("slots-badts");
-    t.write(
-        "slots-2026-09-13.jsonl",
-        r#"{"kind":"slots","ts":"x","sampledAt":"later","error":null,"models":[]}"#,
-    );
-    let r = build_router_slots_response(Some(&t.0), None, 0.0);
-    assert_eq!(r["ageMs"], 9_007_199_254_740_991i64);
-    assert_eq!(r["stale"], true);
-}
-
-#[test]
-fn slot_projection() {
-    let s = project_slot(json!({"id": 0, "n_ctx": 8192, "is_processing": true, "n_prompt_tokens": 200, "n_prompt_tokens_cache": 50}).as_object().unwrap());
-    assert_eq!(s.cache_hit_ratio, Some(0.25));
-    let s = project_slot(
-        json!({"id": 0, "n_prompt_tokens": 0, "n_prompt_tokens_cache": 0, "is_processing": "yes"})
-            .as_object()
-            .unwrap(),
-    );
-    assert_eq!(
-        (s.cache_hit_ratio, s.is_processing, s.n_ctx),
-        (None, None, None)
-    );
 }
 
 #[test]

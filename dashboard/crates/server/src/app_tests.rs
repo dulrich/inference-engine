@@ -111,7 +111,14 @@ async fn routes_and_errors() {
         (1.into(), "v1".into(), 2.into())
     );
     assert_eq!(e["records"][0]["experimentId"], "fixture-v2-smoke-cell");
+    // WP-6: live residency is disabled (typed 200) without SERVING_FEED_DIR; slots retired.
+    let (s, _, _, b) = call(&app, "GET", "/api/serving/live").await;
+    assert_eq!(
+        (s, b.as_str()),
+        (200, r#"{"available":false,"reason":"disabled"}"#)
+    );
     for (m, p) in [
+        ("GET", "/api/router/slots"),
         ("GET", "/api/nope"),
         ("GET", "/api"),
         ("POST", "/api/experiments"),

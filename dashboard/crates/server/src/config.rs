@@ -22,6 +22,8 @@ pub struct Config {
     pub control_host_dir: Option<String>,
     pub router_telemetry_dir: Option<String>,
     pub codex_sidecar_log_dir: Option<String>,
+    /// `SERVING_FEED_DIR`: the status collector's `serving-feed-*.jsonl` dir (`:ro`).
+    pub serving_feed_dir: Option<String>,
 }
 
 pub type Env<'a> = &'a dyn Fn(&str) -> Option<String>;
@@ -55,6 +57,7 @@ impl Config {
             control_host_dir: env("CONTROL_HOST_DIR"),
             router_telemetry_dir: env("ROUTER_TELEMETRY_DIR"),
             codex_sidecar_log_dir: env("CODEX_SIDECAR_LOG_DIR"),
+            serving_feed_dir: env("SERVING_FEED_DIR"),
         }
     }
 }
@@ -105,6 +108,7 @@ mod tests {
         assert_eq!(c.control_requests_dir, None);
         assert_eq!(c.router_telemetry_dir, None);
         assert_eq!(c.codex_sidecar_log_dir, None);
+        assert_eq!(c.serving_feed_dir, None);
     }
 
     #[test]

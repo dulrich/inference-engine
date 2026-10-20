@@ -4,7 +4,7 @@
 
 import type { RouterInFlight } from "@bench-dashboard/shared";
 import { formatDurationMs, formatTokPerSec } from "./format.ts";
-import type { StatusPill } from "./slots.ts";
+import type { StatusPill } from "./status.ts";
 
 export interface TokenSplit {
   total: number;

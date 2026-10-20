@@ -1360,511 +1360,488 @@ models:
     ttl: 1800
     checkEndpoint: /health
 
-groups:
-  # Embedding and reranking are small enough, and used closely enough together by a single
-  # search/rerank flow, that neither should evict the other: swap/exclusive both false means
-  # llama-swap is free to run both children at once, and persistent: false means the ttl above
-  # is still what unloads them (a persistent group would never unload regardless of ttl).
-  retrieval:
-    swap: false
-    exclusive: false
-    persistent: false
-    members:
-      - bge-m3-f16
-      - bge-reranker-v2-m3-Q8_0
-      # bge-small joins `retrieval` rather than getting its own group: at 67 MB of weights it
-      # cannot meaningfully contend for VRAM with anything, and it is used by a different
-      # consumer than bge-m3 — so the two must be free to be resident at once, which is exactly
-      # what swap:false/exclusive:false gives. It still unloads on its own ttl.
-      - bge-small-en-v1.5-f16
-
-  # Chat models are large enough that they cannot safely coexist with each other, or necessarily
-  # with the retrieval pair, under this GPU's VRAM — swap: true unloads the group's previous
-  # member before starting the next one, exclusive: true additionally stops any *other* group's
-  # members first (i.e. a chat request evicts bge-m3/bge-reranker-v2 while it is in flight;
-  # retrieval requests afterward reload without evicting chat — verified semantics per the
-  # cutover interleave test below). The eviction-and-restore cycle itself was tested at cutover
-  # (2026-07-26, gemma-4-12B Q4_K_M as the chat member, RX 9070/RADV): two full evict→reload
-  # cycles, embeddings byte-identical after each reload, ~1.3s retrieval reloads warm, no amdgpu
-  # errors in the kernel log. That test did not yet exercise this file's actual `chat` group
-  # config below (the eviction mechanics are the same; the specific model list is new) — the
-  # orchestrator re-runs the live smoke test (including the new chat-completion checks in
-  # smoke-inference.sh) against a real reload before this lands.
-  #
-  # ── VRAM fit math (host-verified 2026-07-26, no container/model touched to get these numbers) ──
-  #
-  # GPU VRAM: `cat /sys/class/drm/card1/device/mem_info_vram_total` = 17,095,983,104 bytes
-  # = 15.92 GiB / 17.10 GB (RX 9070, matches its 16G nameplate). This is a machine with an active
-  # interactive desktop session on the SAME gpu, not a headless inference box: at measurement
-  # time `mem_info_vram_used` = 3,327,463,424 bytes (~3.1 GiB / 3.3 GB), and `fuser /dev/dri/*`
-  # showed ghostty, firefox, LM Studio, obsidian, and nvtop all holding the render node. So real
-  # free VRAM at request time is ~12.8 GiB / 13.8 GB, not the full nameplate figure — and
-  # `exclusive: true` only evicts THIS router's own groups; it cannot and does not free VRAM held
-  # by other GPU clients on the host. The math below uses both figures: nameplate total (an upper
-  # bound assuming nothing else is using the GPU) and the measured free-now figure (the realistic
-  # bound on this desktop-shared host).
-  #
-  # Per-model weights are exact file sizes (`stat -c %s`) on the candidate GGUFs already on disk
-  # (paths below mapped at measurement time to `~/.lmstudio/models/<publisher>/<repo>/…`; the
-  # GGUF-home move has since completed, and the host layout is now
-  # `/srv/models/<publisher>/<repo>/…`). KV cache is computed from each GGUF's own
-  # header metadata (block count, per-layer attention.head_count_kv,
-  # attention.key_length/value_length, attention.sliding_window — read directly, no model
-  # loaded) at f16 KV (llama.cpp's default cache type, unquantized) and is SWA-aware: gemma4
-  # declares a per-layer sliding_window (1024
-  # tokens) and llama.cpp allocates the reduced cache size for the majority of layers that use it,
-  # not the full requested context — only the minority "global" layers (the ones with a markedly
-  # smaller head_count_kv in the GGUF metadata) scale with the full context size.
-  #
-  # - gemma-4-12B-it-Q4_K_M (IN, cutover-tested): weights 7,381,384,864 B = 6.87 GiB / 7.38 GB.
-  #   48 layers (40 local @ head_count_kv=8 capped at the 1024-token sliding window, 8 global @
-  #   head_count_kv=1 scaling with context), key/value head dim 512. At the configured -c 32768,
-  #   SWA-aware KV ≈ 1.12 GiB / 1.21 GB → weights+KV ≈ 8.0 GiB / 8.6 GB. Comfortably under BOTH
-  #   the nameplate total and the measured ~12.8 GiB free-now, leaving ~4.8 GiB for the
-  #   compute/graph buffer even on this desktop-shared host.
-  # - NVIDIA-Nemotron-3-Nano-4B-UD-Q4_K_XL (IN, small/fast option; weights upgraded 2026-08-25
-  #   from lmstudio Q4_K_M — see the registry note, plans/long-context-serving-default.md WP-2):
-  #   weights 3,133,118,624 B = 2.92 GiB / 3.13 GB. `nemotron_h` is a hybrid Mamba/attention
-  #   architecture — only 4 of its 42 layers are real attention (head_count_kv=8, head dim 128,
-  #   blocks 12/17/24/32); the other 38 are SSM/conv state layers whose per-token state is
-  #   ~constant in sequence length, not a KV cache in the usual sense, and this arch carries no
-  #   sliding_window metadata. KV ≈ 16 KiB/token (4 layers × 8 heads × 256 dims × f16).
-  #   Live-measured 2026-08-25 at the landed -c 131072: total footprint ≈5.5 GB used
-  #   (weights+KV+buffers), >9 GB free — needle-at-depth recall exact at a real 117,982-token
-  #   prompt (90% fill), prefill 2,353 t/s. 256k VALID: at -c 262144 footprint ≈7.9 GB,
-  #   >7 GB free, recall exact at a real 234,542-token prompt (89.5%), prefill 1,649 t/s —
-  #   262144 is a valid config for this alias; 131072 is the serving default per plan. The GGUF
-  #   header claims context_length=1048576 (both lmstudio and unsloth conversions); the NVIDIA
-  #   base config says max_position_embeddings=262144 — targets clamped to the smaller. Note:
-  #   this model routinely returns its answer in `reasoning_content` with empty `content` on
-  #   terse factual asks — count both channels before calling a response empty.
-  # - gemma-4-26B-A4B-it-QAT-Q4_0 (OUT — for now): weights 14,439,362,752 B = 13.45 GiB /
-  #   14.44 GB. That number ALONE already exceeds the measured ~12.8 GiB free-now on this
-  #   desktop-shared host, before any KV cache or compute/graph buffer is added. Even against the
-  #   full 15.92 GiB nameplate total (i.e. only if every other GPU client on the host were closed
-  #   first), weights + SWA-aware KV at a modest -c 8192 land around 14.0 GiB, leaving well under
-  #   2 GiB for the compute buffer — too thin a margin to add blind. Revisit if this box becomes
-  #   dedicated/headless (removing the ~3.3 GB desktop baseline), or under a more aggressive quant
-  #   (Q2_K/Q3) that shrinks the weights figure materially.
-  # - 27B (Qwen3.6-27B-Q4_K_M, 16,547,398,784 B = 15.41 GiB/16.55 GB), 31B
-  #   (gemma-4-31B-it-QAT-Q4_0, 17,651,000,768 B = 16.44 GiB/17.65 GB), 35B-A3B
-  #   (Qwen3.6-35B-A3B-Q4_K_M, 21,166,757,728 B = 19.71 GiB/21.17 GB) — all OUT, per the plan's
-  #   expectation, but on measured weight sizes rather than an assumed 16G ceiling: 27B's weights
-  #   alone leave only 0.5 GiB against the full 15.92 GiB nameplate before any KV/compute buffer;
-  #   31B's and 35B-A3B's weights alone already exceed the card's total nameplate capacity, i.e.
-  #   they cannot load fully-offloaded on this GPU regardless of context size or what else is
-  #   running.
-  chat:
-    swap: true
-    exclusive: true
-    persistent: false
-    members:
-      # gemma-4-12B-it-Q4_K_M removed 2026-08-25 (see the tombstone in the registry header);
-      # its historical fit-math record above is retained as-is.
-      - nemotron-3-nano-4B-UD-Q4_K_XL
-
-  # ── ling-bakeoff — Ling-3.0-tiny quant bake-off, testing only, canary-first (see
-  # plans/ling-3-tiny-bakeoff-and-gpu-hang-watchdog.md). Same shape as `chat` above:
-  # swap:true/exclusive:true because no individual quant needs to coexist with anything else
-  # during testing, and exclusive:true is also a safety property — only one
-  # untrusted-on-this-host-architecture process resident at a time. No group-level `ttl` — the
-  # schema has none (see `chat`'s comment above); each model entry above carries its own
-  # `ttl: 1800`.
-  #
-  # ── VRAM fit math (host-verified 2026-08-20, live single- + multi-turn canary probes, two of
-  # the four bake-off quants — the other two land in WP-3) ──
-  #
-  # Not extrapolated from the `chat` group's dense-model math above — deliberately measured live
-  # instead, since this architecture's 6-of-24-layers-have-KV-cache shape (the other 18 are
-  # KDA/linear-attention, no conventional KV cache, no sliding_window metadata) makes a static
-  # extrapolation unreliable. `mem_info_vram_used` read directly before/after each load, at
-  # -c 8192, after both a single-turn and a ≥3-turn (5-message) exchange per model, watched
-  # against `journalctl -k -f` throughout with zero MES/wedged/reset signature.
-  #
-  # Baseline (nothing from this group loaded, desktop session active): 1,204,256,768 B
-  # = 1.12 GiB / 1.20 GB. (Lower than the `chat` group's older 2026-07-26 desktop-baseline
-  # measurement of ~3.1 GiB — a snapshot of whatever else happened to be holding the render node
-  # that day, not a fixed floor; re-measure at request time rather than assuming either figure.)
-  #
-  # - Ling-3.0-tiny-Q4_K_M: weights 4,823,894,880 B = 4.49 GiB / 4.82 GB. Peak `mem_info_vram_used`
-  #   after load + single-turn + multi-turn: 6,148,374,528 B = 5.73 GiB / 6.15 GB → weights+KV+
-  #   buffer delta from baseline ≈ 4.60 GiB / 4.94 GB, i.e. only ~0.11 GiB of KV+compute-buffer
-  #   overhead beyond the weights alone — small, consistent with only 6/24 layers carrying a real
-  #   KV cache and the conservative `-c 8192`. Comfortably under the 15.92 GiB nameplate total.
-  # - Ling-3.0-tiny-UD-Q4_K_XL: weights 5,340,611,328 B = 4.97 GiB / 5.34 GB. Peak
-  #   `mem_info_vram_used` after load + single-turn + multi-turn (measured after `exclusive: true`
-  #   fully evicted Q4_K_M first): 6,602,141,696 B = 6.15 GiB / 6.60 GB → weights+KV+buffer delta
-  #   from baseline ≈ 5.03 GiB / 5.40 GB, ~0.05 GiB overhead beyond weights alone. Also
-  #   comfortably under the nameplate total.
-  #
-  # - Ling-3.0-tiny-UD-Q6_K_XL: weights 7,274,546,528 B = 6.77 GiB / 7.27 GB. Peak
-  #   `mem_info_vram_used` after load + single-turn + multi-turn (baseline re-measured at
-  #   1,295,380,480 B / 1.21 GiB just before this load — a few hundred MB higher than the Q4
-  #   pair's baseline above, ordinary desktop-VRAM fluctuation, not a fixed floor):
-  #   8,540,147,712 B = 7.95 GiB / 8.54 GB → delta from baseline ≈ 6.75 GiB / 7.24 GB, i.e.
-  #   essentially weights-alone (the ~0.03 GiB "negative overhead" against the raw weights figure
-  #   is baseline-measurement noise, not a real effect — two `mem_info_vram_used` reads taken
-  #   minutes apart on a shared desktop session routinely differ by a few hundred MB). Comfortably
-  #   under the 15.92 GiB nameplate total.
-  # - Ling-3.0-tiny-Q8_0: weights 8,408,187,968 B = 7.83 GiB / 8.41 GB — the largest single file
-  #   in this group. Note: its first single-turn probe (`max_tokens: 128`) hit `finish_reason:
-  #   "length"` with EMPTY `content` — this model's reasoning trace is more verbose than
-  #   Q4_K_M/UD-Q4_K_XL/UD-Q6_K_XL's, similar in shape to gemma-4's own `max_tokens >= 128`
-  #   requirement (see the `chat` group's macro comment) but needing more headroom still;
-  #   `max_tokens: 512` got a real answer. Not a hang, not a config defect — a bake-off/testing
-  #   finding worth carrying into whatever `max_tokens` the eventual bake-off evaluation uses; no
-  #   change made here since this group's `cmd` doesn't set `max_tokens` (that's a per-request
-  #   field, not a server flag). Peak `mem_info_vram_used` after load + both probes:
-  #   9,657,081,856 B = 8.99 GiB / 9.66 GB → delta from baseline ≈ 7.79 GiB / 8.36 GB, again
-  #   essentially weights-alone within the same measurement-noise band as UD-Q6_K_XL above.
-  #   Comfortably under the 15.92 GiB nameplate total — even this largest quant leaves several
-  #   GiB of headroom on this card.
-  #
-  # All four bake-off quants now load individually within nameplate VRAM with no compute-buffer
-  # surprises; none were tested loaded simultaneously (this group is exclusive:true by design —
-  # see above — so that was never the point).
-  #
-  # ── Context ceiling raised to 131072 (host-verified 2026-08-21, see
-  # plans/ling-3-tiny-context-ceiling.md) ──
-  #
-  # `-c 8192` above was deliberately conservative pending a live measurement of this hybrid
-  # KDA/MLA architecture's per-token KV cost; that measurement is now in. GGUF-header geometry
-  # (all four quants, byte-identical across quants): `block_count=24`,
-  # `attention.head_count_kv` nonzero at exactly 6 of 24 positions (the MLA layers) with
-  # `attention.key_length=576` = `attention.kv_lora_rank(512) + rope.dimension_count(64)` — a
-  # single compressed latent cached once per token per real-KV layer, not per-attention-head
-  # (`attention.head_count=16`), which is the mechanism (not a guess) behind MLA's cache being far
-  # smaller than a dense model's at the same head count/context. Assuming f16 storage of that
-  # 576-element latent on both the K and V side across the 6 real-KV layers predicts ≈13.5
-  # KB/token of KV overhead — matches the already-measured Q4_K_M `-c 8192` delta above (≈0.11
-  # GiB) almost exactly, and extrapolated linearly to 131072 tokens predicts only ≈1.7-1.8 GiB of
-  # KV overhead even at max context, against the ~12.8 GiB realistic free-VRAM budget below.
-  #
-  # Live needle-in-haystack probes (moderate ~32768 and near-ceiling ~110-120K prompt tokens,
-  # correct recall required, `journalctl -k -f` watched throughout, zero MES/wedged/reset
-  # signature) at `-c 131072`:
-  #
-  # - Ling-3.0-tiny-Q4_K_M (canary, WP-1 Part A, f16 cache): baseline 1,739,743,232 B (1.62 GiB).
-  #   Single-turn ping: 7,624,044,544 B (7.10 GiB). Moderate probe (29,463 real prompt tokens,
-  #   correct recall): 7,698,051,072 B (7.17 GiB). Near-ceiling probe (111,272 real prompt tokens,
-  #   correct recall, 62.2s wall): PEAK 8,013,406,208 B (7.46 GiB) → 1.35 GiB overhead beyond the
-  #   4.49 GiB weights (KV + compute buffer combined, at the full -c 131072 pre-allocation) —
-  #   under the ≈1.7-1.8 GiB a-priori estimate above. Real measured KV growth rate between the two
-  #   probes ≈3.85 KB/token (vs the ≈13.5 KB/token worst-case estimate — the gap is explained
-  #   below). Zero journal signature either probe. Comfortably under nameplate.
-  # - KV cache type test (WP-1 Part B): a hard-gated symmetric q8_0/q8_0 + `-fa on` compatibility
-  #   test was run on the canary given two upstream risk signals for this architecture+backend
-  #   combination (BailingMoE3's own merge PR reported "freezes on Vulkan"; the closely-related
-  #   DeepSeek MLA family has an open llama.cpp issue where quantized K-cache produces "confident
-  #   gibberish" while the server stays healthy). **Result: REJECTED, not landed.** A scratch
-  #   verbose-logged load confirmed flash_attn=enabled and real quantization took effect (K cache
-  #   14.34 MiB at q8_0 vs 27.00 MiB at f16, same 4096-token context) — and confirmed MLA caches
-  #   only ONE side (`V (q8_0): 0.00 MiB` — a single shared latent, not separate K/V caches, which
-  #   is why the real KV rate above is ~3.5x smaller than the dual-sided worst-case estimate).
-  #   The moderate probe (29,463 tokens) recalled correctly, matching the f16 baseline exactly
-  #   (GLiNER2 exact-entity-match + bge-m3 cosine similarity 1.0, both trivial since the completion
-  #   text was byte-identical). But the near-ceiling probe (111,272 tokens, identical prompt to the
-  #   f16 baseline) FAILED both times it was run: `finish_reason: "length"`, empty `content`, the
-  #   full 1024-token budget spent on `reasoning_content` that never located the embedded fact —
-  #   reproduced on a second attempt (10.4s wall, 111,268/111,272 tokens cache-hit, so not a
-  #   prefill-timing fluke) with the model's own reasoning trace showing it searching the wrong
-  #   region of the prompt. No hang, no journal signature, container stayed healthy throughout —
-  #   this is a correctness regression specific to quantized cache at large context, not a Vulkan
-  #   freeze. Per the plan's Part B decision rule, `ling-3-tiny-q4-m` (and, transitively, all four
-  #   quants — WP-2 stays f16-only) keep the f16 default; `-ctk`/`-ctv`/`-fa` are NOT added to any
-  #   entry in this group. Worth a separate, narrower follow-up if throughput ever motivates
-  #   revisiting this — not attempted again in this plan.
-  # - Ling-3.0-tiny-UD-Q4_K_XL (WP-2, f16 cache): weights 5,340,611,328 B = 4.97 GiB / 5.34 GB.
-  #   Near-ceiling probe (111,269 real prompt tokens, correct recall, `finish_reason: "stop"`,
-  #   62.15s wall): PEAK 8,366,440,448 B = 7.79 GiB / 8.37 GB → ≈1.20 GiB overhead beyond weights
-  #   (using WP-1's clean empty-group baseline of 1,739,743,232 B / 1.62 GiB — see methodology
-  #   note below). Zero journal signature. Comfortably under nameplate.
-  # - Ling-3.0-tiny-UD-Q6_K_XL (WP-2, f16 cache): weights 7,274,546,528 B = 6.77 GiB / 7.27 GB.
-  #   Near-ceiling probe (111,271 real prompt tokens, correct recall, 61.93s wall): PEAK
-  #   10,316,177,408 B = 9.61 GiB / 10.32 GB → ≈1.21 GiB overhead beyond weights, in line with
-  #   UD-Q4_K_XL above. Zero journal signature. Comfortably under nameplate.
-  # - Ling-3.0-tiny-Q8_0 (WP-2, f16 cache): weights 8,408,187,968 B = 7.83 GiB / 8.41 GB — the
-  #   largest quant in this group. Single-turn ping needed `max_tokens: 512` (18 completion
-  #   tokens used; a shorter budget is not enough for this quant's more verbose reasoning trace —
-  #   same finding as the original -c 8192 bake-off, still true at -c 131072). Near-ceiling probe
-  #   (111,270 real prompt tokens, correct recall, `finish_reason: "stop"`, 61.09s wall): PEAK
-  #   10,913,460,224 B = 10.16 GiB / 10.91 GB → ≈0.71 GiB overhead beyond weights — lower than the
-  #   other two quants above; within the baseline-measurement noise band already documented in
-  #   this group's original VRAM-fit-math section (a few hundred MB of drift between reads on a
-  #   shared desktop session is ordinary here, not a real quant-dependent effect, since KV-cache
-  #   size is a function of context length and cache dtype, not weight quantization). No hang,
-  #   zero journal signature, container stayed healthy throughout. Comfortably under nameplate —
-  #   even the largest quant leaves several GiB of headroom at full -c 131072.
-  #
-  # Methodology note: a `mem_info_vram_used` reading taken as a "baseline" immediately before a
-  # load inside this `exclusive: true` group can be misleading — eviction of the previous
-  # resident model is triggered by the *incoming* request, not proactively, so a read taken right
-  # before firing that request can still capture the prior model mid-teardown or fully resident,
-  # producing an inflated apparent baseline (hit once during WP-2's live measurement). All three
-  # WP-2 overhead figures above therefore use WP-1's own verified empty-group baseline
-  # (1,739,743,232 B / 1.62 GiB, re-observed in the 1.62-1.94 GiB range across this plan) rather
-  # than a live pre-load reading.
-  #
-  # All four bake-off quants now verified individually at -c 131072, f16 cache only (no
-  # -ctk/-ctv/-fa on any entry — see the Part B rejection above), correct recall at both moderate
-  # and near-ceiling prompt sizes, zero hang signature throughout either WP-1 or WP-2.
-  ling-bakeoff:
-    swap: true
-    exclusive: true
-    persistent: false
-    members:
-      # Ling-3.0-tiny-Q4_K_M removed 2026-08-25 (user-directed quant reduction — see the
-      # bake-off registry comment); its historical fit-math records above are retained as-is.
-      - Ling-3.0-tiny-UD-Q4_K_XL
-      - Ling-3.0-tiny-UD-Q6_K_XL
-      - Ling-3.0-tiny-Q8_0
-
-  # ── minicpm5-2b — MiniCPM5-2B Q6_K, Open WebUI only (plans/minicpm5-2b-q6k-serving.md). Same
-  # swap/exclusive shape as the other chat groups. Measured VRAM loaded/peak (docs/test-matrix-results.md
-  # "minicpm5-2b-4gb-fit spike", Q6_K follow-up): c32k f16 3229/3270 MiB, c64k q8_0 3346/3391 MiB,
-  # c128k q4_0 3494/3536 MiB — all inside a 4 GB card's envelope.
-  minicpm5-2b:
-    swap: true
-    exclusive: true
-    persistent: false
-    members:
-      - MiniCPM5-2B-Q6_K-c32k-f16
-      - MiniCPM5-2B-Q6_K-c64k-q8_0
-      - MiniCPM5-2B-Q6_K-c128k-q4_0
-
-  # ── gemma-qat-bakeoff — Gemma4-12B QAT, testing only (see plans/serving-harness-round-2.md
-  # WP-2). Same shape as `chat`/`ling-bakeoff` above: swap:true/exclusive:true so this new,
-  # unvalidated-on-this-host artifact never coexists with anything else in VRAM while its own
-  # save-work-gated canary load is still being verified. Single member for now — this is the
-  # only quant unsloth published for this model (see registry comment above).
-  #
-  # ── VRAM fit math (host-verified 2026-08-21, live cold/warm/hot sweep + needle probe + quality
-  # corpus through the new llama/bakeoff harness, journalctl -k -f watched throughout, zero
-  # hang signature) ──
-  #
-  # Weights: 6,716,356,800 B = 6.26 GiB. Baseline (nemotron-4b resident in `chat`, nothing from
-  # this group loaded): 4,080,046,080 B / 3.80 GiB. First load (single-turn ping):
-  # 9,395,146,752 B / 8.75 GiB. Post-sweep peak (cold/warm/hot + needle + quality corpus):
-  # 9,426,845,696 B / 8.78 GiB → ≈2.5 GiB overhead beyond weights alone (KV cache at -c 32768 +
-  # compute/graph buffer). Comfortably under the 15.92 GiB nameplate and the realistic free-VRAM
-  # budget. Full results (timing table, needle/quality-corpus findings, an open question about
-  # the cold/warm TTFT gap vs. the poller's own model_load_seconds reading):
-  # docs/gemma-4-12b-qat-bakeoff-results.md.
-  #
-  # ── MTP + vision fit re-verification (host-verified 2026-08-25, plans/mtp-serving-rollout.md
-  # WP-2, at this entry's real -c 32768) ── baseline 818,458,624 B / 0.76 GiB (desktop only);
-  # after cold load + chat probe: 10,450,456,576 B / 9.73 GiB → footprint ≈8.97 GiB
-  # (weights 6.26 + mmproj 0.16 + MTP sidecar & draft context + KV + buffers); after vision
-  # probe: 10,458,386,432 B (stable — buffers pre-allocated). Free ≈6.2 GiB, well over the
-  # ~1.5 GiB gate, no -c step-down needed. Chat probe body-verified MTP engaged: draft_n=36,
-  # draft_n_accepted=29 (0.81), 81.9 tok/s tg. Vision probe (generated solid-red PNG,
-  # reasoning_effort "none"): correct one-word description, body-verified.
-  # ── Long-context landing (host-verified 2026-08-25, plans/long-context-serving-default.md
-  # WP-2) ── `-c` 32768 → 131072 (serving default), f16 KV, vision (--mmproj) + MTP (-md)
-  # resident throughout — no capability was dropped to buy context. Live numbers:
-  # - 131072 landing: footprint ≈11.5 GB (12.37 GB used vs 0.89 GB baseline), 4.4 GiB free at
-  #   peak. Needle-at-depth recall exact at a real 118,135-token prompt (90% fill), draft
-  #   acceptance 0.86, prefill 897 t/s (2.3 min), tg 90 t/s. Vision re-verified at this config
-  #   (solid-red PNG, reasoning_effort "none" → "Red", body-verified).
-  # - 262144 (256k test point): VALID AND FITS — the plan's expected f16 fit-fail did NOT
-  #   materialize (the ≈8 GiB KV extrapolation was pessimistic; SWA-aware allocation is
-  #   lighter). Recall exact at a real 234,066-token prompt (89.3%), MTP acceptance 0.79,
-  #   prefill 576 t/s (6.8 min), peak 15.09 GB used → 1.87 GiB free — passes the ~1.5 GiB gate
-  #   solo, BUT leaves ~0.7 GB with crucible's bge-m3 co-resident (the qwen36 lesson), so
-  #   131072 stays the default; 262144 is a user-selectable valid config for this alias.
-  gemma-qat-bakeoff:
-    swap: true
-    exclusive: true
-    persistent: false
-    members:
-      - gemma-4-12B-it-qat-UD-Q4_K_XL
-
-  # ── qwen36-a3b-bakeoff — Qwen3.6-35B-A3B, testing only (see plans/serving-harness-round-2.md
-  # WP-4). Same shape as the other bake-off groups: swap:true/exclusive:true.
-  #
-  # ── Offload-placement search (host-verified 2026-08-21, scratch llama-server on a throwaway
-  # port :8099, UD-Q4_K_XL canary quant, journalctl -k -f watched throughout, zero hang signature
-  # any config) ──
-  #
-  # Exact tensor-level GGUF math (stdlib struct parse, no gguf pip package — same technique as
-  # Ling's context-ceiling research): 40 blocks, all MoE; routed-expert weights total 18.320 GiB
-  # (~491.8 MiB/layer average), non-expert weights (attention/ssm/embedding/output/shared-expert/
-  # router) total 2.494 GiB, always GPU-resident at `-ngl 99` regardless of `-ncmoe`. Only 10 of 40
-  # layers carry real attention KV cache (`full_attention_interval=4`); the rest are SSM/recurrent
-  # layers with a fixed-size (not context-scaling) state buffer — same KV-lightness pattern as
-  # Ling-3.0-tiny's hybrid KDA/MLA architecture.
-  #
-  # Config A (`-ngl 99 -ncmoe 24`, 16 layers' experts GPU-resident): c=8192 peak
-  # 14,948,843,520 B / 13.92 GiB (2.00 GiB free of 15.92 GiB nameplate); c=32768 peak
-  # 15,477,321,728 B / 14.42 GiB (1.505 GiB free — at the plan's ~1.5 GiB abort-margin
-  # threshold). REJECTED: extrapolated free margin at the ~100K useful-context target is
-  # ≈0.47 GiB, well under any safe threshold — not live-tested at 100K given this was already
-  # clear from the moderate-context measurement plus the linear KV-growth rate measured on config
-  # A itself (160 MiB @ 8192 → 640 MiB @ 32768, exact match to the linear prediction).
-  #
-  # Config B (`-ngl 99 -ncmoe 32`, 8 layers' experts GPU-resident) — WINNER. c=8192:
-  # 11,048,169,472 B / 10.29 GiB (5.63 GiB free). c=100000: idle-loaded 13,024,489,472 B /
-  # 12.13 GiB, peak-after-needle-probe 13,095,755,776 B / 12.20 GiB (3.72–3.79 GiB free either
-  # way — buffers are pre-allocated at load, not growing further under real use). RAM (cgroup):
-  # 28.38 GiB current of 36 GiB cap at c=100000 under active load, 10.28 GiB margin, zero OOM
-  # events. Near-ceiling needle probe (scratch port, 100000 ceiling → 55,618 real prompt tokens):
-  # CORRECT, clean `stop` finish. Decode throughput (200-token generation, c=8192): ≈30.2 tok/s.
-  # A second near-ceiling probe run later through the real router alias (WP-4's full-harness
-  # pass, 55,588 real prompt tokens) hit the 256-token needle-probe budget before emitting visible
-  # `content` — but the captured `reasoning_content` shows the model correctly located the code
-  # ("the exact reference code is FW9-DELTA-3123... Response: FW9-DELTA-3123") and then spent the
-  # rest of the budget on redundant self-verification ("Check format... Correct... Ready...
-  # Done...") without ever transitioning to `content`. This is the same benign
-  # reasoning-budget-truncation pattern already documented for Gemma4-12B-QAT and Ling-3.0-tiny
-  # elsewhere in this plan — genuine correct recall, a formatting/budget artifact, not a wrong
-  # answer — explicitly NOT config C's degenerate-regurgitation failure mode below. This model
-  # exhibits it more severely than any other model in this plan (9 of 12 quality-corpus prompts
-  # hit `length` at the harness's default 768-token budget, 6 with zero visible content) — see the
-  # results doc for the full per-prompt table.
-  #
-  # Config C (`-ngl 99 -cmoe`, ALL experts CPU-resident) — REJECTED despite superior VRAM/RAM
-  # headroom (c=100000 peak 9,052,823,552 B / 8.43 GiB, 7.49 GiB free; RAM margin 10.44 GiB;
-  # decode throughput ≈27.2 tok/s at c=8192, only ~10% slower than B). Near-ceiling needle probe
-  # FAILED reproducibly on two independent probes (different embedded codes, ~55.5-55.6K real
-  # prompt tokens both times): `finish_reason: "length"`, empty `content`, and — the load-bearing
-  # detail that makes this a real correctness regression rather than the already-documented
-  # reasoning-budget-truncation pattern — the `reasoning_content` was not genuine on-topic
-  # reasoning cut off in progress (the shape seen elsewhere in this plan), it was **degenerate
-  # regurgitation of haystack filler tokens** ("block interval artifact archive cycle. driver
-  # archive engine artifact profile anomaly..."), on both probes. Zero hang signature, container
-  # stayed healthy throughout both — the same "healthy but wrong" shape as the
-  # ling-3-tiny-context-ceiling plan's Part B quantized-KV-cache rejection, but a distinct,
-  # previously undocumented failure mode for this specific config (all-CPU MoE compute at large
-  # context), not that plan's cause (quantized cache) — this model's cache is f16 throughout, only
-  # placement varies here.
-  #
-  # `-c 100000` lands as the permanent value: the live-verified "useful long-context target" from
-  # the plan's own scope, not this model's real ceiling (`qwen35moe.context_length=262144` per the
-  # GGUF header) — not pushed further this WP per "push further only if cheap and justified."
-  # Full results (timing, needle/quality-corpus detail): docs/qwen36-35b-a3b-bakeoff-results.md.
-  #
-  # ── MTP fit re-verification (host-verified 2026-08-25, plans/mtp-serving-rollout.md WP-2, at
-  # this entry's real -c 100000 on the MTP-GGUF backing file) ── baseline 818,458,624 B /
-  # 0.76 GiB (desktop only); after cold load + short probe: 11,519,078,400 B / 10.73 GiB; after
-  # a moderate needle probe (4,992 real prompt tokens, correct recall): 11,535,470,592 B /
-  # 10.74 GiB — +16 MB only, draft context and KV pre-allocated at load exactly like the config-B
-  # record above. Free ≈5.2 GiB, well over the ~1.5 GiB gate, no -c step-down needed. MTP
-  # body-verified engaged both probes: draft acceptance 0.85/0.83, tg 54.3/54.6 tok/s (vs
-  # ≈29-30 tok/s pre-MTP at the same -ncmoe 32 placement — the batched-verification
-  # amortization of CPU-expert streaming, even better at short generations than the spike's
-  # +64% figure at -c 8192).
-  #
-  # ── Long-context landing (host-verified 2026-08-25, plans/long-context-serving-default.md
-  # WP-2) ── `-c` 100000 → 131072 (serving default) + per-model `-ub 2048` override (last flag
-  # wins over the macro's `-ub 512`). All numbers below live-measured on this host:
-  # - 131072 landing: footprint 12.38 GB used vs 0.89 GB baseline (≈11.5 GB), 4.4 GiB free at
-  #   peak (VRAM flat load→post-probe: KV + draft context + compute buffer pre-allocated).
-  #   Needle-at-depth recall exact at a real 118,026-token prompt (90% fill), draft acceptance
-  #   0.85-0.87, tg ≈46-55 t/s unchanged by -ub.
-  # - `-ub 2048` (user-directed experiment, plan rev 2): prefill 321.5 → 745.4 t/s at 6.5k
-  #   (2.32x) and 270.6 → 600.0 t/s at 118k (2.22x; 7.3 → 3.3 min wall), for +1.0 GB compute
-  #   buffer (12.38 → 13.38 GB used, 3.46 GiB free — gate holds). Mechanism confirmed: with
-  #   -ncmoe 32, prefill streams CPU-resident expert weights over PCIe once per micro-batch;
-  #   a 4x micro-batch amortizes each transfer across 4x tokens. Decode untouched (token-at-a-
-  #   time). Dense/GPU-resident models have no streaming to amortize — override is qwen36-only.
-  # - 262144 (256k test point): functionally VALID — recall exact at a real 234,971-token
-  #   prompt (89.6%), MTP engaged (acceptance 0.87), no collapse — but fit-FAILS the ~1.5 GiB
-  #   gate: footprint ≈14.7 GB, ≈1.05 GiB free solo (interpolated max passing -c ≈ ~240k, not
-  #   live-verified), and crucible's bge-m3 spawning beside it took the card to 16.92/17.10 GB
-  #   (~175 MB free) — no margin for the embed family that co-runs in practice. Prefill 232 t/s
-  #   (16.9 min) at -ub 512. 131072 stays the default per plan.
-  #
-  # WP-4 step 5 (host-verified 2026-08-21): config B propagated to UD-Q5_K_XL (`-ncmoe 34`) and
-  # UD-Q6_K_XL (`-ncmoe 35`), each recomputed from that file's own tensor-level GGUF math. Both
-  # quants' near-ceiling needle probes (and UD-Q5_K_XL's moderate probe) initially read
-  # `correct: false` -- investigated by reading every reasoning trace in full rather than accepted
-  # at face value (this is exactly the shape config C's real failure took): all four are the
-  # benign reasoning-budget-truncation pattern (genuine correct recall, verbose self-verification
-  # exceeding the needle-probe's 256-token budget), never config C's degenerate haystack
-  # regurgitation. Full investigation and per-trace evidence in the results doc.
-  qwen36-a3b-bakeoff:
-    swap: true
-    exclusive: true
-    persistent: false
-    members:
-      # UD-Q5_K_XL / UD-Q6_K_XL removed 2026-08-25 (user-directed hold on Q4 only — see the
-      # registry comment); their WP-4 step-5 placement records (`-ncmoe 34`/`-ncmoe 35`) live in
-      # the registry comment and docs/qwen36-35b-a3b-bakeoff-results.md for any future re-add.
-      - Qwen3.6-35B-A3B-UD-Q4_K_XL
-
-  # ── gemma-26b-a4b — Gemma 4 26B A4B QAT + MTP, no external consumer yet (see
-  # plans/gemma4-26b-a4b-qat-mtp-ladder.md WP-4). Its own group, modelled on `qwen36-a3b-bakeoff`
-  # above and with the same swap/exclusive/persistent semantics — the other MoE-offload entry is
-  # its nearest neighbour in footprint and placement behaviour, not the 12B it shares a family
-  # with.
-  #
-  # ── VRAM fit math (live read-backs from the two ladder windows, headless profile;
-  # docs/test-matrix-results.md "## gemma4-26b-a4b-ladder-v1" / "## gemma4-26b-a4b-ladder-v2") ──
-  # at this group's only member's real `-c 131072`, `-ncmoe 18`, f16 KV, `--mmproj` and the MTP
-  # draft both resident: 13.59 GiB loaded (both ladders, ±0.01 GiB) over a 0.59-0.77 GiB quiesced
-  # baseline, against the ≈14.8 GiB headless live budget — ≈1.2 GiB free, and only because the
-  # routed experts of 18 layers sit in host RAM rather than VRAM. Every other measured rung sits
-  # in the same 13.5-13.6 GiB band by construction (the `-ncmoe` step-up holds the footprint flat
-  # while the KV grows): 13.48 GiB at 64k/`-ncmoe 14`, 13.56 GiB at 256k/`-ncmoe 24`. Our static
-  # fit math under-predicts all of these by ~1.0-1.2 GiB (compute buffers at `-ub 2048`).
-  #
-  # `exclusive: true` follows directly from that 13.59 GiB: it does not fit beside the ≈1.5 GiB
-  # `retrieval` pair on this 16 GiB card with a desktop attached, so a request for this alias
-  # evicts whatever else is resident first, and a retrieval request afterwards reloads. `swap:
-  # true`/`persistent: false` + `ttl: 1800` return both the VRAM and the pinned host-side expert
-  # buffer that `--load-mode none` allocates (an anonymous `Vulkan_Host` buffer rather than
-  # evictable page cache, on a 62 GB host — the same RAM consequence `qwen36-a3b` carries) after
-  # 30 idle minutes.
-  gemma-26b-a4b:
-    swap: true
-    exclusive: true
-    persistent: false
-    members:
-      - gemma-4-26B-A4B-it-qat-UD-Q4_K_XL
-
-  # ── qwen38-27b-bakeoff — Qwen3.8-27B dense, testing only (see plans/serving-harness-round-2.md
-  # WP-5). Same shape as the other bake-off groups: swap:true/exclusive:true.
-  #
-  # ── VRAM fit-finding (host-verified 2026-08-21, scratch llama-server on a throwaway port,
-  # journalctl -k -f watched throughout, zero hang signature any candidate) ──
-  #
-  # Card nameplate: 15.92 GiB. Canary UD-IQ3_S (12,040,883,104 B / 11.21 GiB) at the plan's own
-  # `-c 100000` target measured only 0.10 GiB free — investigated rather than accepted: KV cache
-  # growth is exactly linear (confirmed at three context points: 512 MiB @ 8192, 4096 MiB @ 65536,
-  # 6256 MiB @ 100000 -- 0.0625 MiB/token throughout), so the shortfall is real, not measurement
-  # noise. c=65536 (0.32 GiB free) and c=49152 (1.34 GiB free) were both still under this plan's
-  # ~1.5-2 GiB safety-margin convention; c=40960 landed at 1.85 GiB free (idle) / 1.83 GiB free
-  # (peak, after a real moderate needle-probe generation -- buffers pre-allocated, not growing
-  # further under use), correct recall confirmed. UD-IQ3_XXS (10,934,860,704 B / 10.18 GiB, the
-  # smallest quant) at the same c=40960: 2.76 GiB free, correct recall. UD-Q3_K_XL
-  # (13,146,393,504 B / 12.24 GiB, the largest quant) needed to step down to c=24576 for
-  # comparable headroom (1.83 GiB free), correct recall confirmed there too.
-  #
-  # A genuine confound found and fixed mid-WP: an early RAM-cgroup reading during the c=100000
-  # test showed memory.current within 0.53 GiB of the 36 GiB cap with memory.events "max"
-  # incrementing (real reclaim pressure) -- traced to ACCUMULATED PAGE CACHE from this session's
-  # earlier WP-4 model loads (~80 GiB of GGUF reads across Q4/Q5/Q6-A3B), not this model's own
-  # footprint: `POST /api/models/unload` (a genuine llama-swap unload-ALL-resident-models
-  # endpoint, more reliable than the exclusive-group-eviction trick for establishing a true empty
-  # baseline) cleared VRAM but NOT the stale page cache, since cgroup v2 charges page cache to
-  # whichever cgroup instance first read it and does not proactively evict on process exit; a full
-  # `docker compose up -d --force-recreate` (the same mechanism WP-0 used for HostConfig changes)
-  # was needed to get a genuinely fresh cgroup, after which RAM was never actually a binding
-  # constraint for this model (26+ GiB margin throughout, zero memory.max events) -- VRAM was the
-  # real, reproducible constraint all along. Full results (timing, needle/quality-corpus detail):
-  # docs/qwen38-27b-bakeoff-results.md.
-  qwen38-27b-bakeoff:
-    swap: true
-    exclusive: true
-    persistent: false
-    members:
-      - Qwen3.8-27B-UD-IQ3_XXS
-      - Qwen3.8-27B-UD-IQ3_S
-      - Qwen3.8-27B-UD-Q3_K_XL
-      # Effort variants of UD-IQ3_S (2026-09-12, plans/local-leg-claude-code-serving-fit.md WP-2)
-      # -- same weights, same context and cache type, so the fit math above covers them; swapping
-      # between them is a reload, which is the documented cost of the per-id effort mechanism.
-      - Qwen3.8-27B-UD-IQ3_S-reasoning-off
-      - Qwen3.8-27B-UD-IQ3_S-reasoning-low
-      - Qwen3.8-27B-UD-IQ3_S-reasoning-medium
-      - Qwen3.8-27B-UD-IQ3_S-reasoning-high
+# Residency: one `matrix` (replaced the nine `groups:` 2026-10-19, plans/serving-control-redesign.md
+# WP-5; semantics measured in docs/serving-control-spikes-2026-10.md, rule in llama/AGENTS.md).
+# Each `sets:` entry names models allowed to be resident together (`&`); loading a model moves
+# residency to a permitted set containing it and stops every model outside that set. Invariant:
+# NO permitted set exceeds the ~12.8 GiB realistic free-VRAM budget (desktop-shared host, fit
+# math below). Retrieval models coexist with each other and with one small live chat model; chat
+# models never coexist with each other; the 27B, the MoE-offload models and every research-only
+# alias are solo sets (the quiet-GPU eviction the bake-off relies on). A model with no measured
+# fit beside retrieval is solo (fail safe). Every model key appears in at least one set. ttl
+# still unloads every model individually. Footprints: retrieval trio ≈1.5 GiB; nemotron-4b
+# ≈5.5 GB; gemma-4-12b-qat ≈11.5 GB (10.7 GiB); MiniCPM5-2B ≤3536 MiB; the 27B 13.72 GiB.
+#
+# ── Measurement history (carried over from the former groups' comments) ──
+#
+# ── Former `chat` group history ── Under the old `groups:` layout a chat request evicted the
+# retrieval models (exclusive: true). The eviction-and-restore cycle was tested at cutover
+# (2026-07-26, gemma-4-12B Q4_K_M as the chat member, RX 9070/RADV): two full evict→reload
+# cycles, embeddings byte-identical after each reload, ~1.3s retrieval reloads warm, no amdgpu
+# errors in the kernel log. Under the matrix a small chat model sits beside retrieval instead.
+#
+# ── VRAM fit math (host-verified 2026-07-26, no container/model touched to get these numbers) ──
+#
+# GPU VRAM: `cat /sys/class/drm/card1/device/mem_info_vram_total` = 17,095,983,104 bytes
+# = 15.92 GiB / 17.10 GB (RX 9070, matches its 16G nameplate). This is a machine with an active
+# interactive desktop session on the SAME gpu, not a headless inference box: at measurement
+# time `mem_info_vram_used` = 3,327,463,424 bytes (~3.1 GiB / 3.3 GB), and `fuser /dev/dri/*`
+# showed ghostty, firefox, LM Studio, obsidian, and nvtop all holding the render node. So real
+# free VRAM at request time is ~12.8 GiB / 13.8 GB, not the full nameplate figure — and
+# matrix eviction only stops THIS router's own children; it cannot and does not free VRAM held
+# by other GPU clients on the host. The math below uses both figures: nameplate total (an upper
+# bound assuming nothing else is using the GPU) and the measured free-now figure (the realistic
+# bound on this desktop-shared host).
+#
+# Per-model weights are exact file sizes (`stat -c %s`) on the candidate GGUFs already on disk
+# (paths below mapped at measurement time to `~/.lmstudio/models/<publisher>/<repo>/…`; the
+# GGUF-home move has since completed, and the host layout is now
+# `/srv/models/<publisher>/<repo>/…`). KV cache is computed from each GGUF's own
+# header metadata (block count, per-layer attention.head_count_kv,
+# attention.key_length/value_length, attention.sliding_window — read directly, no model
+# loaded) at f16 KV (llama.cpp's default cache type, unquantized) and is SWA-aware: gemma4
+# declares a per-layer sliding_window (1024
+# tokens) and llama.cpp allocates the reduced cache size for the majority of layers that use it,
+# not the full requested context — only the minority "global" layers (the ones with a markedly
+# smaller head_count_kv in the GGUF metadata) scale with the full context size.
+#
+# - gemma-4-12B-it-Q4_K_M (IN, cutover-tested): weights 7,381,384,864 B = 6.87 GiB / 7.38 GB.
+#   48 layers (40 local @ head_count_kv=8 capped at the 1024-token sliding window, 8 global @
+#   head_count_kv=1 scaling with context), key/value head dim 512. At the configured -c 32768,
+#   SWA-aware KV ≈ 1.12 GiB / 1.21 GB → weights+KV ≈ 8.0 GiB / 8.6 GB. Comfortably under BOTH
+#   the nameplate total and the measured ~12.8 GiB free-now, leaving ~4.8 GiB for the
+#   compute/graph buffer even on this desktop-shared host.
+# - NVIDIA-Nemotron-3-Nano-4B-UD-Q4_K_XL (IN, small/fast option; weights upgraded 2026-08-25
+#   from lmstudio Q4_K_M — see the registry note, plans/long-context-serving-default.md WP-2):
+#   weights 3,133,118,624 B = 2.92 GiB / 3.13 GB. `nemotron_h` is a hybrid Mamba/attention
+#   architecture — only 4 of its 42 layers are real attention (head_count_kv=8, head dim 128,
+#   blocks 12/17/24/32); the other 38 are SSM/conv state layers whose per-token state is
+#   ~constant in sequence length, not a KV cache in the usual sense, and this arch carries no
+#   sliding_window metadata. KV ≈ 16 KiB/token (4 layers × 8 heads × 256 dims × f16).
+#   Live-measured 2026-08-25 at the landed -c 131072: total footprint ≈5.5 GB used
+#   (weights+KV+buffers), >9 GB free — needle-at-depth recall exact at a real 117,982-token
+#   prompt (90% fill), prefill 2,353 t/s. 256k VALID: at -c 262144 footprint ≈7.9 GB,
+#   >7 GB free, recall exact at a real 234,542-token prompt (89.5%), prefill 1,649 t/s —
+#   262144 is a valid config for this alias; 131072 is the serving default per plan. The GGUF
+#   header claims context_length=1048576 (both lmstudio and unsloth conversions); the NVIDIA
+#   base config says max_position_embeddings=262144 — targets clamped to the smaller. Note:
+#   this model routinely returns its answer in `reasoning_content` with empty `content` on
+#   terse factual asks — count both channels before calling a response empty.
+# - gemma-4-26B-A4B-it-QAT-Q4_0 (OUT — for now): weights 14,439,362,752 B = 13.45 GiB /
+#   14.44 GB. That number ALONE already exceeds the measured ~12.8 GiB free-now on this
+#   desktop-shared host, before any KV cache or compute/graph buffer is added. Even against the
+#   full 15.92 GiB nameplate total (i.e. only if every other GPU client on the host were closed
+#   first), weights + SWA-aware KV at a modest -c 8192 land around 14.0 GiB, leaving well under
+#   2 GiB for the compute buffer — too thin a margin to add blind. Revisit if this box becomes
+#   dedicated/headless (removing the ~3.3 GB desktop baseline), or under a more aggressive quant
+#   (Q2_K/Q3) that shrinks the weights figure materially.
+# - 27B (Qwen3.6-27B-Q4_K_M, 16,547,398,784 B = 15.41 GiB/16.55 GB), 31B
+#   (gemma-4-31B-it-QAT-Q4_0, 17,651,000,768 B = 16.44 GiB/17.65 GB), 35B-A3B
+#   (Qwen3.6-35B-A3B-Q4_K_M, 21,166,757,728 B = 19.71 GiB/21.17 GB) — all OUT, per the plan's
+#   expectation, but on measured weight sizes rather than an assumed 16G ceiling: 27B's weights
+#   alone leave only 0.5 GiB against the full 15.92 GiB nameplate before any KV/compute buffer;
+#   31B's and 35B-A3B's weights alone already exceed the card's total nameplate capacity, i.e.
+#   they cannot load fully-offloaded on this GPU regardless of context size or what else is
+#   running.
+# ── Ling-3.0-tiny (former `ling-bakeoff` group) — quant bake-off, testing only, canary-first
+# (see plans/ling-3-tiny-bakeoff-and-gpu-hang-watchdog.md). Each quant is a solo matrix set: no
+# quant needs to coexist with anything during testing, and solo is also a safety property —
+# only one untrusted-on-this-host-architecture process resident at a time. Each model entry
+# above carries its own `ttl: 1800`.
+#
+# ── VRAM fit math (host-verified 2026-08-20, live single- + multi-turn canary probes, two of
+# the four bake-off quants — the other two land in WP-3) ──
+#
+# Not extrapolated from the `chat` group's dense-model math above — deliberately measured live
+# instead, since this architecture's 6-of-24-layers-have-KV-cache shape (the other 18 are
+# KDA/linear-attention, no conventional KV cache, no sliding_window metadata) makes a static
+# extrapolation unreliable. `mem_info_vram_used` read directly before/after each load, at
+# -c 8192, after both a single-turn and a ≥3-turn (5-message) exchange per model, watched
+# against `journalctl -k -f` throughout with zero MES/wedged/reset signature.
+#
+# Baseline (nothing from this group loaded, desktop session active): 1,204,256,768 B
+# = 1.12 GiB / 1.20 GB. (Lower than the `chat` group's older 2026-07-26 desktop-baseline
+# measurement of ~3.1 GiB — a snapshot of whatever else happened to be holding the render node
+# that day, not a fixed floor; re-measure at request time rather than assuming either figure.)
+#
+# - Ling-3.0-tiny-Q4_K_M: weights 4,823,894,880 B = 4.49 GiB / 4.82 GB. Peak `mem_info_vram_used`
+#   after load + single-turn + multi-turn: 6,148,374,528 B = 5.73 GiB / 6.15 GB → weights+KV+
+#   buffer delta from baseline ≈ 4.60 GiB / 4.94 GB, i.e. only ~0.11 GiB of KV+compute-buffer
+#   overhead beyond the weights alone — small, consistent with only 6/24 layers carrying a real
+#   KV cache and the conservative `-c 8192`. Comfortably under the 15.92 GiB nameplate total.
+# - Ling-3.0-tiny-UD-Q4_K_XL: weights 5,340,611,328 B = 4.97 GiB / 5.34 GB. Peak
+#   `mem_info_vram_used` after load + single-turn + multi-turn (measured after `exclusive: true`
+#   fully evicted Q4_K_M first): 6,602,141,696 B = 6.15 GiB / 6.60 GB → weights+KV+buffer delta
+#   from baseline ≈ 5.03 GiB / 5.40 GB, ~0.05 GiB overhead beyond weights alone. Also
+#   comfortably under the nameplate total.
+#
+# - Ling-3.0-tiny-UD-Q6_K_XL: weights 7,274,546,528 B = 6.77 GiB / 7.27 GB. Peak
+#   `mem_info_vram_used` after load + single-turn + multi-turn (baseline re-measured at
+#   1,295,380,480 B / 1.21 GiB just before this load — a few hundred MB higher than the Q4
+#   pair's baseline above, ordinary desktop-VRAM fluctuation, not a fixed floor):
+#   8,540,147,712 B = 7.95 GiB / 8.54 GB → delta from baseline ≈ 6.75 GiB / 7.24 GB, i.e.
+#   essentially weights-alone (the ~0.03 GiB "negative overhead" against the raw weights figure
+#   is baseline-measurement noise, not a real effect — two `mem_info_vram_used` reads taken
+#   minutes apart on a shared desktop session routinely differ by a few hundred MB). Comfortably
+#   under the 15.92 GiB nameplate total.
+# - Ling-3.0-tiny-Q8_0: weights 8,408,187,968 B = 7.83 GiB / 8.41 GB — the largest single file
+#   in this group. Note: its first single-turn probe (`max_tokens: 128`) hit `finish_reason:
+#   "length"` with EMPTY `content` — this model's reasoning trace is more verbose than
+#   Q4_K_M/UD-Q4_K_XL/UD-Q6_K_XL's, similar in shape to gemma-4's own `max_tokens >= 128`
+#   requirement (see the `chat` group's macro comment) but needing more headroom still;
+#   `max_tokens: 512` got a real answer. Not a hang, not a config defect — a bake-off/testing
+#   finding worth carrying into whatever `max_tokens` the eventual bake-off evaluation uses; no
+#   change made here since this group's `cmd` doesn't set `max_tokens` (that's a per-request
+#   field, not a server flag). Peak `mem_info_vram_used` after load + both probes:
+#   9,657,081,856 B = 8.99 GiB / 9.66 GB → delta from baseline ≈ 7.79 GiB / 8.36 GB, again
+#   essentially weights-alone within the same measurement-noise band as UD-Q6_K_XL above.
+#   Comfortably under the 15.92 GiB nameplate total — even this largest quant leaves several
+#   GiB of headroom on this card.
+#
+# All four bake-off quants now load individually within nameplate VRAM with no compute-buffer
+# surprises; none were tested loaded simultaneously (each quant is a solo set by design —
+# see above — so that was never the point).
+#
+# ── Context ceiling raised to 131072 (host-verified 2026-08-21, see
+# plans/ling-3-tiny-context-ceiling.md) ──
+#
+# `-c 8192` above was deliberately conservative pending a live measurement of this hybrid
+# KDA/MLA architecture's per-token KV cost; that measurement is now in. GGUF-header geometry
+# (all four quants, byte-identical across quants): `block_count=24`,
+# `attention.head_count_kv` nonzero at exactly 6 of 24 positions (the MLA layers) with
+# `attention.key_length=576` = `attention.kv_lora_rank(512) + rope.dimension_count(64)` — a
+# single compressed latent cached once per token per real-KV layer, not per-attention-head
+# (`attention.head_count=16`), which is the mechanism (not a guess) behind MLA's cache being far
+# smaller than a dense model's at the same head count/context. Assuming f16 storage of that
+# 576-element latent on both the K and V side across the 6 real-KV layers predicts ≈13.5
+# KB/token of KV overhead — matches the already-measured Q4_K_M `-c 8192` delta above (≈0.11
+# GiB) almost exactly, and extrapolated linearly to 131072 tokens predicts only ≈1.7-1.8 GiB of
+# KV overhead even at max context, against the ~12.8 GiB realistic free-VRAM budget below.
+#
+# Live needle-in-haystack probes (moderate ~32768 and near-ceiling ~110-120K prompt tokens,
+# correct recall required, `journalctl -k -f` watched throughout, zero MES/wedged/reset
+# signature) at `-c 131072`:
+#
+# - Ling-3.0-tiny-Q4_K_M (canary, WP-1 Part A, f16 cache): baseline 1,739,743,232 B (1.62 GiB).
+#   Single-turn ping: 7,624,044,544 B (7.10 GiB). Moderate probe (29,463 real prompt tokens,
+#   correct recall): 7,698,051,072 B (7.17 GiB). Near-ceiling probe (111,272 real prompt tokens,
+#   correct recall, 62.2s wall): PEAK 8,013,406,208 B (7.46 GiB) → 1.35 GiB overhead beyond the
+#   4.49 GiB weights (KV + compute buffer combined, at the full -c 131072 pre-allocation) —
+#   under the ≈1.7-1.8 GiB a-priori estimate above. Real measured KV growth rate between the two
+#   probes ≈3.85 KB/token (vs the ≈13.5 KB/token worst-case estimate — the gap is explained
+#   below). Zero journal signature either probe. Comfortably under nameplate.
+# - KV cache type test (WP-1 Part B): a hard-gated symmetric q8_0/q8_0 + `-fa on` compatibility
+#   test was run on the canary given two upstream risk signals for this architecture+backend
+#   combination (BailingMoE3's own merge PR reported "freezes on Vulkan"; the closely-related
+#   DeepSeek MLA family has an open llama.cpp issue where quantized K-cache produces "confident
+#   gibberish" while the server stays healthy). **Result: REJECTED, not landed.** A scratch
+#   verbose-logged load confirmed flash_attn=enabled and real quantization took effect (K cache
+#   14.34 MiB at q8_0 vs 27.00 MiB at f16, same 4096-token context) — and confirmed MLA caches
+#   only ONE side (`V (q8_0): 0.00 MiB` — a single shared latent, not separate K/V caches, which
+#   is why the real KV rate above is ~3.5x smaller than the dual-sided worst-case estimate).
+#   The moderate probe (29,463 tokens) recalled correctly, matching the f16 baseline exactly
+#   (GLiNER2 exact-entity-match + bge-m3 cosine similarity 1.0, both trivial since the completion
+#   text was byte-identical). But the near-ceiling probe (111,272 tokens, identical prompt to the
+#   f16 baseline) FAILED both times it was run: `finish_reason: "length"`, empty `content`, the
+#   full 1024-token budget spent on `reasoning_content` that never located the embedded fact —
+#   reproduced on a second attempt (10.4s wall, 111,268/111,272 tokens cache-hit, so not a
+#   prefill-timing fluke) with the model's own reasoning trace showing it searching the wrong
+#   region of the prompt. No hang, no journal signature, container stayed healthy throughout —
+#   this is a correctness regression specific to quantized cache at large context, not a Vulkan
+#   freeze. Per the plan's Part B decision rule, `ling-3-tiny-q4-m` (and, transitively, all four
+#   quants — WP-2 stays f16-only) keep the f16 default; `-ctk`/`-ctv`/`-fa` are NOT added to any
+#   entry in this group. Worth a separate, narrower follow-up if throughput ever motivates
+#   revisiting this — not attempted again in this plan.
+# - Ling-3.0-tiny-UD-Q4_K_XL (WP-2, f16 cache): weights 5,340,611,328 B = 4.97 GiB / 5.34 GB.
+#   Near-ceiling probe (111,269 real prompt tokens, correct recall, `finish_reason: "stop"`,
+#   62.15s wall): PEAK 8,366,440,448 B = 7.79 GiB / 8.37 GB → ≈1.20 GiB overhead beyond weights
+#   (using WP-1's clean empty-group baseline of 1,739,743,232 B / 1.62 GiB — see methodology
+#   note below). Zero journal signature. Comfortably under nameplate.
+# - Ling-3.0-tiny-UD-Q6_K_XL (WP-2, f16 cache): weights 7,274,546,528 B = 6.77 GiB / 7.27 GB.
+#   Near-ceiling probe (111,271 real prompt tokens, correct recall, 61.93s wall): PEAK
+#   10,316,177,408 B = 9.61 GiB / 10.32 GB → ≈1.21 GiB overhead beyond weights, in line with
+#   UD-Q4_K_XL above. Zero journal signature. Comfortably under nameplate.
+# - Ling-3.0-tiny-Q8_0 (WP-2, f16 cache): weights 8,408,187,968 B = 7.83 GiB / 8.41 GB — the
+#   largest quant in this group. Single-turn ping needed `max_tokens: 512` (18 completion
+#   tokens used; a shorter budget is not enough for this quant's more verbose reasoning trace —
+#   same finding as the original -c 8192 bake-off, still true at -c 131072). Near-ceiling probe
+#   (111,270 real prompt tokens, correct recall, `finish_reason: "stop"`, 61.09s wall): PEAK
+#   10,913,460,224 B = 10.16 GiB / 10.91 GB → ≈0.71 GiB overhead beyond weights — lower than the
+#   other two quants above; within the baseline-measurement noise band already documented in
+#   this group's original VRAM-fit-math section (a few hundred MB of drift between reads on a
+#   shared desktop session is ordinary here, not a real quant-dependent effect, since KV-cache
+#   size is a function of context length and cache dtype, not weight quantization). No hang,
+#   zero journal signature, container stayed healthy throughout. Comfortably under nameplate —
+#   even the largest quant leaves several GiB of headroom at full -c 131072.
+#
+# Methodology note: a `mem_info_vram_used` reading taken as a "baseline" immediately before a
+# load of a solo-set model can be misleading — eviction of the previous
+# resident model is triggered by the *incoming* request, not proactively, so a read taken right
+# before firing that request can still capture the prior model mid-teardown or fully resident,
+# producing an inflated apparent baseline (hit once during WP-2's live measurement). All three
+# WP-2 overhead figures above therefore use WP-1's own verified empty-group baseline
+# (1,739,743,232 B / 1.62 GiB, re-observed in the 1.62-1.94 GiB range across this plan) rather
+# than a live pre-load reading.
+#
+# All four bake-off quants now verified individually at -c 131072, f16 cache only (no
+# -ctk/-ctv/-fa on any entry — see the Part B rejection above), correct recall at both moderate
+# and near-ceiling prompt sizes, zero hang signature throughout either WP-1 or WP-2.
+# ── MiniCPM5-2B Q6_K (former `minicpm5-2b` group), Open WebUI only
+# (plans/minicpm5-2b-q6k-serving.md). Each variant is a set beside retrieval. Measured VRAM loaded/peak (docs/test-matrix-results.md
+# "minicpm5-2b-4gb-fit spike", Q6_K follow-up): c32k f16 3229/3270 MiB, c64k q8_0 3346/3391 MiB,
+# c128k q4_0 3494/3536 MiB — all inside a 4 GB card's envelope.
+# ── Gemma4-12B QAT (former `gemma-qat-bakeoff` group; see plans/serving-harness-round-2.md
+# WP-2). Originally exclusive while its canary load was verified; it is now a live chat model
+# and sits beside retrieval in the matrix (≈11.5 GB footprint at -c 131072, below). Only quant
+# unsloth published for this model (see registry comment above).
+#
+# ── VRAM fit math (host-verified 2026-08-21, live cold/warm/hot sweep + needle probe + quality
+# corpus through the new llama/bakeoff harness, journalctl -k -f watched throughout, zero
+# hang signature) ──
+#
+# Weights: 6,716,356,800 B = 6.26 GiB. Baseline (nemotron-4b resident, gemma-qat
+# not loaded): 4,080,046,080 B / 3.80 GiB. First load (single-turn ping):
+# 9,395,146,752 B / 8.75 GiB. Post-sweep peak (cold/warm/hot + needle + quality corpus):
+# 9,426,845,696 B / 8.78 GiB → ≈2.5 GiB overhead beyond weights alone (KV cache at -c 32768 +
+# compute/graph buffer). Comfortably under the 15.92 GiB nameplate and the realistic free-VRAM
+# budget. Full results (timing table, needle/quality-corpus findings, an open question about
+# the cold/warm TTFT gap vs. the poller's own model_load_seconds reading):
+# docs/gemma-4-12b-qat-bakeoff-results.md.
+#
+# ── MTP + vision fit re-verification (host-verified 2026-08-25, plans/mtp-serving-rollout.md
+# WP-2, at this entry's real -c 32768) ── baseline 818,458,624 B / 0.76 GiB (desktop only);
+# after cold load + chat probe: 10,450,456,576 B / 9.73 GiB → footprint ≈8.97 GiB
+# (weights 6.26 + mmproj 0.16 + MTP sidecar & draft context + KV + buffers); after vision
+# probe: 10,458,386,432 B (stable — buffers pre-allocated). Free ≈6.2 GiB, well over the
+# ~1.5 GiB gate, no -c step-down needed. Chat probe body-verified MTP engaged: draft_n=36,
+# draft_n_accepted=29 (0.81), 81.9 tok/s tg. Vision probe (generated solid-red PNG,
+# reasoning_effort "none"): correct one-word description, body-verified.
+# ── Long-context landing (host-verified 2026-08-25, plans/long-context-serving-default.md
+# WP-2) ── `-c` 32768 → 131072 (serving default), f16 KV, vision (--mmproj) + MTP (-md)
+# resident throughout — no capability was dropped to buy context. Live numbers:
+# - 131072 landing: footprint ≈11.5 GB (12.37 GB used vs 0.89 GB baseline), 4.4 GiB free at
+#   peak. Needle-at-depth recall exact at a real 118,135-token prompt (90% fill), draft
+#   acceptance 0.86, prefill 897 t/s (2.3 min), tg 90 t/s. Vision re-verified at this config
+#   (solid-red PNG, reasoning_effort "none" → "Red", body-verified).
+# - 262144 (256k test point): VALID AND FITS — the plan's expected f16 fit-fail did NOT
+#   materialize (the ≈8 GiB KV extrapolation was pessimistic; SWA-aware allocation is
+#   lighter). Recall exact at a real 234,066-token prompt (89.3%), MTP acceptance 0.79,
+#   prefill 576 t/s (6.8 min), peak 15.09 GB used → 1.87 GiB free — passes the ~1.5 GiB gate
+#   solo, BUT leaves ~0.7 GB with crucible's bge-m3 co-resident (the qwen36 lesson), so
+#   131072 stays the default; 262144 is a user-selectable valid config for this alias.
+# ── Qwen3.6-35B-A3B (former `qwen36-a3b-bakeoff` group), testing only (see
+# plans/serving-harness-round-2.md WP-4). Solo matrix set.
+#
+# ── Offload-placement search (host-verified 2026-08-21, scratch llama-server on a throwaway
+# port :8099, UD-Q4_K_XL canary quant, journalctl -k -f watched throughout, zero hang signature
+# any config) ──
+#
+# Exact tensor-level GGUF math (stdlib struct parse, no gguf pip package — same technique as
+# Ling's context-ceiling research): 40 blocks, all MoE; routed-expert weights total 18.320 GiB
+# (~491.8 MiB/layer average), non-expert weights (attention/ssm/embedding/output/shared-expert/
+# router) total 2.494 GiB, always GPU-resident at `-ngl 99` regardless of `-ncmoe`. Only 10 of 40
+# layers carry real attention KV cache (`full_attention_interval=4`); the rest are SSM/recurrent
+# layers with a fixed-size (not context-scaling) state buffer — same KV-lightness pattern as
+# Ling-3.0-tiny's hybrid KDA/MLA architecture.
+#
+# Config A (`-ngl 99 -ncmoe 24`, 16 layers' experts GPU-resident): c=8192 peak
+# 14,948,843,520 B / 13.92 GiB (2.00 GiB free of 15.92 GiB nameplate); c=32768 peak
+# 15,477,321,728 B / 14.42 GiB (1.505 GiB free — at the plan's ~1.5 GiB abort-margin
+# threshold). REJECTED: extrapolated free margin at the ~100K useful-context target is
+# ≈0.47 GiB, well under any safe threshold — not live-tested at 100K given this was already
+# clear from the moderate-context measurement plus the linear KV-growth rate measured on config
+# A itself (160 MiB @ 8192 → 640 MiB @ 32768, exact match to the linear prediction).
+#
+# Config B (`-ngl 99 -ncmoe 32`, 8 layers' experts GPU-resident) — WINNER. c=8192:
+# 11,048,169,472 B / 10.29 GiB (5.63 GiB free). c=100000: idle-loaded 13,024,489,472 B /
+# 12.13 GiB, peak-after-needle-probe 13,095,755,776 B / 12.20 GiB (3.72–3.79 GiB free either
+# way — buffers are pre-allocated at load, not growing further under real use). RAM (cgroup):
+# 28.38 GiB current of 36 GiB cap at c=100000 under active load, 10.28 GiB margin, zero OOM
+# events. Near-ceiling needle probe (scratch port, 100000 ceiling → 55,618 real prompt tokens):
+# CORRECT, clean `stop` finish. Decode throughput (200-token generation, c=8192): ≈30.2 tok/s.
+# A second near-ceiling probe run later through the real router alias (WP-4's full-harness
+# pass, 55,588 real prompt tokens) hit the 256-token needle-probe budget before emitting visible
+# `content` — but the captured `reasoning_content` shows the model correctly located the code
+# ("the exact reference code is FW9-DELTA-3123... Response: FW9-DELTA-3123") and then spent the
+# rest of the budget on redundant self-verification ("Check format... Correct... Ready...
+# Done...") without ever transitioning to `content`. This is the same benign
+# reasoning-budget-truncation pattern already documented for Gemma4-12B-QAT and Ling-3.0-tiny
+# elsewhere in this plan — genuine correct recall, a formatting/budget artifact, not a wrong
+# answer — explicitly NOT config C's degenerate-regurgitation failure mode below. This model
+# exhibits it more severely than any other model in this plan (9 of 12 quality-corpus prompts
+# hit `length` at the harness's default 768-token budget, 6 with zero visible content) — see the
+# results doc for the full per-prompt table.
+#
+# Config C (`-ngl 99 -cmoe`, ALL experts CPU-resident) — REJECTED despite superior VRAM/RAM
+# headroom (c=100000 peak 9,052,823,552 B / 8.43 GiB, 7.49 GiB free; RAM margin 10.44 GiB;
+# decode throughput ≈27.2 tok/s at c=8192, only ~10% slower than B). Near-ceiling needle probe
+# FAILED reproducibly on two independent probes (different embedded codes, ~55.5-55.6K real
+# prompt tokens both times): `finish_reason: "length"`, empty `content`, and — the load-bearing
+# detail that makes this a real correctness regression rather than the already-documented
+# reasoning-budget-truncation pattern — the `reasoning_content` was not genuine on-topic
+# reasoning cut off in progress (the shape seen elsewhere in this plan), it was **degenerate
+# regurgitation of haystack filler tokens** ("block interval artifact archive cycle. driver
+# archive engine artifact profile anomaly..."), on both probes. Zero hang signature, container
+# stayed healthy throughout both — the same "healthy but wrong" shape as the
+# ling-3-tiny-context-ceiling plan's Part B quantized-KV-cache rejection, but a distinct,
+# previously undocumented failure mode for this specific config (all-CPU MoE compute at large
+# context), not that plan's cause (quantized cache) — this model's cache is f16 throughout, only
+# placement varies here.
+#
+# `-c 100000` lands as the permanent value: the live-verified "useful long-context target" from
+# the plan's own scope, not this model's real ceiling (`qwen35moe.context_length=262144` per the
+# GGUF header) — not pushed further this WP per "push further only if cheap and justified."
+# Full results (timing, needle/quality-corpus detail): docs/qwen36-35b-a3b-bakeoff-results.md.
+#
+# ── MTP fit re-verification (host-verified 2026-08-25, plans/mtp-serving-rollout.md WP-2, at
+# this entry's real -c 100000 on the MTP-GGUF backing file) ── baseline 818,458,624 B /
+# 0.76 GiB (desktop only); after cold load + short probe: 11,519,078,400 B / 10.73 GiB; after
+# a moderate needle probe (4,992 real prompt tokens, correct recall): 11,535,470,592 B /
+# 10.74 GiB — +16 MB only, draft context and KV pre-allocated at load exactly like the config-B
+# record above. Free ≈5.2 GiB, well over the ~1.5 GiB gate, no -c step-down needed. MTP
+# body-verified engaged both probes: draft acceptance 0.85/0.83, tg 54.3/54.6 tok/s (vs
+# ≈29-30 tok/s pre-MTP at the same -ncmoe 32 placement — the batched-verification
+# amortization of CPU-expert streaming, even better at short generations than the spike's
+# +64% figure at -c 8192).
+#
+# ── Long-context landing (host-verified 2026-08-25, plans/long-context-serving-default.md
+# WP-2) ── `-c` 100000 → 131072 (serving default) + per-model `-ub 2048` override (last flag
+# wins over the macro's `-ub 512`). All numbers below live-measured on this host:
+# - 131072 landing: footprint 12.38 GB used vs 0.89 GB baseline (≈11.5 GB), 4.4 GiB free at
+#   peak (VRAM flat load→post-probe: KV + draft context + compute buffer pre-allocated).
+#   Needle-at-depth recall exact at a real 118,026-token prompt (90% fill), draft acceptance
+#   0.85-0.87, tg ≈46-55 t/s unchanged by -ub.
+# - `-ub 2048` (user-directed experiment, plan rev 2): prefill 321.5 → 745.4 t/s at 6.5k
+#   (2.32x) and 270.6 → 600.0 t/s at 118k (2.22x; 7.3 → 3.3 min wall), for +1.0 GB compute
+#   buffer (12.38 → 13.38 GB used, 3.46 GiB free — gate holds). Mechanism confirmed: with
+#   -ncmoe 32, prefill streams CPU-resident expert weights over PCIe once per micro-batch;
+#   a 4x micro-batch amortizes each transfer across 4x tokens. Decode untouched (token-at-a-
+#   time). Dense/GPU-resident models have no streaming to amortize — override is qwen36-only.
+# - 262144 (256k test point): functionally VALID — recall exact at a real 234,971-token
+#   prompt (89.6%), MTP engaged (acceptance 0.87), no collapse — but fit-FAILS the ~1.5 GiB
+#   gate: footprint ≈14.7 GB, ≈1.05 GiB free solo (interpolated max passing -c ≈ ~240k, not
+#   live-verified), and crucible's bge-m3 spawning beside it took the card to 16.92/17.10 GB
+#   (~175 MB free) — no margin for the embed family that co-runs in practice. Prefill 232 t/s
+#   (16.9 min) at -ub 512. 131072 stays the default per plan.
+#
+# WP-4 step 5 (host-verified 2026-08-21): config B propagated to UD-Q5_K_XL (`-ncmoe 34`) and
+# UD-Q6_K_XL (`-ncmoe 35`), each recomputed from that file's own tensor-level GGUF math. Both
+# quants' near-ceiling needle probes (and UD-Q5_K_XL's moderate probe) initially read
+# `correct: false` -- investigated by reading every reasoning trace in full rather than accepted
+# at face value (this is exactly the shape config C's real failure took): all four are the
+# benign reasoning-budget-truncation pattern (genuine correct recall, verbose self-verification
+# exceeding the needle-probe's 256-token budget), never config C's degenerate haystack
+# regurgitation. Full investigation and per-trace evidence in the results doc.
+# UD-Q5_K_XL / UD-Q6_K_XL removed 2026-08-25 (user-directed hold on Q4 only — see the
+# registry comment); their WP-4 step-5 placement records (`-ncmoe 34`/`-ncmoe 35`) live in
+# the registry comment and docs/qwen36-35b-a3b-bakeoff-results.md for any future re-add.
+# ── Gemma 4 26B A4B QAT + MTP (former `gemma-26b-a4b` group), no external consumer yet (see
+# plans/gemma4-26b-a4b-qat-mtp-ladder.md WP-4). Solo matrix set, like Qwen3.6-35B-A3B — the
+# other MoE-offload entry is its nearest neighbour in footprint and placement behaviour, not
+# the 12B it shares a family with.
+#
+# ── VRAM fit math (live read-backs from the two ladder windows, headless profile;
+# docs/test-matrix-results.md "## gemma4-26b-a4b-ladder-v1" / "## gemma4-26b-a4b-ladder-v2") ──
+# at this model's real `-c 131072`, `-ncmoe 18`, f16 KV, `--mmproj` and the MTP
+# draft both resident: 13.59 GiB loaded (both ladders, ±0.01 GiB) over a 0.59-0.77 GiB quiesced
+# baseline, against the ≈14.8 GiB headless live budget — ≈1.2 GiB free, and only because the
+# routed experts of 18 layers sit in host RAM rather than VRAM. Every other measured rung sits
+# in the same 13.5-13.6 GiB band by construction (the `-ncmoe` step-up holds the footprint flat
+# while the KV grows): 13.48 GiB at 64k/`-ncmoe 14`, 13.56 GiB at 256k/`-ncmoe 24`. Our static
+# fit math under-predicts all of these by ~1.0-1.2 GiB (compute buffers at `-ub 2048`).
+#
+# The solo set follows directly from that 13.59 GiB: it does not fit beside the ≈1.5 GiB
+# retrieval models on this 16 GiB card with a desktop attached, so a request for this alias
+# evicts whatever else is resident first, and a retrieval request afterwards evicts it. `ttl:
+# 1800` returns both the VRAM and the pinned host-side expert
+# buffer that `--load-mode none` allocates (an anonymous `Vulkan_Host` buffer rather than
+# evictable page cache, on a 62 GB host — the same RAM consequence `qwen36-a3b` carries) after
+# 30 idle minutes.
+# ── Qwen3.8-27B dense (former `qwen38-27b-bakeoff` group; see plans/serving-harness-round-2.md
+# WP-5). Every quant and effort variant is a solo matrix set; the IQ3_S effort variants
+# (2026-09-12, plans/local-leg-claude-code-serving-fit.md WP-2) share its weights, context and
+# cache type, so the fit math below covers them.
+#
+# ── VRAM fit-finding (host-verified 2026-08-21, scratch llama-server on a throwaway port,
+# journalctl -k -f watched throughout, zero hang signature any candidate) ──
+#
+# Card nameplate: 15.92 GiB. Canary UD-IQ3_S (12,040,883,104 B / 11.21 GiB) at the plan's own
+# `-c 100000` target measured only 0.10 GiB free — investigated rather than accepted: KV cache
+# growth is exactly linear (confirmed at three context points: 512 MiB @ 8192, 4096 MiB @ 65536,
+# 6256 MiB @ 100000 -- 0.0625 MiB/token throughout), so the shortfall is real, not measurement
+# noise. c=65536 (0.32 GiB free) and c=49152 (1.34 GiB free) were both still under this plan's
+# ~1.5-2 GiB safety-margin convention; c=40960 landed at 1.85 GiB free (idle) / 1.83 GiB free
+# (peak, after a real moderate needle-probe generation -- buffers pre-allocated, not growing
+# further under use), correct recall confirmed. UD-IQ3_XXS (10,934,860,704 B / 10.18 GiB, the
+# smallest quant) at the same c=40960: 2.76 GiB free, correct recall. UD-Q3_K_XL
+# (13,146,393,504 B / 12.24 GiB, the largest quant) needed to step down to c=24576 for
+# comparable headroom (1.83 GiB free), correct recall confirmed there too.
+#
+# A genuine confound found and fixed mid-WP: an early RAM-cgroup reading during the c=100000
+# test showed memory.current within 0.53 GiB of the 36 GiB cap with memory.events "max"
+# incrementing (real reclaim pressure) -- traced to ACCUMULATED PAGE CACHE from this session's
+# earlier WP-4 model loads (~80 GiB of GGUF reads across Q4/Q5/Q6-A3B), not this model's own
+# footprint: `POST /api/models/unload` (a genuine llama-swap unload-ALL-resident-models
+# endpoint, more reliable than the solo-set eviction trick for establishing a true empty
+# baseline) cleared VRAM but NOT the stale page cache, since cgroup v2 charges page cache to
+# whichever cgroup instance first read it and does not proactively evict on process exit; a full
+# `docker compose up -d --force-recreate` (the same mechanism WP-0 used for HostConfig changes)
+# was needed to get a genuinely fresh cgroup, after which RAM was never actually a binding
+# constraint for this model (26+ GiB margin throughout, zero memory.max events) -- VRAM was the
+# real, reproducible constraint all along. Full results (timing, needle/quality-corpus detail):
+# docs/qwen38-27b-bakeoff-results.md.
+#
+matrix:
+  vars:
+    m3: bge-m3-f16
+    rr: bge-reranker-v2-m3-Q8_0
+    sm: bge-small-en-v1.5-f16
+    nemo: nemotron-3-nano-4B-UD-Q4_K_XL
+    cpm32: MiniCPM5-2B-Q6_K-c32k-f16
+    cpm64: MiniCPM5-2B-Q6_K-c64k-q8_0
+    cpm128: MiniCPM5-2B-Q6_K-c128k-q4_0
+    gqat: gemma-4-12B-it-qat-UD-Q4_K_XL
+    lq4: Ling-3.0-tiny-UD-Q4_K_XL
+    lq6: Ling-3.0-tiny-UD-Q6_K_XL
+    lq8: Ling-3.0-tiny-Q8_0
+    q36: Qwen3.6-35B-A3B-UD-Q4_K_XL
+    g26: gemma-4-26B-A4B-it-qat-UD-Q4_K_XL
+    q27xxs: Qwen3.8-27B-UD-IQ3_XXS
+    q27s: Qwen3.8-27B-UD-IQ3_S
+    q27q3: Qwen3.8-27B-UD-Q3_K_XL
+    q27off: Qwen3.8-27B-UD-IQ3_S-reasoning-off
+    q27low: Qwen3.8-27B-UD-IQ3_S-reasoning-low
+    q27med: Qwen3.8-27B-UD-IQ3_S-reasoning-medium
+    q27high: Qwen3.8-27B-UD-IQ3_S-reasoning-high
+  sets:
+    # nemotron-4b ≈5.5 GB (5.1 GiB, -c 131072) + retrieval ≈1.5 GiB ≈ 6.6 GiB ≤ 12.8.
+    nemo_retrieval: "nemo & m3 & rr & sm"
+    # gemma-4-12b-qat ≈11.5 GB (10.7 GiB, -c 131072, vision+MTP) + retrieval ≈1.5 GiB ≈ 12.2 GiB ≤ 12.8.
+    gqat_retrieval: "gqat & m3 & rr & sm"
+    # MiniCPM5-2B c32k f16 3270 MiB peak (3.2 GiB) + retrieval ≈1.5 GiB ≈ 4.7 GiB ≤ 12.8.
+    cpm32_retrieval: "cpm32 & m3 & rr & sm"
+    # MiniCPM5-2B c64k q8_0 3391 MiB peak (3.3 GiB) + retrieval ≈1.5 GiB ≈ 4.8 GiB ≤ 12.8.
+    cpm64_retrieval: "cpm64 & m3 & rr & sm"
+    # MiniCPM5-2B c128k q4_0 3536 MiB peak (3.5 GiB) + retrieval ≈1.5 GiB ≈ 5.0 GiB ≤ 12.8.
+    cpm128_retrieval: "cpm128 & m3 & rr & sm"
+    # Research-only, solo: Ling UD-Q4_K_XL 7.79 GiB used at -c 131072; fit beside retrieval unmeasured.
+    lq4: "lq4"
+    # Research-only, solo: Ling UD-Q6_K_XL 9.61 GiB used at -c 131072.
+    lq6: "lq6"
+    # Research-only, solo: Ling Q8_0 10.16 GiB used at -c 131072.
+    lq8: "lq8"
+    # Solo: Qwen3.6-35B-A3B 13.38 GB used with -ub 2048 (≈11.6 GiB footprint) + 1.5 GiB > 12.8.
+    q36: "q36"
+    # Solo: gemma-4-26B-A4B 13.59 GiB loaded, over budget beside anything.
+    g26: "g26"
+    # Solo: Qwen3.8-27B IQ3_XXS; 27B family 13.72 GiB measured, fits beside nothing.
+    q27xxs: "q27xxs"
+    # Solo: Qwen3.8-27B IQ3_S, 13.72 GiB measured.
+    q27s: "q27s"
+    # Solo: Qwen3.8-27B Q3_K_XL, largest quant (12.24 GiB weights alone).
+    q27q3: "q27q3"
+    # Solo: IQ3_S effort variants, same weights/context as q27s (13.72 GiB).
+    q27off: "q27off"
+    q27low: "q27low"
+    q27med: "q27med"
+    q27high: "q27high"

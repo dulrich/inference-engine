@@ -414,7 +414,7 @@ def run_sweep(
 
     `cold_precondition_hook`, if given, is called with no arguments immediately before EACH cold
     round to let the caller force a genuine model-not-resident state (container restart, or
-    `exclusive: true` group eviction via a request into a different group -- plan Assumptions;
+    matrix eviction via a request to a model in a solo matrix set -- plan Assumptions;
     this harness deliberately does not choose or perform that mechanism itself, since either
     satisfies the same observable honest-timing contract). Without a hook, cold rounds still run
     and are recorded, but are only genuinely cold the first time nothing else has warmed the

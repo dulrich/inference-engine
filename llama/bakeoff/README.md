@@ -78,16 +78,13 @@ its review finding in its own docstring, so `head -3 <module>.py` tells you why 
 - `control_phases.py` — the dispatcher's six phases and its crash recovery.
 - `control_process.py` — process/boot identity reads.
 
-**Serving control** (WP-5 of `plans/bench-dashboard-serving-control.md`) — a SECOND control plane, deliberately separate from the one above: same disciplines, different failure domain, its own crontab line and its own lock, because folding serving applies into the GPU-run pump would put the declaration edit behind the run lock.
-
-- `serving_protocol.py` — the serving plane's on-disk protocol: the `serving-request-v1` / `serving-status-v1` / `serving-visibility-v1` literals, the `srv-` id grammar, the closed consumer vocabulary, and the fail-closed request validator (including the declaration's own `cc` ⇒ non-null `gateway_id` invariant). Pure: no locking, no writes, no subprocesses.
-- `serving_dispatcher.py` — the minutely pass, as one reconciliation transaction: ingest the `srv-*.json` drop-box, fold every winner into `router/visibility.json` with one write, re-run the two generators that project it exactly once (every valid pass, including an empty one), publish `control/host/serving-status.json`, unlink, prune. See "Serving control" under Scheduling below.
+**Serving control** moved out of this directory to the top-level `control/` area (`plans/serving-control-redesign.md` WP-1): see `control/README.md` (operator reference) and `control/AGENTS.md`. It shares only the state-dir drop-box with the plane above.
 
 **Other:**
 
 - `sampling_table.py` — the per-model-family recommended "production" sampling table.
 - `gates.sh` — the executable form of this directory's gate list (see `AGENTS.md`).
-- `serving-dispatch.sh` — the serving dispatcher's credential wrapper; the operator's minutely crontab line runs this, never `serving_dispatcher.py` directly.
+- `serving-dispatch.sh` — compat shim that execs `control/serving-dispatch.sh` until the crontab is repointed.
 - `pyproject.toml` / `uv.lock` — **dev-only** Ruff + Pyright configuration. The runtime stays
   Python-stdlib-only; nothing here is a runtime dependency.
 
@@ -1022,44 +1019,9 @@ stays governed by the `armed` marker above (currently absent -- nothing runs unt
 `arm`). The dispatcher line is safe to run while disarmed: with no requests and no live run,
 a pass only refreshes `status.json`.
 
-### Serving control -- the second plane (`serving_dispatcher.py`, `serving-dispatch.sh`)
+### Serving control -- the second plane
 
-A separate minutely pass, a separate crontab line, a separate lock (`<state-dir>/serving-dispatch.lock`). It consumes `srv-<UTCcompact>-<16 hex>.json` request files written by the bench dashboard's `POST /api/serving/visibility`, applies them to the repo-owned declaration `router/visibility.json`, and publishes `control/host/serving-status.json` (`serving-status-v1`) every pass -- including passes with no pending request, so the dashboard's visibility chips are authoritative within a minute of install and go `stale` (the same 180 s threshold as the queue plane's own offline banner) if the cron stops.
-
-Why separate rather than a seventh phase of the dispatcher above: the two planes have different failure domains, and folding a serving apply into the GPU-run pump would put the declaration edit behind the run lock.
-
-One pass, in order: **ingest** (`srv-` basename grammar, `O_NOFOLLOW`, an 8 KiB bound, body/basename id agreement, the `serving-request-v1` literal, a declared `model_key`, the closed `cc`/`openwebui` vocabulary, a parseable `requested_at`, and -- the declaration's own invariant -- `cc` only on a key whose `gateway_id` is non-null, rejected with `reason: "cc requires a gateway id"` before anything is written); **stage**, latest request per `model_key` winning by `(requested_at, request_id)` ascending, with every winner of the pass folded into one in-memory declaration and written **once** (only those keys' `consumers` change -- canonically ordered, deduplicated; `gateway_id` untouched -- through the same temp-file + `os.replace` discipline as every other durable control file); **reconcile** once; **disposition** every request from that one result; **publish**; **unlink**; **prune**.
-
-**The generators are the reconciliation loop; the request is only the trigger.** After the declaration is staged the pass runs `node <repo>/router/model-picker-lineup.mjs --write` and then `python3 <repo>/scripts/sync-openwebui-capabilities.py --apply` -- both read the declaration and project it (the Claude Code model picker's rows, and Open WebUI's `is_active`). The picker is invoked with bare `--write` on purpose -- it re-serialises `settings.json` and replaces only `modelPicker.options`, so an existing `--launch-profile` env block survives untouched, and `--launch-profile` would need fleet-tools's gateway key, which this plane never holds.
-
-**Exactly one pair per valid pass -- including a pass with no request at all.** Each generator reconciles the *whole* declaration, so a burst of ten requests is one write and one pair, not ten of each; and an empty minute still runs the pair, which is what actually delivers the self-heal promised above. If either generator exits non-zero, every request the batch represents (winners and the requests they superseded) is recorded `failed` with the same reason naming the step, and **the declaration edit is kept** -- so the next pass re-runs both idempotently from the declaration *whether or not a new request arrives*, with no retry queue. That last clause is load-bearing: a failed request is terminal and its file is unlinked, so if the projection only ran per request, a single sync failure would leave `router/visibility.json`, `~/.claude/settings.json` and Open WebUI permanently half-applied (measured, `reviews/2026-09-14-tn-code-review.md` F2).
-
-**The dispatcher's exit codes**, since a failing *empty* pass has no `recent[]` record to carry it: `0` reconciled; `1` the declaration is missing or unreadable (nothing applied, nothing published); `3` the declaration was read and the status file published, but a generator exited non-zero -- the failure also names the step on stderr, which the crontab line captures into the log. The wrapper's own `2` is separate and earlier: the credential file was refused before the dispatcher ran.
-
-A request file is unlinked only **after** its disposition is durable in `serving-status.json`'s `recent[]` (bounded to 20, newest first; `last_request` is `recent[0]`). A crash between the two therefore leaves a request that is re-read and re-applied idempotently, never one that vanished unrecorded.
-
-**The drop-box is shared with the bake-off plane.** `control/requests/` carries both `req-*.json` and `srv-*.json`; each plane ignores the other's basenames at ingest (`control_phases.ingest_pass` matches `req-` only, and this plane matches `srv-` only). The one place they touch: `control_phases.prune_phase` globs `*.json` over that directory and unlinks **anything** older than 30 days, this plane's files included. Terminalization means a serving request lives for at most a minute, so that is unreachable in practice -- but it is real coupling, and a future change to either prune must be made knowing it.
-
-The crontab line runs the wrapper, never the module directly, because `sync-openwebui-capabilities.py --apply` needs `OPENWEBUI_URL` and `OPENWEBUI_API_KEY` -- which have no default by design -- and a cron line has no useful environment. `serving-dispatch.sh` sources them from `~/.config/inference-serving/env` (overridable with `INFERENCE_SERVING_ENV`), verifies that file is mode `0600` and owned by the invoking user (refusing with exit 2 otherwise), prepends `~/.nvm/current/bin` to `PATH` when present (the reconciliation legs shell out to `node`, which cron's PATH lacks), and execs the dispatcher, which inherits the environment untouched. Under the fleet-env cutover switch (transitional default off) the wrapper instead re-execs itself under `fleet-env run serving-dispatch` and skips that file; post-cutover the fleet-env store is the only source. Neither the wrapper nor the dispatcher ever echoes, logs, or passes a credential **value** anywhere -- a flag value would be visible in process listings, so the environment is the only path.
-
-```
-# ~/.config/inference-serving/env -- mode 0600, owner-only, outside the repo
-OPENWEBUI_URL=http://192.0.2.100:4840
-OPENWEBUI_API_KEY=<the Open WebUI admin key, same value as fleet-tools/.env>
-```
-
-```cron
-* * * * * llama/bakeoff/serving-dispatch.sh >> ~/.local/state/inference-bakeoff/serving-dispatch.log 2>&1
-```
-
-**Both the env file and the crontab line are installed by the operator, never by an agent** -- the same rule as the two lines above, and the first live end-to-end apply is an operator-present exercise. Until they are installed the plane is simply inert: no status file is published, `GET /api/serving/status` answers `{available: false}`, and the dashboard's chips render disabled with the reason. The dispatcher's own stdout is a one-line JSON pass summary (`{"applied":0,"failed":0,"ignored":0,"pruned":0,"rejected":0}`), which is the whole content of a quiet minute in that log -- a quiet minute still re-runs both generators, so a projection that is failing shows up as a stderr line and exit `3` on every pass until it is fixed, not only on the pass that carried a request.
-
-**Applying and confirming a toggle (operator checklist).** A chip click on the Serving tab records a request; nothing is applied until the next cron pass, and nothing is *finished* until the repo commit below. In order:
-
-1. **Click the chip** (Serving tab, Visibility column). The API answers `accepted: true` — that means the `srv-*.json` file was written to the drop-box, not that anything changed yet.
-2. **Wait up to a minute**, then confirm the dispatcher took it: `curl -s http://<dashboard-bind>:4810/api/serving/status | python3 -m json.tool` — `last_request.state` must be `applied` (a `failed`/`rejected` state carries a `reason`); the chips re-render from the same file. Equivalently the newest line of `~/.local/state/inference-bakeoff/serving-dispatch.log` shows `"applied": 1`.
-3. **Confirm each projection landed**: `git -C . diff router/visibility.json` shows exactly the one `consumers` change; `node router/model-picker-lineup.mjs --check` is silent (Claude Code picker in sync); `OPENWEBUI_URL=… OPENWEBUI_API_KEY=… python3 scripts/sync-openwebui-capabilities.py` (dry-run) prints `0 pending`. For an `openwebui` toggle, the Open WebUI picker reflects it on the next page load — no container restart on either side.
-4. **Commit the declaration** — the dispatcher edits the working tree and never commits. Commit `router/visibility.json` by path (`serving: <model> <on|off> in <consumer>`); no fixture refresh, since the status fixture is pinned to the frozen `router/visibility.sample.json` beside it. An uncommitted toggle is live but unrecorded; a later checkout would silently revert it.
+Moved to `control/` (`plans/serving-control-redesign.md` WP-1): the dispatcher, its protocol, the credential wrapper, the cron line and the operator checklist are documented in `control/README.md`. The drop-box (`control/requests/`) stays shared: `control_phases.ingest_pass` matches `req-` only, the serving plane matches `srv-` only, and `control_phases.prune_phase` globs `*.json` over that directory and unlinks anything older than 30 days, serving files included (unreachable in practice, but real coupling).
 
 ### Manual-window flow
 

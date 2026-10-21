@@ -42,7 +42,7 @@ for (const leg of LEGS.filter(l => !l.hosted)) registerLegTests(leg);
 
 // Layer 1 asserts that the wire shapes of the discovery round-trip survive the leg: a
 // tool_reference tool_result and a grown catalogue are accepted and answered normally, with no
-// 4xx, no "tool not found" and no malformed continuation. Whether a given model *chooses* to
+// 4xx and no malformed continuation. Whether a given model *chooses* to
 // call ToolSearch is a behavioural property and belongs to router/smoke-tool-search.sh, which
 // drives a real `claude -p` turn.
 
@@ -56,7 +56,7 @@ test("local OpenAI-conversion: a tool_reference result and the grown catalogue a
   assert.ok(Array.isArray(r.json.content), "the response must carry a content array");
   assert.ok(["end_turn", "tool_use", "max_tokens", "stop_sequence"].includes(r.json.stop_reason),
     `malformed continuation: stop_reason=${String(r.json.stop_reason)}`);
-  const text = JSON.stringify(r.json.content);
-  assert.ok(!/tool[ _]not[ _]found|unknown tool|InputValidationError/i.test(text),
-    `the leg reported the deferred tool as unavailable after discovery: ${text.slice(0, 400)}`);
+  // No assertion on the model's TEXT: the round-trip body itself carries the deferred-tools
+  // notice (which names InputValidationError), and a model may quote it back in thinking or
+  // prose. A relay-level rejection is already the non-200 / non-message assertions above.
 });

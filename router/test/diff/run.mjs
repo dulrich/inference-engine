@@ -1,6 +1,6 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // Differential contract harness runner (router/test/diff/README.md).
-//   node router/test/diff/run.mjs --target image:<tag>|bin:<path>
+//   bun router/test/diff/run.mjs --target image:<tag>|bin:<path>
 //        [--case <glob>] [--slow] [--config-source <path>] [--catalog-source <path>] [--keep] [--stub-image <tag>]
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';

@@ -6,7 +6,7 @@ Runs one gateway (an image or a host binary of the Rust gateway, `router/gateway
 
 ```
 node router/test/diff/run.mjs --target bin:router/gateway/target/release/inference-router
-node router/test/diff/run.mjs --target image:fleet-tools-inference-engine-router:latest
+bun router/test/diff/run.mjs --target image:fleet-tools-inference-engine-router:latest
 ```
 
 Cross-version parity is checked against the deployed image `image:fleet-tools-inference-engine-router:latest`: run the harness against both the fresh `bin:` build and that image, and both must be green.

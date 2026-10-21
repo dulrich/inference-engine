@@ -1,7 +1,7 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // fake-app-server.mjs — a scripted stand-in for `codex app-server` (test seam only).
 //
-//   node fake-app-server.mjs <scenario.json> [<trace.jsonl>] app-server
+//   bun fake-app-server.mjs <scenario.json> [<trace.jsonl>] app-server
 //
 // The sidecar appends the literal `app-server` argument, exactly as it does for the
 // real persona wrapper, so this is spawned through the same code path.
@@ -34,7 +34,7 @@
 import fs from "node:fs";
 
 const argv = process.argv.slice(2).filter(a => a !== "app-server");
-// `node --test test/` treats every .mjs under test/ as a test file; without a
+// `node --test test/` treated every .mjs under test/ as a test file (`bun test` collects only *.test.*); without a
 // scenario this is not a server run, so exit cleanly instead of waiting on stdin.
 if (!argv[0]) process.exit(0);
 const scenario = JSON.parse(fs.readFileSync(argv[0], "utf8"));

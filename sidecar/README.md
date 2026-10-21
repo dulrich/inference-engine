@@ -151,7 +151,7 @@ Without a real codex binary (no metered turns), point it at the fake app-server:
 ```sh
 printf '%s' '{"defaultTurn":[{"text":"hi"},{"complete":{}}]}' > /tmp/scn.json
 SIDECAR_KEY=x SIDECAR_PORT=4899 SIDECAR_BIND_EXTRA= SIDECAR_LOG_DIR=/tmp/sclogs \
-  SIDECAR_APP_SERVER_CMD="node sidecar/test/fake-app-server.mjs /tmp/scn.json" \
+  SIDECAR_APP_SERVER_CMD="bun sidecar/test/fake-app-server.mjs /tmp/scn.json" \
   sidecar/rs/target/release/codex-sidecar
 ```
 

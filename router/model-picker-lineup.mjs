@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // Generate Claude Code `modelPicker.options` rows from the router's model catalog.
 //
 // The catalog (`router/catalog/catalog.json`, schema `model-catalog-v1`) is the single source of

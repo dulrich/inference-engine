@@ -57,7 +57,7 @@
 #
 # The fixture never touches the real profile: a fresh $HOME, a fresh working dir, trust seeded for
 # both the working dir and its parent, and deny rules over the real trees. Exits non-zero on any
-# check failure. Requires: curl, jq, node, claude.
+# check failure. Requires: curl, jq, bun, claude.
 set -u
 
 PROBE_TOOL="NotebookEdit"
@@ -103,7 +103,7 @@ if [ "$WANT_LOCAL" -eq 0 ] && [ "$WANT_CODEX" -eq 0 ] && [ "$WANT_PASSTHROUGH" -
 	WANT_LOCAL=1
 fi
 
-for bin in curl jq node claude; do
+for bin in curl jq bun claude; do
 	if ! command -v "$bin" >/dev/null 2>&1; then
 		echo "[tool-search] FATAL: '$bin' is required but not on PATH." >&2
 		exit 2
@@ -121,7 +121,7 @@ bad() {
 # Default: the legacy fleet-tools/.env, or `fleet-env path router` when the fleet-env
 # cutover switch is on (router/fleet-env.mjs; fails closed, never a silent fallback).
 if [ -z "${ROUTER_ENV_FILE:-}" ]; then
-	ROUTER_ENV_FILE=$(node -e 'import(process.argv[1]).then((m) => console.log(m.routerEnvFile()))' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fleet-env.mjs") || exit 1
+	ROUTER_ENV_FILE=$(bun -e 'import(process.argv[1]).then((m) => console.log(m.routerEnvFile()))' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fleet-env.mjs") || exit 1
 fi
 if [ -z "$GATEWAY_KEY" ] && [ -r "$ROUTER_ENV_FILE" ]; then
 	GATEWAY_KEY=$(sed -n 's/^INFERENCE_ROUTER_GATEWAY_KEY=//p' "$ROUTER_ENV_FILE" | head -1)
@@ -309,7 +309,7 @@ start_proxy() { # <out-dir> -> echoes the proxy base url
 	out="$1"
 	port_file="$out/.port"
 	rm -f "$port_file"
-	node "$RUN_DIR/capture-proxy.mjs" "$BASE_URL" "$out" "$port_file" >"$out/.proxy.log" 2>&1 &
+	bun "$RUN_DIR/capture-proxy.mjs" "$BASE_URL" "$out" "$port_file" >"$out/.proxy.log" 2>&1 &
 	echo "$!" >>"$RUN_DIR/proxies"
 	for _ in $(seq 1 100); do
 		if [ -s "$port_file" ]; then

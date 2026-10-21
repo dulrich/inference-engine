@@ -107,7 +107,8 @@ RUN cmake -B build \
 # zero code or config change, since llama-swap's own module carries no `toolchain` directive that
 # would override it. Building here under `golang:1.26.7-trixie` closed all 20; by 2026-10-09 the
 # go1.26.7 stdlib had picked up 13 new CVEs (fixed in go1.26.9/1.27.2), so the stage now builds
-# under `golang:1.27.2-trixie`. A toolchain bump is image-only — the tag below is unchanged.
+# under `golang:1.27.3-trixie` (2026-10-21: 1.27.3 for CVE-2026-111943, the go1.27.2 stdlib). A
+# toolchain bump is image-only — the tag below is unchanged.
 #
 # Pinned to v243 specifically, not upstream's current v251: measured, the `v243..v251` diff
 # touches `config-schema.json` and `internal/config/load.go`/`matrix.go` — real config-parsing
@@ -123,7 +124,7 @@ RUN cmake -B build \
 # fleet never calls llama-swap's own web UI (nothing in README.md/AGENTS.md/config.yaml
 # references it; the fleet has its own bench dashboard on :4810), so building without it is a
 # lower-complexity substitute for the release binary, not a functionality cut.
-FROM golang:1.27.2-trixie AS swap
+FROM golang:1.27.3-trixie AS swap
 
 ARG LLAMA_SWAP_TAG=v243
 # Full commit SHA the v243 tag points at (a commit object, not an annotated tag), resolved
@@ -131,7 +132,7 @@ ARG LLAMA_SWAP_TAG=v243
 # "Upgrading llama-swap" in README.md for how to resolve the next one.
 ARG LLAMA_SWAP_COMMIT=4c50064e3d7ff44834cf1b12ab529befa79f22d6
 
-# git and ca-certificates already ship in golang:1.27.2-trixie (verified via `docker run
+# git and ca-certificates already ship in golang:1.27.3-trixie (verified via `docker run
 # golang:1.26.7-trixie sh -c 'which git; git --version'` when this stage was written, and by
 # the 2026-10-09 golang:1.27.2-trixie build succeeding) — no
 # apt-get install needed here, unlike router/Dockerfile's node:24-slim build stage.
@@ -150,6 +151,10 @@ RUN git init -q \
 # main.version=... -X main.commit=... -X main.date=...`. Short SHA and RFC3339 date are computed
 # in-shell: Dockerfile ARG interpolation has no bash substring expansion, and .goreleaser.yaml's
 # own `{{ .ShortCommit }}` / `{{ .Date }}` are the short SHA and RFC3339 UTC respectively.
+# Image-only dependency override (2026-10-21): llama-swap v243 links klauspost/compress v1.18.5
+# (CVE-2026-63209, fixed in 1.18.7). llama-swap itself stays at v243 / its commit.
+RUN go get github.com/klauspost/compress@v1.18.7 && go mod tidy
+
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
       -ldflags="-s -w -X main.version=${LLAMA_SWAP_TAG} -X main.commit=$(echo "${LLAMA_SWAP_COMMIT}" | cut -c1-7) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       -o /src/llama-swap .

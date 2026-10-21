@@ -87,55 +87,41 @@ test("renders one row per Claude-Code-visible non-anthropic id, with the documen
   }
 });
 
-test("the real config yields 16 Claude-Code rows: every effort id out, the openwebui ids out", () => {
+// The real catalog's `consumers` lists are OPERATOR STATE: the serving dispatcher rewrites them
+// on every dashboard `set-visibility`, and the user toggles them by hand. So this test never pins
+// which ids are rows, nor how many — only what holds for every valid visibility choice: the
+// rendered rows are exactly the catalog's Claude-Code-visible set, and the append-only/tombstone
+// id contracts hold. The exact-lineup and label behaviour is pinned against the fixture catalog.
+test("the real config renders exactly the catalog's Claude-Code-visible ids, whatever they are", () => {
   const rows = JSON.parse(run(["--config", REAL_CONFIG, "--catalog", REAL_CATALOG]).stdout);
-  assert.equal(rows.length, 16);
-  assert.equal(rows.filter((r) => r.model.startsWith("anthropic/")).length, 0);
-  const models = rows.map((r) => r.model);
-  // The exact lineup: two local rows, the one cc-tagged OpenRouter id, then one bare codex id per
-  // family per persona.
-  assert.deepEqual(models, [
-    "claude-local/qwen36-a3b",
-    "claude-local/qwen38-27b-iq3s",
-    "or-anthropic/z-ai/glm-5.3-flash",
-    "or-anthropic/qwen/qwen3.8-flash",
-    "codex-a/gpt-5.6-luna",
-    "codex-a/gpt-5.6-sol",
-    "codex-a/gpt-6-astra",
-    "codex-a/gpt-6-sol",
-    "codex-a/gpt-6.1-sol",
-    "codex-a/gpt-6-luna",
-    "codex-b/gpt-5.6-luna",
-    "codex-b/gpt-5.6-sol",
-    "codex-b/gpt-6-astra",
-    "codex-b/gpt-6-sol",
-    "codex-b/gpt-6.1-sol",
-    "codex-b/gpt-6-luna",
-  ]);
-  // Reasoning effort on the local leg is a request field since router patch 0007
-  // (plans/router-effort-mapping-claude-local.md): the harness's own effort control maps onto
-  // chat_template_kwargs, so the picker carries exactly ONE Qwen3.8 row and the four suffix ids —
-  // the server-enforced hard-cap surface, declared `consumers: []` in the catalog since
-  // WP-3 — are not rows.
-  assert.ok(models.includes("claude-local/qwen38-27b-iq3s"), "the unsuffixed qwen38 row must stay");
-  assert.equal(models.filter((m) => m.startsWith("claude-local/qwen38-27b-iq3s")).length, 1);
-  for (const effort of ["off", "low", "medium", "high"]) {
-    assert.equal(
-      models.includes(`claude-local/qwen38-27b-iq3s-${effort}`),
-      false,
-      `effort id ${effort} must not be a picker row`,
-    );
-  }
-  // The OpenRouter legs are per-model tagged, not wholesale openwebui, since glm-5.3-flash landed
-  // (user decision 2026-09-14): exactly one OR id is a Claude Code row, it is on the NATIVE
-  // Anthropic leg, and the OpenAI-compat conversion leg contributes none.
-  assert.deepEqual(models.filter((m) => m.startsWith("or-anthropic/")),
-    ["or-anthropic/z-ai/glm-5.3-flash", "or-anthropic/qwen/qwen3.8-flash"]);
-  assert.deepEqual(models.filter((m) => m.startsWith("openrouter/")), []);
-  // Not a picker row is not "gone": the four must stay RESOLVABLE ids, i.e. still listed in the
-  // same provider's catalog models[] (an id dropped from there 400s at model_resolution for the
-  // callers that want the hard cap). /v1/models on the live router is smoke-router.sh check 1's job.
+  const config = JSON.parse(fs.readFileSync(REAL_CONFIG, "utf8"));
   const catalog = JSON.parse(fs.readFileSync(REAL_CATALOG, "utf8"));
+  const models = rows.map((r) => r.model);
+  assert.equal(new Set(models).size, models.length, "no duplicate picker rows");
+  assert.equal(models.filter((m) => m.startsWith("anthropic/")).length, 0);
+  // Derive the expected set from the live catalog itself: an explicit `cc` tag is a row on every
+  // non-anthropic provider the static config serves; an explicit tag list without `cc` never is.
+  // (An absent `consumers` — legal off claude-local — is covered by the fixture tests.)
+  const served = new Set((config.providers ?? []).map((p) => p.name).filter((n) => n !== "anthropic"));
+  const expected = new Set();
+  const excluded = new Set();
+  for (const [name, provider] of Object.entries(catalog.providers)) {
+    if (!served.has(name)) continue;
+    for (const e of provider.models ?? []) {
+      if (!Array.isArray(e.consumers)) continue;
+      (e.consumers.includes("cc") ? expected : excluded).add(`${name}/${e.id}`);
+    }
+  }
+  for (const m of expected) assert.ok(models.includes(m), `${m} is cc-tagged in the catalog but is not a picker row`);
+  for (const m of excluded) assert.equal(models.includes(m), false, `${m} is not cc-tagged but is a picker row`);
+  for (const row of rows) {
+    assert.ok(row.description.length < 90, `description too long: ${row.description}`);
+    // A bare codex id (whichever are visible) takes its effort from the harness.
+    if (/^codex-[^/]+\/(?!.*-(low|medium|high)$)/.test(row.model)) assert.match(row.description, /effort via the harness/);
+  }
+  // Alias contract (append-only): visibility may hide an id, never remove it — the qwen38 effort
+  // ids and the codex suffix ids stay RESOLVABLE in their provider's models[] (an id dropped from
+  // there 400s at model_resolution). /v1/models on the live router is smoke-router.sh check 1's job.
   const idsOf = (name) => catalog.providers[name].models.map((e) => e.id);
   for (const effort of ["off", "low", "medium", "high"]) {
     assert.ok(
@@ -143,10 +129,6 @@ test("the real config yields 16 Claude-Code rows: every effort id out, the openw
       `effort id ${effort} must stay resolvable in claude-local.models[]`,
     );
   }
-  // Same story on the codex leg since plans/codex-leg-effort-and-auditor-unpinning.md WP-2: effort
-  // is the harness's own control, resolved per turn by the sidecar, so the picker carries exactly
-  // ONE row per family per persona (the bare id) and the 12 suffix ids are tagged ["router"].
-  const CODEX_PERSONAS = ["codex-a", "codex-b"];
   const CODEX_SUFFIX_IDS = [
     "gpt-5.6-luna-medium",
     "gpt-5.6-luna-high",
@@ -161,34 +143,23 @@ test("the real config yields 16 Claude-Code rows: every effort id out, the openw
     "gpt-6-luna-medium",
     "gpt-6-luna-high",
   ];
-  for (const persona of CODEX_PERSONAS) {
-    const providerIds = idsOf(persona);
+  for (const persona of ["codex-a", "codex-b"]) {
     for (const id of CODEX_SUFFIX_IDS) {
-      assert.equal(models.includes(`${persona}/${id}`), false, `${persona}/${id} must not be a picker row`);
-      // Not a picker row is not "gone" — the suffix ids stay resolvable (alias contract) and are
-      // the explicit-effort escape hatch that outranks the request field.
-      assert.ok(providerIds.includes(id), `${persona}/${id} must stay resolvable in models[]`);
-    }
-    for (const bare of ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna"]) {
-      const row = rows.find((r) => r.model === `${persona}/${bare}`);
-      assert.ok(row, `${persona}/${bare} must be a picker row`);
-      assert.match(row.description, /effort via the harness/);
+      assert.ok(idsOf(persona).includes(id), `${persona}/${id} must stay resolvable in models[]`);
     }
   }
   // TOMBSTONE GATE (user decision 2026-09-14, router/AGENTS.md): z-ai/glm-5.2:free and z-ai/glm-5.3
-  // were retired from serving. Not-a-picker-row is too weak an assertion for a retired id — assert
-  // they are gone from the CATALOG entirely, on both legs, so a future edit cannot quietly re-add
-  // one. The names stay reserved forever; re-adding either string for different weights is the
-  // append-only violation this gate exists to catch.
+  // were retired from serving. Assert they are gone from the CATALOG entirely, on both legs, so a
+  // future edit cannot quietly re-add one. The names stay reserved forever; re-adding either string
+  // for different weights is the append-only violation this gate exists to catch.
   for (const legName of ["openrouter", "or-anthropic"]) {
     for (const id of ["z-ai/glm-5.2:free", "z-ai/glm-5.3"]) {
       assert.equal(idsOf(legName).includes(id), false, `retired id ${legName}/${id} must stay removed`);
     }
   }
-  // The conversion leg keeps a resolvable id (never an empty models[] — that is a WILDCARD on a
-  // credentialed OR provider), but tagged `router`, so it contributes no picker row.
-  assert.deepEqual(idsOf("openrouter"), ["qwen/qwen3.8-flash"]);
-  assert.equal(models.includes("claude-local/nemotron-4b"), false);
+  // The conversion leg keeps a resolvable id: an empty models[] is a WILDCARD on a credentialed
+  // OR provider.
+  assert.ok(idsOf("openrouter").length > 0, "openrouter models[] must never be empty (wildcard)");
 });
 
 test("consumer tags still govern every provider EXCEPT claude-local, unchanged", () => {

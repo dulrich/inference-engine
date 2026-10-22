@@ -247,6 +247,10 @@ export function createWebkit(config: WebkitConfig) {
   }
 
   async function main(argv = process.argv.slice(2)) {
+    if (argv.includes("--help") || argv.includes("-h")) {
+      console.log("usage: bun build.ts [--watch | --dev]\n\n  (none)   production build into dist/\n  --watch  rebuild on src/ change\n  --dev    watch + dev server (dist/ with SPA fallback, proxied prefixes)\n  -h, --help  print this usage and exit");
+      return;
+    }
     const dev = argv.includes("--dev");
     const watching = dev || argv.includes("--watch");
     const run = async () => {

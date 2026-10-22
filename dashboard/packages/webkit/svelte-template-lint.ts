@@ -72,6 +72,10 @@ export function lintPaths(paths: string[]): Finding[] {
 
 if (import.meta.main) {
   const args = process.argv.slice(2);
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log("usage: bun svelte-template-lint.ts [path ...]   (default: apps/web/src; lints .svelte templates, exit 1 on findings)");
+    process.exit(0);
+  }
   const findings = lintPaths(args.length ? args : ["apps/web/src"]);
   for (const f of findings) console.log(`${f.file}:${f.line}:${f.col} ${f.rule} ${f.message}`);
   if (findings.length) {

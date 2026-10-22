@@ -1306,6 +1306,13 @@ async function runV3(paths) {
 //  entry
 // ======================================================================================
 const argv = process.argv.slice(2);
+if (argv.includes("--help") || argv.includes("-h")) {
+  console.log(
+    "usage: bun packages/signalworks/scripts/check-contrast.mjs <path/to/app.css>\n" +
+      "       bun packages/signalworks/scripts/check-contrast.mjs --signalworks <dir|*.css|*.svelte>…",
+  );
+  process.exit(0);
+}
 const signalworks = argv.includes("--signalworks");
 const inputPaths = argv.filter((a) => !a.startsWith("--"));
 if (signalworks) await runV3(inputPaths);

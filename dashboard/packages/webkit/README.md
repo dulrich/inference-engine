@@ -8,7 +8,7 @@ The fleet's owned Svelte SPA toolchain: `build.ts` (Bun.build + `svelte/compiler
 
 Mirrors `signalworks/install.sh`:
 
-- `bash webkit/install.sh --dest <app>` — delete-then-copy the payload into `<app>/packages/webkit/` and write `.manifest` (version + sorted sha256 per file). Run `bun install` in the app after a fresh copy.
+- `bash webkit/install.sh --dest <app>` — replace the payload items in `<app>/packages/webkit/` (stale payload files are removed, the bun-created `node_modules` is preserved) and write `.manifest` (version + sorted sha256 per file; `node_modules` is never hashed). A consumer directory that does not exist is skipped with a stderr warning, never created. Run `bun install` in the app after a fresh copy.
 - `bash webkit/install.sh --all` — every path in `consumers.txt`.
 - `bash webkit/install.sh --list` / `--verify [--dest <app>]` — report or fail on drift (local edits in the copy, or source changes not yet re-synced).
 

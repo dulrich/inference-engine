@@ -7,7 +7,7 @@ at the repo root is the **source of truth**; tools consume a **vendored copy** a
 tool's existing Bun workspace globs as a real import.
 
 **Vendored copies are never edited.** Fix things here, then re-sync
-(`bash signalworks/install.sh --all`) — `install.sh --verify` hash-checks every
+(`bash signalworks/install.sh --all`; it replaces payload items only, preserves `packages/signalworks/node_modules`, and skips a missing consumer dir with a stderr warning) — `install.sh --verify` hash-checks every
 registered consumer against this source (CC-13's byte-identical rule, machine-enforced)
 and `signalworks/scripts/check-contrast.mjs --signalworks` (source location; consumers run
 the vendored copy at `packages/signalworks/scripts/check-contrast.mjs`) gates the

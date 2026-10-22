@@ -19,6 +19,11 @@
 # Convention: <MODELS_ROOT>/<org>/<repo>/<file>, exact HF casing (mirrors the fleet's existing
 # /models/<org>/<repo>/... layout, e.g. /models/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/...).
 
+for _a in "$@"; do case "$_a" in --help|-h)
+  printf 'usage: %s %s\n' "${0##*/}" '<org/repo> <file> [<file>...]'
+  awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
+  exit 0;; esac; done
+
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then

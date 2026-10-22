@@ -13,6 +13,11 @@
 # skipped and reported as such rather than silently omitted.
 #
 # Exits non-zero on any check failure. Requires: curl, jq.
+for _a in "$@"; do case "$_a" in --help|-h)
+  printf 'usage: %s %s\n' "${0##*/}" '[--url <url>] [--wait-ttl]'
+  awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
+  exit 0;; esac; done
+
 set -u
 
 URL="http://127.0.0.1:4811"

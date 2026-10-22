@@ -8,6 +8,10 @@ use std::io::Write;
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.iter().any(|a| a == "--help" || a == "-h") {
+        print!("usage: check-recipes [--config <path>] [--catalog <path>]\n\n  --config <path>   llama/config.yaml to check (default: the repo's own)\n  --catalog <path>  model catalog (default: router/catalog/catalog.json relative to the config)\n  -h, --help        print this usage and exit 0\n");
+        return;
+    }
     match bd_server::check_recipes::run(&argv) {
         Ok((lines, code)) => {
             let mut out = std::io::stdout().lock();

@@ -22,6 +22,14 @@
 # assertion, which exists for debugging on a machine with no GPU and should never be set in the
 # fleet. There is deliberately no bypass for the ABI assertion — a link-broken image has no
 # working configuration to debug into.
+
+# A leading --help/-h answers with usage before any GPU/model check; later arguments belong to
+# the command this entrypoint execs.
+case "${1:-}" in --help|-h)
+  printf 'usage: %s %s\n' "${0##*/}" '[command [args...]]'
+  awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
+  exit 0;; esac
+
 set -eu
 
 echo "[entrypoint] vulkan devices visible to this container:"

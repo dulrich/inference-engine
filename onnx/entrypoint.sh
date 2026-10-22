@@ -9,6 +9,14 @@
 #
 # Everything after the assertions is exec'd unchanged, so `docker run ... python -c ...` still
 # works for debugging.
+
+# A leading --help/-h answers with usage before any GPU/model check; later arguments belong to
+# the command this entrypoint execs.
+case "${1:-}" in --help|-h)
+  printf 'usage: %s %s\n' "${0##*/}" '[command [args...]]'
+  awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
+  exit 0;; esac
+
 set -euo pipefail
 
 log() { echo "[entrypoint] $*"; }

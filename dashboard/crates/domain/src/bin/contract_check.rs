@@ -9,6 +9,10 @@ use serde_json::{json, Value};
 use std::io::Read;
 
 fn main() {
+    if std::env::args().skip(1).any(|a| a == "--help" || a == "-h") {
+        print!("usage: contract-check < cases.json\n\nRead [[schemaName, input], ...] as JSON on stdin and print [[success, data, issues], ...].\n");
+        return;
+    }
     let mut raw = String::new();
     if std::io::stdin().read_to_string(&mut raw).is_err() {
         std::process::exit(2);

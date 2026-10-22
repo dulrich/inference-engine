@@ -31,6 +31,24 @@ alone (the fleet has been burned by HTTP-200 error payloads; see `llama/AGENTS.m
 
 from __future__ import annotations
 
+import argparse
+
+
+def _parser() -> argparse.ArgumentParser:
+    return argparse.ArgumentParser(
+        prog="python -m server.app",
+        description=(
+            "inference-engine-onnx: loopback HTTP surface over the ONNX sidecar runtimes. Takes no "
+            "arguments; env: ONNX_MODELS_CONFIG, ONNX_HOST, ONNX_PORT, ONNX_INTRA_OP_THREADS."
+        ),
+    )
+
+
+if __name__ == "__main__":
+    # Answered before the registry/runtime imports below (onnxruntime, numpy, tokenizers) and
+    # before any bind; also makes `python3 server/app.py --help` work outside the package.
+    _parser().parse_args()
+
 import hashlib
 import json
 import os

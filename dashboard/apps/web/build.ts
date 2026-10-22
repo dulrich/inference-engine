@@ -7,4 +7,9 @@ import { config } from "./build.config.ts";
 
 export const kit = createWebkit(config);
 
-if (import.meta.main) await kit.main();
+const USAGE = "usage: bun build.ts [--watch | --dev]\n\n  (no flags)  production build into dist/\n  --watch     rebuild on src/ change\n  --dev       watch + dev server (dist/ with SPA fallback, /api proxied)\n  -h, --help  print this usage and exit 0\n";
+
+if (import.meta.main) {
+  if (process.argv.slice(2).some((a) => a === "--help" || a === "-h")) process.stdout.write(USAGE);
+  else await kit.main();
+}

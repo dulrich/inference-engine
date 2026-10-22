@@ -10,6 +10,11 @@
 #
 # Ruff and Pyright are DEV-ONLY, via uv. The harness runtime stays Python-stdlib-only and is
 # always invoked with the host's bare `python3` -- never through .venv.
+for _a in "$@"; do case "$_a" in --help|-h)
+  printf 'usage: %s %s\n' "${0##*/}" '[--help]'
+  awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
+  exit 0;; esac; done
+
 set -euo pipefail
 
 BAKEOFF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

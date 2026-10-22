@@ -10,8 +10,19 @@ use bd_server::http::{AppState, Shared};
 use std::process::ExitCode;
 use std::sync::Arc;
 
+const USAGE: &str = "usage: inference-dashboard [--healthcheck | ingest [--dir <path>|--dir=<path>] [--rebuild] | --help]\n\n  (no arguments)  serve the API + SPA on the configured port\n  --healthcheck   probe /health on the configured port; exit 0 when healthy\n  ingest          ingest bake-off records into the database\n  -h, --help      print this usage and exit 0\n";
+
+/// Help wins over everything and is answered before the config is read or the database opens.
+fn wants_help(args: &[String]) -> bool {
+    args.iter().skip(1).any(|a| a == "--help" || a == "-h")
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if wants_help(&args) {
+        print!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
     let cfg = Config::from_env();
     if args.iter().skip(1).any(|a| a == "--healthcheck") {
         let healthy = listen_port(cfg.port).is_ok_and(|p| health::check(p, health::BUDGET));

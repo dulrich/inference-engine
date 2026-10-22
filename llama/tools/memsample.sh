@@ -14,6 +14,11 @@
 # that exits between the `comm` read and the `status` read is skipped, never treated as an error
 # -- processes come and go under a live queue run and a vanished pid must not kill the sampler.
 
+for _a in "$@"; do case "$_a" in --help|-h)
+  printf 'usage: %s %s\n' "${0##*/}" '<out-path> [interval-s]'
+  awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
+  exit 0;; esac; done
+
 set -euo pipefail
 
 out_path="${1:?usage: memsample.sh <out-path> [interval-s]}"

@@ -49,6 +49,11 @@
 # interval MUST exceed config.yaml's `ttl: 1800` (30 min) for bge-small, or the previous run's
 # request would keep resetting the idle timer and every "cold spawn" would actually hit an
 # already-warm process — proving nothing. Hourly clears that ttl with margin.
+for _a in "$@"; do case "$_a" in --help|-h)
+  printf 'usage: %s %s\n' "${0##*/}" '[--url <url>] [--model <alias>]'
+  awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
+  exit 0;; esac; done
+
 set -u
 
 URL="http://127.0.0.1:4811"

@@ -16,6 +16,7 @@
     "test:web": "bun test apps/web/src apps/web/build.test.ts",
     "check:recipes": "cargo run -q --locked -p bench-dashboard-server --bin check-recipes --",
     "design:verify": "bash <code-root>/fleet-tools/signalworks/install.sh --verify --dest .",
+    "help:check": "bun <code-root>/fleet-tools/scripts/help-gate.mjs .",
     "webkit:verify": "bash <code-root>/fleet-tools/webkit/install.sh --verify --dest .",
     "test:theme": "bun packages/signalworks/scripts/check-contrast.mjs --signalworks packages/signalworks/css apps/web/src",
     "lint": "oxlint --deny-warnings --report-unused-disable-directives && bun packages/webkit/svelte-template-lint.ts && biome lint",

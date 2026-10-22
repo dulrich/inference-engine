@@ -58,6 +58,11 @@
 # The fixture never touches the real profile: a fresh $HOME, a fresh working dir, trust seeded for
 # both the working dir and its parent, and deny rules over the real trees. Exits non-zero on any
 # check failure. Requires: curl, jq, bun, claude.
+for _a in "$@"; do case "$_a" in --help|-h)
+  printf 'usage: %s %s\n' "${0##*/}" '<base-url> [<gateway-key>] [--local] [--codex] [--passthrough] [--control] [--keep]'
+  awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
+  exit 0;; esac; done
+
 set -u
 
 PROBE_TOOL="NotebookEdit"

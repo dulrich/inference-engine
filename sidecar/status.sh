@@ -10,6 +10,11 @@
 # posture is *probed*, not assumed — the response must carry a `stop_reason` and must contain
 # no collabAgentToolCall / webSearch / commandExecution, and the turn's `config-verified` row
 # must exist, whose `features` readings are printed. Body assertions only, never status codes.
+for _a in "$@"; do case "$_a" in --help|-h)
+  printf 'usage: %s %s\n' "${0##*/}" '[--help]'
+  awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
+  exit 0;; esac; done
+
 set -euo pipefail
 
 INSTALL_HOME="${SIDECAR_INSTALL_HOME:-$HOME}"

@@ -53,6 +53,23 @@ from pathlib import Path
 # The numpy runtime lives beside this file's parent; --verify imports it to prove parity.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+
+def _parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--model", required=True, help="HF model id, e.g. fastino/gliner2-base-v1")
+    ap.add_argument("--out", required=True, help="output directory for the ONNX artifacts")
+    ap.add_argument("--tolerance", type=float, default=2e-3, help="max abs confidence delta vs torch")
+    ap.add_argument("--no-verify", action="store_true", help="skip the torch-vs-onnx parity gate")
+    ap.add_argument("--verify-only", action="store_true",
+                    help="re-run the parity gate against an existing export (no re-export)")
+    ap.add_argument("--force", action="store_true", help="overwrite a non-empty output directory")
+    return ap
+
+
+# Help is answered before the (slow, optional) torch import below: argparse prints usage and exits 0.
+if any(a in ("-h", "--help") for a in sys.argv[1:]):
+    _parser().parse_args()
+
 import torch  # noqa: E402
 import torch.nn as nn  # noqa: E402
 
@@ -395,15 +412,7 @@ def _compare(want, got, tol: float) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--model", required=True, help="HF model id, e.g. fastino/gliner2-base-v1")
-    ap.add_argument("--out", required=True, help="output directory for the ONNX artifacts")
-    ap.add_argument("--tolerance", type=float, default=2e-3, help="max abs confidence delta vs torch")
-    ap.add_argument("--no-verify", action="store_true", help="skip the torch-vs-onnx parity gate")
-    ap.add_argument("--verify-only", action="store_true",
-                    help="re-run the parity gate against an existing export (no re-export)")
-    ap.add_argument("--force", action="store_true", help="overwrite a non-empty output directory")
-    args = ap.parse_args()
+    args = _parser().parse_args()
 
     out_dir = Path(args.out)
 

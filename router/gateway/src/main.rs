@@ -5,8 +5,15 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
+const USAGE: &str = "usage: inference-router [serve | healthcheck | check-catalog <path>]\n\n  serve (default)       run the gateway\n  healthcheck           probe the running gateway; exit 0 when healthy\n  check-catalog <path>  validate a candidate catalog against GATEWAY_CONFIG_PATH; print its revision\n  -h, --help            print this usage and exit 0\n";
+
 #[tokio::main]
 async fn main() -> ExitCode {
+    // Help wins over every subcommand and is answered before any config, key or socket is touched.
+    if std::env::args().skip(1).any(|a| a == "--help" || a == "-h") {
+        print!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
     let result = match std::env::args().nth(1).as_deref() {
         Some("healthcheck") => healthcheck::run(&env).await,
         None | Some("serve") => match config::load(&env).and_then(|s| app::state(s, &env)) {

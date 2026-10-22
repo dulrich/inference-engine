@@ -8,7 +8,14 @@ use std::io::Write;
 use std::process::ExitCode;
 use tokio::signal::unix::{signal, SignalKind};
 
+const USAGE: &str = "usage: codex-sidecar [--help]\n\nAnthropic-Messages front end over `codex app-server`. Takes no arguments; configured entirely\nby environment (SIDECAR_KEY, ...). Runs until SIGTERM/SIGINT.\n  -h, --help  print this usage and exit 0\n";
+
 fn main() -> ExitCode {
+    // Help is answered before the runtime, the environment config or any child process exists.
+    if std::env::args().skip(1).any(|a| a == "--help" || a == "-h") {
+        print!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

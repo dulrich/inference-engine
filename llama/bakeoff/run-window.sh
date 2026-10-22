@@ -46,6 +46,11 @@
 #   BAKEOFF_RUNS_DIR           -- base dir for `--records-dir` (default <repo>/llama/bakeoff/records).
 #   BAKEOFF_PORT               -- scratch-server port (default 8899, batch.py's own default).
 
+for _a in "$@"; do case "$_a" in --help|-h)
+  printf 'usage: %s %s\n' "${0##*/}" '<queue.json> [--minutes N] --request-id <invocation-id>'
+  awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
+  exit 0;; esac; done
+
 set -uo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"

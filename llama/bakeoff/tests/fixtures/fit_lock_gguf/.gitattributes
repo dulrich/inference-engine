@@ -1,0 +1,2 @@
+# Reduced real GGUF headers (test_fit_lock.py fixtures): binary by design, never diffed as text.
+*.gguf binary

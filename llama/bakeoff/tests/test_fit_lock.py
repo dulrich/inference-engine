@@ -53,16 +53,23 @@ not a pin.
 classification, and perturbing its KV type changes its command. Without those, a lock that
 accidentally asserted nothing would look identical to one that works.
 
-Entirely offline: reads committed queue JSON and (for cells carrying a `model_host_path`) GGUF
-headers already on disk. No Docker, no network, no live sysfs.
+Entirely offline and independent of host model files: reads committed queue JSON and, for every
+`model_host_path` listed in `fixtures/fit_lock_gguf/manifest.json`, a reduced REAL header (built
+by that directory's `build.py`: the real header minus its `tokenizer.ggml.*` arrays), copied to a
+tempdir and sparse-truncated to the real file size, so the genuine reader, the existence check and
+the `st_size` weights read all run for real. Cells whose path has no fixture keep that path (their
+"does not exist" reason string is part of the pinned digest). No Docker, no network, no sysfs.
 """
 
 import contextlib
 import functools
 import hashlib
 import json
+import os
 import shlex
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -87,6 +94,25 @@ import gguf_fit  # noqa: E402
 import sweep  # noqa: E402
 
 QUEUES_DIR = BAKEOFF_DIR / "queues"
+GGUF_FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "fit_lock_gguf"
+_FIXTURE_TMP = tempfile.TemporaryDirectory(prefix="fit-lock-gguf-")
+
+
+def _materialize_gguf_fixtures() -> dict[str, str]:
+    """`{original host path: tempdir path}` -- each reduced header copied, then sparse-truncated
+    to the real model's size (nothing is read past the tensor-info array)."""
+    manifest = json.loads((GGUF_FIXTURES_DIR / "manifest.json").read_text())
+    redirect = {}
+    for host_path, entry in manifest.items():
+        dest = Path(_FIXTURE_TMP.name) / entry["fixture"]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(GGUF_FIXTURES_DIR / entry["fixture"], dest)
+        os.truncate(dest, entry["size"])
+        redirect[host_path] = str(dest)
+    return redirect
+
+
+_REDIRECT = _materialize_gguf_fixtures()
 
 # The pinned injections (12.8 GiB total / 1 GiB used) -- see this module's docstring.
 PINNED_VRAM_TOTAL_BYTES = 13744734208
@@ -130,7 +156,11 @@ def _resolved_sweep_cells(queue_name):
     """`(vram_profile, [plain-dict cell, ...])` for one committed queue, through the exact same
     path `batch.py` uses live: `load_queue` -> `resolve_queue_cells` -> `as_sweep_cell()`."""
     queue = batch.load_queue(QUEUES_DIR / f"{queue_name}.json")
-    return queue["vram_profile"], [c.as_sweep_cell() for c in batch.resolve_queue_cells(queue)]
+    cells = [c.as_sweep_cell() for c in batch.resolve_queue_cells(queue)]
+    for cell in cells:  # fixture-backed paths only; build_command never reads model_host_path
+        if cell.get("model_host_path") in _REDIRECT:
+            cell["model_host_path"] = _REDIRECT[cell["model_host_path"]]
+    return queue["vram_profile"], cells
 
 
 def _compute(queue_name):

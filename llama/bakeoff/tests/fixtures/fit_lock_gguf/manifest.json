@@ -1,0 +1,70 @@
+{
+  "/srv/models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q8_0.gguf": {
+    "fixture": "Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q8_0.gguf",
+    "size": 8408187968
+  },
+  "/srv/models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q4_K_XL.gguf": {
+    "fixture": "Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q4_K_XL.gguf",
+    "size": 5340611328
+  },
+  "/srv/models/bloomer010/Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q6_K_XL.gguf": {
+    "fixture": "Ling-3.0-tiny-GGUF/Ling-3.0-tiny-UD-Q6_K_XL.gguf",
+    "size": 7274546528
+  },
+  "/srv/models/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-UD-Q4_K_XL.gguf": {
+    "fixture": "NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-UD-Q4_K_XL.gguf",
+    "size": 3133118624
+  },
+  "/srv/models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf": {
+    "fixture": "Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+    "size": 22853663008
+  },
+  "/srv/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf": {
+    "fixture": "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_S.gguf",
+    "size": 12040883104
+  },
+  "/srv/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_XXS.gguf": {
+    "fixture": "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ3_XXS.gguf",
+    "size": 10934860704
+  },
+  "/srv/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q3_K_XL.gguf": {
+    "fixture": "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q3_K_XL.gguf",
+    "size": 13146393504
+  },
+  "/srv/models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf": {
+    "fixture": "Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf",
+    "size": 10946624
+  },
+  "/srv/models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00002-of-00003.gguf": {
+    "fixture": "Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00002-of-00003.gguf",
+    "size": 49979779296
+  },
+  "/srv/models/unsloth/Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00003-of-00003.gguf": {
+    "fixture": "Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-Q2_K_XL-00003-of-00003.gguf",
+    "size": 28878402944
+  },
+  "/srv/models/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf": {
+    "fixture": "gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+    "size": 6716356800
+  },
+  "/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/gemma-4-26B-A4B-it-QAT-Q4_0.gguf": {
+    "fixture": "gemma-4-26B-A4B-it-QAT-GGUF/gemma-4-26B-A4B-it-QAT-Q4_0.gguf",
+    "size": 14439363264
+  },
+  "/models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-F16.gguf": {
+    "fixture": "MiniCPM5-2B-GGUF/MiniCPM5-2B-F16.gguf",
+    "size": 5039006688
+  },
+  "/models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q4_K_M.gguf": {
+    "fixture": "MiniCPM5-2B-GGUF/MiniCPM5-2B-Q4_K_M.gguf",
+    "size": 1561318368
+  },
+  "/models/openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q8_0.gguf": {
+    "fixture": "MiniCPM5-2B-GGUF/MiniCPM5-2B-Q8_0.gguf",
+    "size": 2679710688
+  },
+  "/models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf": {
+    "fixture": "gemma-4-26B-A4B-it-qat-GGUF/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
+    "size": 14249047104
+  }
+}

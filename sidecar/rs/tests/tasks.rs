@@ -9,13 +9,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const DELTAS: usize = 2000;
 
-fn node() -> PathBuf {
+fn bun() -> PathBuf {
     std::env::var_os("PATH")
         .into_iter()
         .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
-        .map(|d| d.join("node"))
+        .map(|d| d.join("bun"))
         .find(|p| p.is_file())
-        .expect("`node` on PATH (the fake app-server is a Node script)")
+        .expect("`bun` on PATH (the fake app-server runs under bun)")
 }
 
 fn alive() -> usize {
@@ -46,7 +46,7 @@ async fn a_long_sse_turn_keeps_the_live_task_count_flat() {
             "SIDECAR_APP_SERVER_CMD",
             format!(
                 "{} {} {d}/{{persona}}.json",
-                node().display(),
+                bun().display(),
                 fake.display()
             ),
         ),

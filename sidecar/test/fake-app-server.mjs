@@ -34,7 +34,7 @@
 import fs from "node:fs";
 
 const argv = process.argv.slice(2).filter(a => a !== "app-server");
-// `node --test test/` treated every .mjs under test/ as a test file (`bun test` collects only *.test.*); without a
+// A test runner that treats every .mjs under test/ as a test file would run this one (`bun test` collects only *.test.*); without a
 // scenario this is not a server run, so exit cleanly instead of waiting on stdin.
 if (!argv[0]) process.exit(0);
 const scenario = JSON.parse(fs.readFileSync(argv[0], "utf8"));

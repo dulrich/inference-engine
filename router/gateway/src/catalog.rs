@@ -491,7 +491,12 @@ mod tests {
     fn committed_exposures_parse_and_are_never_routed() {
         let s = settings();
         let cat = check(&s.providers, CATALOG.as_bytes()).unwrap();
-        assert_eq!(cat.exposures.len(), 13);
+        // Invariants only, never live catalog visibility (precedent 04a0511): every committed
+        // exposure record parses, and no exposure key is a provider model -- the set both routing
+        // and `/v1/models` (`relay::models`, `provider/model`) are built from.
+        let raw: Value = serde_json::from_str(CATALOG).unwrap();
+        let raw_len = raw["exposures"].as_object().map_or(0, |m| m.len());
+        assert_eq!(cat.exposures.len(), raw_len);
         let routed: Vec<&String> = cat.providers.iter().flat_map(|p| &p.models).collect();
         for (key, _) in &cat.exposures {
             assert!(!routed.contains(&key), "{key} is routed");
@@ -505,12 +510,6 @@ mod tests {
         assert!(local
             .iter()
             .all(|e| e.model_key.is_some() && e.consumers.is_some()));
-        let qwen = local.iter().find(|e| e.id == "qwen36-a3b").unwrap();
-        assert_eq!(
-            qwen.model_key.as_deref(),
-            Some("Qwen3.6-35B-A3B-UD-Q4_K_XL")
-        );
-        assert_eq!(qwen.consumers.as_deref().unwrap(), ["cc", "openwebui"]);
     }
 
     #[test]

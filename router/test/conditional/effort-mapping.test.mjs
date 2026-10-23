@@ -1,5 +1,5 @@
 // CONDITIONAL — lives in router/test/conditional/, outside the per-commit
-// `node --test router/test/*.test.mjs` glob, because every probe loads the Qwen3.8 27B on the GPU
+// `bun test router/test/*.test.mjs` glob, because every probe loads the Qwen3.8 27B on the GPU
 // tier (plans/test-qwen-load-minimization.md). Trigger surface (router/AGENTS.md "Gates" trigger
 // table): `router/gateway/src/local_leg.rs` effort handling; `effortKwargs` in router/catalog/catalog.json;
 // Qwen3.8 template/recipe changes in llama/config.yaml; this file. Run with EFFORT_MAPPING_LOCAL=1;

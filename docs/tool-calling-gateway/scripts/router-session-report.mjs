@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // Per-session TTFT / prefill / decode report over the router telemetry jsonl sink
 // (patch 0006, `kind:"request"` terminal records).
 //

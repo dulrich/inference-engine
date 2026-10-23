@@ -32,7 +32,7 @@
 // carries a `probe-<Date.now()>` nonce so the two turns are identifiable by eye in the log.
 //
 // CONDITIONAL — lives in router/test/conditional/, outside the per-commit
-// `node --test router/test/*.test.mjs` glob. Trigger surface (router/AGENTS.md "Gates" trigger
+// `bun test router/test/*.test.mjs` glob. Trigger surface (router/AGENTS.md "Gates" trigger
 // table): `sidecar/` effort/request handling; codex providers in router/gateway.config.json; any
 // router patch; this file. Run with CODEX_METERED=1; a triggered run without it is reported as
 // not run, naming CODEX_METERED.

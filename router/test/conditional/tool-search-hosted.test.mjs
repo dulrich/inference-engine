@@ -4,7 +4,7 @@
 // helpers from ../tool-search-shared.mjs.
 //
 // CONDITIONAL — lives in router/test/conditional/, outside the per-commit
-// `node --test router/test/*.test.mjs` glob. Trigger surface (router/AGENTS.md "Gates" trigger
+// `bun test router/test/*.test.mjs` glob. Trigger surface (router/AGENTS.md "Gates" trigger
 // table): router/gateway.config.json providers; any change under router/gateway/**; this file
 // (plus `router/smoke-tool-search.sh` default and `--passthrough`).
 //

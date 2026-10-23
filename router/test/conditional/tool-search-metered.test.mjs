@@ -9,7 +9,7 @@
 // to prevent.
 //
 // CONDITIONAL — lives in router/test/conditional/, outside the per-commit
-// `node --test router/test/*.test.mjs` glob. Trigger surface (router/AGENTS.md "Gates" trigger
+// `bun test router/test/*.test.mjs` glob. Trigger surface (router/AGENTS.md "Gates" trigger
 // table): `sidecar/` request handling; any router patch; this file (plus
 // `router/smoke-tool-search.sh … --codex`). A triggered run without the flag is reported to the
 // user as not run, naming TOOL_SEARCH_METERED.

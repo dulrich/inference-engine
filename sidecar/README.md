@@ -2,7 +2,7 @@
 
 An Anthropic-Messages front end over `codex app-server`. Claude Code talks to the router at `:4813`; the router's `codex-a` / `codex-b` providers talk to this sidecar; the sidecar drives one long-lived `<persona> app-server` child per persona over JSON-RPC on the child's stdio pipe.
 
-A single Rust binary (`rs/`, binary `codex-sidecar`). The black-box test suite under `test/` is Node ≥ 24, `node:*` only, zero npm dependencies.
+A single Rust binary (`rs/`, binary `codex-sidecar`). The black-box test suite under `test/` runs under bun (`bun test ./test`), `node:*` built-ins only, zero npm dependencies.
 
 ```
 Claude Code ──► router :4813 ──► codex-sidecar :4877 ──► codex-a app-server  (Luna / Sol / Astra)
@@ -159,7 +159,7 @@ SIDECAR_KEY=x SIDECAR_PORT=4899 SIDECAR_BIND_EXTRA= SIDECAR_LOG_DIR=/tmp/sclogs 
 
 ```sh
 cargo build --release --manifest-path sidecar/rs/Cargo.toml
-cd sidecar && bun run test      # node --test 'test/**/*.test.mjs'
+cd sidecar && bun run test      # bun test ./test
 ```
 
 The suite spawns `rs/target/release/codex-sidecar` out-of-process by default (a missing binary is a loud error, never a skip); `SIDECAR_TARGET` (a command line, relative to `sidecar/`) overrides it. Pure-function and serialization cases live in the crate's own tests (`rs/tests/*.rs`, `cargo test`).

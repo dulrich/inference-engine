@@ -174,6 +174,19 @@ async function startBin(binPath, run, cleanups) {
   await waitFor(`${run.gwUrl}/v1/models`, 30000, 'gateway');
 }
 
+// A case whose scripted stub reply holds a connection open this long (headDelayMs / chunk delayMs) is
+// wall-clock-bound, not CPU-bound; bin-mode runs give each such case its own stub+gateway lane and
+// run the lanes concurrently with the short sequential lane. The case bodies and assertions are unchanged.
+export const LONG_CASE_MS = 10000;
+export function maxScriptDelayMs(v) {
+  if (Array.isArray(v)) return v.reduce((m, x) => Math.max(m, maxScriptDelayMs(x)), 0);
+  if (v && typeof v === 'object') {
+    return Object.entries(v).reduce((m, [k, x]) => Math.max(m, (k === 'headDelayMs' || k === 'delayMs') && typeof x === "number" ? x : maxScriptDelayMs(x)), 0);
+  }
+  return 0;
+}
+export const isLongCase = (c) => maxScriptDelayMs(c.script || {}) >= LONG_CASE_MS;
+
 function globToRe(g) {
   return new RegExp(`^${g.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
 }
@@ -206,22 +219,39 @@ async function main() {
     const [mode, ref] = [args.target.slice(0, args.target.indexOf(':')), args.target.slice(args.target.indexOf(':') + 1)];
     if (mode === 'image') await startImage(ref, args.stubImage, run, cleanups);
     else await startBin(ref, run, cleanups);
-    const ctx = makeCtx(run);
-    console.log(`TAP version 13\n1..${selected.length}`);
-    let n = 0;
-    for (const c of selected) {
-      n++;
+    const runCase = async (ctx, c, n) => {
       const started = Date.now();
       try {
         await ctx.script(c.script || {});
         await c.run(ctx);
-        console.log(`ok ${n} - ${c.id} [${c.tags.join(',')}] (${Date.now() - started} ms)`);
+        return [`ok ${n} - ${c.id} [${c.tags.join(',')}] (${Date.now() - started} ms)`];
       } catch (err) {
         failed++;
-        console.log(`not ok ${n} - ${c.id} [${c.tags.join(',')}] (${Date.now() - started} ms)`);
-        console.log(`  # ${String(err && err.message || err).split('\n').slice(0, 6).join('\n  # ')}`);
+        return [`not ok ${n} - ${c.id} [${c.tags.join(',')}] (${Date.now() - started} ms)`,
+          `  # ${String(err && err.message || err).split('\n').slice(0, 6).join('\n  # ')}`];
       }
-    }
+    };
+    // bin mode: each long wall-clock-bound case gets a private stub+gateway lane (own config,
+    // catalog, telemetry dir) and runs concurrently with the short sequential lane; the image
+    // mode stays fully sequential. TAP lines are emitted in case order once all lanes finish.
+    const lanes = mode === 'bin' ? selected.filter(isLongCase) : [];
+    const results = new Array(selected.length);
+    const laneRuns = lanes.map(async (c) => {
+      const n = selected.indexOf(c) + 1;
+      const lane = { ...run, configPath: path.join(tmp, `lane${n}.gateway.config.json`), catalogDir: path.join(tmp, `lane${n}-catalog`), telemetryDir: path.join(tmp, `lane${n}-telemetry`) };
+      fs.mkdirSync(lane.telemetryDir, { mode: 0o777 });
+      await startBin(ref, lane, cleanups);
+      results[n - 1] = await runCase(makeCtx(lane), c, n);
+    });
+    const ctx = makeCtx(run);
+    const shortRun = (async () => {
+      for (const [i, c] of selected.entries()) {
+        if (!lanes.includes(c)) results[i] = await runCase(ctx, c, i + 1);
+      }
+    })();
+    await Promise.all([shortRun, ...laneRuns]);
+    console.log(`TAP version 13\n1..${selected.length}`);
+    for (const lines of results) for (const l of lines) console.log(l);
   } catch (err) {
     failed++;
     console.log(`Bail out! harness error: ${err && err.stack || err}`);

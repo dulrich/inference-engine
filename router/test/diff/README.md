@@ -5,14 +5,14 @@ Runs one gateway (an image or a host binary of the Rust gateway, `router/gateway
 ## Run
 
 ```
-node router/test/diff/run.mjs --target bin:router/gateway/target/release/inference-router
+bun router/test/diff/run.mjs --target bin:router/gateway/target/release/inference-router
 bun router/test/diff/run.mjs --target image:fleet-tools-inference-engine-router:latest
 ```
 
 Cross-version parity is checked against the deployed image `image:fleet-tools-inference-engine-router:latest`: run the harness against both the fresh `bin:` build and that image, and both must be green.
 
 - `--target image:<tag>` creates a `docker network create --internal` network `rrdiff-net-*`, runs the stub as a container of `--stub-image <tag>` (`node /diff/stub.mjs`, this directory mounted read-only; default `node:24-slim`, since the scratch gateway image has no `node`), and runs the gateway container on that network with the generated config mounted at `/app/gateway.config.json:ro` and the generated catalog directory at `/app/catalog:ro` (the image default `GATEWAY_CATALOG_PATH=/app/catalog/catalog.json`). The runner reaches both by container IP from the host (the internal bridge is host-routable; no published port). The gateway runs as the invoking uid so it can write the telemetry dir. Everything is named `rrdiff-*` and removed on exit, including on failure or SIGINT/SIGTERM.
-- `--target bin:<path>` spawns the stub on `127.0.0.1:<random>` and the binary with `HOST=127.0.0.1 PORT=<random> GATEWAY_CONFIG_PATH=<generated> GATEWAY_CATALOG_PATH=<generated>` plus the same fake env as image mode (the production env names from `fleet-tools/fleet/compose.fleet.yml`).
+- `--target bin:<path>` spawns the stub on `127.0.0.1:<random>` and the binary with `HOST=127.0.0.1 PORT=<random> GATEWAY_CONFIG_PATH=<generated> GATEWAY_CATALOG_PATH=<generated>` plus the same fake env as image mode (the production env names from `fleet-tools/fleet/compose.fleet.yml`). In bin mode every case whose scripted stub delay (`headDelayMs`/`delayMs`) is at least `LONG_CASE_MS` (10 s) runs in its own private stub+gateway lane (own config, catalog and telemetry dir), concurrently with the sequential lane of short cases; case bodies and assertions are unchanged and TAP lines print in case order (fleet-tools-bash-perl WP-5: ~67 s to ~18 s). The pure lane selector is unit-tested by `bun test router/test/diff/run.test.mjs`.
 - `--case <glob>` filters ids, `--slow` adds `slow` cases (none exist today), `--config-source <path>` replaces the default source config `router/gateway.config.json`, `--catalog-source <path>` the default source catalog `router/catalog/catalog.json`. `RRDIFF_GW_LOG=<file>` saves the gateway's log.
 - Output is one TAP line per case; exit is non-zero on any failure. The summary prints the generated config path and the per-run telemetry dir (`ROUTER_TELEMETRY_DIR`), kept for later validation (WP-4).
 

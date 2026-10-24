@@ -452,16 +452,14 @@ test("a drifted generated env key fails --check --launch-profile and --write res
   assert.equal(env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE, "1");
 });
 
-// fleet-env cutover (fleet-tools plans/env-management.md): a stubbed fleet-env binary only;
-// the default legacy env file is never read by these tests (the switch is ON or the key comes
-// from FLEET_ENV_RUN's environment).
+// fleet-env store (fleet-tools plans/env-management.md): a stubbed fleet-env binary only;
+// no env file is read by these tests (the key comes from the stub or FLEET_ENV_RUN's environment).
 function runFleetEnv(t, extraEnv, args) {
   const { dir, settings } = tempHome(t);
   const stub = path.join(dir, "fleet-env");
   fs.writeFileSync(stub, `#!/usr/bin/env bash
 echo "$1 $2" >> "${dir}/calls"
 case "$1" in
-  enabled) exit 0 ;;
   run) shift 3; INFERENCE_ROUTER_GATEWAY_KEY=${DUMMY_KEY} FLEET_ENV_RUN=model-picker exec "$@" ;;
 esac
 exit 2
@@ -476,29 +474,29 @@ exit 2
   return { ...r, calls, settings };
 }
 
-test("fleet-env cutover ON: --launch-profile re-execs under fleet-env run model-picker", (t) => {
+test("fleet-env store: --launch-profile re-execs under fleet-env run model-picker", (t) => {
   const r = runFleetEnv(t, {}, ["--write", "--launch-profile"]);
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.calls, "enabled \nrun model-picker\n");
+  assert.equal(r.calls, "run model-picker\n");
   const parsed = JSON.parse(fs.readFileSync(r.settings, "utf8"));
   assert.equal(parsed.env.ANTHROPIC_CUSTOM_HEADERS, `x-gateway-key: ${DUMMY_KEY}`);
   assert.ok(!r.stdout.includes(DUMMY_KEY) && !r.stderr.includes(DUMMY_KEY));
 });
 
-test("fleet-env cutover: bare --write never consults fleet-env", (t) => {
+test("fleet-env store: bare --write never consults fleet-env", (t) => {
   const r = runFleetEnv(t, {}, ["--write"]);
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.calls, "");
 });
 
-test("fleet-env cutover: under fleet-env run an empty key fails closed", (t) => {
+test("fleet-env store: under fleet-env run an empty key fails closed", (t) => {
   const r = runFleetEnv(t, { FLEET_ENV_RUN: "model-picker", INFERENCE_ROUTER_GATEWAY_KEY: "" }, ["--write", "--launch-profile"]);
   assert.equal(r.status, 2);
   assert.match(r.stderr, /missing or empty in the fleet-env environment/);
 });
 
-test("fleet-env cutover ON with the binary missing fails closed", (t) => {
-  const r = runFleetEnv(t, { FLEET_ENV_BIN: "/nonexistent/fleet-env", FLEET_ENV_CUTOVER: "1" }, ["--write", "--launch-profile"]);
+test("fleet-env store: with the binary missing fails closed", (t) => {
+  const r = runFleetEnv(t, { FLEET_ENV_BIN: "/nonexistent/fleet-env" }, ["--write", "--launch-profile"]);
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /cutover is on but/);
+  assert.match(r.stderr, /is missing/);
 });

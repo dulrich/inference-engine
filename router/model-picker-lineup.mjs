@@ -16,8 +16,7 @@
 //
 // Usage:
 //   model-picker-lineup.mjs [--config <path>] [--catalog <path>] [--home <dir>]
-//                           [--env-file <path>]   (default: fleet-tools/.env; under the
-//                                                  fleet-env cutover, the environment via
+//                           [--env-file <path>]   (default: the environment via
 //                                                  `fleet-env run model-picker`)
 //                           [--check | --write [--launch-profile] [--canonicalize]]
 //
@@ -32,7 +31,6 @@ import { fleetEnvReexec } from "./fleet-env.mjs";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG = path.join(SCRIPT_DIR, "gateway.config.json");
 const DEFAULT_CATALOG = path.join(SCRIPT_DIR, "catalog", "catalog.json");
-const DEFAULT_ENV_FILE = "<code-root>/fleet-tools/.env";
 const GATEWAY_KEY_VAR = "INFERENCE_ROUTER_GATEWAY_KEY";
 const ROUTER_URL = "http://127.0.0.1:4813";
 
@@ -424,13 +422,13 @@ function checkFailure(rows, parsed, launchProfile, gatewayKey, file) {
   return null;
 }
 
-// The gateway key for --launch-profile. An explicit --env-file always wins. Otherwise, with the
-// fleet-env cutover switch ON the script re-execs itself under `fleet-env run model-picker`
-// and reads the key from its environment (no file); OFF keeps the legacy DEFAULT_ENV_FILE.
+// The gateway key for --launch-profile. An explicit --env-file always wins. Otherwise the script
+// re-execs itself under `fleet-env run model-picker` and reads the key from its environment
+// (no file); a missing fleet-env binary fails closed.
 // Only --launch-profile needs the key, so a bare --write/--check never consults fleet-env.
 function gatewayKeySource(envFile) {
   if (envFile) return readGatewayKey(envFile);
-  if (!fleetEnvReexec("model-picker")) return readGatewayKey(DEFAULT_ENV_FILE);
+  fleetEnvReexec("model-picker");
   const value = (process.env[GATEWAY_KEY_VAR] || "").trim();
   if (!value) die(`${GATEWAY_KEY_VAR} is missing or empty in the fleet-env environment`);
   return value;

@@ -177,9 +177,9 @@ sidecar/install.sh                 # renders ~/.config/systemd/user/codex-sideca
 sidecar/install.sh --home /tmp/x   # test render into a throwaway root; skips daemon-reload
 ```
 
-It builds and installs the binary (see [Rust binary](#rust-binary)), resolves both persona wrappers (`codex-a`, `codex-b`), creates `~/.config/codex-sidecar/` (`0700`) and `env` (`0600`), and generates a `SIDECAR_KEY` **only when the env file is absent** — an existing key is never overwritten. The generated key is printed exactly once, at generation; after that it lives only in the env file and is never echoed again. Nothing is enabled or started: the installer ends by printing the lines below for you to run. Under the fleet-env cutover switch (`fleet-env enabled`; transitional default off, which is everything above) the installer instead renders `EnvironmentFile=%t/fleet-env/codex-sidecar.env` with `After=`/`Requires=fleet-env-project.service`, checks `CODEX_SIDECAR_KEY` is present via `fleet-env run sidecar-install` (never printed) and the projection exists, and creates no legacy env file; `status.sh` reads `fleet-env path codex-sidecar`. Post-cutover the store is the only copy of the key.
+It builds and installs the binary (see [Rust binary](#rust-binary)), resolves both persona wrappers (`codex-a`, `codex-b`), renders `EnvironmentFile=%t/fleet-env/codex-sidecar.env` (the tmpfs projection) with `After=`/`Requires=fleet-env-project.service`, checks `CODEX_SIDECAR_KEY` is present via `fleet-env run sidecar-install` (never printed) and that the projection exists (a missing fleet-env binary or projection fails loudly), and creates no env file or key; `status.sh` reads `fleet-env path codex-sidecar`. The fleet-env store is the only copy of the key. Nothing is enabled or started: the installer ends by printing the lines below for you to run.
 
-The fleet value for `SIDECAR_OUTBOX_PATH` is `<code-root>/fleet-tools/data/outbox/events.db`; it is added to `~/.config/codex-sidecar/env` by hand and takes effect on `systemctl --user restart codex-sidecar`.
+The fleet value for `SIDECAR_OUTBOX_PATH` is `<code-root>/fleet-tools/data/outbox/events.db`; it lives in the fleet-env store (`fleet-env set SIDECAR_OUTBOX_PATH`), reaches the unit through the `codex-sidecar` projection (`fleet-env project --consumer codex-sidecar`), and takes effect on `systemctl --user restart codex-sidecar`.
 
 **Enable** (`hold-for-user` — the agent cannot do this):
 
@@ -194,17 +194,16 @@ systemctl --user enable --now codex-sidecar
 sidecar/status.sh
 ```
 
-`status.sh` prints `systemctl --user status codex-sidecar` (tolerating a not-installed unit), then an authenticated `GET /healthz` on **every** expected bind — loopback and `SIDECAR_BIND_EXTRA` (read from the env file; default `172.17.0.1`, empty skips it) — status code and body, never the key. It asserts on the body (`"status":"ok"`), and exits non-zero on a 503 (a degraded persona or a missing bind), a non-`ok` body, or a refused connection on any bind. Probing loopback alone was blind to the docker0 bind race by construction.
+`status.sh` prints `systemctl --user status codex-sidecar` (tolerating a not-installed unit), then an authenticated `GET /healthz` on **every** expected bind — loopback and `SIDECAR_BIND_EXTRA` (read from the fleet-env projection; default `172.17.0.1`, empty skips it) — status code and body, never the key. It asserts on the body (`"status":"ok"`), and exits non-zero on a 503 (a degraded persona or a missing bind), a non-`ok` body, or a refused connection on any bind. Probing loopback alone was blind to the docker0 bind race by construction.
 
 **Rotate the key:**
 
 ```sh
-systemctl --user stop codex-sidecar
-printf 'SIDECAR_KEY=%s\n' "$(openssl rand -hex 32)" > ~/.config/codex-sidecar/env
-chmod 0600 ~/.config/codex-sidecar/env
-systemctl --user start codex-sidecar
+openssl rand -hex 32 | fleet-env set CODEX_SIDECAR_KEY   # value from stdin, never echoed
+fleet-env project
+systemctl --user restart codex-sidecar
 ```
 
-Then update the compose-side value to match.
+The store holds the one copy for both sides, so then restart the router (`hc restart inference-engine-router`) to pick up the same value.
 
-**Compose side:** the router reaches the sidecar with the same shared key under the name `CODEX_SIDECAR_KEY` in the fleet-tools `.env` (post-cutover: the fleet-env store, one copy for both sides) (`hold-for-user`: the user adds `CODEX_SIDECAR_KEY` to that `.env` before the router restart). The router's provider entries (`router/gateway.config.json`) and the compose `extra_hosts` consume it.
+**Compose side:** the router reaches the sidecar with the same shared key under the name `CODEX_SIDECAR_KEY` in the fleet-env store (one copy for both sides). The router's provider entries (`router/gateway.config.json`) and the compose `extra_hosts` consume it.

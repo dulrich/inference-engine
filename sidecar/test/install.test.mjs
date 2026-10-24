@@ -1,4 +1,4 @@
-// install.sh under the fleet-env cutover switch: stubbed fleet-env, systemctl and persona
+// install.sh, store-only (no switch, no legacy env file): stubbed fleet-env, systemctl and persona
 // wrappers on PATH, a mkdtemp --home. Never touches the real home, units or store.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 const INSTALL = path.join(import.meta.dirname, "..", "install.sh");
 const DUMMY = "fixture-sidecar-key-not-a-secret";
 
-function setup({ on, projection = true, args = [], prepare } = {}) {
+function setup({ projection = true, args = [], prepare, fleetEnvBin } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidecar-install-"));
   const bin = path.join(root, "bin");
   const home = path.join(root, "home");
@@ -31,7 +31,6 @@ function setup({ on, projection = true, args = [], prepare } = {}) {
   }
   stub("fleet-env", `echo "fleet-env $1 $2" >> "${calls}"
 case "$1" in
-  enabled) exit ${on ? 0 : 1} ;;
   path) echo "${proj}" ;;
   run) shift 3; CODEX_SIDECAR_KEY=${DUMMY} exec "$@" ;;
   *) exit 2 ;;
@@ -41,7 +40,7 @@ esac`);
   const binArgs = args.includes("--rust-bin") ? [] : ["--rust-bin", rustStub(root, "v0")];
   const run = () => spawnSync("bash", [INSTALL, "--home", home, ...binArgs, ...args], {
     encoding: "utf8",
-    env: { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: root, FLEET_ENV_BIN: path.join(bin, "fleet-env") },
+    env: { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: root, FLEET_ENV_BIN: fleetEnvBin ?? path.join(bin, "fleet-env") },
   });
   const r = run();
   const unit = path.join(home, ".config", "systemd", "user", "codex-sidecar.service");
@@ -56,22 +55,13 @@ esac`);
   };
 }
 
-test("switch off: legacy EnvironmentFile, no fleet-env ordering, legacy env file generated", () => {
-  const r = setup({ on: false });
-  assert.equal(r.status, 0, r.stderr);
-  assert.match(r.unit, /^EnvironmentFile=%h\/\.config\/codex-sidecar\/env$/m);
-  assert.doesNotMatch(r.unit, /fleet-env|@FLEET_ENV_UNIT@|@ENV_FILE@/);
-  assert.ok(fs.existsSync(r.legacyEnv));
-  assert.equal(r.calls, "fleet-env enabled \n");
-});
-
-test("switch on: projection EnvironmentFile + After/Requires, no legacy file, no key printed", () => {
-  const r = setup({ on: true });
+test("store-only: projection EnvironmentFile + After/Requires, no legacy file, no key printed", () => {
+  const r = setup();
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.unit, /^EnvironmentFile=%t\/fleet-env\/codex-sidecar\.env$/m);
   assert.match(r.unit, /^After=fleet-env-project\.service$/m);
   assert.match(r.unit, /^Requires=fleet-env-project\.service$/m);
-  assert.ok(!fs.existsSync(r.legacyEnv), "no legacy env file under the cutover");
+  assert.ok(!fs.existsSync(r.legacyEnv), "no legacy env file is created");
   assert.ok(!fs.existsSync(path.dirname(r.legacyEnv)), "legacy config dir untouched");
   assert.ok(!(r.stdout + r.stderr).includes(DUMMY));
   assert.doesNotMatch(r.stdout, /Generated SIDECAR_KEY/);
@@ -79,11 +69,19 @@ test("switch on: projection EnvironmentFile + After/Requires, no legacy file, no
   assert.doesNotMatch(r.calls, /systemctl/, "test home never reloads systemd");
 });
 
-test("switch on with the projection missing fails closed", () => {
-  const r = setup({ on: true, projection: false });
+test("store-only: the projection missing fails closed", () => {
+  const r = setup({ projection: false });
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /is missing; run fleet-env project/);
   assert.ok(!fs.existsSync(r.legacyEnv));
+});
+
+test("store-only: a missing fleet-env binary fails closed, nothing written", () => {
+  const r = setup({ fleetEnvBin: "/nonexistent/fleet-env" });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /is missing/);
+  assert.equal(r.unit, "", "no unit written");
+  assert.ok(!fs.existsSync(path.dirname(r.legacyEnv)), "no legacy config dir");
 });
 
 // A stub "binary" stands in for the release build (no cargo in tests).
@@ -96,7 +94,7 @@ function rustStub(root, tag) {
 
 test("render: ExecStart is the installed binary, no node path, binary 0755", () => {
   let stub;
-  const r = setup({ on: false, prepare: ({ root }) => { stub = rustStub(root, "v1"); }, args: [] });
+  const r = setup({ prepare: ({ root }) => { stub = rustStub(root, "v1"); }, args: [] });
   // first run above installed the v0 stub; re-run with v1 against the same home
   const rr = spawnSync("bash", [INSTALL, "--home", r.home, "--rust-bin", stub], {
     encoding: "utf8",
@@ -115,7 +113,7 @@ test("render: ExecStart is the installed binary, no node path, binary 0755", () 
 
 test("reinstall keeps the previous build as codex-sidecar.prev", () => {
   let v1, v2;
-  const r = setup({ on: false, args: ["--rust-bin", "PLACEHOLDER"], prepare: ({ root }) => { v1 = rustStub(root, "v1"); v2 = rustStub(root, "v2"); } });
+  const r = setup({ args: ["--rust-bin", "PLACEHOLDER"], prepare: ({ root }) => { v1 = rustStub(root, "v1"); v2 = rustStub(root, "v2"); } });
   assert.notEqual(r.status, 0, "placeholder path is rejected");
   assert.match(r.stderr, /--rust-bin is not an executable file/);
   const env = { PATH: `${path.join(r.root, "bin")}:/usr/bin:/bin`, HOME: r.root, FLEET_ENV_BIN: path.join(r.root, "bin", "fleet-env") };

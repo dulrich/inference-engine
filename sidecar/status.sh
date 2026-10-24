@@ -18,35 +18,14 @@ for _a in "$@"; do case "$_a" in --help|-h)
 set -euo pipefail
 
 INSTALL_HOME="${SIDECAR_INSTALL_HOME:-$HOME}"
-# fleet-env cutover switch (plans/env-management.md). 0 = ON, 1 = OFF; exits loudly if
-# ON but the fleet-env binary is missing or the switch is malformed (never a silent
-# fallback to the legacy file).
+# Store-only (plans/env-management.md): the env file is the fleet-env projection, the same as
+# install.sh. A missing binary or failed lookup is a loud exit 1 -- never a silent fallback.
 FLEET_ENV="${FLEET_ENV_BIN:-<code-root>/fleet-tools/fleet/fleet_env/bin/fleet-env}"
-fleet_env_on() {
-  local rc=0
-  if [[ ! -x "$FLEET_ENV" ]]; then
-    case "${FLEET_ENV_CUTOVER:-}" in
-      0) return 1 ;;
-      1) ;;
-      *) [[ -e "${FLEET_ENV_HOME:-$HOME/.config/fleet-env}/cutover" ]] || return 1 ;;
-    esac
-    printf '%s: fleet-env cutover is on but %s is missing; refusing the legacy env path\n' "$0" "$FLEET_ENV" >&2
-    exit 1
-  fi
-  "$FLEET_ENV" enabled || rc=$?
-  if [[ $rc -gt 1 ]]; then
-    printf '%s: fleet-env enabled failed (exit %d)\n' "$0" "$rc" >&2
-    exit 1
-  fi
-  return "$rc"
-}
-
-# Same choice as install.sh: the fleet-env projection under the cutover, else the legacy file.
-if fleet_env_on; then
-  ENV_FILE="$("$FLEET_ENV" path codex-sidecar)" || { printf 'fleet-env path codex-sidecar failed\n' >&2; exit 1; }
-else
-  ENV_FILE="$INSTALL_HOME/.config/codex-sidecar/env"
+if [[ ! -x "$FLEET_ENV" ]]; then
+  printf '%s: fleet-env binary %s is missing; refusing to run without credentials\n' "$0" "$FLEET_ENV" >&2
+  exit 1
 fi
+ENV_FILE="$("$FLEET_ENV" path codex-sidecar)" || { printf 'fleet-env path codex-sidecar failed\n' >&2; exit 1; }
 PORT="${SIDECAR_PORT:-4877}"
 
 printf '== systemctl --user status codex-sidecar ==\n'

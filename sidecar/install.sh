@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the codex-sidecar systemd --user unit, config dir and env file.
+# Install the codex-sidecar systemd --user unit (credentials come from the fleet-env store).
 # Never enables or starts anything: the user runs the printed lines.
 set -euo pipefail
 
@@ -11,34 +11,11 @@ PERSONAS=(codex-a codex-b)
 INSTALL_HOME="${SIDECAR_INSTALL_HOME:-$HOME}"
 RUST_BIN="${SIDECAR_RUST_BIN:-}"
 
-# fleet-env cutover switch (plans/env-management.md). 0 = ON, 1 = OFF; exits loudly if
-# ON but the fleet-env binary is missing or the switch is malformed (never a silent
-# fallback to the legacy file).
+# fleet-env store (plans/env-management.md): the unit reads the tmpfs projection
+# %t/fleet-env/codex-sidecar.env, ordered after fleet-env-project.service. The key lives only
+# in the canonical store (no env file is created or touched, no key is ever printed). A missing
+# fleet-env binary or projection fails loudly -- never a silent fallback.
 FLEET_ENV="${FLEET_ENV_BIN:-<code-root>/fleet-tools/fleet/fleet_env/bin/fleet-env}"
-fleet_env_on() {
-  local rc=0
-  if [[ ! -x "$FLEET_ENV" ]]; then
-    case "${FLEET_ENV_CUTOVER:-}" in
-      0) return 1 ;;
-      1) ;;
-      *) [[ -e "${FLEET_ENV_HOME:-$HOME/.config/fleet-env}/cutover" ]] || return 1 ;;
-    esac
-    printf '%s: fleet-env cutover is on but %s is missing; refusing the legacy env path\n' "$0" "$FLEET_ENV" >&2
-    exit 1
-  fi
-  "$FLEET_ENV" enabled || rc=$?
-  if [[ $rc -gt 1 ]]; then
-    printf '%s: fleet-env enabled failed (exit %d)\n' "$0" "$rc" >&2
-    exit 1
-  fi
-  return "$rc"
-}
-
-# Cutover ON: the unit reads the tmpfs projection %t/fleet-env/codex-sidecar.env, ordered
-# after fleet-env-project.service; the key lives only in the canonical store (no legacy env
-# file is created or touched, no key is ever printed). OFF (default): today's behaviour.
-FLEET_ENV_MODE=0
-if fleet_env_on; then FLEET_ENV_MODE=1; fi
 
 usage() {
   cat <<'USAGE'
@@ -86,6 +63,7 @@ done
 [ -n "$INSTALL_HOME" ] || die "install home resolves to an empty path"
 [ -f "$TEMPLATE" ]   || die "missing unit template: $TEMPLATE"
 [ -z "$RUST_BIN" ] || [ -x "$RUST_BIN" ] || die "--rust-bin is not an executable file: $RUST_BIN"
+[ -x "$FLEET_ENV" ] || die "fleet-env binary $FLEET_ENV is missing; refusing to install without the credential store"
 
 REAL_HOME=0
 if [ "$INSTALL_HOME" = "${HOME:-}" ]; then
@@ -146,19 +124,11 @@ EXEC_VALUE="$BIN_DEST"
 # --- render the unit ----------------------------------------------------------
 UNIT_DIR="$INSTALL_HOME/.config/systemd/user"
 UNIT_FILE="$UNIT_DIR/$UNIT_NAME"
-CONF_DIR="$INSTALL_HOME/.config/codex-sidecar"
-ENV_FILE="$CONF_DIR/env"
 
 # @FLEET_ENV_UNIT@ is the template's sole ordering exception (see its header): rendered as
-# After=/Requires=fleet-env-project.service under the cutover, deleted otherwise so the
-# switch-off unit is byte-identical to the pre-cutover render.
-if [ "$FLEET_ENV_MODE" -eq 1 ]; then
-  UNIT_ENV_FILE='%t/fleet-env/codex-sidecar.env'
-  unit_deps=(-e 's|^@FLEET_ENV_UNIT@$|After=fleet-env-project.service\nRequires=fleet-env-project.service|')
-else
-  UNIT_ENV_FILE='%h/.config/codex-sidecar/env'
-  unit_deps=(-e '/^@FLEET_ENV_UNIT@$/d')
-fi
+# After=/Requires=fleet-env-project.service.
+UNIT_ENV_FILE='%t/fleet-env/codex-sidecar.env'
+unit_deps=(-e 's|^@FLEET_ENV_UNIT@$|After=fleet-env-project.service\nRequires=fleet-env-project.service|')
 
 rendered="$(sed \
   "${unit_deps[@]}" \
@@ -181,35 +151,15 @@ else
 fi
 printf 'unit    %s (%s)\n' "$UNIT_FILE" "$unit_state"
 
-# --- config dir + env file ----------------------------------------------------
-generated_key=""
-if [ "$FLEET_ENV_MODE" -eq 1 ]; then
-  # The key is read only through the canonical store (`fleet-env run sidecar-install`), and
-  # only tested for presence -- never printed, never written to a file here.
-  # shellcheck disable=SC2016  # expanded by the child shell, not here
-  "$FLEET_ENV" run sidecar-install -- bash -c '[ -n "${CODEX_SIDECAR_KEY:-}" ]' \
-    || die "fleet-env cutover is on but CODEX_SIDECAR_KEY is not available from the store (fleet-env check)"
-  projection="$("$FLEET_ENV" path codex-sidecar)" || die "fleet-env path codex-sidecar failed"
-  [ -f "$projection" ] || die "fleet-env cutover is on but $projection is missing; run fleet-env project (or install fleet-env-project.service)"
-  printf 'env     %s (fleet-env projection; CODEX_SIDECAR_KEY from the canonical store, legacy %s not used)\n' "$projection" "$ENV_FILE"
-else
-mkdir -p -- "$CONF_DIR"
-chmod 0700 -- "$CONF_DIR"
-
-if [ -f "$ENV_FILE" ]; then
-  chmod 0600 -- "$ENV_FILE"
-  printf 'env     %s (unchanged; existing SIDECAR_KEY kept)\n' "$ENV_FILE"
-else
-  if command -v openssl >/dev/null 2>&1; then
-    generated_key="$(openssl rand -hex 32)"
-  else
-    generated_key="$(od -vAn -N32 -tx1 /dev/urandom | tr -d ' \n')"
-  fi
-  (umask 077; printf 'SIDECAR_KEY=%s\n' "$generated_key" > "$ENV_FILE")
-  chmod 0600 -- "$ENV_FILE"
-  printf 'env     %s (created; SIDECAR_KEY generated)\n' "$ENV_FILE"
-fi
-fi
+# --- credentials: the fleet-env store -----------------------------------------
+# The key is read only through the canonical store (`fleet-env run sidecar-install`), and
+# only tested for presence -- never printed, never written to a file here.
+# shellcheck disable=SC2016  # expanded by the child shell, not here
+"$FLEET_ENV" run sidecar-install -- bash -c '[ -n "${CODEX_SIDECAR_KEY:-}" ]' \
+  || die "CODEX_SIDECAR_KEY is not available from the fleet-env store (fleet-env check)"
+projection="$("$FLEET_ENV" path codex-sidecar)" || die "fleet-env path codex-sidecar failed"
+[ -f "$projection" ] || die "$projection is missing; run fleet-env project (or install fleet-env-project.service)"
+printf 'env     %s (fleet-env projection; CODEX_SIDECAR_KEY from the canonical store)\n' "$projection"
 
 # --- daemon-reload (real home only) ------------------------------------------
 if [ "$REAL_HOME" -eq 1 ]; then
@@ -234,14 +184,6 @@ if [ "$REAL_HOME" -eq 1 ] && command -v loginctl >/dev/null 2>&1; then
   fi
 else
   printf 'linger  not checked (test render)\n'
-fi
-
-# --- one-time key line --------------------------------------------------------
-if [ -n "$generated_key" ]; then
-  printf '\n'
-  printf 'Generated SIDECAR_KEY (shown once, stored 0600 in %s):\n' "$ENV_FILE"
-  printf '  %s\n' "$generated_key"
-  printf 'Copy this into the fleet-tools .env file as CODEX_SIDECAR_KEY (WP-3 wires the router to it).\n'
 fi
 
 # --- next steps for the user --------------------------------------------------

@@ -281,6 +281,15 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         action="store_true",
         help="perform the mutating sync; default is dry-run (print the diff, change nothing)",
     )
+    p.add_argument(
+        "--quiet",
+        action="store_true",
+        help=(
+            "print only what changed or went wrong: omit the header, no-op model blocks, an "
+            "unmatched-rows section with nothing to retire, and an all-zero summary line "
+            "(mutations, FAIL lines, warnings and errors are unchanged)"
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -358,7 +367,8 @@ def main(argv: List[str]) -> int:
             print(f"warning: --only {mid} not found in router /v1/models", file=sys.stderr)
 
     router_models = sorted(router_models, key=lambda m: m["id"])
-    print_header(args, catalog_path, policy_path, len(router_models))
+    if not args.quiet:
+        print_header(args, catalog_path, policy_path, len(router_models))
 
     counts: Dict[str, int] = {"create": 0, "derive": 0, "update": 0, "toggle": 0, "noop": 0}
     failures = 0
@@ -372,6 +382,7 @@ def main(argv: List[str]) -> int:
             apply=args.apply,
             openwebui_url=args.openwebui_url,
             api_key=args.openwebui_key,
+            quiet=args.quiet,
         )
         for action, count in model_counts.items():
             counts[action] = counts.get(action, 0) + count
@@ -386,8 +397,15 @@ def main(argv: List[str]) -> int:
         only=args.only,
         openwebui_url=args.openwebui_url,
         api_key=args.openwebui_key,
+        quiet=args.quiet,
     )
 
+    nothing_done = not failures and not any(
+        (counts["create"], counts["derive"], counts["update"], counts["toggle"],
+         len(retirement.active))
+    )
+    if args.quiet and nothing_done:
+        return 0
     print(
         f"summary: {counts['create']} create, {counts['derive']} derive, "
         f"{counts['update']} update, {counts['toggle']} visibility toggle, "

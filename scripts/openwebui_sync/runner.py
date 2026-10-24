@@ -48,6 +48,7 @@ def process_row(
     label_create: str = "CREATE",
     base_model_id: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
+    quiet: bool = False,
 ) -> RowOutcome:
     """Plan, print and (under `--apply`) perform one row. Returns its action and failure count.
 
@@ -68,18 +69,22 @@ def process_row(
     active_action, observed_active = planner.plan_is_active(wanted_active, existing)
     overall = planner.overall_action(action, active_action)
 
-    label = label_create if overall == "create" else ACTION_LABELS[overall]
-    print(f"[{row_id}] {label}")
-    for field, old_value, new_value in diffs:
-        print(f"    {field}: {old_value!r} -> {new_value!r}")
-    if active_action == "create":
-        # No observed value exists to transition from -- print the INTENT, never a fabricated
-        # `True -> False`.
-        print(f"    is_active: (no row yet) -> {wanted_active!r}")
-    elif active_action == "toggle":
-        print(f"    is_active: {observed_active!r} -> {wanted_active!r}")
-    if overall == "noop":
-        print("    (already in sync)")
+    # `--quiet` drops only a block whose whole outcome is a no-op (apply_model does nothing for
+    # one); every block that changes, creates or fails prints exactly as without the flag.
+    hush = quiet and overall == "noop"
+    if not hush:
+        label = label_create if overall == "create" else ACTION_LABELS[overall]
+        print(f"[{row_id}] {label}")
+        for field, old_value, new_value in diffs:
+            print(f"    {field}: {old_value!r} -> {new_value!r}")
+        if active_action == "create":
+            # No observed value exists to transition from -- print the INTENT, never a
+            # fabricated `True -> False`.
+            print(f"    is_active: (no row yet) -> {wanted_active!r}")
+        elif active_action == "toggle":
+            print(f"    is_active: {observed_active!r} -> {wanted_active!r}")
+        if overall == "noop":
+            print("    (already in sync)")
 
     failures = 0
     if apply:
@@ -92,7 +97,8 @@ def process_row(
             active_action,
             wanted_active,
         )
-    print()
+    if not hush:
+        print()
     return RowOutcome(overall, failures)
 
 
@@ -106,6 +112,7 @@ def sync_model(
     apply: bool,
     openwebui_url: str,
     api_key: str,
+    quiet: bool = False,
 ) -> Tuple[Dict[str, int], int]:
     """Sync one router model: its base row plus its whole derived effort ladder.
 
@@ -118,6 +125,8 @@ def sync_model(
     router_name = entry.get("name") or router_id
     llamaswap = entry.get("meta", {}).get("llamaswap", {})
     if llamaswap.get("type") not in (None, "model"):
+        if quiet:
+            return counts, 0
         print(f"[{router_id}] skip: meta.llamaswap.type={llamaswap.get('type')!r}, not a model")
         return counts, 0
 
@@ -140,6 +149,7 @@ def sync_model(
         apply=apply,
         openwebui_url=openwebui_url,
         api_key=api_key,
+        quiet=quiet,
     )
     counts[outcome.action] = counts.get(outcome.action, 0) + 1
     failures += outcome.failures
@@ -162,6 +172,7 @@ def sync_model(
             label_create="DERIVE",
             base_model_id=router_id,
             reasoning_effort=level,
+            quiet=quiet,
         )
         key = "derive" if outcome.action == "create" else outcome.action
         counts[key] = counts.get(key, 0) + 1
@@ -177,24 +188,20 @@ def retire_rows(
     only: Optional[List[str]],
     openwebui_url: str,
     api_key: str,
+    quiet: bool = False,
 ) -> int:
     """Report the unmanaged-row partition and, outside `--only`, retire the rows this sync owns.
 
     Nothing here ever deletes: hiding a model is deactivation. `--only` narrows the WALK, so it
     must not act on anything outside it -- the would-be retirements are printed and skipped.
+    With `quiet`, the section is omitted unless it holds a row being retired (rows that are only
+    already-inactive or UNMANAGED are standing state, not news).
     """
     if not plan:
         return 0
 
-    print("Open WebUI rows with no current router match (never deleted -- deactivated only):")
-    skipped = "  (skipped: --only)" if only else ""
-    for row_id in plan.active:
-        print(f"    RETIRE {row_id}{skipped}")
-    for row_id in plan.already_inactive:
-        print(f"    retired (already inactive) {row_id}")
-    for row_id in plan.unmanaged:
-        print(f"    UNMANAGED {row_id}")
-    print()
+    if not (quiet and not plan.active):
+        _print_unmatched(plan, only)
 
     failures = 0
     if apply and not only:
@@ -204,3 +211,15 @@ def retire_rows(
             failures += client.retire_row(openwebui_url, api_key, row_id)
             print()
     return failures
+
+
+def _print_unmatched(plan: RetirementPlan, only: Optional[List[str]]) -> None:
+    print("Open WebUI rows with no current router match (never deleted -- deactivated only):")
+    skipped = "  (skipped: --only)" if only else ""
+    for row_id in plan.active:
+        print(f"    RETIRE {row_id}{skipped}")
+    for row_id in plan.already_inactive:
+        print(f"    retired (already inactive) {row_id}")
+    for row_id in plan.unmanaged:
+        print(f"    UNMANAGED {row_id}")
+    print()

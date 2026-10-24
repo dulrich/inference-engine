@@ -133,6 +133,7 @@ function parseArgs(argv) {
     mode: "print",
     launchProfile: false,
     canonicalize: false,
+    quiet: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -150,9 +151,10 @@ function parseArgs(argv) {
     else if (arg === "--write") opts.mode = "write";
     else if (arg === "--launch-profile") opts.launchProfile = true;
     else if (arg === "--canonicalize") opts.canonicalize = true;
+    else if (arg === "--quiet") opts.quiet = true;
     else if (arg === "--help" || arg === "-h") {
       process.stdout.write(
-        "usage: model-picker-lineup.mjs [--config <path>] [--catalog <path>] [--home <dir>] [--env-file <path>] [--check | --write [--launch-profile] [--canonicalize]]\n",
+        "usage: model-picker-lineup.mjs [--config <path>] [--catalog <path>] [--home <dir>] [--env-file <path>] [--check | --write [--launch-profile] [--canonicalize] [--quiet]]\n",
       );
       process.exit(0);
     } else die(`unknown argument: ${arg}`);
@@ -478,7 +480,7 @@ function main() {
 
   const next = serialize(parsed);
   if (next === original) {
-    process.stdout.write(`model-picker-lineup: ${file} already current (${rows.length} rows)\n`);
+    if (!opts.quiet) process.stdout.write(`model-picker-lineup: ${file} already current (${rows.length} rows)\n`);
     return;
   }
   fs.mkdirSync(path.dirname(file), { recursive: true });

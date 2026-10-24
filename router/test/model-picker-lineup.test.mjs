@@ -283,6 +283,17 @@ test("--write preserves unrelated keys and their order, and is idempotent", (t) 
   assert.equal(fs.readFileSync(settings, "utf8"), first, "second --write must produce zero diff");
 });
 
+test("--write --quiet omits only the already-current line; a real write still prints", (t) => {
+  const { dir } = tempHome(t);
+  const first = run([...FIXTURE_ARGS, "--home", dir, "--write", "--quiet"]);
+  assert.match(first.stdout, /wrote \d+ rows to /);
+  const second = run([...FIXTURE_ARGS, "--home", dir, "--write", "--quiet"]);
+  assert.equal(second.stdout, "");
+  assert.equal(second.stderr, "");
+  const loud = run([...FIXTURE_ARGS, "--home", dir, "--write"]);
+  assert.match(loud.stdout, /already current/);
+});
+
 test("non-canonical settings JSON is refused with exit 2, naming --canonicalize, file untouched", (t) => {
   const { dir, settings } = tempHome(t);
   const original = '{"permissions":{"allow":[]}}';

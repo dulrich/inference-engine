@@ -337,6 +337,32 @@ class CliSelectionTest(_MainHarness):
             [method for method, _, _ in fake.calls], ["GET", "GET", "GET"]
         )
 
+    def test_quiet_prints_nothing_on_a_no_op_run(self):
+        fake = _FakeOpenWebUI(router_models=self.ROUTER)
+        code, _ = self._run(fake, self.VISIBILITY, extra=["--apply"])
+        self.assertEqual(code, 0)
+        code, out = self._run(fake, self.VISIBILITY, extra=["--apply", "--quiet"])
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "")
+
+    def test_quiet_still_prints_a_mutation_and_the_summary(self):
+        fake = _FakeOpenWebUI(router_models=self.ROUTER)
+        code, out = self._run(fake, self.VISIBILITY, extra=["--apply", "--quiet"])
+        self.assertEqual(code, 0, out)
+        self.assertIn("[model-a] CREATE", out)
+        self.assertIn("applied (status=", out)
+        self.assertIn("summary: 2 create", out)
+        self.assertNotIn("=== sync-openwebui-capabilities", out)
+
+    def test_without_quiet_a_no_op_run_still_prints_everything(self):
+        fake = _FakeOpenWebUI(router_models=self.ROUTER)
+        self._run(fake, self.VISIBILITY, extra=["--apply"])
+        code, out = self._run(fake, self.VISIBILITY, extra=["--apply"])
+        self.assertEqual(code, 0, out)
+        self.assertIn("=== sync-openwebui-capabilities: APPLY ===", out)
+        self.assertIn("(already in sync)", out)
+        self.assertIn("summary: 0 create", out)
+
     def test_only_narrows_the_walk_and_warns_about_an_unknown_id(self):
         fake = _FakeOpenWebUI(router_models=self.ROUTER)
         errors = io.StringIO()

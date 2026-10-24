@@ -144,14 +144,16 @@ class VisibilityDeclarationTest(unittest.TestCase):
             sync.load_visibility(path)
         self.assertIn("declared twice", str(ctx.exception))
 
-    def test_the_shipped_catalog_matches_the_retired_declaration(self):
+    def test_the_shipped_catalog_projects_well_formed_records(self):
+        # Structural only: the live catalog's contents (model count, who consumes what) are
+        # operator data that changes without a code change, so they are never pinned here.
         models = sync.load_visibility(sync.default_catalog_path())
-        self.assertEqual(len(models), 20)
-        self.assertEqual(
-            models["Qwen3.8-27B-UD-IQ3_S"],
-            {"gateway_id": "qwen38-27b-iq3s", "consumers": ["cc", "openwebui"]},
-        )
-        self.assertEqual(models["bge-m3-f16"], {"gateway_id": None, "consumers": []})
+        self.assertTrue(models)
+        for key, record in models.items():
+            with self.subTest(model=key):
+                self.assertEqual(sorted(record), ["consumers", "gateway_id"])
+                self.assertIsInstance(record["gateway_id"], (str, type(None)))
+                self.assertIsInstance(record["consumers"], list)
 
 
 class PolicyLoaderTest(unittest.TestCase):

@@ -114,7 +114,7 @@ done
 # Bakeoff-window guard: a live bake-off run window `docker stop`s the router container for the
 # whole window (batch.py's GPU maintenance window -- scratch servers run in a sibling container),
 # so probing :4811 mid-window is guaranteed to read as an outage that isn't one. The window's
-# whole lifetime is exactly the span its wrapper (llama/bakeoff/run-window.sh) holds an exclusive
+# whole lifetime is exactly the span its wrapper (the research harness's run-window.sh, eval-harness/inference_research/harness; cron.lock is the cross-repo interface) holds an exclusive
 # flock on cron.lock, so "can I take the lock?" IS "is the router intentionally down?". The probe
 # takes and releases it instantly (`true`) rather than holding it for the check's duration --
 # holding it would make a concurrently-starting window's own `flock -n` read busy and get its

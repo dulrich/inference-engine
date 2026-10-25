@@ -147,40 +147,9 @@ omitted.
 
 Exits non-zero on any failed check.
 
-## Scheduling — nightly bake-off queue window (first fleet scheduling install)
+## Scheduling — moved to eval-harness
 
-The fleet's first standing schedule, set by `plans/longcontext-pow2-overnight-campaign.md`
-WP-6 as a **user-confirmed convention**: cron, user crontab (the glibc-upgrade plan left
-cron-vs-timers-vs-sidecar unresolved; this decided it). The mechanism was superseded by the
-control plane (`plans/bakeoff-queue-control-plane.md`, 2026-08-24): the canonical crontab
-lines — a minutely dispatcher plus the nightly, which **drops the old outer `flock`**
-(`run-window.sh` now owns `cron.lock` for the run's whole process-group lifetime) — live in
-`llama/bakeoff/README.md`'s "Scheduling" section, the single home for them. Times are the
-**host's local** clock; the queue file's own `deadline` is **UTC**.
-
-**Current install state (2026-08-24)**: the dispatcher minutely line is installed; the
-`0 23` nightly line is **deliberately not installed** — pending manual runs through the
-dashboard's control panel first — and is doubly gated even once installed: `cron-nightly.sh`
-is fail-closed on the `control/host/armed` marker, currently absent (arm/disarm via the
-dashboard, `POST /api/control/{arm,disarm}`). The ladder queue itself is untouched and fully
-pending; the wrapper resumes it whenever a window next fires.
-
-- `llama/bakeoff/cron-nightly.sh` owns the whole night: creates/starts the `bakeoff-scratch`
-  sibling container if needed, runs `batch run` on `llama/bakeoff/queues/ladder-v1.json`
-  (batch.py itself stops the router for the window and restarts it on every exit path), copies
-  the queue state into the run dir, then runs `batch verify` — persisting
-  `verify_report.{json,md}` (audit M2's run-then-verify pairing). The queue spans multiple
-  nights by design: each night resumes pending cells, pauses at the queue's UTC deadline
-  (`13:00` UTC = 07:00 local — this host is `America/Mexico_City`, permanent UTC-6, no DST),
-  and no-ops once terminal.
-- The wrapper's `cron.lock` flock serializes the runner against itself only; **GPU
-  exclusivity against the router is batch.py's own container stop/start**, a deliberately
-  separate mechanism. (`deep-health-check.sh` reads that same lock as its stand-down
-  signal — see below.)
-- The log's `NEEDS-ATTENTION:` lines are the operator contract: a hang-abort, a
-  failed/interrupted cell (crash recovery marks these and NEVER silently re-runs them — re-arm
-  deliberately with `batch run --re-arm-cell <cell>`), or verify findings. `batch verify`
-  exiting 1 means honest findings in the reports, not breakage.
+The bake-off queue scheduling (nightly window, minutely research dispatcher, `cron-nightly.sh`, `run-window.sh`) moved with the harness to `eval-harness/inference_research/harness` (plan `research-to-eval-harness`); its README's "Scheduling" section is the single home for the crontab lines. What stays here is the shared interface: the window holds an exclusive flock on `~/.local/state/inference-bakeoff/cron.lock` (and GPU exclusivity against the router is the harness's own container stop/start), and `deep-health-check.sh` reads that same lock as its stand-down signal — see below. The only cron entry for this repo is `control/serving-dispatch.sh` (`control/AGENTS.md`).
 
 ## Deep health check
 
@@ -215,13 +184,10 @@ llama/deep-health-check.sh --url http://127.0.0.1:4811 --model bge-small
 incident exposed:
 
 ```
-19 * * * * mkdir -p $HOME/.local/state/inference-engine && llama/deep-health-check.sh >>$HOME/.local/state/inference-engine/deep-health-check.log 2>&1
+*/5 * * * * mkdir -p $HOME/.local/state/inference-engine && <code-root>/fleet-tools/scripts/cron-run deep-health-check-tick --max-age 15m -- /usr/bin/flock -n -E 0 ~/.local/state/inference-engine/deep-health-check.lock /usr/local/bin/bun <code-root>/fleet-tools/scripts/run-if-stale.mjs --json-field ~/.local/state/inference-engine/deep-health-check.json:observed_at --max-age 55m -- <code-root>/fleet-tools/scripts/cron-run deep-health-check --max-age 2h -- sh -c 'llama/deep-health-check.sh >>~/.local/state/inference-engine/deep-health-check.log 2>&1' > ~/.local/state/inference-engine/deep-health-check-tick.log 2>&1
 ```
 
-Hourly — the interval must exceed the 1800s `ttl` above so every run is a genuine cold
-spawn. `:19`, not the originally-recommended `:17`, because the container-image security
-scan fires at `:17` (user decision 2026-08-24 — don't stack an image scan and a cold GGUF
-spawn on the same minute); still off the top of the hour to avoid herding. It logs under
+A 5-minute tick (`flock` + `run-if-stale.mjs` on the artifact's `observed_at`, max age 55m; tick output in `deep-health-check-tick.log`) runs the check at most hourly, so every run is still a genuine cold spawn past the 1800s `ttl` above, and after a boot the artifact catches up within 5 minutes instead of up to an hour (2026-10-25). The check relies on every exit path writing the artifact with `observed_at`. It logs under
 `$HOME/.local/state` rather than `/var/log`, which is root-owned on this box: a user
 crontab redirecting into an unwritable directory fails *before* the script runs, which
 would leave this guardrail silently dead — the same shape of bug it exists to detect. The
@@ -382,9 +348,9 @@ docker build --build-arg LLAMA_CPP_TAG=b10664 -t crucible-llamacpp-vulkan:b10664
 
 A future rebuild of that tag through this same build-arg path inherits the source-build `swap` stage automatically; the existing `b10664-swap243` image is deliberately left as built rather than rebuilt now (`plans/container-critical-high-cve-remediation.md`, "Decisions locked").
 
-**The `Dockerfile` default deliberately stays `b10534`, and the compose service is not repointed.** The new tag exists only as a build-arg override, reachable by the bake-off harness through `BAKEOFF_SCRATCH_IMAGE` (`bakeoff/run-window.sh`). Moving the default instead would drag all eight production models, the embedding agreement harness, and the whole glibc/Mesa ABI surface 130 upstream builds forward for the benefit of one experiment — and both traps above are on record from exactly that class of change. Keeping the experiment in its own tag is what contains the *image* risk. It does not contain the *availability* cost: a bake-off window stops the router regardless of which image it runs.
+**The `Dockerfile` default deliberately stays `b10534`, and the compose service is not repointed.** The new tag exists only as a build-arg override, reachable by the bake-off harness through `BAKEOFF_SCRATCH_IMAGE` (`run-window.sh` in `eval-harness/inference_research/harness`). Moving the default instead would drag all eight production models, the embedding agreement harness, and the whole glibc/Mesa ABI surface 130 upstream builds forward for the benefit of one experiment — and both traps above are on record from exactly that class of change. Keeping the experiment in its own tag is what contains the *image* risk. It does not contain the *availability* cost: a bake-off window stops the router regardless of which image it runs.
 
-One sharp edge on that seam: `run-window.sh` reads `BAKEOFF_SCRATCH_IMAGE` only on its `docker run` path. If a `bakeoff-scratch` container already exists but is stopped, the script `docker start`s it with the image and mounts it was *created* with, and the env var is silently ignored. Setting the variable is therefore not enough — `docker rm -f bakeoff-scratch` first, or inspect it and recreate it on an image mismatch.
+One sharp edge on that seam: the harness's `run-window.sh` reads `BAKEOFF_SCRATCH_IMAGE` only on its `docker run` path. If a `bakeoff-scratch` container already exists but is stopped, the script `docker start`s it with the image and mounts it was *created* with, and the env var is silently ignored. Setting the variable is therefore not enough — `docker rm -f bakeoff-scratch` first, or inspect it and recreate it on an image mismatch.
 
 ### Verifying a newly built image — retarget the ABI commands
 

@@ -241,7 +241,7 @@ mod tests {
         }
     }
 
-    /// `llama/bakeoff/tests/test_control_contract.py:184` string-asserts this exact line.
+    /// eval-harness `inference_research/harness/tests/test_control_contract.py` string-asserts this exact line.
     #[test]
     fn control_request_schema_constant_is_verbatim() {
         let module = super::module();

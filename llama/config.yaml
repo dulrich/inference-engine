@@ -975,7 +975,7 @@ models:
   # the 34.55 tok/s f16 baseline, well inside the 15% band), zero correctness regression across
   # an 8/12-prompt quality-corpus subset (all 8 categories) vs. the f16 baseline, VRAM margin
   # 2.14-2.18 GiB. Full cold/warm/hot sweep (genuine per-round scratch-process restarts):
-  # llama/bakeoff/records/qwen38-27b-iq3s-kv-e-alt-q4q4-c120000/.
+  # (former llama/bakeoff/records, now in eval-harness inference_research) records/qwen38-27b-iq3s-kv-e-alt-q4q4-c120000/.
   #
   # Live verification of the router-managed alias's actual KV/FA state (WP-3, post-landing):
   # `-v` was tried and then REMOVED -- it does make llama-server emit the `type_k`/`type_v`/
@@ -1597,7 +1597,7 @@ models:
 # unsloth published for this model (see registry comment above).
 #
 # ── VRAM fit math (host-verified 2026-08-21, live cold/warm/hot sweep + needle probe + quality
-# corpus through the new llama/bakeoff harness, journalctl -k -f watched throughout, zero
+# corpus through the then-new bake-off harness (now eval-harness/inference_research/harness), journalctl -k -f watched throughout, zero
 # hang signature) ──
 #
 # Weights: 6,716,356,800 B = 6.26 GiB. Baseline (nemotron-4b resident, gemma-qat

@@ -6,7 +6,7 @@
 # 4 KiB-row gather rate -- across the three memory states (2-DIMM JEDEC, 2-DIMM EXPO, 4-DIMM)
 # this repo's numpy (1.26.4) happens to run on this host. The access shape (sequential copy,
 # then chunked random-row gather) approximates the PLE / MoE-expert lookup pattern the
-# qwen4exp cells exercise; it is deliberately outside `llama/bakeoff/`, whose runtime is
+# qwen4exp cells exercise; it is deliberately outside the bake-off harness (`eval-harness/inference_research/harness`), whose runtime is
 # Python-stdlib-only, since this tool needs numpy.
 #
 # Safety: this benchmark must measure host memory bandwidth, never swap bandwidth. It computes

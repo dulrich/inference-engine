@@ -207,3 +207,10 @@ systemctl --user restart codex-sidecar
 The store holds the one copy for both sides, so then restart the router (`hc restart inference-engine-router`) to pick up the same value.
 
 **Compose side:** the router reaches the sidecar with the same shared key under the name `CODEX_SIDECAR_KEY` in the fleet-env store (one copy for both sides). The router's provider entries (`router/gateway.config.json`) and the compose `extra_hosts` consume it.
+
+## Multi-node
+
+- host-a runs the sidecar for both personas; host-b runs its own sidecar (same unit, same `install.sh`) and routes only the personas logged in on the laptop to it (today `codex-a`). Every other persona (today `codex-b`) stays on the WG chain to host-a.
+- Logins are independent per machine: `codex login --device-auth` on each, never a copied `auth.json` (see `docs/codex-multi-node-login-spike.md`).
+- A node router whose config points a provider at the local sidecar (`http://host.docker.internal:4877/<persona>`) health-checks it, so that router's health depends on the local sidecar.
+- On the laptop both personas still start; the persona that is not logged in is simply unauthenticated and never routed to. The outbox writer creates its `log/` directory on first use and writes node-local day-files.

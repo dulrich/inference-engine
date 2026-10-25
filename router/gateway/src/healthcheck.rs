@@ -2,10 +2,21 @@
 //! (the `inference-engine-router` service in `fleet-tools/fleet/compose.fleet.yml`): authenticate to the codex sidecar's
 //! `/healthz` with `CODEX_SIDECAR_KEY`, fail unless the JSON body's `status` is `"ok"`, 4 s
 //! timeout, no metered turn; additionally fail if this gateway's own `/health` does not answer.
+//! The sidecar is probed only when the loaded config routes to it (`probes_sidecar`).
 
-use crate::config::{self, Env};
+use crate::config::{self, Env, Provider};
+use reqwest::Url;
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::Duration;
+
+fn client(timeout: Duration) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .no_proxy()
+        .timeout(timeout)
+        .build()
+        .map_err(|e| e.to_string())
+}
 
 pub const SIDECAR_URL_ENV: &str = "INFERENCE_ROUTER_HEALTHCHECK_SIDECAR_URL";
 pub const DEFAULT_SIDECAR_URL: &str = "http://host.docker.internal:4877/healthz";
@@ -37,13 +48,27 @@ pub async fn check(
     sidecar_key: Option<&str>,
     timeout: Duration,
 ) -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(timeout)
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = client(timeout)?;
     status_ok(&client, self_url, None).await?;
     status_ok(&client, sidecar_url, sidecar_key).await
+}
+
+/// The sidecar is probed only when some provider's `baseurl` shares the sidecar URL's origin
+/// (scheme, host, port). A config that cannot be read keeps the probe (fail-closed, today's
+/// behaviour); a chained node with no local sidecar provider is healthy without one.
+pub fn probes_sidecar(providers: Option<&[Arc<Provider>]>, sidecar_url: &str) -> bool {
+    let Some(providers) = providers else {
+        return true;
+    };
+    let Ok(side) = Url::parse(sidecar_url) else {
+        return true;
+    };
+    providers.iter().any(|p| {
+        p.baseurl
+            .as_deref()
+            .and_then(|b| Url::parse(b).ok())
+            .is_some_and(|u| u.origin() == side.origin())
+    })
 }
 
 pub async fn run(env: Env<'_>) -> Result<(), String> {
@@ -55,11 +80,15 @@ pub async fn run(env: Env<'_>) -> Result<(), String> {
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_SIDECAR_URL.into());
     let key = env("CODEX_SIDECAR_KEY");
-    check(
-        &format!("http://127.0.0.1:{port}/health"),
-        &sidecar,
-        key.as_deref(),
-        TIMEOUT,
-    )
-    .await
+    let own = format!("http://127.0.0.1:{port}/health");
+    let providers = config::load_static_providers(env).ok();
+    if !probes_sidecar(providers.as_deref(), &sidecar) {
+        return check_self(&own, TIMEOUT).await;
+    }
+    check(&own, &sidecar, key.as_deref(), TIMEOUT).await
+}
+
+/// Own `/health` only (no sidecar provider in the loaded config).
+pub async fn check_self(self_url: &str, timeout: Duration) -> Result<(), String> {
+    status_ok(&client(timeout)?, self_url, None).await
 }

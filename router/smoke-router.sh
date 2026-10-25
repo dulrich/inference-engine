@@ -5,7 +5,7 @@
 # family this guards against).
 #
 # Usage:
-#   router/smoke-router.sh <base-url> [<gateway-key>] [--subscription] [--codex]
+#   router/smoke-router.sh <base-url> [<gateway-key>] [--subscription] [--codex] [--chained]
 #
 #   <base-url>      mandatory, e.g. http://127.0.0.1:4813 (resident) or a transient
 #                   http://127.0.0.1:470x (WP-1 scratch-decade run).
@@ -19,6 +19,12 @@
 #                   subscription. This is WP-3's held-for-user step
 #                   (docs/tool-calling-gateway/oauth-passthrough-probe.md) — WP-1 implements the
 #                   code path but never exercises it.
+#   --chained       chained-node mode (a client node whose claude-local/* and codex-*/* providers
+#                   use the upstream-gateway credential and relay to the tower's router, e.g.
+#                   host-b). Every Anthropic-ingress check runs unchanged (through the chain);
+#                   check 4 instead asserts that /v1/chat/completions on claude-local/* is an
+#                   intentional 400 protocol refusal (the chained provider speaks only the
+#                   Anthropic protocol). Default (tower) mode is unchanged.
 #
 # Checks (all by response body):
 #   1. GET /v1/models lists both the claude-local/* ids (including the four qwen38 reasoning-
@@ -29,7 +35,8 @@
 #      dependent, so no gate asserts it.
 #   3. A request with a missing gateway key, and one with a wrong gateway key, each return a
 #      401 error body (asserted on the body's error message, not just the status).
-#   4. One non-streamed chat completion via claude-local/nemotron-4b returns non-empty content.
+#   4. One non-streamed chat completion via claude-local/nemotron-4b returns non-empty content
+#      (--chained: returns a 400 protocol-refusal error body instead).
 #   5. POST /v1/messages/count_tokens via claude-local/nemotron-4b returns an integer
 #      input_tokens field (local leg; patch 0004).
 #   6. POST /v1/messages/count_tokens with an unresolvable model returns a 404-class JSON
@@ -53,7 +60,7 @@
 #
 # Exits non-zero on any check failure. Requires: curl, jq.
 for _a in "$@"; do case "$_a" in --help|-h)
-  printf 'usage: %s %s\n' "${0##*/}" '<base-url> [<gateway-key>] [--subscription] [--codex]'
+  printf 'usage: %s %s\n' "${0##*/}" '<base-url> [<gateway-key>] [--subscription] [--codex] [--chained]'
   awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
   exit 0;; esac; done
 
@@ -61,6 +68,7 @@ set -u
 
 SUBSCRIPTION=0
 CODEX=0
+CHAINED=0
 BASE_URL=""
 GATEWAY_KEY="${GATEWAY_KEY:-}"
 
@@ -71,6 +79,9 @@ for arg in "$@"; do
 		;;
 	--codex)
 		CODEX=1
+		;;
+	--chained)
+		CHAINED=1
 		;;
 	*)
 		if [ -z "$BASE_URL" ]; then
@@ -83,7 +94,7 @@ for arg in "$@"; do
 done
 
 if [ -z "$BASE_URL" ]; then
-	echo "usage: $0 <base-url> [<gateway-key>] [--subscription] [--codex]" >&2
+	echo "usage: $0 <base-url> [<gateway-key>] [--subscription] [--codex] [--chained]" >&2
 	exit 2
 fi
 
@@ -192,6 +203,21 @@ else
 fi
 
 # ── 4. Local chat completion via claude-local/nemotron-4b ────────────────────────────────────
+if [ "$CHAINED" -eq 1 ]; then
+	note "--chained: checking POST /v1/chat/completions (model=claude-local/nemotron-4b) is a 400 protocol refusal ..."
+	chain_out=$(curl -s --max-time 15 -w '\n%{http_code}' -X POST "$BASE_URL/v1/chat/completions" \
+		-H 'Content-Type: application/json' \
+		-H "x-gateway-key: $GATEWAY_KEY" \
+		-d '{"model":"claude-local/nemotron-4b","max_tokens":1,"stream":false,"messages":[{"role":"user","content":"ping"}]}') || chain_out=""
+	chain_status=$(printf '%s' "$chain_out" | tail -n 1)
+	chain_body=$(printf '%s' "$chain_out" | sed '$d')
+	chain_msg=$(echo "$chain_body" | jq -r '.error.message // empty' 2>/dev/null)
+	if [ "$chain_status" = "400" ] && [ -n "$chain_msg" ]; then
+		pass "--chained: /v1/chat/completions (claude-local/nemotron-4b) refused with 400: $chain_msg"
+	else
+		bad "--chained: /v1/chat/completions (claude-local/nemotron-4b) expected a 400 refusal body (status=$chain_status). Response: $chain_body"
+	fi
+else
 note "checking POST /v1/chat/completions (model=claude-local/nemotron-4b) ..."
 chat_json=$(curl -s --max-time 120 -X POST "$BASE_URL/v1/chat/completions" \
 	-H 'Content-Type: application/json' \
@@ -205,6 +231,7 @@ if [ -n "$chat_content" ]; then
 	pass "/v1/chat/completions (claude-local/nemotron-4b) returned non-empty content"
 else
 	bad "/v1/chat/completions (claude-local/nemotron-4b) did not return non-empty content. Response: $chat_json"
+fi
 fi
 
 # ── 5. Local-leg count_tokens (claude-local/nemotron-4b) ─────────────────────────────────────

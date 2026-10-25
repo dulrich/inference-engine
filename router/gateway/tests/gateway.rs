@@ -869,3 +869,152 @@ async fn reset_after_request_written_is_not_retried() {
         "a written request is never retried"
     );
 }
+
+/// A chained-node (laptop-shaped) config: same provider names and order as the tower's, with
+/// `claude-local` and `codex-a` on the upstream-gateway credential.
+async fn chained_gateway(up: &Stub, extra_env: &[(&str, &str)]) -> String {
+    let base = format!("http://{}", up.addr);
+    let raw = json!({"host": "127.0.0.1", "port": 0, "providers": [
+        {"name": "claude-local", "type": "anthropic", "credential": "upstream-gateway", "apiKeyEnv": "TOWER_KEY", "baseurl": format!("{base}/tower"), "models": ["qwen", "shared"]},
+        {"name": "anthropic", "type": "anthropic", "credential": "caller-oauth-passthrough", "baseurl": format!("{base}/anthropic"), "models": ["claude-x", "shared"]},
+        {"name": "openrouter", "type": "openai_chat_completions", "apiKeyEnv": "OR_KEY", "baseurl": format!("{base}/or/v1"), "models": ["qwen/q"]},
+        {"name": "codex-a", "type": "anthropic", "credential": "upstream-gateway", "apiKeyEnv": "TOWER_KEY", "baseurl": format!("{base}/tower"), "models": ["gpt-x"]}
+    ]});
+    let env: HashMap<String, String> = [
+        ("AUTH_STATIC_API_KEYS", KEY),
+        ("TOWER_KEY", "tower-key"),
+        ("OR_KEY", "or-secret"),
+    ]
+    .iter()
+    .chain(extra_env)
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
+    let get = move |k: &str| env.get(k).cloned();
+    let state = fixture_state(raw, &get);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
+    format!("http://{}", rx.await.unwrap())
+}
+
+#[tokio::test]
+async fn upstream_gateway_sends_only_its_gateway_key_and_the_model_verbatim() {
+    let up = stub(Script::new()).await;
+    let gw = chained_gateway(&up, &[]).await;
+    let caller = [
+        ("authorization", "Bearer caller-oauth"),
+        ("x-api-key", "caller-api-key"),
+        ("anthropic-version", "2023-06-01"),
+        ("user-agent", "cc"),
+    ];
+    for (path, model, up_path) in [
+        ("/v1/messages", "claude-local/qwen", "/tower/v1/messages"),
+        ("/v1/messages", "qwen", "/tower/v1/messages"),
+        ("/v1/messages", "codex-a/gpt-x", "/tower/v1/messages"),
+        (
+            "/v1/messages/count_tokens",
+            "claude-local/qwen",
+            "/tower/v1/messages/count_tokens",
+        ),
+    ] {
+        let (s, _, _) = post(&gw, path, &caller, json!({"model": model, "messages": []})).await;
+        assert_eq!(s, 200, "{model}");
+        let seen = up.seen().pop().unwrap();
+        assert_eq!(seen.path, up_path);
+        // Credential invariant (test-locked): no caller credential ever reaches upstream.
+        assert_eq!(h(&seen, "x-gateway-key"), Some("tower-key"));
+        assert_eq!(h(&seen, "authorization"), None);
+        assert_eq!(h(&seen, "x-api-key"), None);
+        assert_eq!(h(&seen, "user-agent"), Some("cc"));
+        assert_eq!(seen.body["model"], model, "forwarded verbatim");
+    }
+    // Default-route invariant: a bare subscription id reaches `anthropic` with the caller's
+    // OAuth bearer (passthrough unchanged), never the chain.
+    let (s, rh, _) = post(&gw, "/v1/messages", &caller, json!({"model": "claude-x"})).await;
+    assert_eq!(s, 200);
+    assert_eq!(
+        rh.get("x-gateway-target-provider-name").unwrap(),
+        "anthropic"
+    );
+    let seen = up.seen().pop().unwrap();
+    assert_eq!(seen.path, "/anthropic/v1/messages");
+    assert_eq!(h(&seen, "x-gateway-key"), None);
+    // Chat completions on the chained claude-local is a protocol refusal, no upstream call; a
+    // later OpenAI-kind provider is not a bare-id default (as on the tower).
+    let n = up.seen().len();
+    let (s, _, _) = post(
+        &gw,
+        "/v1/chat/completions",
+        &[],
+        json!({"model": "claude-local/qwen"}),
+    )
+    .await;
+    assert_eq!(s, 400);
+    let (s, _, _) = post(&gw, "/v1/chat/completions", &[], json!({"model": "qwen/q"})).await;
+    assert_ne!(s, 200, "openrouter is not a bare-id target");
+    assert_eq!(up.seen().len(), n);
+    // An unset apiKeyEnv is the usual per-request 503, never a caller-credential fallback.
+    let gw2 = chained_gateway(&up, &[("TOWER_KEY", "")]).await;
+    let (s, _, _) = post(
+        &gw2,
+        "/v1/messages",
+        &caller,
+        json!({"model": "claude-local/qwen"}),
+    )
+    .await;
+    assert_eq!(s, 503);
+    assert_eq!(up.seen().len(), n);
+}
+
+#[tokio::test]
+async fn healthcheck_probes_the_sidecar_only_when_the_config_routes_to_it() {
+    let parse = |providers: Value| {
+        config::from_json(&json!({"providers": providers}), &keys_env)
+            .unwrap()
+            .providers
+    };
+    let tower = parse(json!([
+        {"name": "codex-a", "type": "anthropic", "apiKeyEnv": "K", "baseurl": "http://host.docker.internal:4877/codex-a"}]));
+    let laptop = parse(json!([
+        {"name": "claude-local", "type": "anthropic", "credential": "upstream-gateway", "apiKeyEnv": "K", "baseurl": "http://203.0.113.3:4813"},
+        {"name": "codex-a", "type": "anthropic", "credential": "upstream-gateway", "apiKeyEnv": "K", "baseurl": "http://203.0.113.3:4813"}]));
+    let side = healthcheck::DEFAULT_SIDECAR_URL;
+    assert!(healthcheck::probes_sidecar(Some(&tower), side));
+    assert!(!healthcheck::probes_sidecar(Some(&laptop), side));
+    assert!(
+        healthcheck::probes_sidecar(None, side),
+        "unreadable config keeps the probe"
+    );
+    // Laptop-shaped: healthy on its own /health with no sidecar and the tower unreachable.
+    let up = stub(Script::new()).await;
+    let gw = chained_gateway(&up, &[]).await;
+    let t = Duration::from_millis(500);
+    assert_eq!(
+        healthcheck::check_self(&format!("{gw}/health"), t).await,
+        Ok(())
+    );
+    assert!(healthcheck::check_self("http://127.0.0.1:9/health", t)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn connect_timeout_bounds_an_unreachable_upstream() {
+    // 10.255.255.1 is non-routable: SYNs blackhole (or the route is refused at once).
+    let raw = json!({"host": "127.0.0.1", "port": 0, "providers": [
+        {"name": "side", "type": "anthropic", "apikey": "k", "baseurl": "http://10.255.255.1:4813", "models": ["gpt-x"]}]});
+    let env = |k: &str| match k {
+        "AUTH_STATIC_API_KEYS" => Some(KEY.to_string()),
+        "UPSTREAM_CONNECT_TIMEOUT_MS" => Some("300".to_string()),
+        _ => None,
+    };
+    let state = fixture_state(raw, &env);
+    assert_eq!(state.settings.upstream_connect_timeout_ms, 300);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
+    let gw = format!("http://{}", rx.await.unwrap());
+    let t0 = std::time::Instant::now();
+    let (s, _, b) = post(&gw, "/v1/messages", &[], json!({"model": "side/gpt-x"})).await;
+    assert_eq!(s, 502, "{b}");
+    assert!(b.contains("All target providers failed."), "{b}");
+    assert!(t0.elapsed() < Duration::from_secs(3), "{:?}", t0.elapsed());
+}

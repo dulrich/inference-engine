@@ -191,7 +191,7 @@ pub(crate) fn upstream_headers(
         };
         h.insert("anthropic-version", version);
         copy(&mut h, "anthropic-beta");
-        if route == Route::Messages || p.credential == Credential::CallerOauthPassthrough {
+        if route == Route::Messages || p.credential != Credential::ProviderKey {
             copy(&mut h, "user-agent");
         }
     }
@@ -207,6 +207,11 @@ pub(crate) fn upstream_headers(
                 // Pin 9: refuse clearly with 401, no upstream call.
                 return Err(attempt(p, NO_CALLER_CRED_STAGE, 401, NO_CALLER_CRED.into()));
             }
+        }
+        (Some(key), Credential::UpstreamGateway) if c.leg == Leg::Anthropic => {
+            // Router chaining: the gateway key alone; the caller's `authorization`, `x-api-key`
+            // and `x-gateway-key` are never copied (the header set is built from scratch).
+            h.insert(auth::HEADER, config_value(p, "credential", key)?);
         }
         (Some(key), Credential::ProviderKey) => {
             let leg = c.leg;

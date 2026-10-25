@@ -11,6 +11,9 @@ pub use crate::env::Env;
 use crate::env::{self as envp, trimmed as read_str};
 
 const DEFAULT_BODY_LIMIT: usize = 50 * 1024 * 1024;
+/// Connect bound per attempt; with the one connect-only retry a blackholed upstream fails in
+/// about 2 × 3 s + 150 ms.
+pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 3000;
 /// Effort levels an `effortKwargs` row may name (the levels `derive_effort_level` emits).
 const EFFORT_LEVELS: [&str; 6] = ["low", "medium", "high", "xhigh", "max", "disabled"];
 
@@ -46,6 +49,12 @@ pub enum Credential {
     /// caller's `user-agent` is forwarded on every route. No provider key may be configured.
     #[serde(rename = "caller-oauth-passthrough")]
     CallerOauthPassthrough,
+    /// Router chaining (multi-node): the upstream is another inference-router. Only
+    /// `x-gateway-key: <apiKeyEnv value>` is sent; the caller's `authorization`, `x-api-key` and
+    /// `x-gateway-key` never are, and the model id is forwarded verbatim (prefix included).
+    /// Needs `type:"anthropic"` + `apiKeyEnv`; forms its own default-route class.
+    #[serde(rename = "upstream-gateway")]
+    UpstreamGateway,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -90,6 +99,8 @@ pub struct Settings {
     pub body_limit: usize,
     /// 0 = no timeout.
     pub upstream_timeout_ms: u64,
+    /// `UPSTREAM_CONNECT_TIMEOUT_MS` (>= 1; unset = `DEFAULT_CONNECT_TIMEOUT_MS`).
+    pub upstream_connect_timeout_ms: u64,
     pub anthropic_version: String,
 }
 
@@ -146,6 +157,16 @@ fn parse_provider(item: &Value, env: Env) -> Result<Provider, String> {
         }
         if f.kind != Kind::Anthropic {
             return Err("credential \"caller-oauth-passthrough\" needs type \"anthropic\"".into());
+        }
+    }
+    if f.credential == Credential::UpstreamGateway {
+        if apikey.is_some() || key_env.is_none() {
+            return Err(
+                "credential \"upstream-gateway\" needs apiKeyEnv (and no literal apikey)".into(),
+            );
+        }
+        if f.kind != Kind::Anthropic {
+            return Err("credential \"upstream-gateway\" needs type \"anthropic\"".into());
         }
     }
     if f.local_leg.is_some() && f.kind != Kind::OpenAiChat {
@@ -220,6 +241,16 @@ pub fn from_json(raw: &Value, env: Env) -> Result<Settings, String> {
         None => DEFAULT_BODY_LIMIT,
     };
     let upstream_timeout_ms = envp::integer::<u64>(env, "UPSTREAM_TIMEOUT_MS")?.unwrap_or(0);
+    let upstream_connect_timeout_ms =
+        match envp::integer::<u64>(env, "UPSTREAM_CONNECT_TIMEOUT_MS")? {
+            Some(0) => {
+                return Err(
+                    "UPSTREAM_CONNECT_TIMEOUT_MS=0 is not a valid connect timeout (>= 1)".into(),
+                )
+            }
+            Some(n) => n,
+            None => DEFAULT_CONNECT_TIMEOUT_MS,
+        };
     let gateway_keys = list(env("AUTH_STATIC_API_KEYS"));
     if gateway_keys.is_empty() {
         return Err(
@@ -234,6 +265,7 @@ pub fn from_json(raw: &Value, env: Env) -> Result<Settings, String> {
         gateway_keys,
         body_limit,
         upstream_timeout_ms,
+        upstream_connect_timeout_ms,
         anthropic_version: read_str(env("ANTHROPIC_VERSION"))
             .unwrap_or_else(|| "2023-06-01".into()),
     })
@@ -399,6 +431,29 @@ mod tests {
             &[],
         );
         assert!(e.contains("ANTHROPIC_API_KEY"), "{e}");
+        // upstream-gateway: apiKeyEnv only, type anthropic only.
+        for (p, want) in [
+            (
+                json!({"name": "c", "type": "anthropic", "credential": "upstream-gateway"}),
+                "needs apiKeyEnv",
+            ),
+            (
+                json!({"name": "c", "type": "anthropic", "credential": "upstream-gateway", "apikey": "k", "apiKeyEnv": "K"}),
+                "needs apiKeyEnv",
+            ),
+            (
+                json!({"name": "c", "type": "openai_chat_completions", "credential": "upstream-gateway", "apiKeyEnv": "K"}),
+                "needs type \"anthropic\"",
+            ),
+        ] {
+            let e = err_of(one(p), &[]);
+            assert!(e.contains(want), "{e}");
+        }
+        let e = err_of(
+            json!({"providers": []}),
+            &[("UPSTREAM_CONNECT_TIMEOUT_MS", "0")],
+        );
+        assert!(e.starts_with("UPSTREAM_CONNECT_TIMEOUT_MS=0"), "{e}");
     }
 
     #[test]

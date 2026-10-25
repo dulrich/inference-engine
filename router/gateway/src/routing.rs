@@ -2,7 +2,7 @@
 //! each validated against the provider's model list (from the live catalog snapshot), then filtered to the providers that
 //! speak the ingress protocol (a request never crosses protocols).
 
-use crate::config::{Kind, Provider};
+use crate::config::{Credential, Kind, Provider};
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
 
@@ -90,13 +90,26 @@ fn model_ref(s: &[Arc<Provider>], raw: &str) -> (Option<Arc<Provider>>, String) 
     (None, raw.to_string())
 }
 
-/// First provider per kind, config order, never `systemone`.
+/// Default-route class: the kind, except that an upstream-gateway (chained-router) provider is
+/// never in the Anthropic class — it stands in for the remote node's local (OpenAI-kind)
+/// provider. So a chained-node config ordered like the tower's (`claude-local`, `anthropic`, …)
+/// has the tower's default list: bare local ids reach the chained `claude-local`, bare
+/// subscription ids reach `anthropic`, and no later OpenAI-kind provider becomes a default.
+fn route_class(p: &Provider) -> Kind {
+    if p.credential == Credential::UpstreamGateway {
+        Kind::OpenAiChat
+    } else {
+        p.kind
+    }
+}
+
+/// First provider per route class, config order, never `systemone`.
 fn default_routes(s: &[Arc<Provider>]) -> Vec<(Arc<Provider>, bool)> {
-    let mut seen: Vec<&Kind> = Vec::new();
+    let mut seen: Vec<Kind> = Vec::new();
     let mut out = Vec::new();
     for p in s.iter().filter(|p| p.kind != Kind::Systemone) {
-        if !seen.contains(&&p.kind) {
-            seen.push(&p.kind);
+        if !seen.contains(&route_class(p)) {
+            seen.push(route_class(p));
             out.push((p.clone(), false));
         }
     }
@@ -132,9 +145,16 @@ pub fn resolve(s: &[Arc<Provider>], ingress: Ingress, requested: &str) -> Resolv
             details: None,
         };
         let plan = if validates(&p, &model) {
+            // A chained router resolves the id itself: forward it verbatim, prefix included
+            // (validated against the stripped id, which is what the shared catalog lists).
+            let model = if p.credential == Credential::UpstreamGateway {
+                requested.to_string()
+            } else {
+                model.clone()
+            };
             Ok(Candidate {
                 provider: p.clone(),
-                model: model.clone(),
+                model,
                 leg,
             })
         } else {

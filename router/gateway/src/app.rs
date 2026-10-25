@@ -21,7 +21,17 @@ pub struct AppState {
 
 fn client(settings: &Settings) -> Result<reqwest::Client, String> {
     // No auto-decompression features are compiled in, so bytes relay verbatim; no proxy env.
-    let mut b = reqwest::Client::builder().no_proxy();
+    // Dead-peer detection that never bounds legitimate silence: a slow upstream (model load,
+    // prefill) still ACKs, so neither keepalive (idle connection: 15 s + 3 × 5 s) nor
+    // TCP_USER_TIMEOUT (unacknowledged written data, 30 s) fires; a vanished WG peer does.
+    let mut b = reqwest::Client::builder()
+        .no_proxy()
+        .connect_timeout(Duration::from_millis(settings.upstream_connect_timeout_ms))
+        .tcp_keepalive(Duration::from_secs(15))
+        .tcp_keepalive_interval(Duration::from_secs(5))
+        .tcp_keepalive_retries(3)
+        .tcp_user_timeout(Duration::from_secs(30))
+        .pool_idle_timeout(Duration::from_secs(60));
     if settings.upstream_timeout_ms > 0 {
         // The one timeout bounds the wait for headers and every idle gap in the body.
         b = b.read_timeout(Duration::from_millis(settings.upstream_timeout_ms));

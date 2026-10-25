@@ -202,9 +202,9 @@
   </div>
   {#if liveError}<p class="error-text">{liveError}</p>{/if}
   {#if live === null}
-    <p class="run-empty">No residency feed has been read yet.</p>
+    <p class="serving-empty">No residency feed has been read yet.</p>
   {:else if !live.available}
-    <p class="run-empty">Live residency unavailable — {liveUnavailableMessage(live.reason)}.</p>
+    <p class="serving-empty">Live residency unavailable — {liveUnavailableMessage(live.reason)}.</p>
   {:else}
     {#each [["gpu", live.gpu], ["onnx", live.onnx]] as const as [tier, status] (tier)}
       {@const view = tierView(status)}
@@ -212,7 +212,7 @@
         {TIER_LABELS[tier]}
         {#if view.sampledAt !== null}<span class="router-ambient">sampled {formatAge(view.sampledAt, asOf)}</span>{/if}
       </h3>
-      {#if view.note}<p class="run-empty">{view.note}</p>{/if}
+      {#if view.note}<p class="serving-empty">{view.note}</p>{/if}
       {#if view.models.length > 0}
         <ul>
           {#each view.models as m (m.model)}
@@ -224,7 +224,7 @@
     {/each}
     <h3>Recent loads / unloads</h3>
     {#if live.recent.length === 0}
-      <p class="run-empty">No transitions in the feed window.</p>
+      <p class="serving-empty">No transitions in the feed window.</p>
     {:else}
       <ul>
         {#each recentEvents(live.recent) as ev, index (`${ev.ts}#${ev.tier}#${ev.model}#${index}`)}
@@ -237,14 +237,14 @@
 </section>
 
 {#if visibilityNote}
-  <p class="run-table-muted">{visibilityNote}</p>
+  <p class="serving-table-muted">{visibilityNote}</p>
 {/if}
 {#if visibilityError}
   <p class="error-text">{visibilityError}</p>
 {/if}
 
 {#if factsNote}
-  <p class="run-empty">{factsNote}</p>
+  <p class="serving-empty">{factsNote}</p>
 {/if}
 
 {#if servingLoading && rows.length === 0 && !servingError}
@@ -252,26 +252,26 @@
 {:else if servingError}
   <p class="error-text">{servingError}</p>
 {:else if rows.length === 0}
-  <p class="run-empty">
+  <p class="serving-empty">
     No aliased models resolved from the served config -- either <code>LLAMA_CONFIG_PATH</code> is unset, or the
     config has no models carrying an <code>aliases:</code> list.
   </p>
 {:else}
-  <div class="run-table-wrap">
-    <table class="run-table">
+  <div class="serving-table-wrap">
+    <table class="serving-table">
       <thead>
         <tr>
           <th>Aliases</th>
           <th>Name</th>
-          <th class="run-table-num">Context</th>
+          <th class="serving-table-num">Context</th>
           <th>KV K</th>
           <th>KV V</th>
           <th>FA</th>
           <th>Capabilities</th>
           <th>Visibility</th>
           <th>MTP</th>
-          <th class="run-table-num">Prefill tok/s (p50/p90)</th>
-          <th class="run-table-num">Decode tok/s (p50/p90)</th>
+          <th class="serving-table-num">Prefill tok/s (p50/p90)</th>
+          <th class="serving-table-num">Decode tok/s (p50/p90)</th>
           <th>Measured cell</th>
           <th>Config</th>
         </tr>
@@ -282,7 +282,7 @@
           <tr>
             <td class="serving-aliases">{row.alias.aliases.join(", ")}</td>
             <td>{row.alias.name ?? row.alias.modelKey}</td>
-            <td class="run-table-num">{formatCount(row.alias.flags.contextLength)}</td>
+            <td class="serving-table-num">{formatCount(row.alias.flags.contextLength)}</td>
             <td>{row.alias.flags.kvCacheTypeK ?? "—"}</td>
             <td>{row.alias.flags.kvCacheTypeV ?? "—"}</td>
             <td>{row.alias.flags.flashAttention ?? "—"}</td>
@@ -305,9 +305,9 @@
                     {capabilityReasoningLabel(row.alias.capability.reasoning)}
                   </span>
                 </div>
-                <div class="serving-cap-serving run-table-muted">{formatCapabilityServingSummary(row.alias.capability)}</div>
+                <div class="serving-cap-serving serving-table-muted">{formatCapabilityServingSummary(row.alias.capability)}</div>
               {:else}
-                <span class="run-table-muted">no capability metadata</span>
+                <span class="serving-table-muted">no capability metadata</span>
               {/if}
             </td>
             <td>
@@ -331,15 +331,15 @@
                 {mtpLabel(row.alias.capability?.serving.mtp ?? null)}
               </span>
             </td>
-            <td class="run-table-num">{formatServingPrefillCell(timingRow)}</td>
-            <td class="run-table-num">{formatServingDecodeCell(timingRow)}</td>
+            <td class="serving-table-num">{formatServingPrefillCell(timingRow)}</td>
+            <td class="serving-table-num">{formatServingDecodeCell(timingRow)}</td>
             <td>
               {#if row.measured}
                 <a class="serving-measured-link" href={researchRunUrl(location, row.measured.experimentId)}>
                   {row.measured.alias}
                 </a>
               {:else}
-                <span class="run-table-muted">no measurement yet</span>
+                <span class="serving-table-muted">no measurement yet</span>
               {/if}
             </td>
             <td>
@@ -356,9 +356,9 @@
             <tr class="serving-flags-row">
               <td colspan="13">
                 {#if row.alias.flags.allFlags.length === 0}
-                  <p class="run-table-muted">No flags found in the served command.</p>
+                  <p class="serving-table-muted">No flags found in the served command.</p>
                 {:else}
-                  <table class="run-table serving-flags-table">
+                  <table class="serving-table serving-flags-table">
                     <thead>
                       <tr>
                         <th>Flag</th>

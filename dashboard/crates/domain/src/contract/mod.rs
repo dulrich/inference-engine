@@ -11,18 +11,6 @@ pub use schema::*;
 
 /// Every schema, in dependency order (each `Ref` target precedes its first user).
 pub const EXPORTS: &[&Export] = &[
-    // control.ts
-    &CONTROL_REQUEST_STATE,
-    &CONTROL_LAST_RUN_DISPOSITION,
-    &CONTROL_ACTION,
-    &CONTROL_LIVE,
-    &CONTROL_LAST_RUN,
-    &CONTROL_REQUEST_DIGEST,
-    &CONTROL_SECTION,
-    &CONTROL_START_REQUEST,
-    &CONTROL_CANCEL_REQUEST,
-    &CONTROL_REQUEST_FILE,
-    &CONTROL_ACCEPTED_RESPONSE,
     // health.ts
     &HEALTH_RESPONSE,
     // routerStatus.ts
@@ -91,30 +79,6 @@ pub const EXPORTS: &[&Export] = &[
 /// Every non-schema `export const`, in source order; `gen-ts` emits them verbatim before the
 /// schemas (the regex constants are referenced by the string nodes).
 pub const CONSTS: &[Const] = &[
-    Const {
-        name: "CONTROL_QUEUE_STEM_PATTERN",
-        value: ConstValue::Regex(&CONTROL_QUEUE_STEM_PATTERN),
-    },
-    Const {
-        name: "CONTROL_REQUEST_ID_PATTERN",
-        value: ConstValue::Regex(&CONTROL_REQUEST_ID_PATTERN),
-    },
-    Const {
-        name: "CONTROL_MINUTES_MIN",
-        value: ConstValue::Int(CONTROL_MINUTES_MIN),
-    },
-    Const {
-        name: "CONTROL_MINUTES_MAX",
-        value: ConstValue::Int(CONTROL_MINUTES_MAX),
-    },
-    Const {
-        name: "CONTROL_REQUEST_SCHEMA_V1",
-        value: ConstValue::Str(CONTROL_REQUEST_SCHEMA_V1),
-    },
-    Const {
-        name: "CONTROL_TARGET_ID_PATTERN",
-        value: ConstValue::Regex(&CONTROL_TARGET_ID_PATTERN),
-    },
     Const {
         name: "SERVING_VERIFIED_DATE_PATTERN",
         value: ConstValue::Regex(&SERVING_VERIFIED_DATE_PATTERN),

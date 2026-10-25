@@ -253,23 +253,23 @@
     </div>
     {#if telemetryError}<p class="error-text">{telemetryError}</p>{/if}
     {#if telemetry === null}
-      <p class="run-empty">No telemetry has been read yet.</p>
+      <p class="serving-empty">No telemetry has been read yet.</p>
     {:else if !telemetry.available}
-      <p class="run-empty">Router telemetry unavailable — {unavailableMessage(telemetry.reason)}.</p>
+      <p class="serving-empty">Router telemetry unavailable — {unavailableMessage(telemetry.reason)}.</p>
     {:else if telemetry.inFlight.length === 0}
-      <p class="run-empty">No live generations.</p>
+      <p class="serving-empty">No live generations.</p>
     {:else}
-      <div class="run-table-wrap">
-        <table class="run-table">
+      <div class="serving-table-wrap">
+        <table class="serving-table">
           <thead>
             <tr>
               <th>Leg</th>
               <th>Model</th>
               <th>Session</th>
               <th>Phase</th>
-              <th class="run-table-num">Elapsed</th>
+              <th class="serving-table-num">Elapsed</th>
               <th>Reasoning / response</th>
-              <th class="run-table-num">Rate</th>
+              <th class="serving-table-num">Rate</th>
             </tr>
           </thead>
           <tbody>
@@ -281,7 +281,7 @@
                 <td>{row.modelResolved ?? "—"}</td>
                 <td><span title={row.sessionId ?? "no session id on this request"}>{sessionLabel(row.sessionId)}</span></td>
                 <td><span class="pill {phase.cls}">{phase.label}</span></td>
-                <td class="run-table-num">{elapsedLabel(row.elapsedMs)}</td>
+                <td class="serving-table-num">{elapsedLabel(row.elapsedMs)}</td>
                 <td>
                   <div class="router-split" aria-hidden="true">
                     <span class="router-split-reasoning" style="width: {split.reasoningPct}%"></span>
@@ -289,7 +289,7 @@
                   </div>
                   <span class="router-ambient">{splitLabel(split, row.reasoningTokens, row.responseTokens)}</span>
                 </td>
-                <td class="run-table-num">{tokPerSecLabel(row.tokPerSec)}</td>
+                <td class="serving-table-num">{tokPerSecLabel(row.tokPerSec)}</td>
               </tr>
             {/each}
           </tbody>
@@ -325,10 +325,10 @@
         {/each}
       </div>
       {#if recentRows.length === 0}
-        <p class="run-empty">No requests in this window for the selected leg.</p>
+        <p class="serving-empty">No requests in this window for the selected leg.</p>
       {:else}
-        <div class="run-table-wrap">
-          <table class="run-table">
+        <div class="serving-table-wrap">
+          <table class="serving-table">
             <thead>
               <tr>
                 <th>When</th>
@@ -336,9 +336,9 @@
                 <th>Model</th>
                 <th>Status</th>
                 <th>Stop reason</th>
-                <th class="run-table-num">TTFT</th>
-                <th class="run-table-num">Wall</th>
-                <th class="run-table-num">In / out tok</th>
+                <th class="serving-table-num">TTFT</th>
+                <th class="serving-table-num">Wall</th>
+                <th class="serving-table-num">In / out tok</th>
                 <th>Session</th>
               </tr>
             </thead>
@@ -352,10 +352,10 @@
                     {formatCount(row.status)}
                     {#if isErrorRecord(row)}<span class="pill pill-error">error</span>{/if}
                   </td>
-                  <td class="run-table-muted">{row.stopReason ?? "—"}</td>
-                  <td class="run-table-num">{formatDurationMs(row.ttftMs)}</td>
-                  <td class="run-table-num">{formatDurationMs(row.wallMs)}</td>
-                  <td class="run-table-num">{formatCount(row.usage?.input ?? null)} / {formatCount(row.usage?.output ?? null)}</td>
+                  <td class="serving-table-muted">{row.stopReason ?? "—"}</td>
+                  <td class="serving-table-num">{formatDurationMs(row.ttftMs)}</td>
+                  <td class="serving-table-num">{formatDurationMs(row.wallMs)}</td>
+                  <td class="serving-table-num">{formatCount(row.usage?.input ?? null)} / {formatCount(row.usage?.output ?? null)}</td>
                   <td>
                     <span title={row.sessionId ?? "no session id on this request"}>{sessionLabel(row.sessionId)}</span>
                     {#if row.isSubagent}<span class="pill pill-tag">subagent</span>{/if}
@@ -367,26 +367,26 @@
         </div>
       {/if}
     {:else if telemetry === null}
-      <p class="run-empty">No telemetry has been read yet.</p>
+      <p class="serving-empty">No telemetry has been read yet.</p>
     {:else}
-      <p class="run-empty">Router telemetry unavailable — {unavailableMessage(telemetry.reason)}.</p>
+      <p class="serving-empty">Router telemetry unavailable — {unavailableMessage(telemetry.reason)}.</p>
     {/if}
 
     <h3>Codex sidecar</h3>
     {#if sidecarError}<p class="error-text">{sidecarError}</p>{/if}
     {#if sidecar === null}
-      <p class="run-empty">No sidecar log has been read yet.</p>
+      <p class="serving-empty">No sidecar log has been read yet.</p>
     {:else if !sidecar.available}
-      <p class="run-empty">Sidecar log unavailable — {unavailableMessage(sidecar.reason)}.</p>
+      <p class="serving-empty">Sidecar log unavailable — {unavailableMessage(sidecar.reason)}.</p>
     {:else}
       {#if sidecarData !== null}
         <p class="router-ambient">as of {formatAge(sidecarData.generatedAt, asOf)} ({sidecarData.file})</p>
       {/if}
       {#if sidecar.personas.length === 0}
-        <p class="run-empty">No persona activity in this window.</p>
+        <p class="serving-empty">No persona activity in this window.</p>
       {:else}
-        <div class="run-table-wrap">
-          <table class="run-table">
+        <div class="serving-table-wrap">
+          <table class="serving-table">
             <thead>
               <tr>
                 <th>Persona</th>
@@ -418,7 +418,7 @@
               <span class="router-ambient">{formatAge(entry.ts, asOf)}</span>
               <span>{entry.persona}</span>
               <span>{formatCount(entry.status)}</span>
-              <span class="run-table-muted">{truncateLine(entry.message)}</span>
+              <span class="serving-table-muted">{truncateLine(entry.message)}</span>
             </li>
           {/each}
         </ul>
@@ -434,8 +434,8 @@
         <span class="pill {outcomePillClass(lastOutcome.state)}" title={lastOutcome.requestId}>last change {lastOutcome.state}</span>
       {/if}
     </div>
-    {#if lastOutcome !== null && lastOutcome.reason}<p class="run-table-muted">{lastOutcome.reason}</p>{/if}
-    {#if catalogNote}<p class="run-table-muted">{catalogNote}</p>{/if}
+    {#if lastOutcome !== null && lastOutcome.reason}<p class="serving-table-muted">{lastOutcome.reason}</p>{/if}
+    {#if catalogNote}<p class="serving-table-muted">{catalogNote}</p>{/if}
     {#if catalogError}<p class="error-text">{catalogError}</p>{/if}
     {#if catalog !== null}
       <form
@@ -484,8 +484,8 @@
         </button>
       </form>
 
-      <div class="run-table-wrap">
-        <table class="run-table">
+      <div class="serving-table-wrap">
+        <table class="serving-table">
           <thead>
             <tr>
               <th>Provider</th>
@@ -543,7 +543,7 @@
               {@const key = entryKey("exposure", exposure.model_key)}
               {@const pending = pendingCatalog[key] !== undefined}
               <tr>
-                <td class="run-table-muted">exposure</td>
+                <td class="serving-table-muted">exposure</td>
                 <td>{exposure.model_key}</td>
                 <td>
                   <div class="serving-visibility">
@@ -563,7 +563,7 @@
                     {/each}
                   </div>
                 </td>
-                <td class="run-table-muted">served by llama-swap</td>
+                <td class="serving-table-muted">served by llama-swap</td>
               </tr>
             {/each}
           </tbody>

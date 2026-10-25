@@ -88,7 +88,7 @@ export async function spaPhase(pair: Pair) {
     return s;
   };
   const webDir = join(work, "subject-web");
-  // Web root inside the subject image: /web (Rust image) or /app/apps/web/dist (Bun image).
+  // Web root inside the subject image: /web (Rust image).
   await run(["docker", "cp", `${pair[0].name}:/web`, webDir], true);
   if (!(await Bun.file(join(webDir, "index.html")).exists())) {
     await run(["docker", "cp", `${pair[0].name}:/app/apps/web/dist`, webDir]);

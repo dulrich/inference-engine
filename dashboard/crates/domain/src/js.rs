@@ -76,17 +76,6 @@ pub fn json_number(v: f64) -> serde_json::Value {
     }
 }
 
-/// `Math.round`: the nearest integer, halves toward +infinity. Floor-based rather than
-/// `(x + 0.5).floor()`, which rounds `0.49999999999999994` up to 1.
-pub fn math_round(x: f64) -> f64 {
-    let f = x.floor();
-    if x - f >= 0.5 {
-        f + 1.0
-    } else {
-        f
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,9 +119,6 @@ mod tests {
             json_number(9_007_199_254_740_991.0),
             json!(9_007_199_254_740_991_i64)
         );
-        assert_eq!(math_round(2.5), 3.0);
-        assert_eq!(math_round(-2.5), -2.0);
-        assert_eq!(math_round(0.49999999999999994), 0.0);
     }
 }
 

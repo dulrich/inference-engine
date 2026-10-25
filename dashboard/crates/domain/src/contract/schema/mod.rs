@@ -2,7 +2,6 @@
 //! carries the zod schema's name minus the `Schema` suffix (`tsgen` adds it back).
 use super::*;
 
-mod control;
 mod health;
 mod router_status;
 mod serving;
@@ -10,7 +9,6 @@ mod serving_facts;
 mod serving_live;
 mod serving_request;
 
-pub use control::*;
 pub use health::*;
 pub use router_status::*;
 pub use serving::*;

@@ -1,4 +1,4 @@
-//! `inference-dashboard`: the API + SPA on one port (`apps/api/src/index.ts`, the default).
+//! `inference-dashboard`: the read-only API (config, facts and status files, drop-box writes) and the SPA on one port.
 //! `inference-dashboard --healthcheck` probes `/health` by body on the configured port.
 use bd_server::app::router;
 use bd_server::config::{listen_port, Config};

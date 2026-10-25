@@ -1,7 +1,6 @@
-//! `apps/api/src/config.ts`: one object computed once from the environment. `X ?? default`
-//! semantics — a set-but-empty variable is set. The optional dirs stay `None` when unset (the
-//! feature switches). Repo-relative defaults resolve from this crate's source location the way
-//! `config.ts` resolves them from `import.meta.dir` (`dashboard/apps/api/src`): `webDir`
+//! One config object computed once from the environment. `X ?? default` semantics — a
+//! set-but-empty variable is set. The optional dirs stay `None` when unset (the feature
+//! switches). Repo-relative defaults resolve from this crate's source location: `webDir`
 //! `dashboard/apps/web/dist` (the image sets `APP_WEB_DIR=/web`), `llamaConfigPath` under the
 //! repo root.
 use bd_domain::js;

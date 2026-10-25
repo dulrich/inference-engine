@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Activity } from "lucide-svelte";
   import { AppHeader, PollControl } from "@fleet-tools/signalworks";
-  import { guardedNavClick, NAV_GROUPS, parsePath, tabArea, tabToPath, type Tab } from "./routes.ts";
+  import { guardedNavClick, parsePath, TABS, tabToPath, type Tab } from "./routes.ts";
   import Serving from "./views/Serving.svelte";
   import Router from "./views/Router.svelte";
 
@@ -38,22 +38,15 @@
 
 <AppHeader tool="Bench Dashboard" icon={Activity} appId="bench-dashboard">
   <nav class="sw-nav" slot="nav" aria-label="Bench Dashboard views">
-    {#each NAV_GROUPS as group (group.area)}
-      <div class="nav-group" class:nav-group-active={tabArea(activeTab) === group.area} role="group" aria-label={group.label}>
-        {#if group.tabs.length > 1}
-          <span class="nav-group-label">{group.label}</span>
-        {/if}
-        {#each group.tabs as { tab, label } (tab)}
-          <a
-            href={tabToPath(tab)}
-            class:active={activeTab === tab}
-            aria-current={activeTab === tab ? "page" : undefined}
-            onclick={(event) => guardedNavClick(event, () => goToTab(tab))}
-          >
-            {label}
-          </a>
-        {/each}
-      </div>
+    {#each TABS as { tab, label } (tab)}
+      <a
+        href={tabToPath(tab)}
+        class:active={activeTab === tab}
+        aria-current={activeTab === tab ? "page" : undefined}
+        onclick={(event) => guardedNavClick(event, () => goToTab(tab))}
+      >
+        {label}
+      </a>
     {/each}
   </nav>
   <PollControl slot="poll" storageKey="bench-dashboard.poll.v1" defaultMs={0} busy={false} onTick={refresh} />

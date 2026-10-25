@@ -1,5 +1,5 @@
 //! Runtime-side JS semantics the Bun API leans on implicitly: `JSON.parse` number handling,
-//! `localeCompare`, default `Array#sort` (UTF-16 code units), `node:path` `join`/`basename`,
+//! `localeCompare`, `node:path` `join`,
 //! `new Date().toISOString()`, and Hono's URI decoding (`decodeURI` with `%25` protection,
 //! per-run `tryDecode` fallback).
 use icu_collator::options::CollatorOptions;
@@ -36,12 +36,6 @@ fn to_js_numbers(v: &mut Value) {
     }
 }
 
-/// A JSON value as a JS `number`, when it is one (`typeof v === "number"`; finite by
-/// construction after [`json_parse`]).
-pub fn as_number(v: Option<&Value>) -> Option<f64> {
-    v.and_then(Value::as_f64).filter(|f| f.is_finite())
-}
-
 /// `JSON.stringify(value)`.
 pub fn stringify(v: &Value) -> String {
     bd_domain::jsout::stringify(v)
@@ -58,11 +52,6 @@ fn collator() -> &'static CollatorBorrowed<'static> {
 /// `a.localeCompare(b)` (root locale, default options — plan Spike 2).
 pub fn locale_compare(a: &str, b: &str) -> Ordering {
     collator().compare(a, b)
-}
-
-/// Default `Array.prototype.sort()` order on strings: UTF-16 code units.
-pub fn utf16_cmp(a: &str, b: &str) -> Ordering {
-    a.encode_utf16().cmp(b.encode_utf16())
 }
 
 /// `path.normalize` (POSIX) of a non-empty path.
@@ -104,11 +93,6 @@ pub fn path_join(a: &str, b: &str) -> String {
         (false, false) => format!("{a}/{b}"),
     };
     normalize(&joined)
-}
-
-/// `path.basename(p)` (POSIX, no suffix).
-pub fn basename(p: &str) -> &str {
-    p.trim_end_matches('/').rsplit('/').next().unwrap_or("")
 }
 
 /// `new Date().toISOString()`.
@@ -527,15 +511,6 @@ pub fn decode_uri_component(s: &str) -> Option<String> {
     decode_escapes(s, false)
 }
 
-/// Hono's `getPath` decode of a raw request path: `%25` protected, then `tryDecodeURI`.
-pub fn hono_path(raw: &str) -> String {
-    if !raw.contains('%') {
-        return raw.to_string();
-    }
-    let protected = raw.replace("%25", "%2525");
-    try_decode(&protected, true)
-}
-
 /// Hono's `tryDecodeURIComponent` (route params).
 pub fn hono_param(raw: &str) -> String {
     if raw.contains('%') {
@@ -576,7 +551,6 @@ mod tests {
         assert_eq!(path_join("../r", "a"), "../r/a");
         assert_eq!(path_join("", "a"), "a");
         assert_eq!(path_join("//x//", "a"), "/x/a");
-        assert_eq!(basename("/records/b-1"), "b-1");
     }
 
     #[test]
@@ -683,10 +657,6 @@ mod tests {
 
     #[test]
     fn hono_decoding() {
-        assert_eq!(hono_path("/api/ladders/a%2Fb"), "/api/ladders/a%2Fb");
-        assert_eq!(hono_path("/api/ladders/a%252Fb"), "/api/ladders/a%252Fb");
-        assert_eq!(hono_path("/api/ladders/a/b%20c"), "/api/ladders/a/b c");
-        assert_eq!(hono_path("/x/%E0%A4%A"), "/x/%E0%A4%A");
         assert_eq!(decode_uri_component("a%2Fb").as_deref(), Some("a/b"));
         assert_eq!(decode_uri_component("%E0%A4%A"), None);
         assert_eq!(hono_param("a+b%20c"), "a+b c");

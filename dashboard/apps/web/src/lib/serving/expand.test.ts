@@ -56,7 +56,7 @@ describe("flagValueClass", () => {
     expect(flagValueClass("q4_0")).toBe("");
   });
 
-  test("a boolean-style flag (null value) gets the existing run-table-muted class", () => {
-    expect(flagValueClass(null)).toBe("run-table-muted");
+  test("a boolean-style flag (null value) gets the existing serving-table-muted class", () => {
+    expect(flagValueClass(null)).toBe("serving-table-muted");
   });
 });

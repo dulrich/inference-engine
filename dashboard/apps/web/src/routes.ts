@@ -8,18 +8,11 @@
 
 export type Tab = "serving" | "router";
 
-/** The nav areas: Serving and Router, one tab each. */
-export type NavArea = "serving" | "router";
-
-export const NAV_GROUPS: { area: NavArea; label: string; tabs: { tab: Tab; label: string }[] }[] = [
-  { area: "serving", label: "Serving", tabs: [{ tab: "serving", label: "Serving" }] },
-  { area: "router", label: "Router", tabs: [{ tab: "router", label: "Router" }] },
+/** The nav tabs, in display order. */
+export const TABS: { tab: Tab; label: string }[] = [
+  { tab: "serving", label: "Serving" },
+  { tab: "router", label: "Router" },
 ];
-
-/** The area a tab belongs to (drives the active-group highlight). */
-export function tabArea(tab: Tab): NavArea {
-  return (NAV_GROUPS.find((g) => g.tabs.some((t) => t.tab === tab)) as (typeof NAV_GROUPS)[number]).area;
-}
 
 const TAB_PATHS: Record<Tab, string> = {
   serving: "/",

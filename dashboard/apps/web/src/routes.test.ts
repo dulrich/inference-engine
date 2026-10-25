@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { guardedNavClick, NAV_GROUPS, parsePath, tabArea, tabToPath } from "./routes.ts";
+import { guardedNavClick, parsePath, TABS, tabToPath } from "./routes.ts";
 
 describe("tabToPath", () => {
   test("every tab maps to its own path -- Serving owns \"/\"", () => {
@@ -75,10 +75,9 @@ describe("guardedNavClick", () => {
   });
 });
 
-describe("nav areas", () => {
-  test("two labelled areas: Serving, Router", () => {
-    expect(NAV_GROUPS.map((g) => g.label)).toEqual(["Serving", "Router"]);
-    expect(tabArea("serving")).toBe("serving");
-    expect(tabArea("router")).toBe("router");
+describe("TABS", () => {
+  test("two labelled tabs: Serving, Router", () => {
+    expect(TABS.map((t) => t.label)).toEqual(["Serving", "Router"]);
+    expect(TABS.map((t) => t.tab)).toEqual(["serving", "router"]);
   });
 });

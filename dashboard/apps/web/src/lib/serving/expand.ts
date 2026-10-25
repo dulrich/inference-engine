@@ -42,9 +42,9 @@ export function formatFlagValue(value: ServingFlagEntry["value"]): string {
   return value === null ? "—" : value;
 }
 
-/** Reuses the existing `run-table-muted` class (no new CSS token, CC-15/CC-01) to visually
+/** Reuses the existing `serving-table-muted` class (no new CSS token, CC-15/CC-01) to visually
  * de-emphasize a boolean-style flag's value cell the same way the rest of the app already
  * de-emphasizes "no measurement yet"/"—" cells. */
 export function flagValueClass(value: ServingFlagEntry["value"]): string {
-  return value === null ? "run-table-muted" : "";
+  return value === null ? "serving-table-muted" : "";
 }

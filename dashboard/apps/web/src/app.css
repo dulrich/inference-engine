@@ -4,49 +4,11 @@
  * where color is involved (CC-01), scoped to a class (never a bare button/a/select/input/
  * textarea -- CC-15) so it can never fight a package-owned control's geometry.
  *
- * WP-2 view CSS lives in three namespaced blocks: `.run-*` (shared by every view --
- * eyebrow ledes, empty/error states, the one table shape, the Runs list/detail), `.ladders-*`
- * (the model picker field), `.serving-*` (the alias/measured-cell cells). No new CSS custom
- * properties -- every color is a vendored Signalworks token.
- *
- * WP-C (plan `bench-dashboard-run-context-surfacing.md` WP-C) adds two more: `.run-output-*`
- * (the Runs detail output-length line, alongside the existing `.run-*` block) and `.queue-*`
- * (the new Queue tab's per-queue status cards) -- same `.run-table`/`.pill` reuse, same
- * `var(--...)` token discipline.
- *
- * WP-5 (plan `bakeoff-queue-control-plane.md` WP-5) adds `.control-*` (the Queue tab's
- * control panel) -- layout/spacing only, same `.field`/`.run-meta-grid`/`.run-table`/`.pill`/
- * `.btn-*` reuse as every other view (CC-15: never a bare button/select/input rule here).
- *
- * WP-1 (plan `bench-dashboard-polish.md` WP-1) extends `.serving-*` with the per-row full-
- * config expand -- the toggle itself is a plain `.btn-secondary` (no new button rule), the
- * expanded panel reuses `.run-table`/`.run-table-muted` for the flag/value list.
- *
- * WP-2 (plan `capability-surfacing-and-local-agent-endpoints.md` WP-2) extends `.serving-*`
- * again with the capability-metadata column (`.serving-capabilities`/`.serving-cap-*`) --
- * `.pill`/`.pill-tag` reuse only, no new chip chrome. */
-
-/* ---- Nav areas (serving-control-redesign WP-7) --------------------------- */
-
-.nav-group {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.nav-group + .nav-group {
-  border-left: 1px solid var(--line);
-  padding-left: 10px;
-}
-
-.nav-group-label {
-  color: var(--muted);
-  font-size: 0.64rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
+ * Namespaced blocks: `.run-lede`/`.serving-empty`/`.serving-table*` (shared view chrome: the
+ * lede, empty/error states, the one table shape -- used by both the Serving and Router
+ * views), `.serving-*` (the alias/measured/capability/visibility/expand cells) and `.router-*`
+ * (the Router view). No new CSS custom properties -- every color is a vendored Signalworks
+ * token. */
 
 /* ---- Shared view chrome ------------------------------------------------- */
 
@@ -55,8 +17,7 @@
   color: var(--muted);
 }
 
-.run-empty,
-.run-note {
+.serving-empty {
   max-width: 70ch;
   padding: 12px 14px;
   border: 1px solid var(--line);
@@ -65,108 +26,28 @@
   color: var(--muted);
 }
 
-.run-note {
-  margin-top: 10px;
-  padding: 8px 12px;
-  font-size: 0.78rem;
-}
+/* ---- The one table shape, shared by the Serving and Router views ------------- */
 
-/* ---- Runs: list ---------------------------------------------------------- */
-
-.run-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 16px;
-}
-
-/* `.row` (base.css) already owns the card geometry/hover/color contract (CC-05); this only
- * adds the left/right split this row's content needs. */
-.run-row {
-  justify-content: space-between;
-  gap: 16px;
-  text-decoration: none;
-}
-
-.run-row-main {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.run-row-id {
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-}
-
-.run-row-sub {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 0.72rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.run-row-meta {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-}
-
-.run-row-time {
-  color: var(--muted);
-  font-size: 0.7rem;
-  white-space: nowrap;
-}
-
-/* ---- Runs: detail --------------------------------------------------------- */
-
-.back-link {
-  display: inline-flex;
-  margin-bottom: 16px;
-}
-
-.run-description {
-  max-width: 70ch;
-  color: var(--muted);
-}
-
-.run-meta-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 12px 24px;
-  margin: 16px 0 24px;
-}
-
-.run-wilson {
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
-}
-
-/* ---- The one table shape, shared by Runs/Ladders/Long-context/Fit/Serving ------------- */
-
-.run-table-wrap {
+.serving-table-wrap {
   margin-top: 10px;
   overflow-x: auto;
 }
 
-.run-table {
+.serving-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.8rem;
 }
 
-.run-table th,
-.run-table td {
+.serving-table th,
+.serving-table td {
   padding: 6px 10px;
   border-bottom: 1px solid var(--line);
   text-align: left;
   white-space: nowrap;
 }
 
-.run-table th {
+.serving-table th {
   color: var(--muted);
   font-size: 0.68rem;
   font-weight: 700;
@@ -174,35 +55,18 @@
   text-transform: uppercase;
 }
 
-.run-table tbody tr:last-child td {
+.serving-table tbody tr:last-child td {
   border-bottom: none;
 }
 
-.run-table th.run-table-num,
-.run-table td.run-table-num {
+.serving-table th.serving-table-num,
+.serving-table td.serving-table-num {
   font-family: var(--font-mono);
   text-align: right;
 }
 
-.run-table-muted {
+.serving-table-muted {
   color: var(--muted);
-}
-
-.run-table-flags {
-  /* Wrap, never ellipsize: classifier flag readouts are the evidence a run page exists to
-     show, and the earlier 32ch ellipsis truncation hid them (user feedback 2026-08-23). */
-  max-width: 40ch;
-  color: var(--muted);
-  font-size: 0.7rem;
-  white-space: normal;
-  overflow-wrap: break-word;
-}
-
-/* ---- Ladders / Long-context: the hf_repo / experiment picker field -------------------- */
-
-.ladders-picker {
-  max-width: 420px;
-  margin: 16px 0;
 }
 
 /* ---- Serving ---------------------------------------------------------------- */
@@ -221,7 +85,7 @@
 }
 
 /* ---- Serving: capability metadata column (WP-2) ----------------------------
-   Overrides `.run-table td`'s default `white-space: nowrap` -- this cell stacks three
+   Overrides `.serving-table td`'s default `white-space: nowrap` -- this cell stacks three
    lines (modalities / tools+reasoning pills / the serving-facts summary) rather than one. */
 
 .serving-capabilities {
@@ -286,99 +150,12 @@
   font-size: 0.72rem;
 }
 
-/* ---- Runs detail: output-length line (WP-C) ------------------------------- */
-
-.run-output-length {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin: 4px 0;
-  font-size: 0.82rem;
-}
-
-/* ---- Queue (WP-C) ----------------------------------------------------------- */
+/* ---- Router view: telemetry timestamp and the catalog form ----------------------- */
 
 .queue-generated {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 0.72rem;
-}
-
-.queue-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  margin-top: 16px;
-}
-
-.queue-card {
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-control);
-  background: var(--panel);
-}
-
-.queue-card-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-  margin-bottom: 6px;
-}
-
-.queue-card-name {
-  font-family: var(--font-mono);
-  font-size: 0.88rem;
-}
-
-.queue-card-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-  margin-bottom: 8px;
-  color: var(--muted);
-  font-size: 0.75rem;
-}
-
-.queue-counts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-
-/* ---- Queue: control panel (WP-5) -------------------------------------------- */
-
-.control-panel {
-  max-width: 70ch;
-  margin: 16px 0 24px;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-control);
-  background: var(--panel);
-}
-
-.control-panel h2 {
-  margin: 0 0 6px;
-}
-
-.control-panel h3 {
-  margin: 18px 0 6px;
-  font-size: 0.85rem;
-}
-
-.control-stale-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.control-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 12px 0;
 }
 
 .control-start-form {
@@ -391,33 +168,6 @@
 
 .control-start-form .field {
   min-width: 180px;
-}
-
-.control-feedback {
-  margin: 10px 0 0;
-  color: var(--text);
-  font-size: 0.8rem;
-}
-
-.control-feedback-message {
-  margin: 2px 0 0;
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
-.control-anomalies ul {
-  margin: 6px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.control-anomaly {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-  color: var(--text);
-  font-size: 0.8rem;
 }
 
 /* ---- Router (WP-4, `plans/router-observability-and-tool-search-conformance.md`) ---------

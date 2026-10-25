@@ -616,6 +616,6 @@ mod tests {
         // `\d` is ASCII-only, as in a JS regex without the `u` flag.
         assert!(!pattern_regex(&SERVING_VERIFIED_DATE_PATTERN).is_match("２０２６-01-01"));
         assert!(pattern_regex(&SERVING_VERIFIED_DATE_PATTERN).is_match("2026-01-01"));
-        assert!(!pattern_regex(&CONTROL_QUEUE_STEM_PATTERN).is_match("a\n"));
+        assert!(!pattern_regex(&SERVING_VERIFIED_DATE_PATTERN).is_match("2026-01-01\n"));
     }
 }

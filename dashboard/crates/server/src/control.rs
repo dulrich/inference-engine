@@ -120,16 +120,11 @@ fn bad_request(issues: &[validate::Issue]) -> ActionResult {
     }
 }
 
-fn accepted(request_id: String, message: Option<&str>) -> ActionResult {
-    let mut body = Map::new();
-    body.insert("requestId".into(), Value::String(request_id));
-    body.insert("accepted".into(), Value::Bool(true));
-    if let Some(m) = message {
-        body.insert("message".into(), Value::String(m.into()));
-    }
+/// The 200 body of every accepted drop-box write (`ServingAcceptedResponse`).
+fn accepted(request_id: String, message: &str) -> ActionResult {
     ActionResult {
         status: 200,
-        body: Value::Object(body),
+        body: json!({ "requestId": request_id, "accepted": true, "message": message }),
     }
 }
 
@@ -160,7 +155,7 @@ pub fn record_serving_visibility_action(
         },
         id_factory,
     )?;
-    Ok(accepted(request_id, Some(SERVING_REQUEST_ACCEPTED_MESSAGE)))
+    Ok(accepted(request_id, SERVING_REQUEST_ACCEPTED_MESSAGE))
 }
 
 /// The three catalog intents (`serving-request-v2`). `action` names the intent; the body is
@@ -223,7 +218,7 @@ pub fn record_catalog_action(
         },
         id_factory,
     )?;
-    Ok(accepted(request_id, Some(SERVING_CATALOG_ACCEPTED_MESSAGE)))
+    Ok(accepted(request_id, SERVING_CATALOG_ACCEPTED_MESSAGE))
 }
 
 pub fn record_catalog_add_action(

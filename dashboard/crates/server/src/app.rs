@@ -18,7 +18,7 @@ use axum::Router;
 use serde::Serialize;
 use serde_json::json;
 
-/// Run a DB/disk-bound route body on the blocking pool; a panicked task is the 500 path.
+/// Run a blocking disk read or drop-box write on the blocking pool; a panicked task is the 500 path.
 async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, RouteError> + Send + 'static,
 ) -> Result<T, RouteError> {
@@ -91,7 +91,7 @@ async fn serving_facts_status(State(s): State<Shared>) -> Result<Response, Route
     facts(s, serving_facts::status).await
 }
 
-// ---- WP-4: file planes -------------------------------------------------------------------
+// ---- File planes: config, facts, status and drop-box routes ------------------------------
 
 /// `routes/serving.ts`: any failure (read or parse) is the 502 `{error}`.
 async fn serving(State(s): State<Shared>) -> Result<Response, RouteError> {

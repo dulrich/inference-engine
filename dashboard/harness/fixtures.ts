@@ -5,7 +5,7 @@ import { chmod, cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises
 import { join } from "node:path";
 import { work, type AppSpec } from "./lib.ts";
 
-/** The one fixture-root constant (WP-6 `git mv`s the tree to dashboard/fixtures/). */
+/** The one fixture-root constant: `dashboard/fixtures/`. */
 export const FIXTURE_ROOT = join(import.meta.dir, "../fixtures");
 
 /**

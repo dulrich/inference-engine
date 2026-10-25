@@ -8,7 +8,7 @@ import {
   ServingLiveResponseSchema,
   ServingStatusResponseSchema,
   ServingTimingRowSchema,
-  type ControlAcceptedResponse,
+  type ServingAcceptedResponse,
   type HealthResponse,
   type RouterSidecarResponse,
   type RouterTelemetryResponse,
@@ -71,7 +71,7 @@ export function getServingFactsStatus(): Promise<ServingFactsStatusResponse> {
 // *executed*. Response parsing/error-extraction is `parseControlActionResponse`
 // (`lib/serving/control.ts`) so it's unit-testable without mocking `fetch`; this wrapper is
 // the thin fetch-plumbing seam only, same division as `getJson` above.
-async function postControlAction(path: string, body?: unknown): Promise<ControlAcceptedResponse> {
+async function postControlAction(path: string, body?: unknown): Promise<ServingAcceptedResponse> {
   const response = await fetch(path, {
     method: "POST",
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
@@ -104,7 +104,7 @@ export function getServingLive(): Promise<ServingLiveResponse> {
   return getJson("/api/serving/live", ServingLiveResponseSchema);
 }
 
-export function postServingVisibility(body: ServingVisibilityRequest): Promise<ControlAcceptedResponse> {
+export function postServingVisibility(body: ServingVisibilityRequest): Promise<ServingAcceptedResponse> {
   return postControlAction("/api/serving/visibility", body);
 }
 
@@ -112,15 +112,15 @@ export function postServingVisibility(body: ServingVisibilityRequest): Promise<C
 // the model-catalog intents (`serving-request-v2`). Same posture as the visibility POST: the
 // API writes a drop-box file and returns the request id; the dispatcher validates the
 // candidate catalog, applies it, and reports the outcome in the status file's `recent[]`.
-export function postCatalogAdd(body: ServingCatalogAddRequest): Promise<ControlAcceptedResponse> {
+export function postCatalogAdd(body: ServingCatalogAddRequest): Promise<ServingAcceptedResponse> {
   return postControlAction("/api/catalog/add", body);
 }
 
-export function postCatalogRemove(body: ServingCatalogRemoveRequest): Promise<ControlAcceptedResponse> {
+export function postCatalogRemove(body: ServingCatalogRemoveRequest): Promise<ServingAcceptedResponse> {
   return postControlAction("/api/catalog/remove", body);
 }
 
-export function postCatalogConsumers(body: ServingCatalogConsumersRequest): Promise<ControlAcceptedResponse> {
+export function postCatalogConsumers(body: ServingCatalogConsumersRequest): Promise<ServingAcceptedResponse> {
   return postControlAction("/api/catalog/consumers", body);
 }
 

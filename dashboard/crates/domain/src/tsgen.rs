@@ -241,15 +241,9 @@ mod tests {
         }
     }
 
-    /// eval-harness `inference_research/harness/tests/test_control_contract.py` string-asserts this exact line.
     #[test]
-    fn control_request_schema_constant_is_verbatim() {
+    fn stale_threshold_constant_is_verbatim() {
         let module = super::module();
-        assert!(
-            module.contains("\nexport const CONTROL_REQUEST_SCHEMA_V1 = \"control-request-v1\";\n")
-        );
-        assert!(module
-            .contains("\nexport const CONTROL_QUEUE_STEM_PATTERN = /^[a-z0-9][a-z0-9-]*$/;\n"));
         assert!(module.contains("\nexport const SERVING_STATUS_STALE_MS = 180000;\n"));
     }
 

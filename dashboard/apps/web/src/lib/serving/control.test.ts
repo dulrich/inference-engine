@@ -3,9 +3,9 @@ import { parseControlActionResponse } from "./control.ts";
 
 describe("parseControlActionResponse", () => {
   test("200 with a valid accepted body parses through", () => {
-    const outcome = parseControlActionResponse(200, { requestId: "req-1", accepted: true });
+    const outcome = parseControlActionResponse(200, { requestId: "req-1", accepted: true, message: "recorded" });
     expect(outcome.ok).toBe(true);
-    expect(outcome.accepted).toEqual({ requestId: "req-1", accepted: true });
+    expect(outcome.accepted).toEqual({ requestId: "req-1", accepted: true, message: "recorded" });
     expect(outcome.error).toBeNull();
   });
 

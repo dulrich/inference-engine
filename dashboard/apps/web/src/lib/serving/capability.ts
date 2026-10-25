@@ -25,8 +25,7 @@ export function capabilityToolsPillClass(toolCalling: boolean | null): string {
 // ---- Reasoning level --------------------------------------------------------------------
 // `docs/model-capabilities.md`'s enumeration is append-only -- an unrecognized-but-valid
 // future level still renders (its own label IS the information) via the `?? "pill-muted"`
-// fallback, same "never hide an unrecognized value" posture `lib/profile.ts`'s
-// `vramProfilePillClass` and `lib/runs/verdict.ts`'s `verdictPillClass` already use.
+// fallback: never hide an unrecognized value.
 
 const REASONING_PILL_CLASS: Record<string, string> = {
   none: "pill-muted",

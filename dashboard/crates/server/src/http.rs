@@ -1,7 +1,6 @@
 //! Shared HTTP plumbing: app state, Hono-shaped JSON replies (typed DTOs -> `serde_json::Value`
 //! -> `JSON.stringify` via the domain crate's `jsout`), and the error replies.
 use crate::config::Config;
-use crate::db::Db;
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
@@ -10,7 +9,6 @@ use std::sync::Arc;
 
 pub struct AppState {
     pub cfg: Config,
-    pub db: Db,
 }
 
 pub type Shared = Arc<AppState>;

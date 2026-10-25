@@ -1,6 +1,6 @@
 //! `/api/serving/live` over the committed `fixtures/serving-feed/` feed and temp feeds.
 use super::*;
-use crate::record::tests::{fixtures, TempDir};
+use crate::test_support::{fixtures, TempDir};
 use bd_domain::contract::SERVING_LIVE_RESPONSE;
 use bd_domain::validate;
 

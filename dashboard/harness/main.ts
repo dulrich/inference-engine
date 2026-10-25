@@ -1,52 +1,27 @@
 // Black-box contract harness for the Bench Dashboard image (plans/bench-dashboard-rust-port.md WP-1).
-// Usage: bun run harness [--image <tag>] [--subject-db fresh|golden]
-//                        [--phases routes,ingest,control,feeds,spa] [--routes <prefix,...>]
+// Usage: bun run harness [--image <tag>] [--phases routes,control,feeds,spa] [--routes <prefix,...>]
 // Every check runs the subject (--image) beside a reference twin (the same --image)
-// on identical fixtures and compares status + content type + normalized body, drop-box files and
-// normalized DB dumps; pinned facts guard against a twin pair that agrees on nonsense.
-// fresh (default): each twin of the read pair ingests the fixture records through its own ingest
-// CLI. golden: --image ingests once, both twins serve a copy of that /data tree. --routes:
-// path-prefix subset (`<path>$` = exact), out-of-subset checks skipped.
+// on identical fixtures and compares status + content type + normalized body and drop-box files;
+// pinned facts guard against a twin pair that agrees on nonsense. --routes: path-prefix subset
+// (`<path>$` = exact), out-of-subset checks skipped.
 // Exit 0 iff 0 checks failed and every requested phase ran a check. Every docker object carries a
 // per-run `bd-harness-<random>` prefix, publishes no host port, and is removed on exit.
-import { cp, mkdir } from "node:fs/promises";
-import { join } from "node:path";
-import { composeSpec, seedOne, seedPair, writeFixtures } from "./fixtures.ts";
-import { controlPhase, feedsPhase, ingestPhase } from "./phases-files.ts";
+import { composeSpec, writeFixtures } from "./fixtures.ts";
+import { controlPhase, feedsPhase } from "./phases-files.ts";
 import { routesPhase, spaPhase } from "./phases-http.ts";
-import { check, cleanup, counts, idlePhases, image, ingestCommand, logs, network, phaseSummary, phases, prefix, run, setPhase, startApp, startPair, stopApp, subjectDb, wants, work, type Instance, type Pair } from "./lib.ts";
+import { check, cleanup, counts, idlePhases, image, logs, network, phaseSummary, phases, prefix, run, setPhase, startPair, wants, type Instance, type Pair } from "./lib.ts";
 
 const started: Instance[] = [];
 try {
-  console.log(`harness ${prefix}: image ${image}, subject-db ${subjectDb}, phases ${phases.join(",")}`);
+  console.log(`harness ${prefix}: image ${image}, phases ${phases.join(",")}`);
   await run(["docker", "image", "inspect", image]);
-  console.log(`harness: ingest seam ${(await ingestCommand(image)).join(" ")}`);
   await run(["docker", "network", "create", network]);
   const fx = await writeFixtures();
 
-  let seededDir: string | undefined;
-  if (subjectDb === "golden") {
-    setPhase("seed");
-    const builder = await startApp("builder", image, await composeSpec(fx)());
-    await seedOne(builder);
-    await stopApp(builder);
-    seededDir = builder.dataDir;
-  }
   let pair: Pair | undefined;
   if (wants("routes", "spa")) {
-    setPhase("seed");
-    if (subjectDb === "golden") {
-      const dirs: [string, string] = [join(work, "data", "subject-golden"), join(work, "data", "reference-golden")];
-      for (const d of dirs) {
-        await mkdir(d, { recursive: true });
-        await cp(seededDir!, d, { recursive: true });
-      }
-      pair = await startPair("main", composeSpec(fx), dirs);
-      check("subject serves the --image-built /data tree", true);
-    } else {
-      pair = await startPair("main", composeSpec(fx));
-      await seedPair(pair);
-    }
+    setPhase("setup");
+    pair = await startPair("main", composeSpec(fx));
     started.push(...pair);
   }
   if (wants("routes")) {
@@ -56,10 +31,6 @@ try {
   if (wants("spa")) {
     setPhase("spa");
     await spaPhase(pair!);
-  }
-  if (wants("ingest")) {
-    setPhase("ingest");
-    await ingestPhase(fx);
   }
   if (wants("control")) {
     setPhase("control");

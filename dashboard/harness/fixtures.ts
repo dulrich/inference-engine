@@ -1,21 +1,19 @@
 // Fixtures: the committed fixtures/ tree copied into per-run temp dirs (never mounted
-// directly), plus clock-relative files written at run start, the compose-shaped subject env, the
-// ingest seed. No live data.
+// directly), plus clock-relative files and the synthetic serving-facts-v1 file written at run
+// start, and the compose-shaped subject env. No live data.
 import { chmod, cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { check, execIngest, work, type AppSpec, type Instance, type Pair } from "./lib.ts";
+import { work, type AppSpec } from "./lib.ts";
 
 /** The one fixture-root constant (WP-6 `git mv`s the tree to dashboard/fixtures/). */
 export const FIXTURE_ROOT = join(import.meta.dir, "../fixtures");
 
 /**
  * Run-start clock. Fresh/stale verdicts are placed an hour either side of it so they sit far from
- * every threshold: 180 s control/serving (routes/queue.ts CONTROL_STALE_THRESHOLD_MS,
- * shared SERVING_STATUS_STALE_MS), 15 s telemetry in-flight (router/telemetryFeed.ts:21), 60 s serving
+ * every threshold: 180 s serving status (shared SERVING_STATUS_STALE_MS), 15 s telemetry in-flight (router/telemetryFeed.ts:21), 60 s serving
  * live residency (SERVING_LIVE_STALE_MS), and the 600 000 ms `?staleMs=` ceiling (routes/routerStatus.ts:20).
  * "Fresh" is a future timestamp: every reader computes `now - ts > threshold`, so a future ts is
- * fresh for any run length. queue/eta.ts reads no clock (only record timestamps and the fixture
- * `live.started_at`), so its inputs are fixed.
+ * fresh for any run length.
  */
 export const NOW = Date.now();
 export const FRESH = new Date(NOW + 3_600_000).toISOString();
@@ -24,10 +22,9 @@ export const TODAY = new Date(NOW).toISOString().slice(0, 10);
 
 export interface Fx {
   root: string;
-  records: string;
-  records2: string;
-  queues: string;
   llamaConfig: string;
+  /** Dir mounted at /facts holding a valid, revision-current `serving-facts.json`. */
+  facts: string;
   host: string;
   router: string;
   sidecar: string;
@@ -44,48 +41,40 @@ async function writeJson(path: string, body: unknown) {
 }
 const readJson = async (path: string) => JSON.parse(await readFile(path, "utf8"));
 
-/** Control host files with `generated_at` set to `at` (status.json + serving-status.json). */
+/** Control host file with `generated_at` set to `at` (serving-status.json). */
 export async function writeHostFiles(dir: string, at: string) {
   await mkdir(dir, { recursive: true });
-  const status = await readJson(join(FIXTURE_ROOT, "control/contract-v1/control/host/status.json"));
   const serving = await readJson(join(FIXTURE_ROOT, "serving/contract-v1/control/host/serving-status.json"));
-  await writeJson(join(dir, "status.json"), { ...status, generated_at: at });
   await writeJson(join(dir, "serving-status.json"), { ...serving, generated_at: at });
+}
+
+/** The synthetic `serving-facts-v1` the facts-present state reads (revision = this config's SHA-256). */
+export const FACTS_MEASURED = [{ alias: "harness-alias", experimentId: "harness-exp-1" }];
+export async function writeFactsFile(path: string, llamaConfig: string) {
+  const revision = new Bun.CryptoHasher("sha256").update(await readFile(llamaConfig)).digest("hex");
+  await writeJson(path, {
+    schema: "serving-facts-v1",
+    generatedAt: "2026-10-25T12:00:00.000Z",
+    servingConfigRevision: revision,
+    timing: [{ modelKey: "harness-model", aliases: ["harness-alias"], p50PrefillTokS: 512.5, p90PrefillTokS: 480, p50DecodeTokS: 40, p90DecodeTokS: 38.5, samplingArm: "greedy", sampleCount: 3, mtp: false }],
+    measured: FACTS_MEASURED,
+  });
 }
 
 export async function writeFixtures(): Promise<Fx> {
   const root = join(work, "fx");
   const fx: Fx = {
     root,
-    records: join(root, "records"),
-    records2: join(root, "records2"),
-    queues: join(root, "queues"),
     llamaConfig: join(root, "llama-config.yaml"),
+    facts: join(root, "facts"),
     host: join(root, "host"),
     router: join(root, "router"),
     sidecar: join(root, "sidecar"),
     servingFeed: join(root, "serving-feed"),
   };
-  // One /records holding the v2/v1 set, the legacy-timing side door and the projection record.
-  for (const set of ["records", "records-legacy-timing", "records-projections"]) await copyChildren(join(FIXTURE_ROOT, set), fx.records);
-  // Invalid records (ingest/record.ts:250 parse failure, :252 non-object).
-  await mkdir(join(fx.records, "invalid-json"), { recursive: true });
-  await writeFile(join(fx.records, "invalid-json", "config.json"), "{");
-  await writeJson(join(fx.records, "invalid-array", "config.json"), [1, 2]);
-  // ETA inputs (queue/eta.ts): a cost-table record for synth-joined's running c=8192 cell
-  // (queue.test.ts "descriptor pass-through"), and timestamped cells for the live contract-queue.
-  await writeJson(join(fx.records, "synth-joined", "hist-gemma-c8192", "config.json"), {
-    cell_wall_seconds: 300,
-    sweep_cell: { model: "gemma-4-12b-qat", server_flags: { "-c": 8192 } },
-  });
-  for (const [i, minute] of [5, 17, 31, 52].entries()) {
-    await writeJson(join(fx.records, "contract-queue", `cell-${i}`, "config.json"), { timestamp: `2026-08-27T11:${String(minute).padStart(2, "0")}:00Z` });
-  }
-  await copyChildren(join(FIXTURE_ROOT, "records-two-level"), fx.records2);
-  await copyChildren(join(FIXTURE_ROOT, "queues"), fx.queues);
-  await copyChildren(join(FIXTURE_ROOT, "control/contract-v1/queues"), fx.queues);
+  await mkdir(root, { recursive: true });
   await cp(join(FIXTURE_ROOT, "llama-config.yaml"), fx.llamaConfig);
-  await copyChildren(join(FIXTURE_ROOT, "control/contract-v1/control/host"), fx.host);
+  await writeFactsFile(join(fx.facts, "serving-facts.json"), fx.llamaConfig);
   await writeHostFiles(fx.host, FRESH);
   // The committed router/sidecar jsonl (2026-09-13: never today, so the newest-day pick applies
   // and every progress line is stale against the run clock). The committed serving feed
@@ -115,10 +104,8 @@ export async function requestsBox(): Promise<string> {
 /** The compose `inference-dashboard` block's env (fleet-tools/fleet/compose.fleet.yml). */
 export const COMPOSE_ENV = {
   PORT: "4810",
-  APP_DB_PATH: "/data/bench.db",
-  RECORDS_DIR: "/records",
   LLAMA_CONFIG_PATH: "/llama-config.yaml",
-  QUEUES_DIR: "/queues",
+  SERVING_FACTS_PATH: "/facts/serving-facts.json",
   CONTROL_REQUESTS_DIR: "/control/requests",
   CONTROL_HOST_DIR: "/control/host",
   ROUTER_TELEMETRY_DIR: "/var/log/inference-router",
@@ -127,10 +114,8 @@ export const COMPOSE_ENV = {
 };
 /** The compose mounts (all ro except the per-twin drop-box). */
 export const composeMounts = (fx: Fx) => [
-  `${fx.records}:/records:ro`,
-  `${fx.records2}:/records2:ro`,
   `${fx.llamaConfig}:/llama-config.yaml:ro`,
-  `${fx.queues}:/queues:ro`,
+  `${fx.facts}:/facts:ro`,
   `${fx.host}:/control/host:ro`,
   `${fx.router}:/var/log/inference-router:ro`,
   `${fx.sidecar}:/var/log/codex-sidecar:ro`,
@@ -139,17 +124,8 @@ export const composeMounts = (fx: Fx) => [
 /** Full compose env + mounts, each twin with its own drop-box. */
 export const composeSpec = (fx: Fx) => async (): Promise<AppSpec> => ({ env: COMPOSE_ENV, mounts: composeMounts(fx), requestsDir: await requestsBox() });
 /** Every optional var unset (config.ts: CONTROL_*, ROUTER_TELEMETRY_DIR, CODEX_SIDECAR_LOG_DIR, SERVING_FEED_DIR stay
- * undefined), LLAMA_CONFIG_PATH and QUEUES_DIR pointing at absent paths (502 / empty-queue states). */
-export const degradedSpec = (fx: Fx): AppSpec => ({
-  env: { PORT: "4810", APP_DB_PATH: "/data/bench.db", RECORDS_DIR: "/records", LLAMA_CONFIG_PATH: "/absent/config.yaml", QUEUES_DIR: "/absent/queues" },
-  mounts: [`${fx.records}:/records:ro`],
+ * undefined), LLAMA_CONFIG_PATH and SERVING_FACTS_PATH pointing at absent paths (the 502 and facts-`absent` states). */
+export const degradedSpec = (): AppSpec => ({
+  env: { PORT: "4810", LLAMA_CONFIG_PATH: "/absent/config.yaml", SERVING_FACTS_PATH: "/absent/serving-facts.json" },
+  mounts: [],
 });
-
-/** Seeds one instance through its own ingest CLI (the operator command, Decision 3/6). */
-export async function seedOne(target: Instance) {
-  const result = await execIngest(target);
-  check(`seed ${target.name}: ingest exit 0`, result.code === 0, `${result.code}: ${result.err.slice(0, 300)}`);
-}
-export const seedPair = async (pair: Pair) => {
-  for (const target of pair) await seedOne(target);
-};

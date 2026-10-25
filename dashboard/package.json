@@ -10,7 +10,6 @@
     "dev": "cargo run -p bench-dashboard-server --bin inference-dashboard & bun run --filter '@bench-dashboard/web' dev",
     "dev:web": "bun run --filter '@bench-dashboard/web' dev",
     "build": "bun run --filter '@bench-dashboard/web' build",
-    "ingest": "cargo run -q --locked -p bench-dashboard-server --bin inference-dashboard -- ingest",
     "harness": "bun harness/run.ts",
     "test": "bun run test:web",
     "test:web": "bun test apps/web/src apps/web/build.test.ts",

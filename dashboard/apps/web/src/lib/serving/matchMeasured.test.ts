@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ExperimentSummary, ServingAlias } from "@bench-dashboard/shared";
+import type { ServingAlias, ServingMeasuredEntry } from "@bench-dashboard/shared";
 import { matchServingToMeasured } from "./matchMeasured.ts";
 
 function servingAlias(overrides: Partial<ServingAlias>): ServingAlias {
@@ -23,30 +23,13 @@ function servingAlias(overrides: Partial<ServingAlias>): ServingAlias {
   };
 }
 
-function experiment(overrides: Partial<ExperimentSummary>): ExperimentSummary {
-  return {
-    id: "exp-1",
-    schemaVersion: 2,
-    description: null,
-    timestamp: "2026-08-23T00:00:00Z",
-    lineage: { hfRepo: null, hfRevision: null, filename: null, fileSize: null, sha256: null, llamaCppBuild: null },
-    sweepCell: null,
-    hasWilsonSummary: false,
-    samplingArm: null,
-    battery: null,
-    vramProfile: null,
-    trialCount: 0,
-    metricCount: 0,
-    ...overrides,
-  };
+function entry(alias: string, experimentId = "exp-1"): ServingMeasuredEntry {
+  return { alias, experimentId };
 }
 
 describe("matchServingToMeasured", () => {
-  test("matches an alias to the experiment whose sweepCell.alias it contains", () => {
-    const exp = experiment({
-      id: "exp-1",
-      sweepCell: { cellId: "cell-1", alias: "fixture-alias-f16-c8192", serverFlags: {}, command: null },
-    });
+  test("matches an alias to the measured entry whose alias it contains", () => {
+    const exp = entry("fixture-alias-f16-c8192");
     const rows = matchServingToMeasured([servingAlias({ aliases: ["fixture-alias-f16-c8192"] })], [exp]);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.measured).toBe(exp);
@@ -57,17 +40,16 @@ describe("matchServingToMeasured", () => {
     expect(rows[0]?.measured).toBeNull();
   });
 
-  test("an experiment with no sweepCell (non-sweep full-CLI record) never matches", () => {
-    const exp = experiment({ sweepCell: null });
-    const rows = matchServingToMeasured([servingAlias({ aliases: ["anything"] })], [exp]);
+  test("an entry for a different alias never matches", () => {
+    const rows = matchServingToMeasured([servingAlias({ aliases: ["anything"] })], [entry("other")]);
     expect(rows[0]?.measured).toBeNull();
   });
 
   test("with two experiments sharing an alias, the first (newest-first order) wins", () => {
-    const newer = experiment({ id: "newer", sweepCell: { cellId: "c2", alias: "shared", serverFlags: {}, command: null } });
-    const older = experiment({ id: "older", sweepCell: { cellId: "c1", alias: "shared", serverFlags: {}, command: null } });
+    const newer = entry("shared", "newer");
+    const older = entry("shared", "older");
     const rows = matchServingToMeasured([servingAlias({ aliases: ["shared"] })], [newer, older]);
-    expect(rows[0]?.measured?.id).toBe("newer");
+    expect(rows[0]?.measured?.experimentId).toBe("newer");
   });
 
   test("preserves alias list order and length", () => {

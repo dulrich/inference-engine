@@ -600,7 +600,7 @@ mod tests {
         .unwrap();
         assert_eq!(out["reason"], Value::Null);
         assert_eq!(
-            codes(parse(&HEALTH_RESPONSE, &json!({"experimentCount": 1}))),
+            codes(parse(&HEALTH_RESPONSE, &json!({"status": "degraded"}))),
             vec![("invalid_literal", json!(["status"]))]
         );
         let bad = parse(

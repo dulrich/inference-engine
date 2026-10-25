@@ -1,86 +1,13 @@
-// File-plane phases: ingest (through the command seam), control (drop-box POSTs + host status
-// reads), feeds (router telemetry / sidecar / serving live residency over clock-relative jsonl).
+// File-plane phases: control (serving drop-box POSTs + the serving host status read), feeds (router telemetry / sidecar / serving live residency over clock-relative jsonl).
 import { chmod, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { contentOf, dumpOf, ISO_8601, normalizeResponse } from "./dump.ts";
-import { COMPOSE_ENV, composeMounts, composeSpec, FIXTURE_ROOT, FRESH, requestsBox, STALE, TODAY, writeHostFiles, type Fx } from "./fixtures.ts";
-import { both, check, checkEqual, contentType, diff, execIngest, request, routeIncluded, skip, startPair, stopPair, work, type Json, type Pair } from "./lib.ts";
-
-// ---- ingest ------------------------------------------------------------------------------
-const INVALID_PREFIX = "[ingest] invalid: ";
-/**
- * The comparable form of one ingest run: exit code, stdout (the final JSON summary line, ingest/
- * cli.ts), and the `[ingest] invalid: <dir> (<reason>)` stderr lines. A reason that is a JSON parse
- * failure (`config.json: ${error.message}`, ingest/record.ts:250 and :374) carries the engine's
- * JSON.parse text, so only its `config.json: ` prefix is compared; every other reason is exact.
- * Non-zero exits compare by code only (Bun prints an uncaught-error trace; the message is pinned
- * separately).
- */
-function ingestShape(result: { code: number; out: string; err: string }) {
-  if (result.code !== 0) return { code: result.code === 0 ? 0 : "nonzero" };
-  const invalid = result.err.split("\n").filter((l) => l.startsWith(INVALID_PREFIX)).map((l) => {
-    const m = /^(\[ingest\] invalid: \S+) \((.*)\)$/.exec(l);
-    if (!m) return l;
-    const parseError = m[2]!.startsWith("config.json: ") && !m[2]!.startsWith("config.json: wilson_summary");
-    return `${m[1]} (${parseError ? "config.json: <JSON.parse message>" : m[2]})`;
-  });
-  return { code: 0, stdout: result.out.split("\n"), invalid };
-}
-
-export async function ingestPhase(fx: Fx) {
-  const pair = await startPair("ingest", composeSpec(fx));
-  try {
-    const step = async (label: string, args: string[]) => {
-      const [s, r] = [await execIngest(pair[0], args), await execIngest(pair[1], args)];
-      const [ss, rs] = [ingestShape(s), ingestShape(r)];
-      const d = diff(ss, rs);
-      check(`ingest ${label}: exit, stdout and invalid lines match reference`, d === null, d ?? "");
-      let summary: Json = null;
-      try {
-        summary = s.code === 0 ? JSON.parse(s.out.split("\n").at(-1) ?? "") : null;
-      } catch {
-        summary = null;
-      }
-      const [ds, dr] = [await dumpOf(pair[0].dataDir), await dumpOf(pair[1].dataDir)];
-      checkEqual(`ingest ${label}: subject dump equals reference`, ds, dr);
-      return { s, summary, dump: ds };
-    };
-    const first = await step("fresh", []);
-    const sum = first.summary;
-    check("fresh: one stdout line, the JSON summary", first.s.out.split("\n").length === 1 && sum !== null, first.s.out.slice(0, 300));
-    check("fresh: summary counts", sum?.scanned > 0 && sum?.ingested > 0 && sum?.skippedV1 >= 1 && sum?.skippedInvalid === 2 && sum?.legacyTimingIngested >= 1 && sum?.rebuilt === false, JSON.stringify(sum));
-    const invalidLines = first.s.err.split("\n").filter((l) => l.startsWith(INVALID_PREFIX));
-    check("fresh: invalid lines for invalid-json + invalid-array", invalidLines.length === 2 && invalidLines.some((l) => l.startsWith(`${INVALID_PREFIX}/records/invalid-json (config.json: `))
-      && invalidLines.includes(`${INVALID_PREFIX}/records/invalid-array (config.json is not a JSON object)`), invalidLines.join(" | "));
-    const health = await request(pair[0], "GET", "/health");
-    check("fresh: /health experimentCount = ingested + legacyTimingIngested", health.json?.experimentCount === sum?.ingested + sum?.legacyTimingIngested, health.text);
-    check("fresh: v1-timing provenance written", (first.dump.tables.experiments ?? []).some((row) => row.schema_origin === "v1-timing"), "");
-    const again = await step("re-run", []);
-    checkEqual("re-run: same summary", again.summary, sum);
-    checkEqual("re-run: idempotent content", contentOf(again.dump), contentOf(first.dump));
-    const rebuilt = await step("--rebuild", ["--rebuild"]);
-    checkEqual("--rebuild: summary with rebuilt true", rebuilt.summary, { ...sum, rebuilt: true });
-    checkEqual("--rebuild: same content", contentOf(rebuilt.dump), contentOf(first.dump));
-    const dir = await step("--dir /records2", ["--dir", "/records2"]);
-    // records-two-level: batch-run/cell-{a,b} + flat-record (v1 configs), neither-dir + nested-too-deep invalid.
-    checkEqual("--dir: two-level batch layout scanned", dir.summary, { scanned: 5, ingested: 0, skippedV1: 3, skippedInvalid: 2, legacyTimingIngested: 0, rebuilt: false });
-    const eq = await step("--dir=/records2", ["--dir=/records2"]);
-    checkEqual("--dir=: same summary as --dir", eq.summary, dir.summary);
-    checkEqual("--dir=: same content as --dir", contentOf(eq.dump), contentOf(dir.dump));
-    const both2 = await step("--rebuild --dir=/records2", ["--rebuild", "--dir=/records2"]);
-    check("--rebuild --dir: only the two-level set remains", (both2.dump.tables.experiments ?? []).length === both2.summary?.ingested + both2.summary?.legacyTimingIngested, JSON.stringify(both2.summary));
-    for (const [args, message] of [[["--bogus"], "unknown argument: --bogus"], [["--dir"], "--dir requires a value"], [["--rebuild", "-x"], "unknown argument: -x"], [["--dir", "/absent"], ""]] as const) {
-      const result = await step(`error ${args.join(" ")}`, [...args]);
-      check(`error ${args.join(" ")}: non-zero exit${message ? `, stderr names "${message}"` : ""}`, result.s.code !== 0 && result.s.err.includes(message), `${result.s.code}: ${result.s.err.slice(0, 200)}`);
-    }
-  } finally {
-    await stopPair(pair);
-  }
-}
+import { ISO_8601, normalizeResponse } from "./dump.ts";
+import { COMPOSE_ENV, composeMounts, FIXTURE_ROOT, FRESH, requestsBox, STALE, TODAY, writeHostFiles, type Fx } from "./fixtures.ts";
+import { both, check, checkEqual, contentType, diff, request, routeIncluded, skip, startPair, stopPair, work, type Json, type Pair } from "./lib.ts";
 
 // ---- control -----------------------------------------------------------------------------
-/** shared/src/control.ts CONTROL_REQUEST_ID_PATTERN, shared/src/servingRequest.ts SERVING_REQUEST_ID_PATTERN. */
-const ID_PATTERN = { req: /^req-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$/, srv: /^srv-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$/ };
+/** shared/src/servingRequest.ts SERVING_REQUEST_ID_PATTERN. */
+const SRV_ID = /^srv-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$/;
 
 /**
  * One POST against each twin. Response: `requestId` compared by grammar (clock + randomUUID,
@@ -106,7 +33,6 @@ async function post(pair: Pair, name: string, path: string, body: unknown, expec
     skip(name, `${path} outside --routes`);
     return;
   }
-  const kind = path === "/api/serving/visibility" ? "srv" : "req";
   const views: unknown[] = [];
   for (const twin of pair) {
     const box = twin.requestsDir!;
@@ -120,7 +46,7 @@ async function post(pair: Pair, name: string, path: string, body: unknown, expec
       const text = await readFile(join(box, fresh[0]), "utf8");
       const parsed = JSON.parse(text);
       const at = parsed.requested_at;
-      const shapeOk = ID_PATTERN[kind].test(id) && parsed.request_id === id && typeof at === "string" && ISO_8601.test(at);
+      const shapeOk = SRV_ID.test(id) && parsed.request_id === id && typeof at === "string" && ISO_8601.test(at);
       file = { shapeOk, bytes: text.replace(JSON.stringify(id), '"<request_id>"').replace(JSON.stringify(at), '"<requested_at>"') };
       if (twin === pair[0]) checkEqual(`${name}: request file body`, { ...parsed, request_id: "<id>", requested_at: "<at>" }, { ...expected, request_id: "<id>", requested_at: "<at>" });
     }
@@ -129,7 +55,7 @@ async function post(pair: Pair, name: string, path: string, body: unknown, expec
       views.push({ status: reply.status, type: contentType(reply), body: { error: BAD_REQUEST_ERROR }, file });
       continue;
     }
-    views.push({ status: reply.status, type: contentType(reply), body: normalizeResponse({ ...json, ...(typeof id === "string" ? { requestId: ID_PATTERN[kind].test(id) ? "<id>" : `bad:${id}` } : {}) }), file });
+    views.push({ status: reply.status, type: contentType(reply), body: normalizeResponse({ ...json, ...(typeof id === "string" ? { requestId: SRV_ID.test(id) ? "<id>" : `bad:${id}` } : {}) }), file });
   }
   const d = diff(views[0], views[1]);
   check(`${name} [POST ${path}] response + drop-box match reference`, d === null, d ?? "");
@@ -149,22 +75,6 @@ export async function controlPhase(fx: Fx) {
     requestsDir: await requestsBox(),
   }));
   try {
-    const schema = { schema: "control-request-v1" };
-    for (const action of ["arm", "disarm", "stop"]) await post(pair, `control ${action}`, `/api/control/${action}`, undefined, { ...schema, action });
-    for (const [label, body, minutes] of [["valid", { queueStem: "contract-queue", minutes: 60 }, 60], ["min 15", { queueStem: "a", minutes: 15 }, 15], ["max 480", { queueStem: "q-1", minutes: 480 }, 480], ["extra key stripped", { queueStem: "contract-queue", minutes: 90, extra: true }, 90]] as const) {
-      await post(pair, `control start ${label}`, "/api/control/start", body, { ...schema, action: "start", queue_stem: body.queueStem, minutes });
-    }
-    // Third element: the domain-authored messages each input triggers (shared/src/control.ts).
-    const stemMessage = "queueStem must match ^[a-z0-9][a-z0-9-]*$";
-    for (const [label, body, custom] of [["minutes 14", { queueStem: "q", minutes: 14 }, []], ["minutes 481", { queueStem: "q", minutes: 481 }, []], ["minutes 60.5", { queueStem: "q", minutes: 60.5 }, []], ["minutes string", { queueStem: "q", minutes: "60" }, []], ["stem upper", { queueStem: "Bad_Stem", minutes: 60 }, [stemMessage]], ["stem leading dash", { queueStem: "-q", minutes: 60 }, [stemMessage]], ["missing body", {}, []], ["non-JSON body", "not json", []], ["both invalid", { queueStem: "", minutes: 0 }, [stemMessage]]] as const) {
-      await post(pair, `control start ${label}`, "/api/control/start", body, null, custom);
-    }
-    const target = "req-20260827T120000Z-00000000000000a1";
-    await post(pair, "control cancel valid", "/api/control/cancel", { targetRequestId: target }, { ...schema, action: "cancel", target_request_id: target });
-    const targetMessage = "targetRequestId must match the request-id grammar";
-    for (const [label, body, custom] of [["nightly target", { targetRequestId: "nightly-20260827" }, [targetMessage]], ["uppercase hex", { targetRequestId: "req-20260827T120000Z-00000000000000A1" }, [targetMessage]], ["missing", {}, []]] as const) {
-      await post(pair, `control cancel ${label}`, "/api/control/cancel", body, null, custom);
-    }
     const srv = { schema: "serving-request-v1", action: "set-visibility" };
     for (const [label, consumers] of [["both consumers", ["cc", "openwebui"]], ["none", []], ["reverse order kept", ["openwebui", "cc"]]] as const) {
       await post(pair, `serving visibility ${label}`, "/api/serving/visibility", { modelKey: "Qwen3.6-35B-A3B-UD-Q4_K_XL", consumers }, { ...srv, model_key: "Qwen3.6-35B-A3B-UD-Q4_K_XL", consumers });
@@ -175,37 +85,23 @@ export async function controlPhase(fx: Fx) {
       await post(pair, `serving visibility ${label}`, "/api/serving/visibility", body, null, custom);
     }
 
-    // Host status reads: GET /api/serving/status (routes/servingControl.ts readServingStatus) and
-    // the queue control section (routes/queue.ts buildControlSection), mutated host-side per step.
-    const states: [string, () => Promise<void>, Json, (control: Json) => boolean][] = [
-      ["fresh", () => writeHostFiles(host, FRESH), "available", (c) => c?.stale === false && c?.armed === true],
-      ["stale", () => writeHostFiles(host, STALE), { available: false, reason: "stale" }, (c) => c?.stale === true],
-      ["unparseable generated_at", () => writeHostFiles(host, "not a date"), { available: false, reason: "unreadable" }, (c) => c?.stale === true],
-      ["empty", async () => {
-        await writeFile(join(host, "serving-status.json"), " \n");
-        await writeFile(join(host, "status.json"), "");
-      }, { available: false, reason: "empty" }, (c) => c === null],
-      ["malformed JSON", async () => {
-        await writeFile(join(host, "serving-status.json"), "{");
-        await writeFile(join(host, "status.json"), await readFile(join(FIXTURE_ROOT, "control/malformed-json/status.json")));
-      }, { available: false, reason: "unreadable" }, (c) => c === null],
-      ["schema-invalid", async () => {
-        await writeFile(join(host, "serving-status.json"), JSON.stringify({ schema: "serving-status-v0", generated_at: FRESH }));
-        await writeFile(join(host, "status.json"), await readFile(join(FIXTURE_ROOT, "control/schema-invalid/status.json")));
-      }, { available: false, reason: "unreadable" }, (c) => c === null],
-      ["files missing", async () => {
-        await rm(join(host, "serving-status.json"));
-        await rm(join(host, "status.json"));
-      }, { available: false, reason: "unreadable" }, (c) => c === null],
-      ["host dir missing", () => rm(host, { recursive: true, force: true }), { available: false, reason: "unreadable" }, (c) => c === null],
+    // Host status read: GET /api/serving/status (routes/servingControl.ts readServingStatus),
+    // mutated host-side per step.
+    const states: [string, () => Promise<void>, Json][] = [
+      ["fresh", () => writeHostFiles(host, FRESH), "available"],
+      ["stale", () => writeHostFiles(host, STALE), { available: false, reason: "stale" }],
+      ["unparseable generated_at", () => writeHostFiles(host, "not a date"), { available: false, reason: "unreadable" }],
+      ["empty", () => writeFile(join(host, "serving-status.json"), " \n"), { available: false, reason: "empty" }],
+      ["malformed JSON", () => writeFile(join(host, "serving-status.json"), "{"), { available: false, reason: "unreadable" }],
+      ["schema-invalid", () => writeFile(join(host, "serving-status.json"), JSON.stringify({ schema: "serving-status-v0", generated_at: FRESH })), { available: false, reason: "unreadable" }],
+      ["file missing", () => rm(join(host, "serving-status.json")), { available: false, reason: "unreadable" }],
+      ["host dir missing", () => rm(host, { recursive: true, force: true }), { available: false, reason: "unreadable" }],
     ];
-    for (const [label, apply, servingExpect, controlOk] of states) {
+    for (const [label, apply, servingExpect] of states) {
       await apply();
       if (label !== "host dir missing") await chmod(host, 0o755);
       const status = await both(pair, `host ${label}: serving status`, "GET", "/api/serving/status");
       if (status) check(`host ${label}: serving status verdict`, servingExpect === "available" ? status.json?.available === true && status.json?.schema === "serving-status-v1" : diff(status.json, servingExpect) === null, status.text.slice(0, 200));
-      const queue = await both(pair, `host ${label}: queue control`, "GET", "/api/queue");
-      if (queue) check(`host ${label}: queue control section`, controlOk(queue.json?.control), JSON.stringify(queue.json?.control).slice(0, 200));
     }
   } finally {
     await stopPair(pair);

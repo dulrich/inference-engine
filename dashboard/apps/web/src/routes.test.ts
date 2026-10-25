@@ -1,51 +1,28 @@
 import { describe, expect, test } from "bun:test";
-import { guardedNavClick, NAV_GROUPS, parsePath, runDetailPath, tabArea, tabToPath } from "./routes.ts";
+import { guardedNavClick, NAV_GROUPS, parsePath, tabArea, tabToPath } from "./routes.ts";
 
-describe("tabToPath / runDetailPath", () => {
-  test("every tab maps to its own path -- Serving owns \"/\" (WP-2 default landing route)", () => {
-    expect(tabToPath("runs")).toBe("/runs");
-    expect(tabToPath("ladders")).toBe("/ladders");
-    expect(tabToPath("longcontext")).toBe("/longcontext");
-    expect(tabToPath("fit")).toBe("/fit");
+describe("tabToPath", () => {
+  test("every tab maps to its own path -- Serving owns \"/\"", () => {
     expect(tabToPath("serving")).toBe("/");
-    expect(tabToPath("queue")).toBe("/queue");
     expect(tabToPath("router")).toBe("/router");
-  });
-
-  test("runDetailPath encodes the experiment id", () => {
-    expect(runDetailPath("wp1-smoke-cell-ling-q4km")).toBe("/runs/wp1-smoke-cell-ling-q4km");
   });
 });
 
 describe("parsePath", () => {
-  test("resolves each tab's bare path -- \"/\" resolves to Serving (WP-2 default landing route)", () => {
+  test("resolves each tab's bare path", () => {
     expect(parsePath("/")).toEqual({ tab: "serving", matched: true });
-    expect(parsePath("/runs")).toEqual({ tab: "runs", matched: true });
-    expect(parsePath("/ladders")).toEqual({ tab: "ladders", matched: true });
-    expect(parsePath("/longcontext")).toEqual({ tab: "longcontext", matched: true });
-    expect(parsePath("/fit")).toEqual({ tab: "fit", matched: true });
-    expect(parsePath("/queue")).toEqual({ tab: "queue", matched: true });
     expect(parsePath("/router")).toEqual({ tab: "router", matched: true });
   });
 
-  test("the pre-WP-2 \"/serving\" path is no longer a tab path (Serving moved to \"/\") -- unmatched, normalizes to Serving anyway via the shared fallback", () => {
-    expect(parsePath("/serving")).toEqual({ tab: "serving", matched: false });
+  test("the research paths moved to the research dashboard -- unmatched, normalizing to Serving", () => {
+    for (const p of ["/runs", "/runs/fixture-v2-full", "/ladders", "/longcontext", "/fit", "/queue"]) {
+      expect(parsePath(p)).toEqual({ tab: "serving", matched: false });
+    }
   });
 
-  test("resolves a run detail path", () => {
-    expect(parsePath("/runs/fixture-v2-full")).toEqual({ tab: "runs", runId: "fixture-v2-full", matched: true });
-  });
-
-  test("decodes an encoded run id", () => {
-    expect(parsePath("/runs/a%2Fb")).toEqual({ tab: "runs", runId: "a/b", matched: true });
-  });
-
-  test("an unrecognized path is unmatched, defaulting to serving (WP-2 default landing route)", () => {
+  test("an unrecognized path is unmatched, defaulting to serving", () => {
     expect(parsePath("/nonsense")).toEqual({ tab: "serving", matched: false });
-  });
-
-  test("/runs/ with no id is unmatched, defaulting to serving", () => {
-    expect(parsePath("/runs/")).toEqual({ tab: "serving", matched: false });
+    expect(parsePath("/serving")).toEqual({ tab: "serving", matched: false });
   });
 });
 
@@ -98,19 +75,10 @@ describe("guardedNavClick", () => {
   });
 });
 
-describe("nav areas (serving-control-redesign WP-7)", () => {
-  test("three labelled areas: Serving, Router, Research", () => {
-    expect(NAV_GROUPS.map((g) => g.label)).toEqual(["Serving", "Router", "Research"]);
-    expect(NAV_GROUPS[2]?.tabs.map((t) => t.tab)).toEqual(["runs", "ladders", "longcontext", "fit", "queue"]);
-  });
-
-  test("every tab is in exactly one area and the default route stays Serving", () => {
-    const all = NAV_GROUPS.flatMap((g) => g.tabs.map((t) => t.tab));
-    expect([...all].sort()).toEqual(["fit", "ladders", "longcontext", "queue", "router", "runs", "serving"]);
+describe("nav areas", () => {
+  test("two labelled areas: Serving, Router", () => {
+    expect(NAV_GROUPS.map((g) => g.label)).toEqual(["Serving", "Router"]);
     expect(tabArea("serving")).toBe("serving");
     expect(tabArea("router")).toBe("router");
-    for (const tab of ["runs", "ladders", "longcontext", "fit", "queue"] as const) expect(tabArea(tab)).toBe("research");
-    expect(parsePath("/").tab).toBe("serving");
-    expect(parsePath("/queue").tab).toBe("queue");
   });
 });

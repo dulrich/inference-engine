@@ -2,7 +2,7 @@
 //! fixtures, `currentFile` across UTC midnight, `routerStatus.test.ts` `parseStaleMsQuery`,
 //! and the `summariseLegs` tie/null/even-median cases.
 use super::*;
-use crate::record::tests::{fixtures, TempDir};
+use crate::test_support::{fixtures, TempDir};
 use serde_json::json;
 
 const WINDOW: u64 = 1024 * 1024;

@@ -11,10 +11,6 @@ pub use schema::*;
 
 /// Every schema, in dependency order (each `Ref` target precedes its first user).
 pub const EXPORTS: &[&Export] = &[
-    // capture.ts
-    &CAPTURE_SERVING,
-    &CAPTURE_RECORD,
-    &CAPTURE_ENVELOPE,
     // control.ts
     &CONTROL_REQUEST_STATE,
     &CONTROL_LAST_RUN_DISPOSITION,
@@ -27,33 +23,8 @@ pub const EXPORTS: &[&Export] = &[
     &CONTROL_CANCEL_REQUEST,
     &CONTROL_REQUEST_FILE,
     &CONTROL_ACCEPTED_RESPONSE,
-    // curve.ts
-    &CURVE_SERIES_POINT,
-    &CURVE_SERIES,
-    // trial.ts, metric.ts (before experiment.ts: `ExperimentFullDetail` uses both)
-    &TRIAL_ROW,
-    &METRIC_ROW,
-    // experiment.ts
-    &LINEAGE,
-    &SWEEP_CELL,
-    &WILSON_SUMMARY,
-    &EXPERIMENT_SUMMARY,
-    &EXPERIMENT_DETAIL,
-    &EXPERIMENT_FULL_DETAIL,
-    // health.ts, ingestSummary.ts, ladder.ts
+    // health.ts
     &HEALTH_RESPONSE,
-    &INGEST_SUMMARY,
-    &LADDER_ROW,
-    // queue.ts
-    &CELL_STATE,
-    &QUEUE_STATE,
-    &QUEUE_CELL_COUNTS,
-    &QUEUE_CELL,
-    &QUEUE_ETA,
-    &QUEUE_ENTRY,
-    &QUEUE_ERROR_ENTRY,
-    &QUEUE_LIST_ITEM,
-    &QUEUE_LIST_RESPONSE,
     // routerStatus.ts
     &ROUTER_UNAVAILABLE_REASON,
     &ROUTER_UNAVAILABLE,
@@ -76,6 +47,11 @@ pub const EXPORTS: &[&Export] = &[
     &SERVING_ALIAS,
     &SERVING_RESPONSE,
     &SERVING_TIMING_ROW,
+    // servingFacts.ts
+    &SERVING_MEASURED_ENTRY,
+    &SERVING_FACTS_FILE,
+    &SERVING_FACTS_UNAVAILABLE_REASON,
+    &SERVING_FACTS_STATUS_RESPONSE,
     // servingLive.ts
     &SERVING_LIVE_TIER,
     &SERVING_LIVE_EVENT_KIND,
@@ -181,6 +157,10 @@ pub const CONSTS: &[Const] = &[
     Const {
         name: "SERVING_VISIBILITY_SCHEMA_V1",
         value: ConstValue::Str(SERVING_VISIBILITY_SCHEMA_V1),
+    },
+    Const {
+        name: "SERVING_FACTS_SCHEMA_V1",
+        value: ConstValue::Str(SERVING_FACTS_SCHEMA_V1),
     },
     Const {
         name: "SERVING_STATUS_STALE_MS",

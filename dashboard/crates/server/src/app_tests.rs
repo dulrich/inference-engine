@@ -2,9 +2,9 @@
 //! intent); the black-box harness is the parity oracle.
 use super::*;
 use crate::config::Config;
-use crate::db::Db;
 use crate::http::AppState;
-use crate::record::tests::{fixtures, TempDir};
+use crate::serving_facts::sha256_hex;
+use crate::test_support::{fixtures, TempDir};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use std::sync::Arc;
@@ -38,16 +38,18 @@ fn j(body: &str) -> Value {
     serde_json::from_str(body).unwrap_or_else(|e| panic!("{e}: {body}"))
 }
 
-fn app(t: &TempDir, llama: &str) -> Router {
+fn app_with(t: &TempDir, llama: &str, facts: Option<String>) -> Router {
     let mut cfg = Config::from_lookup(&|_| None);
-    cfg.db_path = format!("{}/bench.db", t.0);
     cfg.web_dir = format!("{}/web", t.0);
     cfg.llama_config_path = llama.to_string();
+    cfg.serving_facts_path = facts;
     t.write("web/index.html", "<html>spa</html>");
     t.write("web/assets/app-1234.js", "js");
-    let db = Db::open(&cfg.db_path).unwrap();
-    crate::ingest::run_ingest(&db, &fixtures("records"), false, |_, _| {}).unwrap();
-    router(Arc::new(AppState { cfg, db }))
+    router(Arc::new(AppState { cfg }))
+}
+
+fn app(t: &TempDir, llama: &str) -> Router {
+    app_with(t, llama, None)
 }
 
 #[tokio::test]
@@ -57,70 +59,31 @@ async fn routes_and_errors() {
     let (s, ty, _, b) = call(&app, "GET", "/health").await;
     assert_eq!(
         (s, ty.as_str(), b.as_str()),
-        (
-            200,
-            "application/json",
-            r#"{"status":"ok","experimentCount":2}"#
-        )
+        (200, "application/json", r#"{"status":"ok"}"#)
     );
-    let (s, _, _, b) = call(&app, "GET", "/api/experiments").await;
-    assert_eq!(s, 200);
-    assert_eq!(j(&b).as_array().unwrap().len(), 2);
-    let (s, _, _, b) = call(&app, "GET", "/api/experiments/fixture-v2-full").await;
-    assert_eq!(s, 200);
-    let d = j(&b);
-    assert!(d["trials"].is_array() && d["metrics"].is_array() && d["wilsonSummary"].is_object());
-    let (s, _, _, b) = call(&app, "GET", "/api/experiments/nope").await;
-    assert_eq!((s, b.as_str()), (404, r#"{"error":"not found"}"#));
-    let (s, _, _, b) = call(&app, "GET", "/api/curves/fixture-v2-full").await;
-    assert_eq!(s, 200);
-    let c = j(&b);
-    assert_eq!(c["experimentId"], "fixture-v2-full");
-    assert_eq!(c["points"].as_array().unwrap().len(), 2);
-    assert_eq!(c["points"][0]["sided"], "two");
-    let (_, _, _, b) = call(&app, "GET", "/api/curves/nope").await;
-    assert_eq!(b, r#"{"experimentId":"nope","points":[]}"#);
-    let (s, _, _, b) = call(&app, "GET", "/api/ladders/").await;
-    assert_eq!((s, b.as_str()), (400, r#"{"error":"hfRepo is required"}"#));
-    let (s, _, _, b) = call(&app, "GET", "/api/ladders").await;
-    assert_eq!((s, b.as_str()), (200, "[]"));
-    let (s, _, _, b) = call(&app, "GET", "/api/ladders/example-org%2FExample-Tiny-GGUF").await;
-    assert_eq!(s, 200);
-    assert_eq!(j(&b).as_array().unwrap().len(), 1);
-    let (s, _, _, b) = call(&app, "GET", "/api/ladders/example-org/Example-Tiny-GGUF").await;
-    assert_eq!((s, j(&b).as_array().unwrap().len()), (200, 1));
-    let (s, ty, _, _) = call(&app, "GET", "/api/ladders/%E0%A4%A").await;
-    assert_eq!((s, ty.as_str()), (500, "text/plain; charset=UTF-8"));
-    let (s, _, _, b) = call(&app, "GET", "/api/serving/timing").await;
-    assert_eq!(s, 200, "{b}");
-    assert!(j(&b).is_array());
-    let (s, _, _, b) = call(
-        &app,
-        "GET",
-        "/api/export/scoreboard-capture?id=fixture-v2-smoke-cell&id=fixture-v2-full&id=nope",
-    )
-    .await;
-    assert_eq!(s, 200);
-    let e = j(&b);
-    assert_eq!(
-        (
-            e["captureVersion"].clone(),
-            e["stability"].clone(),
-            e["recordCount"].clone()
-        ),
-        (1.into(), "v1".into(), 2.into())
-    );
-    assert_eq!(e["records"][0]["experimentId"], "fixture-v2-smoke-cell");
     // WP-6: live residency is disabled (typed 200) without SERVING_FEED_DIR; slots retired.
     let (s, _, _, b) = call(&app, "GET", "/api/serving/live").await;
     assert_eq!(
         (s, b.as_str()),
         (200, r#"{"available":false,"reason":"disabled"}"#)
     );
+    // The research half moved to eval-harness: its routes are the JSON 404 here.
     for (m, p) in [
         ("GET", "/api/router/slots"),
         ("GET", "/api/nope"),
         ("GET", "/api"),
+        ("GET", "/api/experiments"),
+        ("GET", "/api/experiments/fixture-v2-full"),
+        ("GET", "/api/ladders"),
+        ("GET", "/api/ladders/example-org/Example-Tiny-GGUF"),
+        ("GET", "/api/curves/fixture-v2-full"),
+        ("GET", "/api/queue"),
+        ("GET", "/api/export/scoreboard-capture"),
+        ("POST", "/api/control/arm"),
+        ("POST", "/api/control/disarm"),
+        ("POST", "/api/control/stop"),
+        ("POST", "/api/control/start"),
+        ("POST", "/api/control/cancel"),
         ("POST", "/api/experiments"),
         ("DELETE", "/api/queue/x"),
     ] {
@@ -133,18 +96,95 @@ async fn routes_and_errors() {
     }
 }
 
+const FACTS_CONFIG: &str = "models: {}\n";
+
+fn facts_body(revision: &str) -> String {
+    serde_json::json!({
+        "schema": "serving-facts-v1",
+        "generatedAt": "2026-10-25T12:00:00Z",
+        "servingConfigRevision": revision,
+        "timing": [{
+            "modelKey": "m", "aliases": ["m-a"], "p50PrefillTokS": 1.5, "p90PrefillTokS": null,
+            "p50DecodeTokS": null, "p90DecodeTokS": null, "samplingArm": null,
+            "sampleCount": 1, "mtp": true
+        }],
+        "measured": [{"alias": "m-a", "experimentId": "exp-1"}]
+    })
+    .to_string()
+}
+
+async fn facts_routes(app: &Router) -> (String, String, Value) {
+    let mut out = Vec::new();
+    for p in [
+        "/api/serving/timing",
+        "/api/serving/measured",
+        "/api/serving/facts-status",
+    ] {
+        let (s, ty, _, b) = call(app, "GET", p).await;
+        assert_eq!((s, ty.as_str()), (200, "application/json"), "{p}: {b}");
+        out.push(b);
+    }
+    let status = j(&out[2]);
+    (out.remove(0), out.remove(0), status)
+}
+
+#[tokio::test]
+async fn facts_states_for_timing_and_measured() {
+    let t = TempDir::new("facts-app");
+    t.write("config.yaml", FACTS_CONFIG);
+    let llama = format!("{}/config.yaml", t.0);
+    let facts = format!("{}/facts.json", t.0);
+    // disabled
+    let (timing, measured, status) = facts_routes(&app(&t, &llama)).await;
+    assert_eq!((timing.as_str(), measured.as_str()), ("[]", "[]"));
+    assert_eq!(
+        status,
+        serde_json::json!({"available": false, "reason": "disabled"})
+    );
+    let with_facts = || app_with(&t, &llama, Some(facts.clone()));
+    // absent
+    let (timing, measured, status) = facts_routes(&with_facts()).await;
+    assert_eq!((timing.as_str(), measured.as_str()), ("[]", "[]"));
+    assert_eq!(status["reason"], "absent");
+    // present
+    t.write(
+        "facts.json",
+        &facts_body(&sha256_hex(FACTS_CONFIG.as_bytes())),
+    );
+    let (timing, measured, status) = facts_routes(&with_facts()).await;
+    assert_eq!(j(&timing)[0]["modelKey"], "m");
+    assert_eq!(j(&timing)[0]["mtp"], true);
+    assert_eq!(measured, r#"[{"alias":"m-a","experimentId":"exp-1"}]"#);
+    assert_eq!(
+        status,
+        serde_json::json!({
+            "available": true,
+            "generatedAt": "2026-10-25T12:00:00Z",
+            "servingConfigRevision": sha256_hex(FACTS_CONFIG.as_bytes()),
+        })
+    );
+    // invalid
+    t.write("facts.json", r#"{"schema":"serving-facts-v1"}"#);
+    let (timing, measured, status) = facts_routes(&with_facts()).await;
+    assert_eq!((timing.as_str(), measured.as_str()), ("[]", "[]"));
+    assert_eq!(status["reason"], "invalid");
+    // stale-config
+    t.write("facts.json", &facts_body(&sha256_hex(b"an older config")));
+    let (timing, measured, status) = facts_routes(&with_facts()).await;
+    assert_eq!((timing.as_str(), measured.as_str()), ("[]", "[]"));
+    assert_eq!(status["reason"], "stale-config");
+}
+
 #[tokio::test]
 async fn config_failures_are_502() {
     let t = TempDir::new("app502");
     let app = app(&t, "/absent/config.yaml");
-    for p in ["/api/serving/timing", "/api/export/scoreboard-capture"] {
-        let (s, _, _, b) = call(&app, "GET", p).await;
-        assert_eq!(s, 502, "{p}");
-        assert!(j(&b)["error"]
-            .as_str()
-            .unwrap()
-            .contains("/absent/config.yaml"));
-    }
+    let (s, _, _, b) = call(&app, "GET", "/api/serving").await;
+    assert_eq!(s, 502);
+    assert!(j(&b)["error"]
+        .as_str()
+        .unwrap()
+        .contains("/absent/config.yaml"));
 }
 
 #[tokio::test]

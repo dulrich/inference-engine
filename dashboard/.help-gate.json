@@ -1,6 +1,6 @@
 {
   "entrypoints": [
-    { "path": "crates/server/src/main.rs", "subcommands": ["ingest"] }
+    { "path": "crates/server/src/main.rs" }
   ],
   "exclude": [
     { "path": "packages/signalworks/", "reason": "vendored copy of fleet-tools/signalworks; canonical is gated there, never edited here" },

@@ -1,18 +1,15 @@
 //! `inference-dashboard`: the API + SPA on one port (`apps/api/src/index.ts`, the default).
 //! `inference-dashboard --healthcheck` probes `/health` by body on the configured port.
-//! `inference-dashboard ingest [--dir <path>|--dir=<path>] [--rebuild]` is
-//! `apps/api/src/ingest/cli.ts` (plan Decision 6).
 use bd_server::app::router;
 use bd_server::config::{listen_port, Config};
-use bd_server::db::Db;
 use bd_server::health;
 use bd_server::http::{AppState, Shared};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-const USAGE: &str = "usage: inference-dashboard [--healthcheck | ingest [--dir <path>|--dir=<path>] [--rebuild] | --help]\n\n  (no arguments)  serve the API + SPA on the configured port\n  --healthcheck   probe /health on the configured port; exit 0 when healthy\n  ingest          ingest bake-off records into the database\n  -h, --help      print this usage and exit 0\n";
+const USAGE: &str = "usage: inference-dashboard [--healthcheck | --help]\n\n  (no arguments)  serve the API + SPA on the configured port\n  --healthcheck   probe /health on the configured port; exit 0 when healthy\n  -h, --help      print this usage and exit 0\n";
 
-/// Help wins over everything and is answered before the config is read or the database opens.
+/// Help wins over everything and is answered before the config is read.
 fn wants_help(args: &[String]) -> bool {
     args.iter().skip(1).any(|a| a == "--help" || a == "-h")
 }
@@ -32,18 +29,6 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         };
     }
-    // `connection.ts` opens the DB at import time, before the CLI parses its arguments.
-    let db = match Db::open(&cfg.db_path) {
-        Ok(db) => db,
-        Err(e) => {
-            eprintln!("inference-dashboard: db {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    if args.get(1).map(String::as_str) == Some("ingest") {
-        let code = bd_server::ingest::cli(&db, &args[2..], &cfg.records_dir);
-        return ExitCode::from(code);
-    }
     let port = match listen_port(cfg.port) {
         Ok(p) => p,
         Err(e) => {
@@ -61,7 +46,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let state = Arc::new(AppState { cfg, db });
+    let state = Arc::new(AppState { cfg });
     match runtime.block_on(serve(state, port)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

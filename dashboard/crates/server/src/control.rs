@@ -7,7 +7,6 @@
 //! *recorded*; the host dispatcher (Python) reads the bytes, so they are `JSON.stringify`'s.
 use crate::jsrt;
 use bd_domain::contract::{
-    CONTROL_CANCEL_REQUEST, CONTROL_REQUEST_SCHEMA_V1, CONTROL_START_REQUEST,
     SERVING_CATALOG_ADD_REQUEST, SERVING_CATALOG_CONSUMERS_REQUEST, SERVING_CATALOG_REMOVE_REQUEST,
     SERVING_REQUEST_SCHEMA_V1, SERVING_REQUEST_SCHEMA_V2, SERVING_STATUS_FILE,
     SERVING_STATUS_STALE_MS, SERVING_VISIBILITY_REQUEST,
@@ -28,9 +27,6 @@ pub const SERVING_CATALOG_ACCEPTED_MESSAGE: &str =
     "Catalog change recorded; the dispatcher validates and applies it on its next pass (about a minute).";
 /// The one cross-field rule the shape cannot express (`catalog.consumers`' either/or target).
 pub const CATALOG_TARGET_MESSAGE: &str = "give provider and id, or modelKey alone";
-const STOP_MESSAGE: &str =
-    "Stop delivered to the live run; effect is pause-after-current-cell, or a no-op if the run completes first.";
-const CANCEL_MESSAGE: &str = "Cancellation is effective only before dispatch claim.";
 
 /// `yyyymmddTHHMMSSZ` of the current UTC time.
 fn utc_compact() -> String {
@@ -135,92 +131,6 @@ fn accepted(request_id: String, message: Option<&str>) -> ActionResult {
         status: 200,
         body: Value::Object(body),
     }
-}
-
-/// `recordSimpleAction`: `arm` / `disarm` / `stop`.
-pub fn record_simple_action(
-    requests_dir: Option<&str>,
-    action: &str,
-    id_factory: IdFactory,
-) -> Result<ActionResult, String> {
-    let Some(dir) = configured(requests_dir) else {
-        return Ok(unconfigured());
-    };
-    let request_id = write_exclusive(
-        dir,
-        &|id, at| {
-            json!({
-                "schema": CONTROL_REQUEST_SCHEMA_V1,
-                "request_id": id,
-                "action": action,
-                "requested_at": at,
-            })
-        },
-        id_factory,
-    )?;
-    Ok(accepted(
-        request_id,
-        (action == "stop").then_some(STOP_MESSAGE),
-    ))
-}
-
-/// `recordStartAction`: `{queueStem, minutes}`.
-pub fn record_start_action(
-    requests_dir: Option<&str>,
-    body: &Value,
-    id_factory: IdFactory,
-) -> Result<ActionResult, String> {
-    let Some(dir) = configured(requests_dir) else {
-        return Ok(unconfigured());
-    };
-    let parsed = match validate::parse(&CONTROL_START_REQUEST.node, body) {
-        Ok(v) => v,
-        Err(issues) => return Ok(bad_request(&issues)),
-    };
-    let request_id = write_exclusive(
-        dir,
-        &|id, at| {
-            json!({
-                "schema": CONTROL_REQUEST_SCHEMA_V1,
-                "request_id": id,
-                "action": "start",
-                "queue_stem": parsed["queueStem"],
-                "minutes": parsed["minutes"],
-                "requested_at": at,
-            })
-        },
-        id_factory,
-    )?;
-    Ok(accepted(request_id, None))
-}
-
-/// `recordCancelAction`: `{targetRequestId}`.
-pub fn record_cancel_action(
-    requests_dir: Option<&str>,
-    body: &Value,
-    id_factory: IdFactory,
-) -> Result<ActionResult, String> {
-    let Some(dir) = configured(requests_dir) else {
-        return Ok(unconfigured());
-    };
-    let parsed = match validate::parse(&CONTROL_CANCEL_REQUEST.node, body) {
-        Ok(v) => v,
-        Err(issues) => return Ok(bad_request(&issues)),
-    };
-    let request_id = write_exclusive(
-        dir,
-        &|id, at| {
-            json!({
-                "schema": CONTROL_REQUEST_SCHEMA_V1,
-                "request_id": id,
-                "action": "cancel",
-                "target_request_id": parsed["targetRequestId"],
-                "requested_at": at,
-            })
-        },
-        id_factory,
-    )?;
-    Ok(accepted(request_id, Some(CANCEL_MESSAGE)))
 }
 
 /// `recordServingVisibilityAction`: `{modelKey, consumers}` (the full desired array).

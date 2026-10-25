@@ -1,9 +1,9 @@
 //! `apps/api/src/config.ts`: one object computed once from the environment. `X ?? default`
 //! semantics — a set-but-empty variable is set. The optional dirs stay `None` when unset (the
 //! feature switches). Repo-relative defaults resolve from this crate's source location the way
-//! `config.ts` resolves them from `import.meta.dir` (`dashboard/apps/api/src`): `dbPath`
-//! `dashboard/data/app.db`, `webDir` `dashboard/apps/web/dist` (the image sets `APP_WEB_DIR=/web`),
-//! `recordsDir`/`llamaConfigPath` under the repo root.
+//! `config.ts` resolves them from `import.meta.dir` (`dashboard/apps/api/src`): `webDir`
+//! `dashboard/apps/web/dist` (the image sets `APP_WEB_DIR=/web`), `llamaConfigPath` under the
+//! repo root.
 use bd_domain::js;
 
 const CRATE_DIR: &str = env!("CARGO_MANIFEST_DIR");
@@ -13,17 +13,16 @@ pub struct Config {
     /// `Number(process.env.PORT ?? 4810)` — validated by the listener (`Bun.serve`'s range
     /// check), not here.
     pub port: f64,
-    pub db_path: String,
     pub web_dir: String,
-    pub records_dir: String,
     pub llama_config_path: String,
-    pub queues_dir: String,
     pub control_requests_dir: Option<String>,
     pub control_host_dir: Option<String>,
     pub router_telemetry_dir: Option<String>,
     pub codex_sidecar_log_dir: Option<String>,
     /// `SERVING_FEED_DIR`: the status collector's `serving-feed-*.jsonl` dir (`:ro`).
     pub serving_feed_dir: Option<String>,
+    /// `SERVING_FACTS_PATH`: the research side's `serving-facts-v1` file (`:ro`).
+    pub serving_facts_path: Option<String>,
 }
 
 pub type Env<'a> = &'a dyn Fn(&str) -> Option<String>;
@@ -42,22 +41,17 @@ impl Config {
         let dashboard = format!("{CRATE_DIR}/../..");
         Config {
             port: env("PORT").map_or(4810.0, |p| js::number(&p)),
-            db_path: or("APP_DB_PATH", format!("{dashboard}/data/app.db")),
             web_dir: or("APP_WEB_DIR", format!("{dashboard}/apps/web/dist")),
-            records_dir: or(
-                "RECORDS_DIR",
-                format!("{dashboard}/../llama/bakeoff/records"),
-            ),
             llama_config_path: or(
                 "LLAMA_CONFIG_PATH",
                 format!("{dashboard}/../llama/config.yaml"),
             ),
-            queues_dir: or("QUEUES_DIR", "/queues".into()),
             control_requests_dir: env("CONTROL_REQUESTS_DIR"),
             control_host_dir: env("CONTROL_HOST_DIR"),
             router_telemetry_dir: env("ROUTER_TELEMETRY_DIR"),
             codex_sidecar_log_dir: env("CODEX_SIDECAR_LOG_DIR"),
             serving_feed_dir: env("SERVING_FEED_DIR"),
+            serving_facts_path: env("SERVING_FACTS_PATH"),
         }
     }
 }
@@ -100,29 +94,28 @@ mod tests {
     fn defaults_and_absence() {
         let c = cfg(&[]);
         assert_eq!(c.port, 4810.0);
-        assert!(c.db_path.ends_with("/data/app.db"));
         assert!(c.web_dir.ends_with("/apps/web/dist"));
-        assert!(c.records_dir.ends_with("/llama/bakeoff/records"));
         assert!(c.llama_config_path.ends_with("/llama/config.yaml"));
-        assert_eq!(c.queues_dir, "/queues");
         assert_eq!(c.control_requests_dir, None);
         assert_eq!(c.router_telemetry_dir, None);
         assert_eq!(c.codex_sidecar_log_dir, None);
         assert_eq!(c.serving_feed_dir, None);
+        assert_eq!(c.serving_facts_path, None);
     }
 
     #[test]
     fn set_values_win_even_when_empty() {
         let c = cfg(&[
             ("PORT", " 0x10 "),
-            ("APP_DB_PATH", "/data/bench.db"),
+            ("SERVING_FACTS_PATH", "/facts/serving-facts.json"),
             ("CONTROL_REQUESTS_DIR", ""),
-            ("QUEUES_DIR", ""),
         ]);
         assert_eq!(c.port, 16.0);
-        assert_eq!(c.db_path, "/data/bench.db");
+        assert_eq!(
+            c.serving_facts_path.as_deref(),
+            Some("/facts/serving-facts.json")
+        );
         assert_eq!(c.control_requests_dir.as_deref(), Some(""));
-        assert_eq!(c.queues_dir, "");
         assert_eq!(cfg(&[("PORT", "")]).port, 0.0);
         assert!(cfg(&[("PORT", "abc")]).port.is_nan());
     }

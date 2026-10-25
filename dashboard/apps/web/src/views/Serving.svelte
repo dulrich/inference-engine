@@ -3,9 +3,10 @@
   // `bench-dashboard-polish.md`), and now the default landing view (plan WP-2, `capability-
   // surfacing-and-local-agent-endpoints.md`). `GET /api/serving` is a server-side reader of
   // `llama/config.yaml`; the SPA never reads any host file directly (Decisions locked
-  // "Read-only over serving config"). The join to `experiments` is client-side
-  // (`lib/serving/matchMeasured.ts`) -- most aliases have no measurement yet, which is an
-  // expected, designed state, not an error. The "Capabilities" column renders
+  // "Read-only over serving config"). The measured join is client-side against `GET
+  // /api/serving/measured` (`lib/serving/matchMeasured.ts`), and the cell links to the run on
+  // the research dashboard (:4816, `lib/serving/facts.ts researchRunUrl`) as a plain link --
+  // most aliases have no measurement yet, which is an expected, designed state, not an error. The "Capabilities" column renders
   // `row.alias.capability` (the per-model `metadata:` block, `docs/model-capabilities.md`)
   // ALONGSIDE the pre-existing Context/KV K/KV V/FA columns and the full-flag expand row
   // below -- augmenting, never subsetting or replacing either (a `null` capability, e.g. a
@@ -14,8 +15,9 @@
   //
   // "MTP" / "Prefill tok/s (p50/p90)" / "Decode tok/s (p50/p90)" columns (WP-1, `plans/
   // served-recipe-p50-prefill-and-decode.md` -- revises WP-3's `bakeoff-timing-records-and-
-  // estimates.md` original single "tok/s (p50)" column) fetch the SEPARATE DB-backed `GET
-  // /api/serving/timing` aggregate alongside `GET /api/serving` and join the two
+  // estimates.md` original single "tok/s (p50)" column) fetch the SEPARATE `GET
+  // /api/serving/timing` aggregate (the research side's `serving-facts-v1` file, WP-4 of
+  // `research-to-eval-harness`; unavailable facts say so in words and never blank the table) alongside `GET /api/serving` and join the two
   // client-side by `modelKey` (`lib/serving/matchTiming.ts`) -- `GET /api/serving` itself
   // stays a pure config-file parse, untouched. p50 AND p90 for both prefill and decode,
   // each with its own arm/sample-count provenance; a served model with no recipe-matched
@@ -35,8 +37,17 @@
   // chips with the reason in words rather than guessing. No restart banner: nothing on this
   // path requires one. All derivations live in `lib/serving/visibility.ts`; this file stays
   // markup-thin, and owns NO timer (refresh is `refreshToken`, CC-06/07).
-  import type { ExperimentSummary, ServingLiveResponse, ServingStatusResponse, ServingTimingRow } from "@bench-dashboard/shared";
-  import { getServing, getServingLive, getServingStatus, getServingTiming, postServingVisibility } from "../api.ts";
+  import type { ServingLiveResponse, ServingStatusResponse, ServingTimingRow } from "@bench-dashboard/shared";
+  import {
+    getServing,
+    getServingFactsStatus,
+    getServingLive,
+    getServingMeasured,
+    getServingStatus,
+    getServingTiming,
+    postServingVisibility,
+  } from "../api.ts";
+  import { researchRunUrl, resolveServingLoad } from "../lib/serving/facts.ts";
   import { TIER_LABELS, eventPill, liveUnavailableMessage, recentEvents, residencyDetail, residentPill, tierView } from "../lib/serving/live.ts";
   import { formatAge } from "../lib/router/format.ts";
   import {
@@ -48,7 +59,7 @@
     type PendingVisibilityMap,
     type ServingChipState,
   } from "../lib/serving/visibility.ts";
-  import { matchServingToMeasured } from "../lib/serving/matchMeasured.ts";
+  import type { ServingMatchRow } from "../lib/serving/matchMeasured.ts";
   import { formatServingDecodeCell, formatServingPrefillCell, matchServingTiming } from "../lib/serving/matchTiming.ts";
   import { expandToggleLabel, flagValueClass, formatFlagValue, toggleExpandedRow } from "../lib/serving/expand.ts";
   import {
@@ -61,28 +72,18 @@
     mtpLabel,
     mtpPillClass,
   } from "../lib/serving/capability.ts";
-  import { guardedNavClick, runDetailPath } from "../routes.ts";
   import { formatCount } from "../lib/format.ts";
 
-  let {
-    experiments,
-    loading,
-    error,
-    refreshToken,
-    onopenrun,
-  }: {
-    experiments: ExperimentSummary[];
-    loading: boolean;
-    error: string;
-    refreshToken: number;
-    onopenrun: (id: string) => void;
-  } = $props();
+  let { refreshToken }: { refreshToken: number } = $props();
 
   let configPath = $state("");
-  let rows = $state<ReturnType<typeof matchServingToMeasured>>([]);
+  let rows = $state<ServingMatchRow[]>([]);
   let timingRows = $state<ServingTimingRow[]>([]);
-  let servingLoading = $state(false);
+  let servingLoading = $state(true);
   let servingError = $state("");
+  // Timing/measured unavailable (facts file off, absent, invalid, stale-config, or a failed
+  // fetch) -- shown in words above the table, never blanking it.
+  let factsNote = $state("");
   // Live residency (WP-6): an independent feed -- its failure never blanks the alias table.
   let live = $state<ServingLiveResponse | null>(null);
   let liveError = $state("");
@@ -109,17 +110,20 @@
   }
 
   // `Promise.allSettled`, the Router.svelte pattern: the visibility status is an INDEPENDENT
-  // feed, so a status failure never blanks the served-alias table (and vice versa). The
-  // config/timing pair keeps its previous all-or-nothing error behaviour.
-  async function loadServing(exps: ExperimentSummary[]) {
-    servingLoading = true;
+  // feed, so a status failure never blanks the served-alias table (and vice versa). Only the
+  // serving config failing withholds the table; the facts trio (timing, measured, facts
+  // status) degrades to a note (`lib/serving/facts.ts resolveServingLoad`).
+  async function loadServing() {
     servingError = "";
-    const [servingResult, timingResult, statusResult, liveResult] = await Promise.allSettled([
-      getServing(),
-      getServingTiming(),
-      getServingStatus(),
-      getServingLive(),
-    ]);
+    const [servingResult, timingResult, measuredResult, factsResult, statusResult, liveResult] =
+      await Promise.allSettled([
+        getServing(),
+        getServingTiming(),
+        getServingMeasured(),
+        getServingFactsStatus(),
+        getServingStatus(),
+        getServingLive(),
+      ]);
     if (liveResult.status === "fulfilled") {
       live = liveResult.value;
       liveError = "";
@@ -127,13 +131,13 @@
       liveError = liveResult.reason instanceof Error ? liveResult.reason.message : "Unable to load live residency";
     }
     asOf = Date.now();
-    if (servingResult.status === "fulfilled" && timingResult.status === "fulfilled") {
-      configPath = servingResult.value.configPath;
-      rows = matchServingToMeasured(servingResult.value.models, exps);
-      timingRows = timingResult.value;
-    } else {
-      const failure = servingResult.status === "rejected" ? servingResult.reason : (timingResult as PromiseRejectedResult).reason;
-      servingError = failure instanceof Error ? failure.message : "Unable to load served aliases";
+    const load = resolveServingLoad(servingResult, timingResult, measuredResult, factsResult);
+    timingRows = load.timingRows;
+    factsNote = load.factsNote;
+    servingError = load.servingError;
+    if (load.rows !== null) {
+      rows = load.rows;
+      configPath = load.configPath ?? "";
     }
     if (statusResult.status === "fulfilled") {
       servingStatus = statusResult.value;
@@ -177,12 +181,10 @@
         : "",
   );
 
-  // ONE effect tracking both `experiments` and `refreshToken` -- see Runs.svelte's own
-  // comment on why this isn't split into two effects.
   $effect(() => {
     // eslint-disable-next-line no-unused-expressions -- bare read registers the $effect dependency
     refreshToken;
-    void loadServing(experiments);
+    void loadServing();
   });
 </script>
 
@@ -241,10 +243,12 @@
   <p class="error-text">{visibilityError}</p>
 {/if}
 
-{#if loading || servingLoading}
+{#if factsNote}
+  <p class="run-empty">{factsNote}</p>
+{/if}
+
+{#if servingLoading && rows.length === 0 && !servingError}
   <p>Loading…</p>
-{:else if error}
-  <p class="error-text">{error}</p>
 {:else if servingError}
   <p class="error-text">{servingError}</p>
 {:else if rows.length === 0}
@@ -331,12 +335,8 @@
             <td class="run-table-num">{formatServingDecodeCell(timingRow)}</td>
             <td>
               {#if row.measured}
-                <a
-                  class="serving-measured-link"
-                  href={runDetailPath(row.measured.id)}
-                  onclick={(event) => guardedNavClick(event, () => onopenrun((row.measured as ExperimentSummary).id))}
-                >
-                  {row.measured.sweepCell?.alias ?? row.measured.id}
+                <a class="serving-measured-link" href={researchRunUrl(location, row.measured.experimentId)}>
+                  {row.measured.alias}
                 </a>
               {:else}
                 <span class="run-table-muted">no measurement yet</span>

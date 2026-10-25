@@ -1,8 +1,0 @@
-{
-  "schema": "control-request-v2",
-  "request_id": "req-20260827T120600Z-00000000000000b2",
-  "action": "start",
-  "queue_stem": "contract-queue",
-  "minutes": 60,
-  "requested_at": "2026-08-27T12:06:00.000Z"
-}

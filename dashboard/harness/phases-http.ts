@@ -1,66 +1,46 @@
-// Read-side phases: routes (every route registered in apps/api/src/app.ts + routes/*.ts, under the
-// full compose env and under the degraded env) and spa.
+// Read-side phases: routes (every route the serving dashboard registers, under the full compose
+// env and under the degraded env, plus the JSON 404 for the research routes that moved to
+// eval-harness `inference_research`) and spa.
 import { join } from "node:path";
-import { ISO_8601 } from "./dump.ts";
-import { degradedSpec, seedPair, type Fx } from "./fixtures.ts";
-import { both, check, checkEqual, contentType, diff, expectStatus, pin, request, routeIncluded, run, skip, startPair, stopPair, work, type Json, type Pair } from "./lib.ts";
+import { degradedSpec, FACTS_MEASURED, type Fx } from "./fixtures.ts";
+import { both, check, checkEqual, contentType, diff, pin, request, routeIncluded, run, skip, startPair, stopPair, work, type Pair } from "./lib.ts";
 
-/** Every GET read route against a seeded pair (the routes phase battery). */
+/** Every GET read route against a pair (the routes phase battery). */
 export async function readBattery(pair: Pair, label: string) {
-  const ids: string[] = ((await request(pair[0], "GET", "/api/experiments")).json ?? []).map((e: Json) => e.id);
   const health = await both(pair, `${label} health`, "GET", "/health");
-  pin(health, `${label} health: status ok, experimentCount = list length`, (j) => j?.status === "ok" && j?.experimentCount === ids.length);
-  const list = await both(pair, `${label} experiments list`, "GET", "/api/experiments");
-  pin(list, `${label} experiments list non-empty`, (j) => Array.isArray(j) && j.length > 0);
-  for (const id of ids) {
-    const detail = await both(pair, `${label} experiment ${id}`, "GET", `/api/experiments/${encodeURIComponent(id)}`);
-    pin(detail, `${label} experiment ${id}: detail with trials+metrics`, (j) => j?.id === id && Array.isArray(j?.trials) && Array.isArray(j?.metrics));
-    await both(pair, `${label} curves ${id}`, "GET", `/api/curves/${encodeURIComponent(id)}`);
-  }
-  expectStatus(await both(pair, `${label} unknown experiment`, "GET", "/api/experiments/no-such-experiment"), `${label} unknown experiment`, 404);
-  await both(pair, `${label} unknown curves`, "GET", "/api/curves/no-such-experiment");
-  const repos = [...new Set(((list?.json ?? (await request(pair[0], "GET", "/api/experiments")).json) as Json[]).map((e) => e.lineage?.hfRepo).filter((r) => typeof r === "string"))] as string[];
-  for (const repo of repos) {
-    // routes/ladders.ts: wildcard route, the repo id keeps its `/` (and is decodeURIComponent'd).
-    const ladder = await both(pair, `${label} ladder ${repo}`, "GET", `/api/ladders/${repo}`);
-    pin(ladder, `${label} ladder ${repo}: rows`, (j) => Array.isArray(j) && j.length > 0);
-    await both(pair, `${label} ladder ${repo} (encoded slash)`, "GET", `/api/ladders/${encodeURIComponent(repo)}`);
-  }
-  await both(pair, `${label} ladder unknown repo`, "GET", "/api/ladders/nobody/nothing-GGUF");
-  await both(pair, `${label} ladder empty repo`, "GET", "/api/ladders/");
+  pin(health, `${label} health: status ok`, (j) => j?.status === "ok");
   const serving = await both(pair, `${label} serving`, "GET", "/api/serving");
   const timing = await both(pair, `${label} serving timing`, "GET", "/api/serving/timing");
+  const measured = await both(pair, `${label} serving measured`, "GET", "/api/serving/measured");
+  const facts = await both(pair, `${label} serving facts status`, "GET", "/api/serving/facts-status");
   await both(pair, `${label} serving status`, "GET", "/api/serving/status");
   const live = await both(pair, `${label} serving live`, "GET", "/api/serving/live");
-  const capture = await both(pair, `${label} capture export`, "GET", "/api/export/scoreboard-capture");
-  pin(capture, `${label} capture: v1 envelope, one record per experiment`, (j) => capture?.status !== 200 || j?.captureVersion === 1 && j?.stability === "v1" && j?.recordCount === ids.length && ISO_8601.test(j?.generatedAt ?? ""));
-  if (ids.length > 1) {
-    const two = await both(pair, `${label} capture ?id x2`, "GET", `/api/export/scoreboard-capture?id=${encodeURIComponent(ids[1]!)}&id=${encodeURIComponent(ids[0]!)}`);
-    pin(two, `${label} capture ?id order follows the query`, (j) => two?.status !== 200 || j?.recordCount === 2 && j?.records?.[0]?.experimentId === ids[1]);
-  }
-  await both(pair, `${label} capture ?id unknown`, "GET", "/api/export/scoreboard-capture?id=no-such-experiment");
-  const queue = await both(pair, `${label} queue`, "GET", "/api/queue");
   for (const query of ["", "?staleMs=999", "?staleMs=abc", "?staleMs=600000", "?staleMs=600001"]) {
     await both(pair, `${label} router telemetry${query}`, "GET", `/api/router/telemetry${query}`);
   }
   await both(pair, `${label} router sidecar`, "GET", "/api/router/sidecar");
-  return { serving, timing, queue, capture, live };
+  return { serving, timing, measured, facts, live };
 }
 
-/** The JSON 404 for unknown /api/* (app.ts `app.all("/api/*")`) under every method. */
+/** The JSON 404 for unknown /api/* under every method, and for every retired research route. */
 async function notFoundBattery(pair: Pair) {
-  for (const [method, path] of [["GET", "/api/router/slots"], ["GET", "/api/nope"], ["GET", "/api"], ["POST", "/api/experiments"], ["GET", "/api/control/arm"], ["DELETE", "/api/queue/x"], ["PUT", "/api/serving/visibility"]] as const) {
+  const research = [
+    ["GET", "/api/experiments"], ["GET", "/api/experiments/fixture-v2-full"], ["GET", "/api/ladders"], ["GET", "/api/ladders/example-org/Example-Tiny-GGUF"],
+    ["GET", "/api/curves/fixture-v2-full"], ["GET", "/api/queue"], ["GET", "/api/export/scoreboard-capture"],
+    ["POST", "/api/control/arm"], ["POST", "/api/control/disarm"], ["POST", "/api/control/stop"], ["POST", "/api/control/start"], ["POST", "/api/control/cancel"],
+  ] as const;
+  for (const [method, path] of [["GET", "/api/router/slots"], ["GET", "/api/nope"], ["GET", "/api"], ["DELETE", "/api/queue/x"], ["PUT", "/api/serving/visibility"], ...research] as const) {
     const reply = await both(pair, "unknown api route", method, path);
     pin(reply, `${method} ${path}: JSON 404 {error:"not found"}`, (j) => reply?.status === 404 && contentType(reply) === "application/json" && j?.error === "not found");
   }
 }
 
-export async function routesPhase(main: Pair, fx: Fx) {
+export async function routesPhase(main: Pair, _fx: Fx) {
   const r = await readBattery(main, "full env");
   pin(r.serving, "serving: 200 with models", (j) => r.serving?.status === 200 && Array.isArray(j?.models) && j.models.length > 0);
-  pin(r.timing, "serving timing: 200 array", (j) => r.timing?.status === 200 && Array.isArray(j));
-  pin(r.queue, "queue: queues incl. malformed entries, control fresh", (j) => Array.isArray(j?.queues) && j.queues.some((q: Json) => typeof q.error === "string") && j?.control?.stale === false && ISO_8601.test(j?.generatedAt ?? ""));
-  pin(r.queue, "queue: synth-joined ETA on the model-table basis (queue.test.ts pass-through)", (j) => j?.queues?.find((q: Json) => q.name === "synth-joined")?.eta?.basis === "model-table");
+  pin(r.timing, "facts present: timing is the facts file's rows", (j) => r.timing?.status === 200 && Array.isArray(j) && j.length === 1 && j[0]?.modelKey === "harness-model");
+  pin(r.measured, "facts present: measured is the facts file's list", (j) => r.measured?.status === 200 && diff(j, FACTS_MEASURED) === null);
+  pin(r.facts, "facts present: status available with the generatedAt + revision", (j) => j?.available === true && j?.generatedAt === "2026-10-25T12:00:00.000Z" && /^[0-9a-f]{64}$/.test(j?.servingConfigRevision ?? ""));
   if (routeIncluded("/api/router/telemetry")) {
     const telemetry = await request(main[0], "GET", "/api/router/telemetry");
     check("committed telemetry: newest day file, every in-flight aged out", telemetry.json?.available === true && telemetry.json?.file === "router-2026-09-13.10.jsonl" && telemetry.json?.inFlight?.length === 0, telemetry.text.slice(0, 300));
@@ -68,20 +48,20 @@ export async function routesPhase(main: Pair, fx: Fx) {
   pin(r.live, "committed serving feed (2026-10-19): typed stale", (j) => r.live?.status !== 200 || j?.available === false && j?.reason === "stale");
   await notFoundBattery(main);
 
-  const degraded = await startPair("degraded", () => degradedSpec(fx));
+  const degraded = await startPair("degraded", () => degradedSpec());
   try {
-    await seedPair(degraded);
     const d = await readBattery(degraded, "degraded env");
-    for (const [name, reply] of [["serving", d.serving], ["serving timing", d.timing], ["capture", d.capture]] as const) {
-      pin(reply, `degraded ${name}: 502 {error} on an absent LLAMA_CONFIG_PATH`, (j) => reply?.status === 502 && typeof j?.error === "string");
+    pin(d.serving, "degraded serving: 502 {error} on an absent LLAMA_CONFIG_PATH", (j) => d.serving?.status === 502 && typeof j?.error === "string");
+    for (const [name, reply] of [["timing", d.timing], ["measured", d.measured]] as const) {
+      pin(reply, `facts absent: ${name} 200 []`, (j) => reply?.status === 200 && Array.isArray(j) && j.length === 0);
     }
-    pin(d.queue, "degraded queue: no queues, control null", (j) => Array.isArray(j?.queues) && j.queues.length === 0 && j?.control === null);
+    pin(d.facts, "facts absent: typed {available:false, reason:absent}", (j) => d.facts?.status === 200 && diff(j, { available: false, reason: "absent" }) === null);
     for (const path of ["/api/router/telemetry", "/api/router/sidecar", "/api/serving/status", "/api/serving/live"]) {
       if (!routeIncluded(path)) continue;
       const reply = await request(degraded[0], "GET", path);
       checkEqual(`degraded ${path}: 200 disabled`, { status: reply.status, body: reply.json }, { status: 200, body: { available: false, reason: "disabled" } });
     }
-    for (const path of ["/api/control/arm", "/api/control/disarm", "/api/control/stop", "/api/control/start", "/api/control/cancel", "/api/serving/visibility"]) {
+    for (const path of ["/api/serving/visibility", "/api/catalog/add", "/api/catalog/remove", "/api/catalog/consumers"]) {
       const reply = await both(degraded, "unset CONTROL_REQUESTS_DIR", "POST", path, {});
       pin(reply, `degraded POST ${path}: 503`, (j) => reply?.status === 503 && j?.error === "control plane not configured: CONTROL_REQUESTS_DIR is unset");
     }
@@ -131,7 +111,7 @@ export async function spaPhase(pair: Pair) {
     if (reply) check(`spa ${asset} body == subject /web${asset}`, (await Bun.file(join(webDir, asset)).exists()) && sha(reply.bytes) === sha(await onDisk(asset.slice(1))), `${reply.bytes.length} bytes`);
   }
   // app.ts spaResponse: anything not on disk inside the web root falls back to index.html, no-cache.
-  for (const path of ["/runs", "/serving/some-model", "/assets/missing-0000.js", "/..%2f..%2f..%2fetc%2fpasswd", "/%2e%2e%2fpackage.json", "/assets/..%2f..%2f..%2fpackage.json"]) {
+  for (const path of ["/runs", "/runs/fixture-v2-full", "/serving/some-model", "/assets/missing-0000.js", "/..%2f..%2f..%2fetc%2fpasswd", "/%2e%2e%2fpackage.json", "/assets/..%2f..%2f..%2fpackage.json"]) {
     const reply = await view(path);
     if (reply) check(`spa ${path}: index fallback, no-cache (no root escape)`, reply.status === 200 && reply.headers.get("cache-control") === "no-cache" && sha(reply.bytes) === sha(index.bytes), `${reply.status} ${reply.headers.get("cache-control")} ${reply.text.slice(0, 80)}`);
   }

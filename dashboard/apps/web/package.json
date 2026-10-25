@@ -12,8 +12,7 @@
   "dependencies": {
     "@bench-dashboard/shared": "workspace:*",
     "@fleet-tools/signalworks": "workspace:*",
-    "lucide-svelte": "^0.468.0",
-    "uplot": "^1.6.31"
+    "lucide-svelte": "^0.468.0"
   },
   "devDependencies": {
     "svelte": "^5.46.4"

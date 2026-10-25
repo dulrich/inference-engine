@@ -2,7 +2,7 @@
 //! `routes/servingControl.test.ts` (idFactory collision, the 180 s status boundary, the
 //! unavailable verdicts) — the cases WP-1 could not reach black-box.
 use super::*;
-use crate::record::tests::{fixtures, TempDir};
+use crate::test_support::{fixtures, TempDir};
 use serde_json::json;
 
 fn ids(list: Vec<&'static str>) -> impl FnMut() -> std::io::Result<String> {
@@ -36,7 +36,12 @@ fn collision_regenerates_and_never_overwrites() {
         calls += 1;
         inner()
     };
-    let r = record_simple_action(Some(&t.0), "arm", &mut factory).unwrap();
+    let r = record_serving_visibility_action(
+        Some(&t.0),
+        &json!({"modelKey": "a", "consumers": []}),
+        &mut factory,
+    )
+    .unwrap();
     assert_eq!(calls, 2);
     assert_eq!(r.status, 200);
     assert_eq!(r.body["requestId"], fresh);
@@ -105,61 +110,9 @@ fn serving_id_factory_collision_and_bytes() {
 }
 
 #[test]
-fn start_and_cancel_bytes_and_messages() {
-    let t = TempDir::new("ctl-bytes");
-    let id = "req-20260827T120000Z-00000000000000a1";
-    let r = record_start_action(
-        Some(&t.0),
-        &json!({"queueStem": "q-1", "minutes": 480, "extra": true}),
-        &mut ids(vec![id]),
-    )
-    .unwrap();
-    assert_eq!(r.body, json!({"requestId": id, "accepted": true}));
-    let text = read(&t.0, &format!("{id}.json"));
-    assert!(text.starts_with(&format!(
-        r#"{{"schema":"control-request-v1","request_id":"{id}","action":"start","queue_stem":"q-1","minutes":480,"requested_at":""#
-    )));
-    let c = record_cancel_action(
-        Some(&t.0),
-        &json!({"targetRequestId": id}),
-        &mut ids(vec!["req-20260827T120001Z-00000000000000a2"]),
-    )
-    .unwrap();
-    assert_eq!(c.body["message"], CANCEL_MESSAGE);
-    let s = record_simple_action(
-        Some(&t.0),
-        "stop",
-        &mut ids(vec!["req-20260827T120002Z-00000000000000a3"]),
-    )
-    .unwrap();
-    assert_eq!(s.body["message"], STOP_MESSAGE);
-}
-
-#[test]
 fn bad_requests_write_nothing_and_name_the_domain_messages() {
     let t = TempDir::new("ctl-400");
     let mut never = || -> std::io::Result<String> { panic!("no write on a 400") };
-    let r = record_start_action(
-        Some(&t.0),
-        &json!({"queueStem": "Bad_Stem", "minutes": 60}),
-        &mut never,
-    )
-    .unwrap();
-    assert_eq!(r.status, 400);
-    assert!(r.body["error"]
-        .as_str()
-        .unwrap()
-        .contains("queueStem must match ^[a-z0-9][a-z0-9-]*$"));
-    let r = record_cancel_action(
-        Some(&t.0),
-        &json!({"targetRequestId": "nightly-20260827"}),
-        &mut never,
-    )
-    .unwrap();
-    assert!(r.body["error"]
-        .as_str()
-        .unwrap()
-        .contains("targetRequestId must match the request-id grammar"));
     let r = record_serving_visibility_action(
         Some(&t.0),
         &json!({"modelKey": "", "consumers": []}),
@@ -170,16 +123,7 @@ fn bad_requests_write_nothing_and_name_the_domain_messages() {
         .as_str()
         .unwrap()
         .contains("modelKey must be a non-empty llama/config.yaml model key"));
-    for minutes in [json!(14), json!(481), json!(60.5), json!("60")] {
-        let r = record_start_action(
-            Some(&t.0),
-            &json!({"queueStem": "q", "minutes": minutes}),
-            &mut never,
-        )
-        .unwrap();
-        assert_eq!(r.status, 400);
-        assert!(!r.body["error"].as_str().unwrap().is_empty());
-    }
+    assert_eq!(r.status, 400);
     assert!(entries(&t.0).is_empty());
 }
 
@@ -187,11 +131,9 @@ fn bad_requests_write_nothing_and_name_the_domain_messages() {
 fn unconfigured_is_503_for_unset_and_empty() {
     let mut never = || -> std::io::Result<String> { panic!("no write") };
     for dir in [None, Some("")] {
-        let r = record_simple_action(dir, "arm", &mut never).unwrap();
-        assert_eq!(r.status, 503);
-        assert_eq!(r.body, json!({"error": UNCONFIGURED}));
         let r = record_serving_visibility_action(dir, &json!({}), &mut never).unwrap();
         assert_eq!(r.status, 503);
+        assert_eq!(r.body, json!({"error": UNCONFIGURED}));
     }
 }
 

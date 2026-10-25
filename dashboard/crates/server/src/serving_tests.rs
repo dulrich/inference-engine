@@ -248,7 +248,7 @@ fn tokenize_and_int_flags() {
 // ---- GET /api/serving projection (`serving/llamaConfig.test.ts`) --------------------------
 
 fn fixture_models() -> Vec<Value> {
-    let path = crate::record::tests::fixtures("llama-config.yaml");
+    let path = crate::test_support::fixtures("llama-config.yaml");
     read_serving_config(&path).unwrap().models
 }
 

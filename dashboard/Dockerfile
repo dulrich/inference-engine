@@ -27,18 +27,14 @@ FROM alpine:3.24
 # apk layer so a new commit re-runs `apk upgrade` instead of serving a stale cached layer.
 ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.revision=${GIT_SHA}
-# No ca-certificates: the API makes no outbound connection (plan Decision 8).
-# /data must exist app-owned BEFORE the VOLUME is first materialized: a named volume initializes
-# from this directory's content and ownership (a root-owned mount point leaves SQLite unable to
-# create /data/bench.db).
+# No ca-certificates: the API makes no outbound connection (plan Decision 8). No /data volume:
+# the serving half keeps no database (the research half moved to eval-harness).
 RUN apk upgrade --no-cache \
- && addgroup -g 1001 app && adduser -D -u 1001 -G app app \
- && mkdir -p /data && chown app:app /data
+ && addgroup -g 1001 app && adduser -D -u 1001 -G app app
 COPY --from=rust-build /inference-dashboard /inference-dashboard
 COPY --from=web /app/apps/web/dist /web
-ENV PORT=4810 APP_DB_PATH=/data/bench.db APP_WEB_DIR=/web
+ENV PORT=4810 APP_WEB_DIR=/web
 EXPOSE 4810
-VOLUME ["/data"]
 USER app
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/inference-dashboard","--healthcheck"]
 CMD ["/inference-dashboard"]

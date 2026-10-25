@@ -1,8 +1,0 @@
-{
-  "queue_format": 1,
-  "vram_profile": "desktop-shared",
-  "deadline": "13:00",
-  "stop_policy": "pause-at-deadline",
-  "models": {},
-  "cells": "not-an-array"
-}

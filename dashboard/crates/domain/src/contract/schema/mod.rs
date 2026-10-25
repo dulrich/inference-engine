@@ -2,35 +2,21 @@
 //! carries the zod schema's name minus the `Schema` suffix (`tsgen` adds it back).
 use super::*;
 
-mod capture;
 mod control;
-mod curve;
-mod experiment;
 mod health;
-mod ingest_summary;
-mod ladder;
-mod metric;
-mod queue;
 mod router_status;
 mod serving;
+mod serving_facts;
 mod serving_live;
 mod serving_request;
-mod trial;
 
-pub use capture::*;
 pub use control::*;
-pub use curve::*;
-pub use experiment::*;
 pub use health::*;
-pub use ingest_summary::*;
-pub use ladder::*;
-pub use metric::*;
-pub use queue::*;
 pub use router_status::*;
 pub use serving::*;
+pub use serving_facts::*;
 pub use serving_live::*;
 pub use serving_request::*;
-pub use trial::*;
 
 const fn f(name: &'static str, node: &'static Node) -> Field {
     Field { name, node }
@@ -60,16 +46,12 @@ const NULLISH_NUM: Node = Node::Optional(&NULL_NUM);
 const INT: Node = Node::Num(NumRules::ANY.int());
 const NULL_INT: Node = Node::Nullable(&INT);
 const NONNEG_INT: Node = Node::Num(NumRules::ANY.int().gte(0.0));
-const NULL_NONNEG_INT: Node = Node::Nullable(&NONNEG_INT);
 const POS_INT: Node = Node::Num(NumRules::ANY.int().gt(0.0));
 const BOOL: Node = Node::Bool;
 const NULL_BOOL: Node = Node::Nullable(&BOOL);
 const UNKNOWN: Node = Node::Unknown;
 const STR_LIST: Node = Node::Array(&STR);
-const UNKNOWN_LIST: Node = Node::Array(&UNKNOWN);
 const UNKNOWN_RECORD: Node = Node::Record {
     key: &STR,
     value: &UNKNOWN,
 };
-/// `z.enum(["one", "two"])` (Wilson `sided`).
-const SIDED: Node = Node::Enum(&["one", "two"]);

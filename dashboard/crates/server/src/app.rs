@@ -1,14 +1,13 @@
-//! `apps/api/src/app.ts` for the record-derived routes (WP-3): health, experiments, ladders,
-//! curves, serving timing and the capture export, then the JSON 404 under `/api/*` and the SPA
-//! fallback; and the file-plane routes (WP-4): serving, serving control, queue, bake-off
-//! control, router status. Registration order is irrelevant (no overlapping patterns).
-use crate::db::{CaptureRecord, ExperimentSummary};
+//! The serving dashboard's routes: health, serving config + timing/measured (from the
+//! `serving-facts-v1` file), serving control and the catalog drop-box, router status, then the
+//! JSON 404 under `/api/*` and the SPA fallback. The research routes (experiments, ladders,
+//! curves, queue, bake-off control, capture export) moved to eval-harness `inference_research`
+//! and answer the JSON 404 here. Registration order is irrelevant (no overlapping patterns).
 use crate::http::{internal_error, ok, reply, RouteError, Shared};
 use crate::jsrt;
-use crate::serving::{read_served_models, read_serving_config};
+use crate::serving::read_serving_config;
 use crate::spa;
-use crate::wilson::{wilson_interval, Sided};
-use crate::{control, router_feeds, serving_live};
+use crate::{control, router_feeds, serving_facts, serving_live};
 use axum::body::Body;
 use axum::body::Bytes;
 use axum::extract::{RawQuery, Request, State};
@@ -31,14 +30,9 @@ async fn blocking<T: Send + 'static>(
 pub fn router(state: Shared) -> Router {
     Router::new()
         .route("/health", get(health))
-        .route("/api/experiments", get(list_experiments))
-        .route("/api/experiments/{id}", get(experiment_detail))
-        .route("/api/ladders", get(ladders))
-        .route("/api/ladders/", get(ladders))
-        .route("/api/ladders/{*rest}", get(ladders))
-        .route("/api/curves/{id}", get(curves))
         .route("/api/serving/timing", get(serving_timing))
-        .route("/api/export/scoreboard-capture", get(capture_export))
+        .route("/api/serving/measured", get(serving_measured))
+        .route("/api/serving/facts-status", get(serving_facts_status))
         .route("/api/serving", get(serving))
         .route("/api/serving/status", get(serving_status))
         .route("/api/serving/live", get(serving_live))
@@ -46,12 +40,6 @@ pub fn router(state: Shared) -> Router {
         .route("/api/catalog/add", post(catalog_add))
         .route("/api/catalog/remove", post(catalog_remove))
         .route("/api/catalog/consumers", post(catalog_consumers))
-        .route("/api/queue", get(queue))
-        .route("/api/control/arm", post(control_arm))
-        .route("/api/control/disarm", post(control_disarm))
-        .route("/api/control/stop", post(control_stop))
-        .route("/api/control/start", post(control_start))
-        .route("/api/control/cancel", post(control_cancel))
         .route("/api/router/telemetry", get(router_telemetry))
         .route("/api/router/sidecar", get(router_sidecar))
         // A known path with an unrouted method falls through to Hono's `app.all("/api/*")`
@@ -61,212 +49,46 @@ pub fn router(state: Shared) -> Router {
         .with_state(state)
 }
 
-/// The last path segment as Hono's `c.req.param(name)` reads it.
-fn last_param(req_path: &str) -> String {
-    jsrt::hono_param(req_path.rsplit('/').next().unwrap_or(""))
-}
-
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct HealthResponse {
     status: &'static str,
-    experiment_count: f64,
 }
 
-/// `routes/health.ts`.
-async fn health(State(s): State<Shared>) -> Result<Response, RouteError> {
-    blocking(move || {
-        Ok(ok(&HealthResponse {
-            status: "ok",
-            experiment_count: s.db.experiment_count()?,
-        }))
-    })
-    .await
+/// `routes/health.ts`; no DB since the research half moved out.
+async fn health() -> Response {
+    ok(&HealthResponse { status: "ok" })
 }
 
-/// `routes/experiments.ts`.
-async fn list_experiments(State(s): State<Shared>) -> Result<Response, RouteError> {
-    blocking(move || {
-        let list: Vec<ExperimentSummary> = s.db.list_experiment_summaries()?;
-        Ok(ok(&list))
-    })
-    .await
-}
-
-async fn experiment_detail(State(s): State<Shared>, req: Request) -> Result<Response, RouteError> {
-    let id = last_param(req.uri().path());
-    blocking(move || match s.db.experiment_full_detail(&id)? {
-        Some(detail) => Ok(ok(&detail)),
-        None => Err(RouteError::NotFound("not found".into())),
-    })
-    .await
-}
-
-/// `routes/ladders.ts`: everything after `/api/ladders/` of Hono's decoded path, then
-/// `decodeURIComponent` (a throw is the plain 500). `/api/ladders` itself matches the wildcard
-/// and, the prefix regex not applying, looks up the repo `"/api/ladders"`.
-async fn ladders(State(s): State<Shared>, req: Request) -> Result<Response, RouteError> {
-    let path = jsrt::hono_path(req.uri().path());
-    let rest = path.strip_prefix("/api/ladders/").unwrap_or(&path);
-    let Some(hf_repo) = jsrt::decode_uri_component(rest) else {
-        return Err(RouteError::Internal(format!(
-            "URIError: URI error ({rest})"
-        )));
-    };
-    if hf_repo.is_empty() {
-        return Err(RouteError::BadRequest("hfRepo is required".into()));
-    }
-    blocking(move || Ok(ok(&s.db.list_ladder_rows(&hf_repo)?))).await
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CurveSeriesPoint {
-    task: String,
-    position_fraction: f64,
-    n: f64,
-    k: f64,
-    failure_rate: f64,
-    sided: &'static str,
-    confidence: f64,
-    lower: Option<f64>,
-    upper: f64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CurveSeries {
-    experiment_id: String,
-    points: Vec<CurveSeriesPoint>,
-}
-
-/// `routes/curves.ts`: one Wilson-scored point per `(task, position_fraction)` cell, every
-/// non-`"correct"` verdict a failure, sorted by `task.localeCompare` then position.
-async fn curves(State(s): State<Shared>, req: Request) -> Result<Response, RouteError> {
-    let experiment_id = last_param(req.uri().path());
-    blocking(move || {
-        struct Group {
-            key: String,
-            task: String,
-            position_fraction: f64,
-            n: f64,
-            k: f64,
-        }
-        let mut groups: Vec<Group> = Vec::new();
-        for t in s.db.list_longcontext_trials(&experiment_id)? {
-            let (Some(task), Some(pf)) = (t.task, t.position_fraction) else {
-                continue;
-            };
-            let key = format!(
-                "{task}::{}",
-                bd_domain::jsout::number_to_string(pf).unwrap_or_default()
-            );
-            let i = match groups.iter().position(|g| g.key == key) {
-                Some(i) => i,
-                None => {
-                    groups.push(Group {
-                        key,
-                        task,
-                        position_fraction: pf,
-                        n: 0.0,
-                        k: 0.0,
-                    });
-                    groups.len() - 1
-                }
-            };
-            groups[i].n += 1.0;
-            if t.classifier_verdict.as_deref() != Some("correct") {
-                groups[i].k += 1.0;
-            }
-        }
-        groups.sort_by(|a, b| {
-            jsrt::locale_compare(&a.task, &b.task).then_with(|| {
-                (a.position_fraction - b.position_fraction)
-                    .partial_cmp(&0.0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-        });
-        let points = groups
-            .into_iter()
-            .map(|g| {
-                let w = wilson_interval(g.k, g.n, Sided::Two, 0.95)?;
-                Ok(CurveSeriesPoint {
-                    failure_rate: g.k / g.n,
-                    task: g.task,
-                    position_fraction: g.position_fraction,
-                    n: g.n,
-                    k: g.k,
-                    sided: w.sided.as_str(),
-                    confidence: w.confidence,
-                    lower: w.lower,
-                    upper: w.upper,
-                })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        Ok(ok(&CurveSeries {
-            experiment_id,
-            points,
-        }))
-    })
-    .await
-}
-
-/// `routes/servingTiming.ts`: the config is read per request; any failure inside the handler's
-/// `try` (config read/parse or DB) is the 502 `{error}`.
-async fn serving_timing(State(s): State<Shared>) -> Result<Response, RouteError> {
-    blocking(move || {
-        let served =
-            read_served_models(&s.cfg.llama_config_path).map_err(RouteError::BadGateway)?;
-        let rows =
-            s.db.list_serving_timing_rows(&served)
-                .map_err(RouteError::BadGateway)?;
-        Ok(ok(&rows))
-    })
-    .await
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CaptureEnvelope {
-    capture_version: u8,
-    stability: &'static str,
-    generated_at: String,
-    record_count: usize,
-    records: Vec<CaptureRecord>,
-}
-
-/// `routes/export.ts`: the frozen v1 capture envelope, `?id=` repeatable (query order), every
-/// record resolved against one config snapshot. Any failure inside the handler's `try` —
-/// config read or DB — is the 502 `{error}`.
-async fn capture_export(
-    State(s): State<Shared>,
-    RawQuery(q): RawQuery,
+/// Read the facts file on the blocking pool; every state is a 200 body.
+async fn facts(
+    s: Shared,
+    project: fn(&FactsResult) -> serde_json::Value,
 ) -> Result<Response, RouteError> {
     blocking(move || {
-        let served =
-            read_served_models(&s.cfg.llama_config_path).map_err(RouteError::BadGateway)?;
-        let ids = match jsrt::query_all(q.as_deref(), "id") {
-            Some(ids) => ids,
-            None => s.db.list_experiment_ids().map_err(RouteError::BadGateway)?,
-        };
-        let mut records = Vec::new();
-        for id in &ids {
-            if let Some(r) =
-                s.db.capture_record(id, &served)
-                    .map_err(RouteError::BadGateway)?
-            {
-                records.push(r);
-            }
-        }
-        Ok(ok(&CaptureEnvelope {
-            capture_version: 1,
-            stability: "v1",
-            generated_at: jsrt::iso_now(),
-            record_count: records.len(),
-            records,
-        }))
+        let f = serving_facts::read_serving_facts(
+            s.cfg.serving_facts_path.as_deref(),
+            &s.cfg.llama_config_path,
+        );
+        Ok(ok(&project(&f)))
     })
     .await
+}
+
+type FactsResult = Result<serving_facts::Facts, serving_facts::Unavailable>;
+
+/// `GET /api/serving/timing`: `ServingTimingRow[]` from the facts file, `[]` when unavailable.
+async fn serving_timing(State(s): State<Shared>) -> Result<Response, RouteError> {
+    facts(s, serving_facts::timing).await
+}
+
+/// `GET /api/serving/measured`: `ServingMeasuredEntry[]` from the facts file, `[]` when unavailable.
+async fn serving_measured(State(s): State<Shared>) -> Result<Response, RouteError> {
+    facts(s, serving_facts::measured).await
+}
+
+/// `GET /api/serving/facts-status`: `ServingFactsStatusResponse`, always 200.
+async fn serving_facts_status(State(s): State<Shared>) -> Result<Response, RouteError> {
+    facts(s, serving_facts::status).await
 }
 
 // ---- WP-4: file planes -------------------------------------------------------------------
@@ -369,65 +191,6 @@ async fn catalog_consumers(State(s): State<Shared>, body: Bytes) -> Result<Respo
         control::record_catalog_consumers_action,
         control::generate_serving_request_id,
     )
-    .await
-}
-
-async fn control_start(State(s): State<Shared>, body: Bytes) -> Result<Response, RouteError> {
-    drop_box(
-        s,
-        body,
-        control::record_start_action,
-        control::generate_request_id,
-    )
-    .await
-}
-
-async fn control_cancel(State(s): State<Shared>, body: Bytes) -> Result<Response, RouteError> {
-    drop_box(
-        s,
-        body,
-        control::record_cancel_action,
-        control::generate_request_id,
-    )
-    .await
-}
-
-async fn simple(s: Shared, action: &'static str) -> Result<Response, RouteError> {
-    blocking(move || {
-        let mut factory = control::generate_request_id;
-        let r = control::record_simple_action(
-            s.cfg.control_requests_dir.as_deref(),
-            action,
-            &mut factory,
-        )?;
-        Ok(action_reply(r))
-    })
-    .await
-}
-
-async fn control_arm(State(s): State<Shared>) -> Result<Response, RouteError> {
-    simple(s, "arm").await
-}
-
-async fn control_disarm(State(s): State<Shared>) -> Result<Response, RouteError> {
-    simple(s, "disarm").await
-}
-
-async fn control_stop(State(s): State<Shared>) -> Result<Response, RouteError> {
-    simple(s, "stop").await
-}
-
-/// `routes/queue.ts`: `control` first (the ETA needs `control.live`), then the queue list.
-async fn queue(State(s): State<Shared>) -> Result<Response, RouteError> {
-    blocking(move || {
-        let control =
-            crate::queue::build_control_section(s.cfg.control_host_dir.as_deref(), jsrt::now_ms());
-        Ok(ok(&crate::queue::build_queue_list_response(
-            &s.cfg.queues_dir,
-            Some(&s.cfg.records_dir),
-            control,
-        )))
-    })
     .await
 }
 

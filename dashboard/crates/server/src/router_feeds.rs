@@ -207,7 +207,17 @@ fn str_or_null(v: &Value, k: &str) -> Value {
 
 /// `median` (even counts average the middle pair).
 fn median(values: &[f64]) -> Option<f64> {
-    crate::eta::median_of(values)
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let mid = sorted.len() / 2;
+    Some(if sorted.len() % 2 == 0 {
+        (sorted[mid - 1] + sorted[mid]) / 2.0
+    } else {
+        sorted[mid]
+    })
 }
 
 /// `RouterLegSummary`.

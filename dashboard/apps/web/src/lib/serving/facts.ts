@@ -1,24 +1,23 @@
-// The Serving view's research-derived data (plan `research-to-eval-harness` WP-4): timing and
-// the measured link come from the `serving-facts-v1` file the research dashboard writes, read
-// server-side (`GET /api/serving/{timing,measured,facts-status}`). Facts being unavailable is
-// an expected state: the columns say so in words and the served-alias table still renders.
+// Consumes `GET /api/serving/facts` (one `serving-facts-v1` generation per response) and
+// `GET /api/serving`; produces the Serving view's state. Facts being unavailable is an expected
+// state: the columns say so in words and the served-alias table still renders.
 
 import type {
-  ServingFactsStatusResponse,
+  ServingFactsResponse,
   ServingFactsUnavailableReason,
-  ServingMeasuredEntry,
   ServingResponse,
   ServingTimingRow,
 } from "@bench-dashboard/shared";
 import { matchServingToMeasured, type ServingMatchRow } from "./matchMeasured.ts";
 
-/** The research dashboard's port (`inference-research`, eval-harness). */
-export const RESEARCH_PORT = 4816;
-
-/** A run's page on the research dashboard, on the page's own host: the research SPA's own
- * `/runs/:id` drill-down route (`routes.ts runDetailPath` there), id URI-encoded. */
-export function researchRunUrl(location: { protocol: string; hostname: string }, experimentId: string): string {
-  return `${location.protocol}//${location.hostname}:${RESEARCH_PORT}/runs/${encodeURIComponent(experimentId)}`;
+/** A run's page on the research dashboard, on the page's own host (LAN and WG both work) at
+ * the port the server reports: the research SPA's `/runs/:id` route, id URI-encoded. */
+export function researchRunUrl(
+  location: { protocol: string; hostname: string },
+  researchPort: number,
+  experimentId: string,
+): string {
+  return `${location.protocol}//${location.hostname}:${researchPort}/runs/${encodeURIComponent(experimentId)}`;
 }
 
 const REASON_TEXT: Record<ServingFactsUnavailableReason, string> = {
@@ -30,7 +29,7 @@ const REASON_TEXT: Record<ServingFactsUnavailableReason, string> = {
 };
 
 export function factsUnavailableText(reason: ServingFactsUnavailableReason): string {
-  return REASON_TEXT[reason] ?? reason;
+  return REASON_TEXT[reason];
 }
 
 function message(reason: unknown, fallback: string): string {
@@ -45,42 +44,46 @@ export interface ServingLoad {
   timingRows: ServingTimingRow[];
   /** Non-empty when timing/measured are unavailable; shown in words, never blanks the table. */
   factsNote: string;
+  /** The facts file's `generatedAt` when available, else `null`. */
+  factsGeneratedAt: string | null;
+  /** The research dashboard's port for run links; `null` until a facts response arrives. */
+  researchPort: number | null;
 }
 
-/** Folds the four settled fetches into the view state. Only `GET /api/serving` failing
- * withholds the rows; timing, measured or facts-status failing (or the facts being typed
- * unavailable) leaves the rows rendered with empty timing/measured and a note. */
+/** Folds the serving and facts fetches into the view state. Only `GET /api/serving` failing
+ * withholds the rows; the facts failing or being typed unavailable leaves the rows rendered
+ * with empty timing/measured and a note. */
 export function resolveServingLoad(
   serving: PromiseSettledResult<ServingResponse>,
-  timing: PromiseSettledResult<ServingTimingRow[]>,
-  measured: PromiseSettledResult<ServingMeasuredEntry[]>,
-  factsStatus: PromiseSettledResult<ServingFactsStatusResponse>,
+  facts: PromiseSettledResult<ServingFactsResponse>,
 ): ServingLoad {
-  const timingRows = timing.status === "fulfilled" ? timing.value : [];
-  const measuredList = measured.status === "fulfilled" ? measured.value : [];
+  const available = facts.status === "fulfilled" && facts.value.available ? facts.value : null;
+  const timingRows = available?.timing ?? [];
+  const measuredList = available?.measured ?? [];
   let factsNote = "";
-  if (factsStatus.status === "rejected") {
-    factsNote = `Timing and measured cells are unavailable: ${message(factsStatus.reason, "unable to load the facts status")}.`;
-  } else if (!factsStatus.value.available) {
-    factsNote = `Timing and measured cells are unavailable: ${factsUnavailableText(factsStatus.value.reason)}.`;
-  } else if (timing.status === "rejected" || measured.status === "rejected") {
-    const failed = timing.status === "rejected" ? timing.reason : (measured as PromiseRejectedResult).reason;
-    factsNote = `Timing and measured cells are unavailable: ${message(failed, "unable to load the facts")}.`;
+  if (facts.status === "rejected") {
+    factsNote = `Timing and measured cells are unavailable: ${message(facts.reason, "unable to load the facts")}.`;
+  } else if (!facts.value.available) {
+    factsNote = `Timing and measured cells are unavailable: ${factsUnavailableText(facts.value.reason)}.`;
   }
+  const shared = {
+    timingRows,
+    factsNote,
+    factsGeneratedAt: available?.generatedAt ?? null,
+    researchPort: facts.status === "fulfilled" ? facts.value.researchPort : null,
+  };
   if (serving.status === "rejected") {
     return {
       configPath: null,
       rows: null,
       servingError: message(serving.reason, "Unable to load served aliases"),
-      timingRows,
-      factsNote,
+      ...shared,
     };
   }
   return {
     configPath: serving.value.configPath,
     rows: matchServingToMeasured(serving.value.models, measuredList),
     servingError: "",
-    timingRows,
-    factsNote,
+    ...shared,
   };
 }

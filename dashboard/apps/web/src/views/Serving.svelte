@@ -1,50 +1,15 @@
 <script lang="ts">
-  // Serving -- live-served aliases joined to their best measured cell (plan WP-2 bullet 5,
-  // `bench-dashboard-polish.md`), and now the default landing view (plan WP-2, `capability-
-  // surfacing-and-local-agent-endpoints.md`). `GET /api/serving` is a server-side reader of
-  // `llama/config.yaml`; the SPA never reads any host file directly (Decisions locked
-  // "Read-only over serving config"). The measured join is client-side against `GET
-  // /api/serving/measured` (`lib/serving/matchMeasured.ts`), and the cell links to the run on
-  // the research dashboard (:4816, `lib/serving/facts.ts researchRunUrl`) as a plain link --
-  // most aliases have no measurement yet, which is an expected, designed state, not an error. The "Capabilities" column renders
-  // `row.alias.capability` (the per-model `metadata:` block, `docs/model-capabilities.md`)
-  // ALONGSIDE the pre-existing Context/KV K/KV V/FA columns and the full-flag expand row
-  // below -- augmenting, never subsetting or replacing either (a `null` capability, e.g. a
-  // model predating the WP-1 metadata rollout, renders its own muted "no capability
-  // metadata" note rather than an empty cell).
-  //
-  // "MTP" / "Prefill tok/s (p50/p90)" / "Decode tok/s (p50/p90)" columns (WP-1, `plans/
-  // served-recipe-p50-prefill-and-decode.md` -- revises WP-3's `bakeoff-timing-records-and-
-  // estimates.md` original single "tok/s (p50)" column) fetch the SEPARATE `GET
-  // /api/serving/timing` aggregate (the research side's `serving-facts-v1` file, WP-4 of
-  // `research-to-eval-harness`; unavailable facts say so in words and never blank the table) alongside `GET /api/serving` and join the two
-  // client-side by `modelKey` (`lib/serving/matchTiming.ts`) -- `GET /api/serving` itself
-  // stays a pure config-file parse, untouched. p50 AND p90 for both prefill and decode,
-  // each with its own arm/sample-count provenance; a served model with no recipe-matched
-  // timing data (the `bge-*` embed/rerank aliases, or any model whose only measured cells
-  // are off-recipe) renders the literal "—", never a guessed value. The `MTP` pill is
-  // driven by `capability.serving.mtp` (config truth) with the recipe's `specType` as
-  // title/detail text (`lib/serving/capability.ts mtpDetail`) -- the product-surface label
-  // is always "MTP", never the underlying method name (`draft-mtp` today).
-  //
-  // Visibility chips (WP-4, `plans/bench-dashboard-serving-control.md`): two per row, `cc`
-  // and `openwebui`, whose ONLY source is `GET /api/serving/status`'s `visibility` map -- the
-  // host dispatcher's republication of the model catalog's visibility (`router/catalog/catalog.json`), never this view's YAML parse
-  // (which carries no visibility at all). Toggling POSTs the full desired `consumers` array
-  // for that model, which only RECORDS a request; the chip enters an optimistic "requested"
-  // state keyed by the returned `requestId` and settles when a later status shows that id in
-  // `recent[]`. An unavailable status -- unset, unreadable, empty or stale -- disables the
-  // chips with the reason in words rather than guessing. No restart banner: nothing on this
-  // path requires one. All derivations live in `lib/serving/visibility.ts`; this file stays
-  // markup-thin, and owns NO timer (refresh is `refreshToken`, CC-06/07).
+  // Serving view. Consumes `GET /api/serving` (config parse), `GET /api/serving/facts` (one
+  // serving-facts-v1 generation: timing, measured, availability), `/status` (visibility
+  // chips) and `/live` (residency), all in one `Promise.allSettled` per refresh; only the config
+  // failing blanks the table. Derivations live in `lib/serving/*`; this file is markup-thin
+  // and owns no timer (refresh is `refreshToken`).
   import type { ServingLiveResponse, ServingStatusResponse, ServingTimingRow } from "@bench-dashboard/shared";
   import {
     getServing,
-    getServingFactsStatus,
+    getServingFacts,
     getServingLive,
-    getServingMeasured,
     getServingStatus,
-    getServingTiming,
     postServingVisibility,
   } from "../api.ts";
   import { researchRunUrl, resolveServingLoad } from "../lib/serving/facts.ts";
@@ -84,6 +49,8 @@
   // Timing/measured unavailable (facts file off, absent, invalid, stale-config, or a failed
   // fetch) -- shown in words above the table, never blanking it.
   let factsNote = $state("");
+  let factsGeneratedAt = $state<string | null>(null);
+  let researchPort = $state<number | null>(null);
   // Live residency (WP-6): an independent feed -- its failure never blanks the alias table.
   let live = $state<ServingLiveResponse | null>(null);
   let liveError = $state("");
@@ -111,19 +78,16 @@
 
   // `Promise.allSettled`, the Router.svelte pattern: the visibility status is an INDEPENDENT
   // feed, so a status failure never blanks the served-alias table (and vice versa). Only the
-  // serving config failing withholds the table; the facts trio (timing, measured, facts
-  // status) degrades to a note (`lib/serving/facts.ts resolveServingLoad`).
+  // serving config failing withholds the table; the facts degrade to a note
+  // (`lib/serving/facts.ts resolveServingLoad`).
   async function loadServing() {
     servingError = "";
-    const [servingResult, timingResult, measuredResult, factsResult, statusResult, liveResult] =
-      await Promise.allSettled([
-        getServing(),
-        getServingTiming(),
-        getServingMeasured(),
-        getServingFactsStatus(),
-        getServingStatus(),
-        getServingLive(),
-      ]);
+    const [servingResult, factsResult, statusResult, liveResult] = await Promise.allSettled([
+      getServing(),
+      getServingFacts(),
+      getServingStatus(),
+      getServingLive(),
+    ]);
     if (liveResult.status === "fulfilled") {
       live = liveResult.value;
       liveError = "";
@@ -131,9 +95,11 @@
       liveError = liveResult.reason instanceof Error ? liveResult.reason.message : "Unable to load live residency";
     }
     asOf = Date.now();
-    const load = resolveServingLoad(servingResult, timingResult, measuredResult, factsResult);
+    const load = resolveServingLoad(servingResult, factsResult);
     timingRows = load.timingRows;
     factsNote = load.factsNote;
+    factsGeneratedAt = load.factsGeneratedAt;
+    researchPort = load.researchPort;
     servingError = load.servingError;
     if (load.rows !== null) {
       rows = load.rows;
@@ -245,6 +211,8 @@
 
 {#if factsNote}
   <p class="serving-empty">{factsNote}</p>
+{:else if factsGeneratedAt}
+  <p class="serving-table-muted">Timing and measured facts as of <code>{factsGeneratedAt}</code></p>
 {/if}
 
 {#if servingLoading && rows.length === 0 && !servingError}
@@ -334,8 +302,8 @@
             <td class="serving-table-num">{formatServingPrefillCell(timingRow)}</td>
             <td class="serving-table-num">{formatServingDecodeCell(timingRow)}</td>
             <td>
-              {#if row.measured}
-                <a class="serving-measured-link" href={researchRunUrl(location, row.measured.experimentId)}>
+              {#if row.measured && researchPort !== null}
+                <a class="serving-measured-link" href={researchRunUrl(location, researchPort, row.measured.experimentId)}>
                   {row.measured.alias}
                 </a>
               {:else}

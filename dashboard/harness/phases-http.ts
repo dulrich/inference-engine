@@ -10,24 +10,24 @@ export async function readBattery(pair: Pair, label: string) {
   const health = await both(pair, `${label} health`, "GET", "/health");
   pin(health, `${label} health: status ok`, (j) => j?.status === "ok");
   const serving = await both(pair, `${label} serving`, "GET", "/api/serving");
-  const timing = await both(pair, `${label} serving timing`, "GET", "/api/serving/timing");
-  const measured = await both(pair, `${label} serving measured`, "GET", "/api/serving/measured");
-  const facts = await both(pair, `${label} serving facts status`, "GET", "/api/serving/facts-status");
+  const facts = await both(pair, `${label} serving facts`, "GET", "/api/serving/facts");
   await both(pair, `${label} serving status`, "GET", "/api/serving/status");
   const live = await both(pair, `${label} serving live`, "GET", "/api/serving/live");
   for (const query of ["", "?staleMs=999", "?staleMs=abc", "?staleMs=600000", "?staleMs=600001"]) {
     await both(pair, `${label} router telemetry${query}`, "GET", `/api/router/telemetry${query}`);
   }
   await both(pair, `${label} router sidecar`, "GET", "/api/router/sidecar");
-  return { serving, timing, measured, facts, live };
+  return { serving, facts, live };
 }
 
-/** The JSON 404 for unknown /api/* under every method, and for every retired research route. */
+/** The JSON 404 for unknown /api/* under every method, for every retired research route, and
+ * for the three split facts routes `/api/serving/facts` replaced. */
 async function notFoundBattery(pair: Pair) {
   const research = [
     ["GET", "/api/experiments"], ["GET", "/api/experiments/fixture-v2-full"], ["GET", "/api/ladders"], ["GET", "/api/ladders/example-org/Example-Tiny-GGUF"],
     ["GET", "/api/curves/fixture-v2-full"], ["GET", "/api/queue"], ["GET", "/api/export/scoreboard-capture"],
     ["POST", "/api/control/arm"], ["POST", "/api/control/disarm"], ["POST", "/api/control/stop"], ["POST", "/api/control/start"], ["POST", "/api/control/cancel"],
+    ["GET", "/api/serving/timing"], ["GET", "/api/serving/measured"], ["GET", "/api/serving/facts-status"],
   ] as const;
   for (const [method, path] of [["GET", "/api/router/slots"], ["GET", "/api/nope"], ["GET", "/api"], ["DELETE", "/api/queue/x"], ["PUT", "/api/serving/visibility"], ...research] as const) {
     const reply = await both(pair, "unknown api route", method, path);
@@ -38,9 +38,10 @@ async function notFoundBattery(pair: Pair) {
 export async function routesPhase(main: Pair, _fx: Fx) {
   const r = await readBattery(main, "full env");
   pin(r.serving, "serving: 200 with models", (j) => r.serving?.status === 200 && Array.isArray(j?.models) && j.models.length > 0);
-  pin(r.timing, "facts present: timing is the facts file's rows", (j) => r.timing?.status === 200 && Array.isArray(j) && j.length === 1 && j[0]?.modelKey === "harness-model");
-  pin(r.measured, "facts present: measured is the facts file's list", (j) => r.measured?.status === 200 && diff(j, FACTS_MEASURED) === null);
-  pin(r.facts, "facts present: status available with the generatedAt + revision", (j) => j?.available === true && j?.generatedAt === "2026-10-25T12:00:00.000Z" && /^[0-9a-f]{64}$/.test(j?.servingConfigRevision ?? ""));
+  pin(r.facts, "facts present: 200 available with the generatedAt + revision", (j) => r.facts?.status === 200 && j?.available === true && j?.generatedAt === "2026-10-25T12:00:00.000Z" && /^[0-9a-f]{64}$/.test(j?.servingConfigRevision ?? ""));
+  pin(r.facts, "facts present: timing is the facts file's rows", (j) => Array.isArray(j?.timing) && j.timing.length === 1 && j.timing[0]?.modelKey === "harness-model");
+  pin(r.facts, "facts present: measured is the facts file's list", (j) => diff(j?.measured, FACTS_MEASURED) === null);
+  pin(r.facts, "facts present: researchPort defaults to 4816", (j) => j?.researchPort === 4816);
   if (routeIncluded("/api/router/telemetry")) {
     const telemetry = await request(main[0], "GET", "/api/router/telemetry");
     check("committed telemetry: newest day file, every in-flight aged out", telemetry.json?.available === true && telemetry.json?.file === "router-2026-09-13.10.jsonl" && telemetry.json?.inFlight?.length === 0, telemetry.text.slice(0, 300));
@@ -52,10 +53,8 @@ export async function routesPhase(main: Pair, _fx: Fx) {
   try {
     const d = await readBattery(degraded, "degraded env");
     pin(d.serving, "degraded serving: 502 {error} on an absent LLAMA_CONFIG_PATH", (j) => d.serving?.status === 502 && typeof j?.error === "string");
-    for (const [name, reply] of [["timing", d.timing], ["measured", d.measured]] as const) {
-      pin(reply, `facts absent: ${name} 200 []`, (j) => reply?.status === 200 && Array.isArray(j) && j.length === 0);
-    }
-    pin(d.facts, "facts absent: typed {available:false, reason:absent}", (j) => d.facts?.status === 200 && diff(j, { available: false, reason: "absent" }) === null);
+    pin(d.facts, "facts absent: 200 typed {available:false, reason:absent, researchPort}", (j) => d.facts?.status === 200 && diff(j, { available: false, reason: "absent", researchPort: 4816 }) === null);
+    pin(d.facts, "facts absent: no timing or measured lists", (j) => j?.timing === undefined && j?.measured === undefined);
     for (const path of ["/api/router/telemetry", "/api/router/sidecar", "/api/serving/status", "/api/serving/live"]) {
       if (!routeIncluded(path)) continue;
       const reply = await request(degraded[0], "GET", path);

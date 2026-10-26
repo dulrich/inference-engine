@@ -37,12 +37,15 @@ fn present_file_serves_both_lists_and_strips_unknown_fields() {
     let f = read_serving_facts(Some(&path), &cfg);
     let ok = f.as_ref().unwrap();
     assert_eq!(ok.generated_at, "2026-10-25T12:00:00Z");
-    assert_eq!(timing(&f)[0]["modelKey"], "m");
+    let body = response(&f, 4816);
+    assert_eq!(body["available"], true);
+    assert_eq!(body["timing"][0]["modelKey"], "m");
     assert_eq!(
-        measured(&f),
+        body["measured"],
         json!([{"alias": "m-a", "experimentId": "exp-1"}])
     );
-    assert_eq!(status(&f)["available"], true);
+    assert_eq!(body["researchPort"], 4816);
+    assert!(body.get("futureField").is_none());
 }
 
 #[test]
@@ -77,14 +80,16 @@ fn unavailable_states() {
         let (_t, cfg, path) = setup(Some(&text));
         let f = read_serving_facts(Some(&path), &cfg);
         assert_eq!(f, Err(Unavailable::Invalid), "{text}");
-        assert_eq!((timing(&f), measured(&f)), (json!([]), json!([])));
-        assert_eq!(status(&f), json!({"available": false, "reason": "invalid"}));
+        assert_eq!(
+            response(&f, 4816),
+            json!({"available": false, "reason": "invalid", "researchPort": 4816})
+        );
     }
     let stale = facts_json(&sha256_hex(b"other config")).to_string();
     let (_t, cfg, path) = setup(Some(&stale));
     let f = read_serving_facts(Some(&path), &cfg);
     assert_eq!(f, Err(Unavailable::StaleConfig));
-    assert_eq!(status(&f)["reason"], "stale-config");
+    assert_eq!(response(&f, 1)["reason"], "stale-config");
     assert_eq!(
         read_serving_facts(Some(&path), "/absent/config.yaml"),
         Err(Unavailable::StaleConfig)

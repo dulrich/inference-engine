@@ -1,13 +1,7 @@
 import type { ServingTimingRow } from "@bench-dashboard/shared";
 
-/** Joins a served model's `modelKey` against `GET /api/serving/timing`'s per-served-model
- * p50/p90 aggregate (WP-1, `plans/served-recipe-p50-prefill-and-decode.md` -- rekeys the
- * WP-3 original from a raw `sweep_alias` string match to the resolver's own `modelKey`,
- * since a timing row is now already resolved to exactly one served model server-side). An
- * exact match, same alias-contract discipline `matchServingToMeasured` already uses
- * ("append-only -- never rename, never repurpose", root `CLAUDE.md`) -- a served model with
- * no recipe-matched `timing_round` rounds (the `bge-*` embed/rerank aliases are the known
- * case today) simply has no row in `timingRows` -- returns `null`, never a guessed match. */
+/** Joins a served model's `modelKey` to its `timing` row from `GET /api/serving/facts`
+ * (exact match, alias contract); no row is `null`, never a guessed match. */
 export function matchServingTiming(modelKey: string, timingRows: readonly ServingTimingRow[]): ServingTimingRow | null {
   return timingRows.find((row) => row.modelKey === modelKey) ?? null;
 }

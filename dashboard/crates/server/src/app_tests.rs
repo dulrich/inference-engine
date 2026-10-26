@@ -98,81 +98,115 @@ async fn routes_and_errors() {
 
 const FACTS_CONFIG: &str = "models: {}\n";
 
-fn facts_body(revision: &str) -> String {
+fn facts_body(revision: &str, generated_at: &str, model: &str) -> String {
     serde_json::json!({
         "schema": "serving-facts-v1",
-        "generatedAt": "2026-10-25T12:00:00Z",
+        "generatedAt": generated_at,
         "servingConfigRevision": revision,
         "timing": [{
-            "modelKey": "m", "aliases": ["m-a"], "p50PrefillTokS": 1.5, "p90PrefillTokS": null,
+            "modelKey": model, "aliases": ["m-a"], "p50PrefillTokS": 1.5, "p90PrefillTokS": null,
             "p50DecodeTokS": null, "p90DecodeTokS": null, "samplingArm": null,
             "sampleCount": 1, "mtp": true
         }],
-        "measured": [{"alias": "m-a", "experimentId": "exp-1"}]
+        "measured": [{"alias": "m-a", "experimentId": format!("exp-{model}")}]
     })
     .to_string()
 }
 
-async fn facts_routes(app: &Router) -> (String, String, Value) {
-    let mut out = Vec::new();
+/// `GET /api/serving/facts`: always a 200 JSON body.
+async fn get_facts(app: &Router) -> Value {
+    let (s, ty, _, b) = call(app, "GET", "/api/serving/facts").await;
+    assert_eq!((s, ty.as_str()), (200, "application/json"), "{b}");
+    j(&b)
+}
+
+#[tokio::test]
+async fn facts_route_states() {
+    let t = TempDir::new("facts-app");
+    t.write("config.yaml", FACTS_CONFIG);
+    let llama = format!("{}/config.yaml", t.0);
+    let facts = format!("{}/facts.json", t.0);
+    let rev = sha256_hex(FACTS_CONFIG.as_bytes());
+    let unavailable = |reason: &str| serde_json::json!({"available": false, "reason": reason, "researchPort": 4816});
+    // disabled
+    assert_eq!(get_facts(&app(&t, &llama)).await, unavailable("disabled"));
+    let with_facts = || app_with(&t, &llama, Some(facts.clone()));
+    // absent
+    assert_eq!(get_facts(&with_facts()).await, unavailable("absent"));
+    // present
+    t.write("facts.json", &facts_body(&rev, "2026-10-25T12:00:00Z", "m"));
+    let body = get_facts(&with_facts()).await;
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "available": true,
+            "generatedAt": "2026-10-25T12:00:00Z",
+            "servingConfigRevision": rev,
+            "timing": [{
+                "modelKey": "m", "aliases": ["m-a"], "p50PrefillTokS": 1.5, "p90PrefillTokS": null,
+                "p50DecodeTokS": null, "p90DecodeTokS": null, "samplingArm": null,
+                "sampleCount": 1, "mtp": true
+            }],
+            "measured": [{"alias": "m-a", "experimentId": "exp-m"}],
+            "researchPort": 4816,
+        })
+    );
+    // invalid
+    t.write("facts.json", r#"{"schema":"serving-facts-v1"}"#);
+    assert_eq!(get_facts(&with_facts()).await, unavailable("invalid"));
+    // stale-config
+    t.write(
+        "facts.json",
+        &facts_body(&sha256_hex(b"an older config"), "2026-10-25T12:00:00Z", "m"),
+    );
+    assert_eq!(get_facts(&with_facts()).await, unavailable("stale-config"));
+    // the research port comes from server config
+    let mut cfg = Config::from_lookup(&|_| None);
+    cfg.llama_config_path = llama.clone();
+    cfg.research_port = 5816;
+    let ported = router(Arc::new(AppState { cfg }));
+    assert_eq!(get_facts(&ported).await["researchPort"], 5816);
+    // the three split routes are gone: the JSON 404
     for p in [
         "/api/serving/timing",
         "/api/serving/measured",
         "/api/serving/facts-status",
     ] {
-        let (s, ty, _, b) = call(app, "GET", p).await;
-        assert_eq!((s, ty.as_str()), (200, "application/json"), "{p}: {b}");
-        out.push(b);
+        let (s, ty, _, b) = call(&with_facts(), "GET", p).await;
+        assert_eq!(
+            (s, ty.as_str(), b.as_str()),
+            (404, "application/json", r#"{"error":"not found"}"#),
+            "{p}"
+        );
     }
-    let status = j(&out[2]);
-    (out.remove(0), out.remove(0), status)
 }
 
+/// One generation per response: availability, timing and measured come from one read of the
+/// file (`serving_facts::serve` reads once and builds the body from that read). Rewriting the
+/// file between requests yields responses that are each internally consistent.
 #[tokio::test]
-async fn facts_states_for_timing_and_measured() {
-    let t = TempDir::new("facts-app");
+async fn facts_response_is_one_generation() {
+    let t = TempDir::new("facts-gen");
     t.write("config.yaml", FACTS_CONFIG);
     let llama = format!("{}/config.yaml", t.0);
     let facts = format!("{}/facts.json", t.0);
-    // disabled
-    let (timing, measured, status) = facts_routes(&app(&t, &llama)).await;
-    assert_eq!((timing.as_str(), measured.as_str()), ("[]", "[]"));
-    assert_eq!(
-        status,
-        serde_json::json!({"available": false, "reason": "disabled"})
-    );
-    let with_facts = || app_with(&t, &llama, Some(facts.clone()));
-    // absent
-    let (timing, measured, status) = facts_routes(&with_facts()).await;
-    assert_eq!((timing.as_str(), measured.as_str()), ("[]", "[]"));
-    assert_eq!(status["reason"], "absent");
-    // present
-    t.write(
-        "facts.json",
-        &facts_body(&sha256_hex(FACTS_CONFIG.as_bytes())),
-    );
-    let (timing, measured, status) = facts_routes(&with_facts()).await;
-    assert_eq!(j(&timing)[0]["modelKey"], "m");
-    assert_eq!(j(&timing)[0]["mtp"], true);
-    assert_eq!(measured, r#"[{"alias":"m-a","experimentId":"exp-1"}]"#);
-    assert_eq!(
-        status,
-        serde_json::json!({
-            "available": true,
-            "generatedAt": "2026-10-25T12:00:00Z",
-            "servingConfigRevision": sha256_hex(FACTS_CONFIG.as_bytes()),
-        })
-    );
-    // invalid
-    t.write("facts.json", r#"{"schema":"serving-facts-v1"}"#);
-    let (timing, measured, status) = facts_routes(&with_facts()).await;
-    assert_eq!((timing.as_str(), measured.as_str()), ("[]", "[]"));
-    assert_eq!(status["reason"], "invalid");
-    // stale-config
-    t.write("facts.json", &facts_body(&sha256_hex(b"an older config")));
-    let (timing, measured, status) = facts_routes(&with_facts()).await;
-    assert_eq!((timing.as_str(), measured.as_str()), ("[]", "[]"));
-    assert_eq!(status["reason"], "stale-config");
+    let rev = sha256_hex(FACTS_CONFIG.as_bytes());
+    let app = app_with(&t, &llama, Some(facts));
+    for (gen, model) in [
+        ("2026-10-25T12:00:00Z", "gen-a"),
+        ("2026-10-25T13:00:00Z", "gen-b"),
+    ] {
+        t.write("facts.json", &facts_body(&rev, gen, model));
+        let body = get_facts(&app).await;
+        assert_eq!(body["generatedAt"], gen);
+        assert_eq!(body["timing"][0]["modelKey"], model);
+        assert_eq!(body["measured"][0]["experimentId"], format!("exp-{model}"));
+    }
+    // A generation that turns stale carries no lists from an earlier read.
+    t.write("config.yaml", "models: {changed: {}}\n");
+    let body = get_facts(&app).await;
+    assert_eq!(body["reason"], "stale-config");
+    assert!(body.get("timing").is_none() && body.get("measured").is_none());
 }
 
 #[tokio::test]

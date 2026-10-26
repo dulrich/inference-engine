@@ -1,44 +1,19 @@
-//! The `serving-facts-v1` reader (plan `research-to-eval-harness` WP-4): the research dashboard
-//! writes the file, this side mounts it `:ro` at `SERVING_FACTS_PATH` and serves its `timing`
-//! (`GET /api/serving/timing`) and `measured` (`GET /api/serving/measured`) lists, plus the typed
-//! availability (`GET /api/serving/facts-status`). Every state is a 200: an unavailable file
-//! makes both lists `[]`, and the status route names the reason. Read-only; never writes.
+//! The `serving-facts-v1` reader: the research dashboard (eval-harness) writes the file, this
+//! side mounts it `:ro` at `SERVING_FACTS_PATH` and serves it as one `GET /api/serving/facts`
+//! body (`ServingFactsResponse`). One read of the file and one hash of the llama config per
+//! response, so timing, measured and availability are always one generation. Every state is a
+//! 200; read-only, never writes.
 use crate::jsrt;
+pub use bd_domain::contract::ServingFactsUnavailable as Unavailable;
 use bd_domain::contract::SERVING_FACTS_FILE;
 use bd_domain::validate;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-/// Why the facts are unavailable (`ServingFactsUnavailableReason`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Unavailable {
-    /// `SERVING_FACTS_PATH` unset or empty.
-    Disabled,
-    /// The file does not exist (the research side has not exported yet).
-    Absent,
-    /// Any other read failure.
-    Unreadable,
-    /// Not JSON, or not a `serving-facts-v1` envelope.
-    Invalid,
-    /// `servingConfigRevision` is not the SHA-256 of this side's `LLAMA_CONFIG_PATH` bytes (or
-    /// those bytes cannot be read, so the revision cannot be confirmed).
-    StaleConfig,
-}
-
-impl Unavailable {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Unavailable::Disabled => "disabled",
-            Unavailable::Absent => "absent",
-            Unavailable::Unreadable => "unreadable",
-            Unavailable::Invalid => "invalid",
-            Unavailable::StaleConfig => "stale-config",
-        }
-    }
-}
-
 /// A validated, revision-current facts file (unknown fields already stripped).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Facts {
     pub generated_at: String,
     pub serving_config_revision: String,
@@ -72,54 +47,38 @@ pub fn read_serving_facts(
     let parsed = jsrt::json_parse(text).map_err(|_| Unavailable::Invalid)?;
     let data =
         validate::parse(&SERVING_FACTS_FILE.node, &parsed).map_err(|_| Unavailable::Invalid)?;
-    let field = |k: &str| data.get(k).cloned().unwrap_or(Value::Null);
-    let generated_at = field("generatedAt")
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    if jsrt::date_parse(&generated_at).is_none() {
+    let facts: Facts = serde_json::from_value(data).map_err(|_| Unavailable::Invalid)?;
+    if jsrt::date_parse(&facts.generated_at).is_none() {
         return Err(Unavailable::Invalid);
     }
-    let revision = field("servingConfigRevision")
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
     let config = std::fs::read(llama_config_path).map_err(|_| Unavailable::StaleConfig)?;
-    if sha256_hex(&config) != revision {
+    if sha256_hex(&config) != facts.serving_config_revision {
         return Err(Unavailable::StaleConfig);
     }
-    Ok(Facts {
-        generated_at,
-        serving_config_revision: revision,
-        timing: field("timing"),
-        measured: field("measured"),
-    })
+    Ok(facts)
 }
 
-/// `ServingTimingRow[]`, `[]` when unavailable.
-pub fn timing(facts: &Result<Facts, Unavailable>) -> Value {
-    facts
-        .as_ref()
-        .map_or_else(|_| json!([]), |f| f.timing.clone())
-}
-
-/// `ServingMeasuredEntry[]`, `[]` when unavailable.
-pub fn measured(facts: &Result<Facts, Unavailable>) -> Value {
-    facts
-        .as_ref()
-        .map_or_else(|_| json!([]), |f| f.measured.clone())
-}
-
-/// `ServingFactsStatusResponse`.
-pub fn status(facts: &Result<Facts, Unavailable>) -> Value {
+/// The `ServingFactsResponse` body for one read.
+pub fn response(facts: &Result<Facts, Unavailable>, research_port: u16) -> Value {
     match facts {
         Ok(f) => json!({
             "available": true,
             "generatedAt": f.generated_at,
             "servingConfigRevision": f.serving_config_revision,
+            "timing": f.timing,
+            "measured": f.measured,
+            "researchPort": research_port,
         }),
-        Err(r) => json!({ "available": false, "reason": r.as_str() }),
+        Err(r) => json!({ "available": false, "reason": r, "researchPort": research_port }),
     }
+}
+
+/// `GET /api/serving/facts`: exactly one read, then the one body built from it.
+pub fn serve(facts_path: Option<&str>, llama_config_path: &str, research_port: u16) -> Value {
+    response(
+        &read_serving_facts(facts_path, llama_config_path),
+        research_port,
+    )
 }
 
 #[cfg(test)]

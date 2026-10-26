@@ -22,7 +22,14 @@ pub struct Config {
     pub serving_feed_dir: Option<String>,
     /// `SERVING_FACTS_PATH`: the research side's `serving-facts-v1` file (`:ro`).
     pub serving_facts_path: Option<String>,
+    /// `INFERENCE_RESEARCH_PORT ?? 4816`: the research dashboard's port, handed to the SPA in
+    /// the facts response. Unlike the other variables, a set value that is not a `u16` after
+    /// trimming (including empty) falls back to the default rather than failing startup.
+    pub research_port: u16,
 }
+
+/// The research dashboard's default port (eval-harness `inference_research`).
+pub const DEFAULT_RESEARCH_PORT: u16 = 4816;
 
 pub type Env<'a> = &'a dyn Fn(&str) -> Option<String>;
 
@@ -51,6 +58,9 @@ impl Config {
             codex_sidecar_log_dir: env("CODEX_SIDECAR_LOG_DIR"),
             serving_feed_dir: env("SERVING_FEED_DIR"),
             serving_facts_path: env("SERVING_FACTS_PATH"),
+            research_port: env("INFERENCE_RESEARCH_PORT")
+                .and_then(|p| p.trim().parse::<u16>().ok())
+                .unwrap_or(DEFAULT_RESEARCH_PORT),
         }
     }
 }
@@ -100,6 +110,18 @@ mod tests {
         assert_eq!(c.codex_sidecar_log_dir, None);
         assert_eq!(c.serving_feed_dir, None);
         assert_eq!(c.serving_facts_path, None);
+        assert_eq!(c.research_port, 4816);
+        assert_eq!(
+            cfg(&[("INFERENCE_RESEARCH_PORT", " 5816 ")]).research_port,
+            5816
+        );
+        for bad in ["", "abc", "70000", "-1"] {
+            assert_eq!(
+                cfg(&[("INFERENCE_RESEARCH_PORT", bad)]).research_port,
+                4816,
+                "{bad}"
+            );
+        }
     }
 
     #[test]

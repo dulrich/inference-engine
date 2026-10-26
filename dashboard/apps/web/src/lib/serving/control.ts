@@ -1,26 +1,24 @@
 // POST-response handling for the serving drop-box writes (`POST /api/serving/visibility`,
-// `POST /api/catalog/*`): parses `ServingAcceptedResponseSchema` on a 2xx status, else
-// extracts the route's `{error}` body (mirrors `api.ts`'s own `getJson` error-message
-// extraction) -- kept here, not inline in `api.ts`, so it's testable without mocking `fetch`.
-// Moved from the retired `lib/queue/control.ts` when the research half left (WP-4).
+// `POST /api/catalog/*`): parses `ServingAcceptedResponseSchema` on a 2xx status, else the
+// route's `{error}` body via the shared `errorMessage` extractor `api.ts`'s `getJson` uses too.
+// Kept out of `api.ts` so it is testable without mocking `fetch`.
 
 import { ServingAcceptedResponseSchema, type ServingAcceptedResponse } from "@bench-dashboard/shared";
 
-export interface ControlActionOutcome {
-  ok: boolean;
-  accepted: ServingAcceptedResponse | null;
-  error: string | null;
+export type ControlActionOutcome = { ok: true; accepted: ServingAcceptedResponse } | { ok: false; error: string };
+
+/** A route's `{error: string}` body as a message, or `null` when the body carries none. */
+export function errorMessage(body: unknown): string | null {
+  return body && typeof body === "object" && "error" in body ? String((body as { error: unknown }).error) : null;
 }
 
 export function parseControlActionResponse(status: number, body: unknown): ControlActionOutcome {
   if (status >= 200 && status < 300) {
     const parsed = ServingAcceptedResponseSchema.safeParse(body);
     if (parsed.success) {
-      return { ok: true, accepted: parsed.data, error: null };
+      return { ok: true, accepted: parsed.data };
     }
-    return { ok: false, accepted: null, error: "Malformed response from the control API." };
+    return { ok: false, error: "Malformed response from the control API." };
   }
-  const message =
-    body && typeof body === "object" && "error" in body ? String((body as { error: unknown }).error) : null;
-  return { ok: false, accepted: null, error: message ?? `Control action failed: HTTP ${status}` };
+  return { ok: false, error: errorMessage(body) ?? `Control action failed: HTTP ${status}` };
 }

@@ -2,12 +2,10 @@ import {
   HealthResponseSchema,
   RouterSidecarResponseSchema,
   RouterTelemetryResponseSchema,
-  ServingFactsStatusResponseSchema,
-  ServingMeasuredEntrySchema,
+  ServingFactsResponseSchema,
   ServingResponseSchema,
   ServingLiveResponseSchema,
   ServingStatusResponseSchema,
-  ServingTimingRowSchema,
   type ServingAcceptedResponse,
   type HealthResponse,
   type RouterSidecarResponse,
@@ -15,15 +13,13 @@ import {
   type ServingCatalogAddRequest,
   type ServingCatalogConsumersRequest,
   type ServingCatalogRemoveRequest,
-  type ServingFactsStatusResponse,
-  type ServingMeasuredEntry,
+  type ServingFactsResponse,
   type ServingResponse,
   type ServingLiveResponse,
   type ServingStatusResponse,
-  type ServingTimingRow,
   type ServingVisibilityRequest,
 } from "@bench-dashboard/shared";
-import { parseControlActionResponse } from "./lib/serving/control.ts";
+import { errorMessage, parseControlActionResponse } from "./lib/serving/control.ts";
 
 // The fetch seam for every view: the serving, catalog and router reads/writes. The research
 // routes (experiments, ladders, curves, queue, bake-off control) moved to the research
@@ -36,8 +32,7 @@ async function getJson<T>(path: string, schema: { parse: (value: unknown) => T }
     // return `{ error: string }` -- surface that message when present rather than a bare
     // status code, so a view's error state reads as actionable.
     const body = await response.json().catch(() => null);
-    const message = body && typeof body === "object" && "error" in body ? String((body as { error: unknown }).error) : null;
-    throw new Error(message ?? `${path}: HTTP ${response.status}`);
+    throw new Error(errorMessage(body) ?? `${path}: HTTP ${response.status}`);
   }
   return schema.parse(await response.json());
 }
@@ -50,20 +45,12 @@ export function getServing(): Promise<ServingResponse> {
   return getJson("/api/serving", ServingResponseSchema);
 }
 
-// `GET /api/serving/{timing,measured,facts-status}` (`research-to-eval-harness` WP-4): the
-// research side's `serving-facts-v1` file, read server-side. Timing and measured are always a
-// 200 array (`[]` when the facts are unavailable); the status route says why, as a typed
-// `{available:false, reason}`. Joined client-side (`lib/serving/{matchTiming,matchMeasured}.ts`).
-export function getServingTiming(): Promise<ServingTimingRow[]> {
-  return getJson("/api/serving/timing", ServingTimingRowSchema.array());
-}
-
-export function getServingMeasured(): Promise<ServingMeasuredEntry[]> {
-  return getJson("/api/serving/measured", ServingMeasuredEntrySchema.array());
-}
-
-export function getServingFactsStatus(): Promise<ServingFactsStatusResponse> {
-  return getJson("/api/serving/facts-status", ServingFactsStatusResponseSchema);
+// `GET /api/serving/facts`: the research side's `serving-facts-v1` file, read server-side in
+// one read per response -- timing, measured and availability are one generation. Always 200:
+// unavailable facts are a typed `{available:false, reason}`. `researchPort` builds the
+// research-run link on this page's own host.
+export function getServingFacts(): Promise<ServingFactsResponse> {
+  return getJson("/api/serving/facts", ServingFactsResponseSchema);
 }
 
 // The drop-box POSTs (serving visibility, catalog intents) -- each route only ever RECORDS a
@@ -79,15 +66,15 @@ async function postControlAction(path: string, body?: unknown): Promise<ServingA
   });
   const json = await response.json().catch(() => null);
   const outcome = parseControlActionResponse(response.status, json);
-  if (!outcome.ok || outcome.accepted === null) {
-    throw new Error(outcome.error ?? `${path}: HTTP ${response.status}`);
+  if (!outcome.ok) {
+    throw new Error(outcome.error);
   }
   return outcome.accepted;
 }
 
 // `GET /api/serving/status` + `POST /api/serving/visibility` (WP-4, `plans/bench-dashboard-
 // serving-control.md`) -- the serving-visibility control pair, fetched by `Serving.svelte`
-// ALONGSIDE `getServing()`/`getServingTiming()`. The status read is a discriminated union on
+// ALONGSIDE `getServing()`/`getServingFacts()`. The status read is a discriminated union on
 // `available` (an unset env var, a missing/unparseable/empty file, or a `generated_at` older
 // than 180 s is a typed `{available:false, reason}` at 200, never an error), so only a
 // genuine transport/parse failure throws out of it -- the router-status posture. The POST

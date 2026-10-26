@@ -1,4 +1,4 @@
-//! The serving dashboard's routes: health, serving config + timing/measured (from the
+//! The serving dashboard's routes: health, serving config + facts (one route over the
 //! `serving-facts-v1` file), serving control and the catalog drop-box, router status, then the
 //! JSON 404 under `/api/*` and the SPA fallback. The research routes (experiments, ladders,
 //! curves, queue, bake-off control, capture export) moved to eval-harness `inference_research`
@@ -30,9 +30,7 @@ async fn blocking<T: Send + 'static>(
 pub fn router(state: Shared) -> Router {
     Router::new()
         .route("/health", get(health))
-        .route("/api/serving/timing", get(serving_timing))
-        .route("/api/serving/measured", get(serving_measured))
-        .route("/api/serving/facts-status", get(serving_facts_status))
+        .route("/api/serving/facts", get(serving_facts))
         .route("/api/serving", get(serving))
         .route("/api/serving/status", get(serving_status))
         .route("/api/serving/live", get(serving_live))
@@ -59,36 +57,16 @@ async fn health() -> Response {
     ok(&HealthResponse { status: "ok" })
 }
 
-/// Read the facts file on the blocking pool; every state is a 200 body.
-async fn facts(
-    s: Shared,
-    project: fn(&FactsResult) -> serde_json::Value,
-) -> Result<Response, RouteError> {
+/// `GET /api/serving/facts`: `ServingFactsResponse`, always 200 (one file read per response).
+async fn serving_facts(State(s): State<Shared>) -> Result<Response, RouteError> {
     blocking(move || {
-        let f = serving_facts::read_serving_facts(
+        Ok(ok(&serving_facts::serve(
             s.cfg.serving_facts_path.as_deref(),
             &s.cfg.llama_config_path,
-        );
-        Ok(ok(&project(&f)))
+            s.cfg.research_port,
+        )))
     })
     .await
-}
-
-type FactsResult = Result<serving_facts::Facts, serving_facts::Unavailable>;
-
-/// `GET /api/serving/timing`: `ServingTimingRow[]` from the facts file, `[]` when unavailable.
-async fn serving_timing(State(s): State<Shared>) -> Result<Response, RouteError> {
-    facts(s, serving_facts::timing).await
-}
-
-/// `GET /api/serving/measured`: `ServingMeasuredEntry[]` from the facts file, `[]` when unavailable.
-async fn serving_measured(State(s): State<Shared>) -> Result<Response, RouteError> {
-    facts(s, serving_facts::measured).await
-}
-
-/// `GET /api/serving/facts-status`: `ServingFactsStatusResponse`, always 200.
-async fn serving_facts_status(State(s): State<Shared>) -> Result<Response, RouteError> {
-    facts(s, serving_facts::status).await
 }
 
 // ---- File planes: config, facts, status and drop-box routes ------------------------------

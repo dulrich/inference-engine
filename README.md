@@ -8,7 +8,7 @@ Local model-serving fleet for `<code-root>` consumers. All services are loopback
 - **`inference-engine-router`** (`router/`) — resident mixed local/subscription Anthropic-protocol gateway (`@the-next-ai/ai-gateway`, pinned source build + vendored patch series): `claude-local/*` → the llama tier, subscription Claude passthrough, OpenRouter legs, and the codex providers. Port **4813**.
 - **`codex-sidecar`** (`sidecar/`) — Anthropic-Messages front end over `codex app-server`, one child per codex persona; a `systemd --user` service (not a container) behind the router. Port **4877**.
 - **`inference-engine-tts`** (`tts/tier/`) — GPU TTS tier (Higgs TTS 3 4B render + MOSS-VoiceGenerator design, ROCm). Port **4814**, compose `manual` profile, run only inside `tts/tier/window.sh` render windows.
-- **`inference-dashboard`** (`dashboard/`) — serving dashboard (Serving/Router views over `serving-facts-v1`). Port **4810** (dev listener 5810).
+- **`inference-console`** (`console/`) — Inference Console (Serving/Router views over `serving-facts-v1`). Port **4810** (dev listener 5810).
 
 The bake-off harness, queue control plane, and research dashboard (:4816) live in eval-harness `inference_research/` (`eval-harness/inference_research/harness`); the Open WebUI model-row sync lives in `scripts/`.
 

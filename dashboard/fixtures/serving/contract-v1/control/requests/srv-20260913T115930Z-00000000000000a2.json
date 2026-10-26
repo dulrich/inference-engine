@@ -1,8 +1,0 @@
-{
-  "schema": "serving-request-v1",
-  "request_id": "srv-20260913T115930Z-00000000000000a2",
-  "action": "set-visibility",
-  "model_key": "Qwen3.8-27B-UD-IQ3_S-reasoning-off",
-  "consumers": [],
-  "requested_at": "2026-09-13T11:59:30.117Z"
-}

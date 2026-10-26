@@ -194,7 +194,7 @@ systemctl --user enable --now codex-sidecar
 sidecar/status.sh
 ```
 
-`status.sh` prints `systemctl --user status codex-sidecar` (tolerating a not-installed unit), then an authenticated `GET /healthz` on **every** expected bind — loopback and `SIDECAR_BIND_EXTRA` (read from the fleet-env projection; default `172.17.0.1`, empty skips it) — status code and body, never the key. It asserts on the body (`"status":"ok"`), and exits non-zero on a 503 (a degraded persona or a missing bind), a non-`ok` body, or a refused connection on any bind. Probing loopback alone was blind to the docker0 bind race by construction.
+`status.sh` prints `systemctl --user status codex-sidecar` (tolerating a not-installed unit), then an authenticated `GET /healthz` on **every** expected bind — loopback and `SIDECAR_BIND_EXTRA` (read from the fleet-env projection; default `172.17.0.1`, empty skips it) — status code and body, never the key. It asserts on the body (`"status":"ok"`), and exits non-zero on a 503 (a degraded persona or a missing bind), a non-`ok` body, or a refused connection on any bind. Probing loopback alone was blind to the docker0 bind race by construction. It then runs one fixture turn as a posture probe, not tied to a fixed account: it tries the personas loopback `/healthz` lists, in order, reports and skips any whose turn does not complete (e.g. a persona not logged in on that node), probes the first that does, and fails only when none completes; `SIDECAR_PROBE_PERSONA="<name> [<name>…]"` replaces that list (tried in the order given).
 
 **Rotate the key:**
 

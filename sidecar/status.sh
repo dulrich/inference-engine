@@ -10,6 +10,10 @@
 # posture is *probed*, not assumed — the response must carry a `stop_reason` and must contain
 # no collabAgentToolCall / webSearch / commandExecution, and the turn's `config-verified` row
 # must exist, whose `features` readings are printed. Body assertions only, never status codes.
+# The probe is not tied to one account: it tries the personas loopback /healthz reports, in
+# order, and the first whose turn completes is probed (a persona not logged in on this node is
+# reported and skipped); it fails only when none completes. SIDECAR_PROBE_PERSONA="<name> [<name>…]"
+# replaces that list (tried in the order given).
 for _a in "$@"; do case "$_a" in --help|-h)
   printf 'usage: %s %s\n' "${0##*/}" '[--help]'
   awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
@@ -60,6 +64,7 @@ body_file="$(mktemp)"
 trap 'rm -f -- "$body_file"' EXIT
 
 rc=0
+personas=""
 for host in $hosts; do
   url="http://${host}:${PORT}/healthz"
   printf '\n== %s ==\n' "$url"
@@ -79,6 +84,10 @@ for host in $hosts; do
 
   if [ "$code" != "200" ] || ! grep -q '"status":"ok"' -- "$body_file"; then
     rc=1
+  fi
+  # The configured persona set, from the sidecar itself (loopback), in its declared order.
+  if [ "$host" = "127.0.0.1" ] && command -v jq >/dev/null 2>&1; then
+    personas="$(jq -r '(.personas // {}) | keys_unsorted[]' -- "$body_file" 2>/dev/null || true)"
   fi
 done
 
@@ -104,17 +113,35 @@ probe_body="$(jq -nc --arg sid "$probe_sid" '{
   metadata: { user_id: ({ device_id: "status-probe", account_uuid: "status-probe", session_id: $sid } | tojson) }
 }')"
 
-curl -sS -o "$probe_file" \
-  -H "authorization: Bearer ${key}" -H 'content-type: application/json' \
-  --data-binary "$probe_body" \
-  "http://127.0.0.1:${PORT}/codex-b/v1/messages" >/dev/null || true
-
-if ! jq -e '.stop_reason != null' -- "$probe_file" >/dev/null 2>&1; then
-  printf 'posture probe: no stop_reason in the response body (the turn did not complete)\n' >&2
-  head -c 400 -- "$probe_file" >&2 || true
-  printf '\n' >&2
+if [ -n "${SIDECAR_PROBE_PERSONA:-}" ]; then
+  personas="$SIDECAR_PROBE_PERSONA"
+fi
+if [ -z "$personas" ]; then
+  printf 'posture probe: no persona to probe (loopback /healthz listed none; set SIDECAR_PROBE_PERSONA)\n' >&2
   exit 1
 fi
+
+probed=""
+tried=""
+for persona in $personas; do
+  tried="$tried $persona"
+  curl -sS -o "$probe_file" \
+    -H "authorization: Bearer ${key}" -H 'content-type: application/json' \
+    --data-binary "$probe_body" \
+    "http://127.0.0.1:${PORT}/${persona}/v1/messages" >/dev/null || true
+  if jq -e '.stop_reason != null' -- "$probe_file" >/dev/null 2>&1; then
+    probed="$persona"
+    break
+  fi
+  printf 'posture probe: %s: no stop_reason in the response body (the turn did not complete)\n' "$persona" >&2
+  head -c 400 -- "$probe_file" >&2 || true
+  printf '\n' >&2
+done
+if [ -z "$probed" ]; then
+  printf 'posture probe: no persona completed a turn (tried:%s)\n' "$tried" >&2
+  exit 1
+fi
+printf 'persona:     %s\n' "$probed"
 printf 'stop_reason: %s\n' "$(jq -r '.stop_reason' -- "$probe_file")"
 
 if grep -qE 'collabAgentToolCall|webSearch|commandExecution' -- "$probe_file"; then

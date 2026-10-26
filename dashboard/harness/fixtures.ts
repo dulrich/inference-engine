@@ -112,7 +112,7 @@ export const COMPOSE_ENV = {
   CODEX_SIDECAR_LOG_DIR: "/var/log/codex-sidecar",
   SERVING_FEED_DIR: "/var/log/inference-serving",
 };
-/** The compose mounts (all ro except the per-twin drop-box). */
+/** The compose mounts (all ro except the rw drop-box). */
 export const composeMounts = (fx: Fx) => [
   `${fx.llamaConfig}:/llama-config.yaml:ro`,
   `${fx.facts}:/facts:ro`,
@@ -121,7 +121,7 @@ export const composeMounts = (fx: Fx) => [
   `${fx.sidecar}:/var/log/codex-sidecar:ro`,
   `${fx.servingFeed}:/var/log/inference-serving:ro`,
 ];
-/** Full compose env + mounts, each twin with its own drop-box. */
+/** Full compose env + mounts, with its own drop-box. */
 export const composeSpec = (fx: Fx) => async (): Promise<AppSpec> => ({ env: COMPOSE_ENV, mounts: composeMounts(fx), requestsDir: await requestsBox() });
 /** Every optional var unset (config.ts: CONTROL_*, ROUTER_TELEMETRY_DIR, CODEX_SIDECAR_LOG_DIR, SERVING_FEED_DIR stay
  * undefined), LLAMA_CONFIG_PATH and SERVING_FACTS_PATH pointing at absent paths (the 502 and facts-`absent` states). */

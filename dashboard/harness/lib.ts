@@ -1,15 +1,15 @@
-// Shared plumbing for the bench-dashboard black-box harness (plans/bench-dashboard-rust-port.md
-// WP-1): CLI, PASS/FAIL/SKIP accounting, HTTP client, docker lifecycle with unconditional per-run
+// Shared plumbing for the serving-dashboard black-box harness: CLI, PASS/FAIL/SKIP accounting, HTTP client, docker lifecycle with unconditional per-run
 // cleanup. Talks to images only over HTTP on a throwaway docker network (no host port publish),
 // env, bind-mounted fixture files, and the files left in the drop-box. Never imports API code.
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { normalizeResponse } from "./dump.ts";
 
 export const ALL_PHASES = ["routes", "control", "feeds", "spa"];
-/** apps/api/src/config.ts `port: Number(process.env.PORT ?? 4810)`; the compose block sets 4810. */
+/** The port the image listens on (the compose block sets 4810). */
 export const PORT = 4810;
+/** An ISO-8601 UTC timestamp with optional milliseconds (the drop-box `requested_at` grammar). */
+export const ISO_8601 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
 
 const args = process.argv.slice(2);
 function argValue(flag: string): string | undefined {
@@ -114,7 +114,6 @@ export interface Instance {
   /** Host path of this instance's rw drop-box (bind-mounted at CONTROL_REQUESTS_DIR), if any. */
   requestsDir?: string;
 }
-export type Pair = [Instance, Instance];
 
 export async function request(target: Instance, method: string, path: string, body?: unknown): Promise<Reply> {
   const init: RequestInit = { method, headers: {} };
@@ -135,37 +134,18 @@ export async function request(target: Instance, method: string, path: string, bo
 }
 
 export const contentType = (reply: Reply): string => (reply.headers.get("content-type") ?? "").split(";")[0] ?? "";
-/** The comparable form of a JSON reply: status, content type and the clock-normalized body. */
-export const shape = (reply: Reply) => ({
-  status: reply.status,
-  type: contentType(reply),
-  body: reply.json === null ? reply.text : reply.status === 502 && typeof reply.json?.error === "string" && Object.keys(reply.json).length === 1
-    // routes/serving.ts answers 502 `{error: error.message}` on a config read
-    // failure: the message is the runtime's I/O error text (Bun: "ENOENT: no such file or
-    // directory, open '…'"), compared by shape only.
-    ? { error: "<io error message>" }
-    : normalizeResponse(reply.json),
-});
-
-/**
- * Subject vs reference twin: one request against each (sequentially), compared on status + type +
- * normalized body. Returns the subject reply for pinned facts; out-of-subset paths are skipped.
- */
-export async function both(pair: Pair, name: string, method: string, path: string, body?: unknown): Promise<Reply | null> {
+/** One request against `target`; an out-of-`--routes` path is skipped (counted) and returns null. */
+export async function get(target: Instance, name: string, method: string, path: string, body?: unknown): Promise<Reply | null> {
   if (!routeIncluded(path)) {
     skip(name, `${path} outside --routes`);
     return null;
   }
-  const s = await request(pair[0], method, path, body);
-  const g = await request(pair[1], method, path, body);
-  const d = diff(shape(s), shape(g));
-  check(`${name} [${method} ${path}] matches reference`, d === null, d ?? "");
-  return s;
+  return request(target, method, path, body);
 }
 export function expectStatus(reply: Reply | null, name: string, status: number) {
   if (reply) check(`${name}: status ${status}`, reply.status === status, `got ${reply.status}: ${reply.text.slice(0, 200)}`);
 }
-/** Pinned fact on a subject reply (skipped silently when `both` skipped the route). */
+/** Pinned fact on a subject reply (skipped silently when `get` skipped the route). */
 export function pin(reply: Reply | null, name: string, ok: (json: Json) => boolean) {
   if (reply) check(name, ok(reply.json), reply.text.slice(0, 300));
 }
@@ -239,16 +219,10 @@ export async function startApp(key: string, tag: string, spec: AppSpec): Promise
   }
   throw new Error(`${name} never became ready:\n${await logs(instance)}`);
 }
-/** Subject (`--image`) + reference twin (the same `--image`); `specFor(i)` lets each twin own its drop-box. */
-export async function startPair(key: string, specFor: (twin: number) => AppSpec | Promise<AppSpec>): Promise<Pair> {
-  const [s, r] = [await specFor(0), await specFor(1)];
-  return Promise.all([startApp(`${key}-s`, image, s), startApp(`${key}-r`, image, r)]);
-}
 export async function stopApp(instance: { name: string }) {
   await run(["docker", "stop", "-t", "10", instance.name], true);
   await run(["docker", "rm", "-f", "-v", instance.name], true);
   containers.delete(instance.name);
 }
-export const stopPair = (pair: Pair) => Promise.all(pair.map(stopApp));
 export const logs = (instance: { name: string }) => run(["docker", "logs", "--tail", "60", instance.name], true);
 

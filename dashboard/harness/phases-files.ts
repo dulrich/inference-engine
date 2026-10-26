@@ -1,19 +1,17 @@
 // File-plane phases: control (serving drop-box POSTs + the serving host status read), feeds (router telemetry / sidecar / serving live residency over clock-relative jsonl).
 import { chmod, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ISO_8601, normalizeResponse } from "./dump.ts";
 import { COMPOSE_ENV, composeMounts, FIXTURE_ROOT, FRESH, requestsBox, STALE, TODAY, writeHostFiles, type Fx } from "./fixtures.ts";
-import { both, check, checkEqual, contentType, diff, request, routeIncluded, skip, startPair, stopPair, work, type Json, type Pair } from "./lib.ts";
+import { check, checkEqual, diff, get, image, ISO_8601, request, routeIncluded, skip, startApp, stopApp, work, type Instance, type Json } from "./lib.ts";
 
 // ---- control -----------------------------------------------------------------------------
 /** shared/src/servingRequest.ts SERVING_REQUEST_ID_PATTERN. */
 const SRV_ID = /^srv-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$/;
 
 /**
- * One POST against each twin. Response: `requestId` compared by grammar (clock + randomUUID,
- * routes/control.ts:41-48), everything else exact. Drop-box: exactly one new entry named
- * `<requestId>.json` (temp file unlinked), its bytes compared with `request_id`/`requested_at`
- * replaced by placeholders after their shape checks, and its parsed body pinned to `expected`.
+ * One POST. Response: `requestId` checked by grammar (clock + randomUUID, routes/control.ts:41-48).
+ * Drop-box: exactly one new entry named `<requestId>.json` (temp file unlinked) whose
+ * `request_id`/`requested_at` pass their shape checks, and whose parsed body is pinned to `expected`.
  */
 /**
  * A 400 `{error}` body. routes/control.ts:136,156 and routes/servingControl.ts:86 answer
@@ -28,40 +26,33 @@ const BAD_REQUEST_ERROR = "<400 issue messages>";
 const isBadRequestBody = (status: number, json: Json): boolean =>
   status === 400 && json !== null && typeof json === "object" && Object.keys(json).length === 1 && typeof json.error === "string" && json.error.length > 0;
 
-async function post(pair: Pair, name: string, path: string, body: unknown, expected: Record<string, unknown> | null, custom: readonly string[] = []) {
+async function post(target: Instance, name: string, path: string, body: unknown, expected: Record<string, unknown> | null, custom: readonly string[] = []) {
   if (!routeIncluded(path)) {
     skip(name, `${path} outside --routes`);
     return;
   }
-  const views: unknown[] = [];
-  for (const twin of pair) {
-    const box = twin.requestsDir!;
-    const before = new Set(await readdir(box));
-    const reply = await request(twin, "POST", path, body);
-    const fresh = (await readdir(box)).filter((f) => !before.has(f));
-    const json = reply.json ?? {};
-    const id = json.requestId;
-    let file: unknown = fresh;
-    if (reply.status === 200 && typeof id === "string" && fresh.length === 1 && fresh[0] === `${id}.json`) {
-      const text = await readFile(join(box, fresh[0]), "utf8");
-      const parsed = JSON.parse(text);
-      const at = parsed.requested_at;
-      const shapeOk = SRV_ID.test(id) && parsed.request_id === id && typeof at === "string" && ISO_8601.test(at);
-      file = { shapeOk, bytes: text.replace(JSON.stringify(id), '"<request_id>"').replace(JSON.stringify(at), '"<requested_at>"') };
-      if (twin === pair[0]) checkEqual(`${name}: request file body`, { ...parsed, request_id: "<id>", requested_at: "<at>" }, { ...expected, request_id: "<id>", requested_at: "<at>" });
-    }
-    if (isBadRequestBody(reply.status, reply.json)) {
-      for (const message of custom) check(`${name}: ${twin === pair[0] ? "subject" : "reference"} 400 names "${message}"`, json.error.includes(message), json.error);
-      views.push({ status: reply.status, type: contentType(reply), body: { error: BAD_REQUEST_ERROR }, file });
-      continue;
-    }
-    views.push({ status: reply.status, type: contentType(reply), body: normalizeResponse({ ...json, ...(typeof id === "string" ? { requestId: SRV_ID.test(id) ? "<id>" : `bad:${id}` } : {}) }), file });
+  const box = target.requestsDir!;
+  const before = new Set(await readdir(box));
+  const reply = await request(target, "POST", path, body);
+  const fresh = (await readdir(box)).filter((f) => !before.has(f));
+  const json = reply.json ?? {};
+  const id = json.requestId;
+  let file: unknown = fresh;
+  if (reply.status === 200 && typeof id === "string" && fresh.length === 1 && fresh[0] === `${id}.json`) {
+    const parsed = JSON.parse(await readFile(join(box, fresh[0]), "utf8"));
+    const at = parsed.requested_at;
+    file = { shapeOk: SRV_ID.test(id) && parsed.request_id === id && typeof at === "string" && ISO_8601.test(at) };
+    checkEqual(`${name}: request file body`, { ...parsed, request_id: "<id>", requested_at: "<at>" }, { ...expected, request_id: "<id>", requested_at: "<at>" });
   }
-  const d = diff(views[0], views[1]);
-  check(`${name} [POST ${path}] response + drop-box match reference`, d === null, d ?? "");
-  const v = views[0] as Json;
-  if (expected) check(`${name}: 200 accepted, one well-formed file`, v.status === 200 && v.body?.accepted === true && v.file?.shapeOk === true, JSON.stringify(v).slice(0, 300));
-  else check(`${name}: 400 {error}, no file`, v.status === 400 && v.body?.error === BAD_REQUEST_ERROR && Array.isArray(v.file) && v.file.length === 0, JSON.stringify(v).slice(0, 300));
+  let view: Json;
+  if (isBadRequestBody(reply.status, reply.json)) {
+    for (const message of custom) check(`${name}: subject 400 names "${message}"`, json.error.includes(message), json.error);
+    view = { status: reply.status, body: { error: BAD_REQUEST_ERROR }, file };
+  } else {
+    view = { status: reply.status, body: json, file };
+  }
+  if (expected) check(`${name}: 200 accepted, one well-formed file`, view.status === 200 && view.body?.accepted === true && view.file?.shapeOk === true, JSON.stringify(view).slice(0, 300));
+  else check(`${name}: 400 {error}, no file`, view.status === 400 && view.body?.error === BAD_REQUEST_ERROR && Array.isArray(view.file) && view.file.length === 0, JSON.stringify(view).slice(0, 300));
 }
 
 export async function controlPhase(fx: Fx) {
@@ -69,20 +60,20 @@ export async function controlPhase(fx: Fx) {
   const host = join(ctl, "host");
   await writeHostFiles(host, FRESH);
   await chmod(ctl, 0o755);
-  const pair = await startPair("control", async () => ({
+  const main = await startApp("control", image, {
     env: { ...COMPOSE_ENV, CONTROL_HOST_DIR: "/ctl/host" },
     mounts: [...composeMounts(fx), `${ctl}:/ctl:ro`],
     requestsDir: await requestsBox(),
-  }));
+  });
   try {
     const srv = { schema: "serving-request-v1", action: "set-visibility" };
     for (const [label, consumers] of [["both consumers", ["cc", "openwebui"]], ["none", []], ["reverse order kept", ["openwebui", "cc"]]] as const) {
-      await post(pair, `serving visibility ${label}`, "/api/serving/visibility", { modelKey: "Qwen3.6-35B-A3B-UD-Q4_K_XL", consumers }, { ...srv, model_key: "Qwen3.6-35B-A3B-UD-Q4_K_XL", consumers });
+      await post(main, `serving visibility ${label}`, "/api/serving/visibility", { modelKey: "Qwen3.6-35B-A3B-UD-Q4_K_XL", consumers }, { ...srv, model_key: "Qwen3.6-35B-A3B-UD-Q4_K_XL", consumers });
     }
     // shared/src/servingRequest.ts: the one custom message, `modelKey`'s `.min(1, …)`.
     const modelKeyMessage = "modelKey must be a non-empty llama/config.yaml model key";
     for (const [label, body, custom] of [["empty modelKey", { modelKey: "", consumers: [] }, [modelKeyMessage]], ["unknown consumer", { modelKey: "m", consumers: ["bogus"] }, []], ["consumers not array", { modelKey: "m", consumers: "cc" }, []], ["missing", {}, []], ["non-JSON", "{", []]] as const) {
-      await post(pair, `serving visibility ${label}`, "/api/serving/visibility", body, null, custom);
+      await post(main, `serving visibility ${label}`, "/api/serving/visibility", body, null, custom);
     }
 
     // Host status read: GET /api/serving/status (routes/servingControl.ts readServingStatus),
@@ -100,11 +91,11 @@ export async function controlPhase(fx: Fx) {
     for (const [label, apply, servingExpect] of states) {
       await apply();
       if (label !== "host dir missing") await chmod(host, 0o755);
-      const status = await both(pair, `host ${label}: serving status`, "GET", "/api/serving/status");
+      const status = await get(main, `host ${label}: serving status`, "GET", "/api/serving/status");
       if (status) check(`host ${label}: serving status verdict`, servingExpect === "available" ? status.json?.available === true && status.json?.schema === "serving-status-v1" : diff(status.json, servingExpect) === null, status.text.slice(0, 200));
     }
   } finally {
-    await stopPair(pair);
+    await stopApp(main);
   }
 }
 
@@ -184,13 +175,13 @@ export async function feedsPhase() {
   };
   await writeLive(FRESH, FRESH);
   await chmod(feeds, 0o755);
-  const pair = await startPair("feeds", () => ({ env: { ...COMPOSE_ENV, ROUTER_TELEMETRY_DIR: "/feeds/router", CODEX_SIDECAR_LOG_DIR: "/feeds/sidecar", SERVING_FEED_DIR: "/feeds/serving" }, mounts: [`${feeds}:/feeds:ro`] }));
+  const main = await startApp("feeds", image, { env: { ...COMPOSE_ENV, ROUTER_TELEMETRY_DIR: "/feeds/router", CODEX_SIDECAR_LOG_DIR: "/feeds/sidecar", SERVING_FEED_DIR: "/feeds/serving" }, mounts: [`${feeds}:/feeds:ro`] });
   try {
     const read = async (label: string) => {
-      const t = await both(pair, `${label}: telemetry`, "GET", "/api/router/telemetry");
-      await both(pair, `${label}: telemetry ?staleMs=600000`, "GET", "/api/router/telemetry?staleMs=600000");
-      const s = await both(pair, `${label}: serving live`, "GET", "/api/serving/live");
-      const c = await both(pair, `${label}: sidecar`, "GET", "/api/router/sidecar");
+      const t = await get(main, `${label}: telemetry`, "GET", "/api/router/telemetry");
+      await get(main, `${label}: telemetry ?staleMs=600000`, "GET", "/api/router/telemetry?staleMs=600000");
+      const s = await get(main, `${label}: serving live`, "GET", "/api/serving/live");
+      const c = await get(main, `${label}: sidecar`, "GET", "/api/router/sidecar");
       return { t: t?.json, s: s?.json, c: c?.json, ran: Boolean(t && s && c) };
     };
     const unavailable = (r: Json, reason: string) => r?.available === false && r?.reason === reason && Object.keys(r).length === 2;
@@ -244,6 +235,6 @@ export async function feedsPhase() {
     r = await read("dirs missing");
     if (r.ran) check("missing dir: all three unreadable", unavailable(r.t, "unreadable") && unavailable(r.s, "unreadable") && unavailable(r.c, "unreadable"), JSON.stringify(r));
   } finally {
-    await stopPair(pair);
+    await stopApp(main);
   }
 }

@@ -1,15 +1,14 @@
-// Black-box contract harness for the Bench Dashboard image (plans/bench-dashboard-rust-port.md WP-1).
+// Black-box contract harness for the serving dashboard image.
 // Usage: bun run harness [--image <tag>] [--phases routes,control,feeds,spa] [--routes <prefix,...>]
-// Every check runs the subject (--image) beside a reference twin (the same --image)
-// on identical fixtures and compares status + content type + normalized body and drop-box files;
-// pinned facts guard against a twin pair that agrees on nonsense. --routes: path-prefix subset
-// (`<path>$` = exact), out-of-subset checks skipped.
+// Every check drives one instance of --image over HTTP on identical fixtures and asserts pinned facts
+// about its replies and drop-box files. --routes: path-prefix subset (`<path>$` = exact),
+// out-of-subset checks skipped.
 // Exit 0 iff 0 checks failed and every requested phase ran a check. Every docker object carries a
 // per-run `bd-harness-<random>` prefix, publishes no host port, and is removed on exit.
 import { composeSpec, writeFixtures } from "./fixtures.ts";
 import { controlPhase, feedsPhase } from "./phases-files.ts";
 import { routesPhase, spaPhase } from "./phases-http.ts";
-import { check, cleanup, counts, idlePhases, image, logs, network, phaseSummary, phases, prefix, run, setPhase, startPair, wants, type Instance, type Pair } from "./lib.ts";
+import { check, cleanup, counts, idlePhases, image, logs, network, phaseSummary, phases, prefix, run, setPhase, startApp, wants, type Instance } from "./lib.ts";
 
 const started: Instance[] = [];
 try {
@@ -18,19 +17,19 @@ try {
   await run(["docker", "network", "create", network]);
   const fx = await writeFixtures();
 
-  let pair: Pair | undefined;
+  let main: Instance | undefined;
   if (wants("routes", "spa")) {
     setPhase("setup");
-    pair = await startPair("main", composeSpec(fx));
-    started.push(...pair);
+    main = await startApp("main", image, await composeSpec(fx)());
+    started.push(main);
   }
   if (wants("routes")) {
     setPhase("routes");
-    await routesPhase(pair!, fx);
+    await routesPhase(main!);
   }
   if (wants("spa")) {
     setPhase("spa");
-    await spaPhase(pair!);
+    await spaPhase(main!);
   }
   if (wants("control")) {
     setPhase("control");

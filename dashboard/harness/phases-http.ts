@@ -2,27 +2,27 @@
 // env and under the degraded env, plus the JSON 404 for the research routes that moved to
 // eval-harness `inference_research`) and spa.
 import { join } from "node:path";
-import { degradedSpec, FACTS_MEASURED, type Fx } from "./fixtures.ts";
-import { both, check, checkEqual, contentType, diff, pin, request, routeIncluded, run, skip, startPair, stopPair, work, type Pair } from "./lib.ts";
+import { degradedSpec, FACTS_MEASURED } from "./fixtures.ts";
+import { check, checkEqual, contentType, diff, get, image, pin, request, routeIncluded, run, skip, startApp, stopApp, work, type Instance } from "./lib.ts";
 
-/** Every GET read route against a pair (the routes phase battery). */
-export async function readBattery(pair: Pair, label: string) {
-  const health = await both(pair, `${label} health`, "GET", "/health");
+/** Every GET read route against one instance (the routes phase battery). */
+export async function readBattery(target: Instance, label: string) {
+  const health = await get(target, `${label} health`, "GET", "/health");
   pin(health, `${label} health: status ok`, (j) => j?.status === "ok");
-  const serving = await both(pair, `${label} serving`, "GET", "/api/serving");
-  const facts = await both(pair, `${label} serving facts`, "GET", "/api/serving/facts");
-  await both(pair, `${label} serving status`, "GET", "/api/serving/status");
-  const live = await both(pair, `${label} serving live`, "GET", "/api/serving/live");
+  const serving = await get(target, `${label} serving`, "GET", "/api/serving");
+  const facts = await get(target, `${label} serving facts`, "GET", "/api/serving/facts");
+  await get(target, `${label} serving status`, "GET", "/api/serving/status");
+  const live = await get(target, `${label} serving live`, "GET", "/api/serving/live");
   for (const query of ["", "?staleMs=999", "?staleMs=abc", "?staleMs=600000", "?staleMs=600001"]) {
-    await both(pair, `${label} router telemetry${query}`, "GET", `/api/router/telemetry${query}`);
+    await get(target, `${label} router telemetry${query}`, "GET", `/api/router/telemetry${query}`);
   }
-  await both(pair, `${label} router sidecar`, "GET", "/api/router/sidecar");
+  await get(target, `${label} router sidecar`, "GET", "/api/router/sidecar");
   return { serving, facts, live };
 }
 
 /** The JSON 404 for unknown /api/* under every method, for every retired research route, and
  * for the three split facts routes `/api/serving/facts` replaced. */
-async function notFoundBattery(pair: Pair) {
+async function notFoundBattery(target: Instance) {
   const research = [
     ["GET", "/api/experiments"], ["GET", "/api/experiments/fixture-v2-full"], ["GET", "/api/ladders"], ["GET", "/api/ladders/example-org/Example-Tiny-GGUF"],
     ["GET", "/api/curves/fixture-v2-full"], ["GET", "/api/queue"], ["GET", "/api/export/scoreboard-capture"],
@@ -30,12 +30,12 @@ async function notFoundBattery(pair: Pair) {
     ["GET", "/api/serving/timing"], ["GET", "/api/serving/measured"], ["GET", "/api/serving/facts-status"],
   ] as const;
   for (const [method, path] of [["GET", "/api/router/slots"], ["GET", "/api/nope"], ["GET", "/api"], ["DELETE", "/api/queue/x"], ["PUT", "/api/serving/visibility"], ...research] as const) {
-    const reply = await both(pair, "unknown api route", method, path);
+    const reply = await get(target, "unknown api route", method, path);
     pin(reply, `${method} ${path}: JSON 404 {error:"not found"}`, (j) => reply?.status === 404 && contentType(reply) === "application/json" && j?.error === "not found");
   }
 }
 
-export async function routesPhase(main: Pair, _fx: Fx) {
+export async function routesPhase(main: Instance) {
   const r = await readBattery(main, "full env");
   pin(r.serving, "serving: 200 with models", (j) => r.serving?.status === 200 && Array.isArray(j?.models) && j.models.length > 0);
   pin(r.facts, "facts present: 200 available with the generatedAt + revision", (j) => r.facts?.status === 200 && j?.available === true && j?.generatedAt === "2026-10-25T12:00:00.000Z" && /^[0-9a-f]{64}$/.test(j?.servingConfigRevision ?? ""));
@@ -43,13 +43,13 @@ export async function routesPhase(main: Pair, _fx: Fx) {
   pin(r.facts, "facts present: measured is the facts file's list", (j) => diff(j?.measured, FACTS_MEASURED) === null);
   pin(r.facts, "facts present: researchPort defaults to 4816", (j) => j?.researchPort === 4816);
   if (routeIncluded("/api/router/telemetry")) {
-    const telemetry = await request(main[0], "GET", "/api/router/telemetry");
+    const telemetry = await request(main, "GET", "/api/router/telemetry");
     check("committed telemetry: newest day file, every in-flight aged out", telemetry.json?.available === true && telemetry.json?.file === "router-2026-09-13.10.jsonl" && telemetry.json?.inFlight?.length === 0, telemetry.text.slice(0, 300));
   }
   pin(r.live, "committed serving feed (2026-10-19): typed stale", (j) => r.live?.status !== 200 || j?.available === false && j?.reason === "stale");
   await notFoundBattery(main);
 
-  const degraded = await startPair("degraded", () => degradedSpec());
+  const degraded = await startApp("degraded", image, degradedSpec());
   try {
     const d = await readBattery(degraded, "degraded env");
     pin(d.serving, "degraded serving: 502 {error} on an absent LLAMA_CONFIG_PATH", (j) => d.serving?.status === 502 && typeof j?.error === "string");
@@ -57,41 +57,30 @@ export async function routesPhase(main: Pair, _fx: Fx) {
     pin(d.facts, "facts absent: no timing or measured lists", (j) => j?.timing === undefined && j?.measured === undefined);
     for (const path of ["/api/router/telemetry", "/api/router/sidecar", "/api/serving/status", "/api/serving/live"]) {
       if (!routeIncluded(path)) continue;
-      const reply = await request(degraded[0], "GET", path);
+      const reply = await request(degraded, "GET", path);
       checkEqual(`degraded ${path}: 200 disabled`, { status: reply.status, body: reply.json }, { status: 200, body: { available: false, reason: "disabled" } });
     }
     for (const path of ["/api/serving/visibility", "/api/catalog/add", "/api/catalog/remove", "/api/catalog/consumers"]) {
-      const reply = await both(degraded, "unset CONTROL_REQUESTS_DIR", "POST", path, {});
+      const reply = await get(degraded, "unset CONTROL_REQUESTS_DIR", "POST", path, {});
       pin(reply, `degraded POST ${path}: 503`, (j) => reply?.status === 503 && j?.error === "control plane not configured: CONTROL_REQUESTS_DIR is unset");
     }
   } finally {
-    await stopPair(degraded);
+    await stopApp(degraded);
   }
 }
 
-export async function spaPhase(pair: Pair) {
+export async function spaPhase(main: Instance) {
   const sha = (b: Uint8Array) => new Bun.CryptoHasher("sha256").update(b).digest("hex");
-  const view = async (path: string, refPath = path) => {
+  const view = async (path: string) => {
     if (!routeIncluded(path)) {
       skip(`spa ${path}`, "outside --routes");
       return null;
     }
-    const [s, r] = [await request(pair[0], "GET", path), await request(pair[1], "GET", refPath)];
-    // Status + headers are compared to the reference twin; body bytes are NOT. Plan WP-6's
-    // required apps/web/src/api.ts edit (and the generated shared module) changed the web bundle
-    // bytes and hashed asset names, so the reference twin (the same --image) is not a byte oracle for them. SPA content is instead checked against the subject
-    // image's own /web tree below.
-    const facts = (x: typeof s) => ({ status: x.status, type: contentType(x), cache: x.headers.get("cache-control") });
-    const d = diff(facts(s), facts(r));
-    check(`spa GET ${path} matches reference${refPath === path ? "" : ` (${refPath})`}`, d === null, d ?? "");
-    return s;
+    return request(main, "GET", path);
   };
   const webDir = join(work, "subject-web");
-  // Web root inside the subject image: /web (Rust image).
-  await run(["docker", "cp", `${pair[0].name}:/web`, webDir], true);
-  if (!(await Bun.file(join(webDir, "index.html")).exists())) {
-    await run(["docker", "cp", `${pair[0].name}:/app/apps/web/dist`, webDir]);
-  }
+  // Web root inside the image: /web. A missing web root fails loudly here.
+  await run(["docker", "cp", `${main.name}:/web`, webDir]);
   const onDisk = async (rel: string) => new Uint8Array(await Bun.file(join(webDir, rel)).arrayBuffer());
   const index = await view("/");
   if (!index) return;
@@ -99,13 +88,8 @@ export async function spaPhase(pair: Pair) {
   check("spa /: html, no-cache", index.status === 200 && contentType(index) === "text/html" && index.headers.get("cache-control") === "no-cache" && index.text.includes("<html"), `${index.status} ${index.headers.get("cache-control")}`);
   const assets = [...index.text.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1]!);
   check("spa index references hashed assets", assets.length > 0, index.text.slice(0, 300));
-  // Hashed names differ between the bundles, so each subject asset is paired with the reference
-  // index's asset at the same position (same build layout, different content hash).
-  const refIndex = await request(pair[1], "GET", "/");
-  const refAssets = [...refIndex.text.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1]!);
-  check("spa index asset count matches reference", refAssets.length === assets.length, `${assets.length} vs ${refAssets.length}`);
-  for (const [i, asset] of assets.entries()) {
-    const reply = await view(asset, refAssets[i] ?? asset);
+  for (const asset of assets) {
+    const reply = await view(asset);
     if (reply) check(`spa ${asset}: 200 immutable`, reply.status === 200 && reply.headers.get("cache-control") === "public, max-age=31536000, immutable" && reply.bytes.length > 0, `${reply.status} ${reply.headers.get("cache-control")}`);
     if (reply) check(`spa ${asset} body == subject /web${asset}`, (await Bun.file(join(webDir, asset)).exists()) && sha(reply.bytes) === sha(await onDisk(asset.slice(1))), `${reply.bytes.length} bytes`);
   }

@@ -15,6 +15,7 @@ name = "codex-sidecar"
 path = "src/main.rs"
 
 [dependencies]
+fleetkit = { path = "crates/fleetkit", features = ["shutdown"] }
 # Typed codex frames/usage and outbox rows (already in the graph via serde_json).
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
@@ -28,6 +29,9 @@ bytes = "1"
 libc = "0.2"
 # The body-limit error type behind axum::body::to_bytes (already in the graph via axum).
 http-body-util = "0.1"
+
+[workspace]
+exclude = ["crates/fleetkit"]
 
 [profile.release]
 opt-level = 3

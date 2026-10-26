@@ -60,6 +60,7 @@ from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from . import shutdown
 from .registry import ModelRegistry, UnknownModelError
 from .runtime import PreparedSchema, SchemaError
 from .schema import RequestError, check_model_type, compile_classify_texts
@@ -345,14 +346,25 @@ def main() -> int:
     threads_env = os.environ.get("ONNX_INTRA_OP_THREADS")
     threads = int(threads_env) if threads_env else None
 
+    # Installed before the registry build / preload / bind: nothing below may hold a SIGTERM
+    # past the shutdown deadline (the watchdog `os._exit(0)`s regardless).
+    holder: list[ThreadingHTTPServer] = []
+
+    def on_stop() -> None:
+        if holder:
+            holder[0].shutdown()  # unblocks serve_forever; runs on the helper thread
+
+    sd = shutdown.install(on_stop)
     server = build_server(config_path, host, port, threads)
+    holder.append(server)
     _log(f"listening on {host}:{port}")
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        _log("shutting down")
+        if not sd.triggered:
+            server.serve_forever()
     finally:
         server.server_close()
+        if sd.triggered:
+            _log("shutting down")
     return 0
 
 

@@ -1,0 +1,36 @@
+[package]
+name = "fleetkit"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+description = "Shared JS-semantics, request-decoding, radix and collation helpers for fleet Rust services"
+publish = false
+
+# Every module is a feature; default is none, so a consumer pulls only what it uses.
+[features]
+default = []
+radix = []
+query = []
+js = ["radix"]
+json = ["js", "dep:serde_json"]
+time = ["js", "dep:jiff"]
+# JS object-key enumeration keeps insertion order, hence `preserve_order`.
+jsout = ["dep:serde_json", "serde_json/preserve_order", "dep:ryu"]
+collate = ["dep:icu_collator"]
+shutdown = ["dep:tokio"]
+
+[dependencies]
+serde_json = { version = "1.0.154", optional = true, default-features = false, features = ["std"] }
+ryu = { version = "1.0.23", optional = true }
+jiff = { version = "0.2.38", optional = true, default-features = false, features = ["std"] }
+icu_collator = { version = "2", optional = true, default-features = false, features = ["compiled_data"] }
+tokio = { version = "1.47", optional = true, default-features = false, features = ["signal", "sync", "time", "rt", "macros"] }
+
+# Standalone-build root for the canonical copy. A consumer workspace never lists
+# this crate in `members`; it adds it to `exclude` and uses it as a path dependency,
+# so this table stays byte-identical in vendored copies (see README).
+[workspace]
+
+[dev-dependencies]
+tokio = { version = "1.47", default-features = false, features = ["test-util"] }

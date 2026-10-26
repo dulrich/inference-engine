@@ -21,10 +21,14 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "s
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+fleetkit = { path = "crates/fleetkit", features = ["shutdown"] }
 
 [dev-dependencies]
 # Paused-clock tests of the telemetry progress cadence (tests/telemetry.rs); no new crate.
 tokio = { version = "1", features = ["test-util"] }
+
+[workspace]
+exclude = ["crates/fleetkit"]
 
 [profile.release]
 opt-level = 3

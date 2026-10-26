@@ -7,6 +7,8 @@ RUN apk add --no-cache musl-dev ca-certificates \
  && cargo install cargo-auditable --locked --version 0.7.7
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+COPY clippy.toml ./
 COPY src src
 COPY tests tests
 RUN cargo fetch --locked

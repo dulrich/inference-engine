@@ -75,13 +75,33 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 /// Bind and serve until the process ends. `on_bound` sees the real address (tests use port 0).
 pub async fn serve(state: Arc<AppState>, on_bound: impl FnOnce(SocketAddr)) -> Result<(), String> {
+    serve_until(
+        state,
+        fleetkit::shutdown::Shutdown::without_watchdog(),
+        on_bound,
+    )
+    .await
+}
+
+/// `serve` that drains on `shutdown` (production passes the signal-installed handle).
+pub async fn serve_until(
+    state: Arc<AppState>,
+    shutdown: fleetkit::shutdown::Shutdown,
+    on_bound: impl FnOnce(SocketAddr),
+) -> Result<(), String> {
     let addr = format!("{}:{}", state.settings.host, state.settings.port);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("bind {addr}: {e}"))?;
     on_bound(listener.local_addr().map_err(|e| e.to_string())?);
     state.catalog.spawn_reloader(catalog::POLL_INTERVAL);
-    axum::serve(listener, router(state))
+    let server = axum::serve(listener, router(state)).with_graceful_shutdown(shutdown.triggered());
+    // In-flight proxied streams are bounded by the drain deadline; the watchdog exits at 5 s regardless.
+    match shutdown
+        .drain(std::future::IntoFuture::into_future(server))
         .await
-        .map_err(|e| e.to_string())
+    {
+        Some(r) => r.map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
 }

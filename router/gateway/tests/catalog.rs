@@ -281,3 +281,32 @@ fn check_catalog_exit_codes() {
     assert!(!run(&dir.join("absent.json")).status.success());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn shutdown_trigger_lets_serve_return_and_finishes_idle_cleanly() {
+    let dir = temp_dir("shutdown");
+    replace(&dir, &catalog_json(&["a"]));
+    let path = dir.join("catalog.json").display().to_string();
+    let env: HashMap<&str, String> = [
+        ("GATEWAY_CATALOG_PATH", path),
+        ("ROUTER_TELEMETRY_ENABLED", "false".into()),
+    ]
+    .into_iter()
+    .collect();
+    let get = move |k: &str| env.get(k).cloned();
+    let state = app::state(settings("http://127.0.0.1:9"), &get).unwrap();
+    let sd = fleetkit::shutdown::Shutdown::without_watchdog();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(app::serve_until(state, sd.clone(), move |a| {
+        tx.send(a).unwrap()
+    }));
+    let gw = format!("http://{}", rx.await.unwrap());
+    assert_eq!(get_json(format!("{gw}/health")).await["status"], "ok");
+    assert!(!task.is_finished());
+    sd.trigger();
+    let res = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("serve returns after the trigger")
+        .unwrap();
+    assert!(res.is_ok());
+}

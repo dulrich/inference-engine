@@ -18,7 +18,8 @@ async fn main() -> ExitCode {
         Some("healthcheck") => healthcheck::run(&env).await,
         None | Some("serve") => match config::load(&env).and_then(|s| app::state(s, &env)) {
             Ok(state) => {
-                app::serve(state, |addr| {
+                let sd = fleetkit::shutdown::install(fleetkit::shutdown::DEFAULT_DRAIN);
+                app::serve_until(state, sd, |addr| {
                     eprintln!("inference-router listening on {addr}")
                 })
                 .await

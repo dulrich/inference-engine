@@ -35,6 +35,10 @@ USAGE
 
 die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 
+# shellcheck source=/dev/null
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib/build-id.sh"
+build_flags "${BASH_SOURCE[0]}" "$@"
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --home)

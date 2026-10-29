@@ -70,6 +70,14 @@ def _parser() -> argparse.ArgumentParser:
 if any(a in ("-h", "--help") for a in sys.argv[1:]):
     _parser().parse_args()
 
+# `--build`/`--version` are likewise answered before the torch import (--help wins, above).
+if __name__ == "__main__":
+    from build_id import handle_build_flags
+
+    _build_rc = handle_build_flags(sys.argv[1:], __file__)
+    if _build_rc is not None:
+        sys.exit(_build_rc)
+
 import torch  # noqa: E402
 import torch.nn as nn  # noqa: E402
 

@@ -47,6 +47,18 @@ def _parser() -> argparse.ArgumentParser:
 if __name__ == "__main__":
     # Answered before the registry/runtime imports below (onnxruntime, numpy, tokenizers) and
     # before any bind; also makes `python3 server/app.py --help` work outside the package.
+    # `--build`/`--version` are answered the same way (--help wins).
+    import sys
+
+    if not {"-h", "--help"} & set(sys.argv[1:]):
+        try:
+            from .build_id import handle_build_flags
+        except ImportError:  # run as a plain script, outside the package
+            from build_id import handle_build_flags
+
+        _build_rc = handle_build_flags(sys.argv[1:], __file__)
+        if _build_rc is not None:
+            sys.exit(_build_rc)
     _parser().parse_args()
 
 import hashlib

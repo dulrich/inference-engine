@@ -17,6 +17,18 @@ case "${1:-}" in --help|-h)
   awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
   exit 0;; esac
 
+# `--build`/`--version` answer the fleet build id as the first argument (later arguments belong to the exec'd command). The helper
+# is not copied into the image, where there is no checkout: `unknown` (plan fleet-build-version-gate).
+case "${1:-}" in --build|--version)
+  _bi="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib/build-id.sh"
+  if [ -r "$_bi" ]; then
+    # shellcheck source=/dev/null
+    . "$_bi"
+    build_flags "${BASH_SOURCE[0]}" "$1"
+  fi
+  echo unknown
+  exit 0;; esac
+
 set -euo pipefail
 
 log() { echo "[entrypoint] $*"; }

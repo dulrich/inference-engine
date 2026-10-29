@@ -26,6 +26,10 @@ for _a in "$@"; do case "$_a" in --help|-h)
   awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
   exit 0;; esac; done
 
+# shellcheck source=/dev/null
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib/build-id.sh"
+build_flags "${BASH_SOURCE[0]}" "$@"
+
 set -u
 
 URL="http://127.0.0.1:4812"

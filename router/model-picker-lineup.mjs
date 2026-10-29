@@ -26,6 +26,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { handleBuildFlags } from "./build-id.mjs";
 import { fleetEnvReexec } from "./fleet-env.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -435,7 +436,15 @@ function gatewayKeySource(envFile) {
 }
 
 function main() {
-  const opts = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  // `--build`/`--version` before arg parsing; `--help` wins (parseArgs answers it, so the build
+  // flags are dropped from what it sees when both are present).
+  const wantsHelp = argv.some((a) => a === "--help" || a === "-h");
+  if (!wantsHelp) {
+    const rc = handleBuildFlags(argv, { path: import.meta.filename });
+    if (rc !== null) process.exit(rc);
+  }
+  const opts = parseArgs(wantsHelp ? argv.filter((a) => a !== "--build" && a !== "--version") : argv);
   const config = readConfig(opts.config);
   const catalog = readCatalog(opts.catalog);
   const rows = buildRows(config, catalog);

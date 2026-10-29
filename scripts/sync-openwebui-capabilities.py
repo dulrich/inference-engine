@@ -419,4 +419,12 @@ def main(argv: List[str]) -> int:
 
 
 if __name__ == "__main__":
+    import sys
+
+    if not {"-h", "--help"} & set(sys.argv[1:]):
+        from build_id import handle_build_flags
+
+        _build_rc = handle_build_flags(sys.argv[1:], __file__)
+        if _build_rc is not None:
+            sys.exit(_build_rc)
     sys.exit(main(sys.argv[1:]))

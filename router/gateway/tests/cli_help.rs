@@ -41,3 +41,34 @@ fn unknown_subcommand_is_still_an_error() {
         .expect("spawn inference-router");
     assert_eq!(out.status.code(), Some(1), "{out:?}");
 }
+
+#[test]
+fn build_prints_one_build_id_line_and_touches_nothing() {
+    let dir = std::env::temp_dir().join(format!("ir-cli-build-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for flag in ["--build", "--version"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_inference-router"))
+            .arg(flag)
+            .current_dir(&dir)
+            .env_clear()
+            .output()
+            .expect("spawn inference-router");
+        assert_eq!(out.status.code(), Some(0), "{flag}: {out:?}");
+        let text = String::from_utf8_lossy(&out.stdout);
+        let id = text
+            .strip_suffix('\n')
+            .expect("one newline-terminated line");
+        let hex = id.strip_suffix("-dirty").unwrap_or(id);
+        assert!(
+            id == "unknown" || (hex.len() == 40 && hex.bytes().all(|b| b.is_ascii_hexdigit())),
+            "{flag}: {text:?}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_dir(&dir).unwrap().count(),
+        0,
+        "build created files"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

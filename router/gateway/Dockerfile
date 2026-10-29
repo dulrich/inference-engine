@@ -9,11 +9,15 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 COPY clippy.toml ./
+COPY build.rs ./
 COPY src src
 COPY tests tests
 RUN cargo fetch --locked
 
 FROM rust-base AS rust-build
+# Forwarded to build.rs (FLEET_BUILD_ID); empty when not passed, then build.rs computes or falls back to unknown.
+ARG GIT_SHA
+ENV GIT_SHA=$GIT_SHA
 RUN cargo auditable build --release --locked --bin inference-router \
  && cp target/release/inference-router /inference-router
 

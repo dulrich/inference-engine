@@ -14,6 +14,14 @@ async fn main() -> ExitCode {
         print!("{USAGE}");
         return ExitCode::SUCCESS;
     }
+    // `--build`/`--version` print the build-time id (build.rs); answered before any I/O.
+    if std::env::args()
+        .skip(1)
+        .any(|a| a == "--build" || a == "--version")
+    {
+        println!("{}", env!("FLEET_BUILD_ID"));
+        return ExitCode::SUCCESS;
+    }
     let result = match std::env::args().nth(1).as_deref() {
         Some("healthcheck") => healthcheck::run(&env).await,
         None | Some("serve") => match config::load(&env).and_then(|s| app::state(s, &env)) {

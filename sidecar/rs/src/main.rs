@@ -15,6 +15,14 @@ fn main() -> ExitCode {
         print!("{USAGE}");
         return ExitCode::SUCCESS;
     }
+    // `--build`/`--version` print the build-time id (build.rs); answered before any I/O.
+    if std::env::args()
+        .skip(1)
+        .any(|a| a == "--build" || a == "--version")
+    {
+        println!("{}", env!("FLEET_BUILD_ID"));
+        return ExitCode::SUCCESS;
+    }
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

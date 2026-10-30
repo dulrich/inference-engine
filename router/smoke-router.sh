@@ -10,7 +10,9 @@
 #   <base-url>      mandatory, e.g. http://127.0.0.1:4813 (resident) or a transient
 #                   http://127.0.0.1:470x (WP-1 scratch-decade run).
 #   <gateway-key>   the x-gateway-key auth value for the local checks below. Falls back to
-#                   $GATEWAY_KEY if omitted. Required for checks 1, 2 and 4 to pass (check 3
+#                   $GATEWAY_KEY, then to INFERENCE_ROUTER_GATEWAY_KEY in $ROUTER_ENV_FILE (default:
+#                   the fleet-env router projection, `fleet-env path router`), so neither the operator
+#                   nor an agent ever puts the secret on a command line. The key is never echoed. Required for checks 1, 2 and 4 to pass (check 3
 #                   deliberately omits/misconfigures it).
 #   --subscription  default OFF, and this script NEVER passes it to itself. Without it, the
 #                   hosted-leg check is skipped and only PRINTS what it would run — no request
@@ -42,8 +44,8 @@
 #   6. POST /v1/messages/count_tokens with an unresolvable model returns a 404-class JSON
 #      error body (patch 0004).
 #   7. (--subscription only) one claude -p call through the gateway returns a completion.
-#   8. (--codex only, metered: one luna turn on the operator's Codex subscription) one
-#      non-streamed codex-a/gpt-5.6-luna completion via /v1/messages returns
+#   8. (--codex only, metered: one turn on the operator's Codex subscription; SMOKE_CODEX_MODEL
+#      overrides the id, default codex-a/gpt-5.6-luna) one non-streamed completion via /v1/messages returns
 #      usage.output_tokens > 0 — proves the host sidecar leg (plans/codex-appserver-sidecar.md)
 #      end to end through the router: extra_hosts, the shared CODEX_SIDECAR_KEY, and the
 #      engine's baseurl-with-path derivation. (Not input_tokens: since 2026-09-13 the sidecar
@@ -119,8 +121,18 @@ bad() {
 	fail=1
 }
 
+# Default: `fleet-env path router` (router/fleet-env.mjs; fails closed, never a silent fallback),
+# the same resolution as smoke-tool-search.sh and smoke-catalog.sh.
 if [ -z "$GATEWAY_KEY" ]; then
-	note "WARNING: no gateway key given (arg or \$GATEWAY_KEY) — checks 1, 2 and 4 will fail authentication."
+	if [ -z "${ROUTER_ENV_FILE:-}" ]; then
+		ROUTER_ENV_FILE=$(bun -e 'import(process.argv[1]).then((m) => console.log(m.routerEnvFile()))' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fleet-env.mjs") || exit 1
+	fi
+	if [ -r "$ROUTER_ENV_FILE" ]; then
+		GATEWAY_KEY=$(sed -n 's/^INFERENCE_ROUTER_GATEWAY_KEY=//p' "$ROUTER_ENV_FILE" | head -1)
+	fi
+fi
+if [ -z "$GATEWAY_KEY" ]; then
+	note "WARNING: no gateway key given (arg, \$GATEWAY_KEY or \$ROUTER_ENV_FILE) — checks 1, 2 and 4 will fail authentication."
 fi
 
 # ── 1. GET /v1/models lists both legs ───────────────────────────────────────────────────────
@@ -292,8 +304,11 @@ else
 fi
 
 # ── 8. Codex sidecar leg, metered (--codex only) ────────────────────────────────────────────
+# SMOKE_CODEX_MODEL picks the routed id (default codex-a/gpt-5.6-luna) — the only end-to-end
+# proof a newly added codex id is accepted, since the sidecar's count_tokens never checks the id.
+CODEX_MODEL="${SMOKE_CODEX_MODEL:-codex-a/gpt-5.6-luna}"
 if [ "$CODEX" -eq 1 ]; then
-	note "--codex passed: running one non-streamed codex-a/gpt-5.6-luna turn through $BASE_URL (bills the operator's Codex subscription)."
+	note "--codex passed: running one non-streamed $CODEX_MODEL turn through $BASE_URL (bills the operator's Codex subscription)."
 	# The engine's anthropic-type leg needs *some* client bearer to build passthrough headers
 	# (openrouter-spike finding 3); the provider's apiKeyEnv replaces it before the sidecar.
 	codex_json=$(curl -s --max-time 180 -X POST "$BASE_URL/v1/messages" \
@@ -301,17 +316,17 @@ if [ "$CODEX" -eq 1 ]; then
 		-H "x-gateway-key: $GATEWAY_KEY" \
 		-H 'authorization: Bearer smoke-dummy-client-bearer' \
 		-H 'anthropic-version: 2023-06-01' \
-		-d '{"model":"codex-a/gpt-5.6-luna","max_tokens":32,"stream":false,"metadata":{"user_id":"{\"session_id\":\"smoke-router-codex\"}"},"messages":[{"role":"user","content":"Reply with the single word: pong"}]}') || codex_json=""
+		-d "$(jq -nc --arg m "$CODEX_MODEL" '{model:$m,max_tokens:32,stream:false,metadata:{user_id:"{\"session_id\":\"smoke-router-codex\"}"},messages:[{role:"user",content:"Reply with the single word: pong"}]}')") || codex_json=""
 	# Anthropic usage semantics (2026-09-13): input_tokens is the *uncached* prompt share, so a
 	# fully cached turn legitimately reports 0 — output_tokens is the liveness signal here.
 	codex_out=$(echo "$codex_json" | jq -r '.usage.output_tokens | if type == "number" and . > 0 then . else empty end' 2>/dev/null)
 	if [ -n "$codex_out" ]; then
-		pass "/v1/messages (codex-a/gpt-5.6-luna) returned usage.output_tokens=$codex_out"
+		pass "/v1/messages ($CODEX_MODEL) returned usage.output_tokens=$codex_out"
 	else
-		bad "/v1/messages (codex-a/gpt-5.6-luna) did not return usage.output_tokens > 0. Response: $codex_json"
+		bad "/v1/messages ($CODEX_MODEL) did not return usage.output_tokens > 0. Response: $codex_json"
 	fi
 else
-	note "--codex not passed: SKIPPING the metered codex-a/gpt-5.6-luna probe (one Codex-subscription turn)."
+	note "--codex not passed: SKIPPING the metered $CODEX_MODEL probe (one Codex-subscription turn)."
 fi
 
 # ── 9. Codex sidecar count_tokens (unmetered) ───────────────────────────────────────────────

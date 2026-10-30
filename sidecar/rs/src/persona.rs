@@ -723,10 +723,15 @@ pub fn interrupt(w: &mut World, pi: usize, sid: u64, reason: &str) {
     }
 }
 
+/// Closes the session and unmaps its key — only while the key still maps to it, so dropping
+/// a displaced session never unmaps its successor.
 pub fn drop_session(w: &mut World, pi: usize, sid: u64) {
     session::close(w, sid, "session dropped");
     if let Some(key) = w.sessions.get(&sid).map(|s| s.key.clone()) {
-        w.personas[pi].sessions.remove(&key);
+        let p = &mut w.personas[pi];
+        if p.session(&key) == Some(sid) {
+            p.sessions.remove(&key);
+        }
     }
 }
 

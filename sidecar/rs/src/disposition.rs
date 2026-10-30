@@ -5,7 +5,10 @@
 use crate::outbox_events::outbox_key_of;
 use crate::persona;
 use crate::protocol::Scope;
-use crate::request::{Content, ContentBlock, Identity, Mode, Normalized};
+use crate::request::{
+    canon, disposition_of, request_token, Content, ContentBlock, Disposition, Identity, Message,
+    Mode, Normalized,
+};
 use crate::session::{self, id_key, Session};
 use crate::sidecar::World;
 use serde_json::{json, Map, Value};
@@ -175,6 +178,97 @@ fn new_session(w: &mut World, pi: usize, key: &str) -> u64 {
     sid
 }
 
+/// An assistant message as comparable blocks: text (non-empty) and tool_use, decoration
+/// (`cache_control`, unknown keys) dropped. `None` when it holds anything else.
+fn answer_shape_of_blocks(blocks: &[Value]) -> Option<Vec<Value>> {
+    let mut out = Vec::new();
+    for b in blocks {
+        match b.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                let t = b.get("text").and_then(Value::as_str)?;
+                if !t.is_empty() {
+                    out.push(json!({ "type": "text", "text": t }));
+                }
+            }
+            Some("tool_use") => out.push(canon(&json!({
+                "type": "tool_use",
+                "id": b.get("id").cloned().unwrap_or(Value::Null),
+                "name": b.get("name").cloned().unwrap_or(Value::Null),
+                "input": b.get("input").filter(|v| !v.is_null()).cloned().unwrap_or_else(|| json!({})),
+            }))),
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+fn answer_shape_of_message(m: &Message) -> Option<Vec<Value>> {
+    if m.role() != Some("assistant") {
+        return None;
+    }
+    match &m.content {
+        Some(Content::Text(t)) => answer_shape_of_blocks(&[json!({ "type": "text", "text": t })]),
+        Some(Content::Blocks(bs)) => {
+            let vs: Vec<Value> = bs.iter().map(ContentBlock::to_value).collect();
+            answer_shape_of_blocks(&vs)
+        }
+        _ => None,
+    }
+}
+
+/// Weak key, `n > m`: the request's message at the session's boundary is the answer this
+/// session last emitted (and no request is driving it). Not comparable means not owned.
+fn owns_continuation(sess: &Session, norm: &Normalized) -> bool {
+    let m = sess.hist.len();
+    if m == 0 || sess.owner.is_some() {
+        return false;
+    }
+    let Some(lo) = &sess.last_outcome else {
+        return false;
+    };
+    let (Some(mine), Some(theirs)) = (
+        answer_shape_of_blocks(&lo.blocks),
+        norm.msgs.get(m).and_then(answer_shape_of_message),
+    ) else {
+        return false;
+    };
+    !mine.is_empty() && canon(&Value::Array(mine)) == canon(&Value::Array(theirs))
+}
+
+/// Weak key, `n == m`: the mode under which the request still shares the session — a
+/// byte-identical twin of the in-flight owner joins it, a tool-result straggler replays.
+/// `None` means it is an independent call and is isolated.
+fn weak_twin_mode(w: &World, sid: u64, norm: &Normalized, ident: &Identity) -> Option<Mode> {
+    let sess = w.sessions.get(&sid)?;
+    let mode = match &sess.owner {
+        Some(o) => o.token.mode,
+        None if norm.tool_results().is_empty() => return None,
+        None => Mode::ToolResult,
+    };
+    let token = request_token(String::new(), mode, norm, ident);
+    match disposition_of(sess, &token) {
+        Disposition::Join { .. } => Some(mode),
+        Disposition::Replay { .. } => Some(Mode::NextTurn),
+        Disposition::Drive { .. } => None,
+    }
+}
+
+/// Weak key: give the request a fresh session (re-pointing the key) and leave the old one
+/// to finish its in-flight work; it is retired once settled (`World::gc_sessions`).
+fn isolate(w: &mut World, pi: usize, old: u64, norm: &Normalized, key: &str, reason: &str) -> u64 {
+    let name = w.personas[pi].name.clone();
+    let Some(s) = w.sessions.get_mut(&old) else {
+        return new_session(w, pi, key);
+    };
+    s.displaced = true;
+    let row = json!({
+        "persona": name, "key": key, "reason": reason, "seen": s.hist.len(), "now": norm.msgs.len(),
+        "inFlight": s.in_flight(), "threadId": s.thread_id.as_ref().map_or(Value::Null, Value::from),
+    });
+    w.log("weak-session-isolated", row);
+    new_session(w, pi, key)
+}
+
 pub(crate) fn dispose_session(
     w: &mut World,
     pi: usize,
@@ -189,6 +283,35 @@ pub(crate) fn dispose_session(
         sid = adopt_rekeyed(w, pi, norm, ident, &digests);
     }
     let cls = sid.and_then(|s| classify(w, s, &digests, norm, ident));
+    let mut forced: Option<Mode> = None;
+    let cls = match (sid, cls) {
+        (Some(old), Some(c)) if ident.weak => {
+            let sess = &w.sessions[&old];
+            let reason = match c {
+                Cls::Continues if digests.len() == sess.hist.len() => {
+                    match weak_twin_mode(w, old, norm, ident) {
+                        Some(m) => {
+                            forced = sess.owner.is_some().then_some(m);
+                            None
+                        }
+                        None => Some("no-extension"),
+                    }
+                }
+                Cls::Continues if !owns_continuation(sess, norm) => Some("not-owned"),
+                Cls::Diverged { .. } if sess.in_flight() => Some("diverged-in-flight"),
+                _ => None,
+            };
+            if let Some(reason) = reason {
+                let sid = isolate(w, pi, old, norm, key, reason);
+                return finish(w, sid, Mode::NewThread, norm, ident, digests);
+            }
+            Some(c)
+        }
+        (_, c) => c,
+    };
+    if let (Some(s), Some(m)) = (sid, forced) {
+        return finish(w, s, m, norm, ident, digests);
+    }
     let (sid, mode) = match (sid, cls) {
         (Some(old), Some(Cls::Diverged { at, step })) => {
             let s = &w.sessions[&old];
@@ -214,6 +337,8 @@ pub(crate) fn dispose_session(
         }
         (Some(s), Some(_)) => {
             let sess = &w.sessions[&s];
+            let (threadless, in_flight, seen) =
+                (sess.thread_id.is_none(), sess.in_flight(), sess.hist.len());
             let tr = norm.tool_results();
             let echoes = || {
                 tr.iter().any(|t| {
@@ -233,11 +358,33 @@ pub(crate) fn dispose_session(
                     );
                     session::abandon_parked(w, s, "no result returned by the client");
                 }
-                (s, Mode::NextTurn)
+                if threadless {
+                    // (a) no thread yet (its `thread/start` is still awaited, or failed): a
+                    // next turn would carry a null threadId, so open the thread instead.
+                    w.log(
+                        "thread-guard",
+                        json!({ "persona": name, "key": key, "seen": seen, "now": norm.msgs.len(), "inFlight": in_flight }),
+                    );
+                    (s, Mode::NewThread)
+                } else {
+                    (s, Mode::NextTurn)
+                }
             }
         }
         _ => (new_session(w, pi, key), Mode::NewThread),
     };
+    finish(w, sid, mode, norm, ident, digests)
+}
+
+fn finish(
+    w: &mut World,
+    sid: u64,
+    mode: Mode,
+    norm: &Normalized,
+    ident: &Identity,
+    digests: Vec<String>,
+) -> (u64, Mode) {
+    let key = ident.key.as_str();
     if let Some(s) = w.sessions.get_mut(&sid) {
         s.msg_count = norm.msgs.len();
         s.hist = digests;

@@ -69,6 +69,7 @@ impl World {
     /// Sessions nothing can reach any more (not keyed, not on a bus, no request driving or
     /// joined to them) are dropped.
     pub fn gc_sessions(&mut self) {
+        self.retire_displaced();
         let mut live: HashSet<u64> = HashSet::new();
         for p in &self.personas {
             live.extend(p.sessions.values().copied());
@@ -77,6 +78,37 @@ impl World {
         self.sessions.retain(|id, s| {
             live.contains(id) || s.owner.is_some() || !s.joiners.is_empty() || s.resolve.is_some()
         });
+    }
+}
+
+impl World {
+    /// Retires every displaced session whose owner, joiners and resolver have settled:
+    /// closed and off the bus, so `gc_sessions` can drop it.
+    fn retire_displaced(&mut self) {
+        let done: Vec<u64> = self
+            .sessions
+            .iter()
+            .filter(|(id, s)| {
+                s.displaced
+                    && !s.closed
+                    && !s.in_flight()
+                    && self.personas[s.persona].session(&s.key) != Some(**id)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for sid in done {
+            let Some(s) = self.sessions.get(&sid) else {
+                continue;
+            };
+            let (pi, key) = (s.persona, s.key.clone());
+            let tid = s.thread_id.as_ref().map_or(Value::Null, Value::from);
+            crate::session::close(self, sid, "session displaced");
+            let name = self.personas[pi].name.clone();
+            self.log(
+                "session-retired",
+                json!({ "persona": name, "key": key, "threadId": tid }),
+            );
+        }
     }
 }
 

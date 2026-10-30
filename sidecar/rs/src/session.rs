@@ -98,6 +98,9 @@ pub struct Session {
     pub pending_outcomes: Vec<Outcome>,
     pub resolve: Option<oneshot::Sender<Outcome>>,
     pub closed: bool,
+    /// A weak-key session whose key now maps to a successor: it runs its in-flight work to
+    /// completion and is then retired (closed, off the bus) by `World::gc_sessions`.
+    pub displaced: bool,
 }
 
 /// The `delivered` key of a client-side id (strings as-is; shared with `request::disposition_of`).
@@ -154,7 +157,13 @@ impl Session {
             pending_outcomes: Vec::new(),
             resolve: None,
             closed: false,
+            displaced: false,
         }
+    }
+
+    /// A request still drives, joins or waits on this session.
+    pub fn in_flight(&self) -> bool {
+        self.owner.is_some() || !self.joiners.is_empty() || self.resolve.is_some()
     }
 
     pub fn owner_id(&self) -> Option<u64> {

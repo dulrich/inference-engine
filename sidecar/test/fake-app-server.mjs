@@ -40,7 +40,7 @@ if (!argv[0]) process.exit(0);
 const scenario = JSON.parse(fs.readFileSync(argv[0], "utf8"));
 const tracePath = argv[1] || null;
 
-const state = { threads: 0, turns: 0, items: 0, rpcId: 1000, toolResponses: 0, thread: null, turn: null, interrupted: false, threadConfig: null };
+const state = { threads: 0, turns: 0, items: 0, rpcId: 1000, toolResponses: 0, thread: null, turn: null, interrupted: false, interruptedThreads: new Set(), threadConfig: null };
 
 const trace = (kind, obj) => {
   if (!tracePath) return;
@@ -52,19 +52,23 @@ const reply = (id, result) => out({ jsonrpc: "2.0", id, result });
 const replyError = (id, error) => out({ jsonrpc: "2.0", id, error });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-async function play(actions) {
+// `ctx` carries the thread/turn ids of the request the actions belong to, so overlapping
+// thread/starts and turns stay distinguishable; it defaults to the latest ones.
+async function play(actions, ctx = null) {
+  const ids = () => ctx ?? { thread: state.thread, turn: state.turn };
+  const stopped = () => (ctx ? state.interruptedThreads.has(ctx.thread) : state.interrupted);
   for (const a of (Array.isArray(actions) ? actions : [])) {
-    if (state.interrupted) return;
+    if (stopped()) return;
     if (a.delay) { await sleep(a.delay); continue; }
     if (a.exit !== undefined) { process.exit(a.exit); }
     if (a.text !== undefined) {
-      notify("item/agentMessage/delta", { threadId: state.thread, turnId: state.turn, itemId: `item_${state.items}`, delta: a.text });
+      notify("item/agentMessage/delta", { threadId: ids().thread, turnId: ids().turn, itemId: `item_${state.items}`, delta: a.text });
       continue;
     }
     if (a.message !== undefined) {
       state.items += 1;
       notify("item/completed", {
-        threadId: state.thread, turnId: state.turn, completedAtMs: Date.now(),
+        threadId: ids().thread, turnId: ids().turn, completedAtMs: Date.now(),
         item: { id: `item_${state.items}`, type: "agentMessage", text: a.message },
       });
       continue;
@@ -72,34 +76,34 @@ async function play(actions) {
     if (a.item !== undefined) {
       state.items += 1;
       notify("item/started", {
-        threadId: state.thread, turnId: state.turn, startedAtMs: Date.now(),
+        threadId: ids().thread, turnId: ids().turn, startedAtMs: Date.now(),
         item: { id: `item_${state.items}`, ...a.item },
       });
       continue;
     }
     if (a.usage !== undefined) {
-      notify("thread/tokenUsage/updated", { threadId: state.thread, turnId: state.turn, tokenUsage: a.usage });
+      notify("thread/tokenUsage/updated", { threadId: ids().thread, turnId: ids().turn, tokenUsage: a.usage });
       continue;
     }
     if (a.notify !== undefined) {
-      notify(a.notify, { threadId: state.thread, turnId: state.turn, ...(a.params || {}) });
+      notify(a.notify, { threadId: ids().thread, turnId: ids().turn, ...(a.params || {}) });
       continue;
     }
     if (a.request !== undefined) {
       const id = state.rpcId++;
-      const params = { threadId: state.thread, turnId: state.turn, callId: `call_${id}`, ...(a.params || {}) };
+      const params = { threadId: ids().thread, turnId: ids().turn, callId: `call_${id}`, ...(a.params || {}) };
       out({ jsonrpc: "2.0", id, method: a.request, params });
       continue;
     }
     if (a.awaitToolResults !== undefined) {
       const want = state.toolResponses + a.awaitToolResults;
-      while (state.toolResponses < want && !state.interrupted) await sleep(5);
+      while (state.toolResponses < want && !stopped()) await sleep(5);
       continue;
     }
     if (a.complete !== undefined) {
       notify("turn/completed", {
-        threadId: state.thread,
-        turn: { id: state.turn, items: [], status: "completed", ...(a.complete || {}) },
+        threadId: ids().thread,
+        turn: { id: ids().turn, items: [], status: "completed", ...(a.complete || {}) },
       });
       continue;
     }
@@ -130,16 +134,17 @@ async function onMessage(m) {
   if (m.method === "thread/start") {
     const ts = scenario.threadStart || {};
     state.threads += 1;
-    state.thread = `thread_${state.threads}`;
+    const tid = `thread_${state.threads}`;
+    state.thread = tid;
     state.threadConfig = m.params?.config ?? null;
-    if (ts.before) await play(ts.before);
+    if (ts.before) await play(ts.before, { thread: tid, turn: state.turn });
     if (ts.error) { replyError(m.id, ts.error); return; }
     reply(m.id, {
       thread: {
-        id: state.thread, cwd: m.params?.cwd ?? null, ephemeral: true, status: { type: "idle" },
+        id: tid, cwd: m.params?.cwd ?? null, ephemeral: true, status: { type: "idle" },
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
         cliVersion: "0.0.0-fake", modelProvider: "fake", preview: "", projectId: null,
-        sessionId: state.thread, source: "startup", turns: [],
+        sessionId: tid, source: "startup", turns: [],
       },
       model: m.params?.model ?? "gpt-5.6-luna",
       modelProvider: "fake",
@@ -153,14 +158,22 @@ async function onMessage(m) {
   }
 
   if (m.method === "turn/start") {
+    // the real app-server rejects a turn/start without a string threadId
+    if (typeof m.params?.threadId !== "string") {
+      replyError(m.id, { code: -32600, message: "Invalid request: invalid type: null, expected a string" });
+      return;
+    }
     state.turns += 1;
-    state.turn = `turn_${state.turns}`;
-    state.thread = m.params?.threadId ?? state.thread;
+    const turn = `turn_${state.turns}`;
+    state.turn = turn;
+    state.thread = m.params.threadId;
+    const ctx = { thread: m.params.threadId, turn };
     state.interrupted = false;
+    state.interruptedThreads.delete(m.params.threadId);
     const script = (scenario.turns || [])[state.turns - 1] ?? scenario.defaultTurn ?? [];
     if (script && !Array.isArray(script) && script.error) { replyError(m.id, script.error); return; }
-    reply(m.id, { turn: { id: state.turn, items: [], status: "inProgress" } });
-    play(Array.isArray(script) ? script : script.actions || []);
+    reply(m.id, { turn: { id: turn, items: [], status: "inProgress" } });
+    play(Array.isArray(script) ? script : script.actions || [], ctx);
     return;
   }
 
@@ -175,7 +188,7 @@ async function onMessage(m) {
     return;
   }
 
-  if (m.method === "turn/interrupt") { state.interrupted = true; reply(m.id, {}); return; }
+  if (m.method === "turn/interrupt") { state.interrupted = true; state.interruptedThreads.add(m.params?.threadId); reply(m.id, {}); return; }
 
   if (m.id !== undefined) reply(m.id, {});
 }

@@ -10,9 +10,8 @@
 #   <base-url>      mandatory, e.g. http://127.0.0.1:4813 (resident) or a transient
 #                   http://127.0.0.1:470x (WP-1 scratch-decade run).
 #   <gateway-key>   the x-gateway-key auth value for the local checks below. Falls back to
-#                   $GATEWAY_KEY, then to INFERENCE_ROUTER_GATEWAY_KEY in $ROUTER_ENV_FILE (default:
-#                   the fleet-env router projection, `fleet-env path router`), so neither the operator
-#                   nor an agent ever puts the secret on a command line. The key is never echoed. Required for checks 1, 2 and 4 to pass (check 3
+#                   $GATEWAY_KEY; otherwise the script re-execs under `fleet-env run router-client`,
+#                   so neither the operator nor an agent handles the secret. Never echoed. Required for checks 1, 2 and 4 to pass (check 3
 #                   deliberately omits/misconfigures it).
 #   --subscription  default OFF, and this script NEVER passes it to itself. Without it, the
 #                   hosted-leg check is skipped and only PRINTS what it would run — no request
@@ -121,19 +120,15 @@ bad() {
 	fail=1
 }
 
-# Default: `fleet-env path router` (router/fleet-env.mjs; fails closed, never a silent fallback),
-# the same resolution as smoke-tool-search.sh and smoke-catalog.sh.
-if [ -z "$GATEWAY_KEY" ]; then
-	if [ -z "${ROUTER_ENV_FILE:-}" ]; then
-		ROUTER_ENV_FILE=$(bun -e 'import(process.argv[1]).then((m) => console.log(m.routerEnvFile()))' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fleet-env.mjs") || exit 1
-	fi
-	if [ -r "$ROUTER_ENV_FILE" ]; then
-		GATEWAY_KEY=$(sed -n 's/^INFERENCE_ROUTER_GATEWAY_KEY=//p' "$ROUTER_ENV_FILE" | head -1)
-	fi
+# Key: the <gateway-key> arg or $GATEWAY_KEY win; otherwise re-exec under the fleet-env
+# router-client consumer, which puts only GATEWAY_KEY in the environment — this script never
+# opens a projection or other credential file, and never echoes the key.
+if [ -z "${GATEWAY_KEY:-}" ] && [ "${FLEET_ENV_RUN:-}" != router-client ]; then
+	FLEET_ENV="${FLEET_ENV_BIN:-<code-root>/fleet-tools/fleet/fleet_env/bin/fleet-env}"
+	[ -x "$FLEET_ENV" ] || { echo "FATAL: fleet-env binary $FLEET_ENV is missing; refusing to run without credentials" >&2; exit 2; }
+	exec "$FLEET_ENV" run router-client -- bash "${BASH_SOURCE[0]}" "$@"
 fi
-if [ -z "$GATEWAY_KEY" ]; then
-	note "WARNING: no gateway key given (arg, \$GATEWAY_KEY or \$ROUTER_ENV_FILE) — checks 1, 2 and 4 will fail authentication."
-fi
+: "${GATEWAY_KEY:?no gateway key: pass <gateway-key>, set GATEWAY_KEY, or run under fleet-env run router-client}"
 
 # ── 1. GET /v1/models lists both legs ───────────────────────────────────────────────────────
 note "checking GET /v1/models ..."

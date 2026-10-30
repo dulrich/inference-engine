@@ -13,9 +13,8 @@
 #                               [--control] [--keep]
 #
 #   <base-url>      mandatory, e.g. http://127.0.0.1:4813.
-#   <gateway-key>   x-gateway-key auth value; falls back to $GATEWAY_KEY, then to
-#                   INFERENCE_ROUTER_GATEWAY_KEY in $ROUTER_ENV_FILE
-#                   (default: the fleet-env router projection, `fleet-env path router`)
+#   <gateway-key>   x-gateway-key auth value; falls back to $GATEWAY_KEY; otherwise the script
+#                   re-execs under `fleet-env run router-client` (only GATEWAY_KEY),
 #                   so the operator never has to
 #                   put the secret on a command line. The key is never echoed.
 #   --local         the claude-local/* OpenAI-conversion leg. Unmetered (local GPU). DEFAULT
@@ -127,17 +126,15 @@ bad() {
 	fail=1
 }
 
-# Default: `fleet-env path router`, the fleet-env projection (router/fleet-env.mjs; fails
-# closed, never a silent fallback).
-if [ -z "${ROUTER_ENV_FILE:-}" ]; then
-	ROUTER_ENV_FILE=$(bun -e 'import(process.argv[1]).then((m) => console.log(m.routerEnvFile()))' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fleet-env.mjs") || exit 1
+# Key: the <gateway-key> arg or $GATEWAY_KEY win; otherwise re-exec under the fleet-env
+# router-client consumer, which puts only GATEWAY_KEY in the environment — this script never
+# opens a projection or other credential file, and never echoes the key.
+if [ -z "${GATEWAY_KEY:-}" ] && [ "${FLEET_ENV_RUN:-}" != router-client ]; then
+	FLEET_ENV="${FLEET_ENV_BIN:-<code-root>/fleet-tools/fleet/fleet_env/bin/fleet-env}"
+	[ -x "$FLEET_ENV" ] || { echo "FATAL: fleet-env binary $FLEET_ENV is missing; refusing to run without credentials" >&2; exit 2; }
+	exec "$FLEET_ENV" run router-client -- bash "${BASH_SOURCE[0]}" "$@"
 fi
-if [ -z "$GATEWAY_KEY" ] && [ -r "$ROUTER_ENV_FILE" ]; then
-	GATEWAY_KEY=$(sed -n 's/^INFERENCE_ROUTER_GATEWAY_KEY=//p' "$ROUTER_ENV_FILE" | head -1)
-fi
-if [ -z "$GATEWAY_KEY" ]; then
-	note "WARNING: no gateway key given (arg, \$GATEWAY_KEY or $ROUTER_ENV_FILE) — every leg will fail authentication."
-fi
+: "${GATEWAY_KEY:?no gateway key: pass <gateway-key>, set GATEWAY_KEY, or run under fleet-env run router-client}"
 
 RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/smoke-tool-search.XXXXXX") || exit 2
 # shellcheck disable=SC2317  # reached through the EXIT trap, not by fallthrough

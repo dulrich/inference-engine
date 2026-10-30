@@ -54,8 +54,10 @@ import test from "node:test";
 
 const METERED = process.env.CODEX_METERED === "1";
 const BASE_URL = (process.env.ROUTER_BASE_URL || "http://127.0.0.1:4813").replace(/\/$/, "");
-// ROUTER_ENV_FILE, else `fleet-env path router` under the fleet-env cutover, else the legacy file.
-const ENV_FILE = routerEnvFile();
+// ROUTER_ENV_FILE, else `fleet-env path router` — resolved lazily, only when $GATEWAY_KEY is unset
+// (run under `fleet-env run router-client -- bun test …` and the file is never touched).
+let envFileMemo;
+const envFile = () => (envFileMemo ??= routerEnvFile());
 const LOG_DIR = process.env.SIDECAR_LOG_DIR
   || path.join(process.env.HOME || os.homedir(), ".local", "state", "codex-sidecar", "logs");
 // The cheapest family on the leg, and the one the per-turn effort measurement was taken on.
@@ -124,14 +126,14 @@ function gatewayKey() {
   if (process.env.GATEWAY_KEY) return process.env.GATEWAY_KEY;
   let text = "";
   try {
-    text = fs.readFileSync(ENV_FILE, "utf8");
+    text = fs.readFileSync(envFile(), "utf8");
   } catch (err) {
-    assert.fail(`no gateway key: $GATEWAY_KEY is unset and ${ENV_FILE} is unreadable (${err.code}). `
-      + "Set GATEWAY_KEY or point ROUTER_ENV_FILE at the env file holding INFERENCE_ROUTER_GATEWAY_KEY.");
+    assert.fail(`no gateway key: $GATEWAY_KEY is unset and ${envFile()} is unreadable (${err.code}). `
+      + "Set GATEWAY_KEY (`fleet-env run router-client -- bun test …`) or point ROUTER_ENV_FILE at the env file holding INFERENCE_ROUTER_GATEWAY_KEY.");
   }
   const hit = /^INFERENCE_ROUTER_GATEWAY_KEY=(.*)$/m.exec(text);
   if (!hit || !hit[1].trim()) {
-    assert.fail(`${ENV_FILE} carries no INFERENCE_ROUTER_GATEWAY_KEY; set $GATEWAY_KEY instead.`);
+    assert.fail(`${envFile()} carries no INFERENCE_ROUTER_GATEWAY_KEY; set $GATEWAY_KEY instead.`);
   }
   return hit[1].trim();              // never logged, never asserted on
 }

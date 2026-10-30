@@ -11,8 +11,10 @@ import fs from "node:fs";
 import test from "node:test";
 
 const BASE_URL = (process.env.ROUTER_BASE_URL || "http://127.0.0.1:4813").replace(/\/$/, "");
-// ROUTER_ENV_FILE, else `fleet-env path router` under the fleet-env cutover, else the legacy file.
-const ENV_FILE = routerEnvFile();
+// ROUTER_ENV_FILE, else `fleet-env path router` — resolved lazily, only when $GATEWAY_KEY is unset
+// (run under `fleet-env run router-client -- bun test …` and the file is never touched).
+let envFileMemo;
+const envFile = () => (envFileMemo ??= routerEnvFile());
 // The engine's anthropic-type legs want *some* client bearer to build passthrough headers; the
 // provider's own apiKeyEnv replaces it before the upstream (smoke-router.sh checks 7 and 8).
 const DUMMY_BEARER = "tool-search-conformance-dummy-client-bearer";
@@ -26,14 +28,14 @@ function gatewayKey() {
   if (process.env.GATEWAY_KEY) return process.env.GATEWAY_KEY;
   let text = "";
   try {
-    text = fs.readFileSync(ENV_FILE, "utf8");
+    text = fs.readFileSync(envFile(), "utf8");
   } catch (err) {
-    assert.fail(`no gateway key: $GATEWAY_KEY is unset and ${ENV_FILE} is unreadable (${err.code}). `
-      + "Set GATEWAY_KEY or point ROUTER_ENV_FILE at the env file holding INFERENCE_ROUTER_GATEWAY_KEY.");
+    assert.fail(`no gateway key: $GATEWAY_KEY is unset and ${envFile()} is unreadable (${err.code}). `
+      + "Set GATEWAY_KEY (`fleet-env run router-client -- bun test …`) or point ROUTER_ENV_FILE at the env file holding INFERENCE_ROUTER_GATEWAY_KEY.");
   }
   const hit = /^INFERENCE_ROUTER_GATEWAY_KEY=(.*)$/m.exec(text);
   if (!hit || !hit[1].trim()) {
-    assert.fail(`${ENV_FILE} carries no INFERENCE_ROUTER_GATEWAY_KEY; set $GATEWAY_KEY instead.`);
+    assert.fail(`${envFile()} carries no INFERENCE_ROUTER_GATEWAY_KEY; set $GATEWAY_KEY instead.`);
   }
   return hit[1].trim();          // never logged, never asserted on
 }
@@ -208,14 +210,14 @@ function hostedBearer() {
   if (fromEnv && fromEnv.trim()) return fromEnv.trim();
   let text = "";
   try {
-    text = fs.readFileSync(ENV_FILE, "utf8");
+    text = fs.readFileSync(envFile(), "utf8");
   } catch {
     text = "";
   }
   const hit = /^ROUTER_HOSTED_BEARER=(.*)$/m.exec(text);
   assert.ok(hit && hit[1].trim(), "the hosted passthrough leg forwards the caller's own OAuth bearer, and the gateway key alone "
     + "gets \"ANTHROPIC_API_KEY is missing.\" (measured, WP-5). Set $ROUTER_HOSTED_BEARER, or a ROUTER_HOSTED_BEARER line in "
-    + `${ENV_FILE} (ROUTER_ENV_FILE overrides the path), to a bearer from an authenticated session before running the `
+    + `${envFile()} (ROUTER_ENV_FILE overrides the path), to a bearer from an authenticated session before running the `
     + "passthrough cells. This cell fails rather than skips on purpose: a silently-skipped conformance cell is the "
     + "failure mode this file exists to prevent.");
   return hit[1].trim();          // never logged, never asserted on

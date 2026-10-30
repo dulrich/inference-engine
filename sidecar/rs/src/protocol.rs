@@ -15,6 +15,7 @@ pub const MODEL_FAMILIES: &[(&str, &str)] = &[
     ("gpt-6-astra", "medium"),
     ("gpt-6-sol", "medium"),
     ("gpt-6.1-sol", "medium"),
+    ("gpt-6.1-terra", "low"),
     ("gpt-6-luna", "low"),
 ];
 /// The harness's `output_config.effort` vocabulary folded onto the app-server's low|medium|high.

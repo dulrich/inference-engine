@@ -76,7 +76,7 @@ Usage on the wire is **this turn's context occupancy, never cumulative spend** (
 
 | id | model | effort |
 | --- | --- | --- |
-| `gpt-5.6-luna`, `gpt-6-luna` | luna | low (family default — only when the request carries no `output_config.effort`) |
+| `gpt-5.6-luna`, `gpt-6-luna`, `gpt-6.1-terra` | luna / terra | low (family default — only when the request carries no `output_config.effort`) |
 | `gpt-5.6-sol`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6.1-sol` | sol / astra | medium (family default — only when the request carries no `output_config.effort`) |
 | `…-low`, `…-medium`, `…-high` | as named | as named (an explicit suffix wins over the request) |
 

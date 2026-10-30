@@ -88,6 +88,7 @@ fn bare_id_with_no_effort_field_keeps_family_default() {
     assert_eq!(resolve("gpt-6-astra", json!({})), eff("medium", "default"));
     assert_eq!(resolve("gpt-6-sol", json!({})), eff("medium", "default"));
     assert_eq!(resolve("gpt-6.1-sol", json!({})), eff("medium", "default"));
+    assert_eq!(resolve("gpt-6.1-terra", json!({})), eff("low", "default"));
     assert_eq!(resolve("gpt-6-luna", json!({})), eff("low", "default"));
     assert_eq!(
         resolve(

@@ -1,7 +1,7 @@
 // tool-search-shared.mjs — helpers shared by the deferred-tool (ENABLE_TOOL_SEARCH) conformance
 // files: router/test/tool-search-conformance.test.mjs (local + unmetered codex legs, per commit),
 // router/test/conditional/tool-search-hosted.test.mjs (hosted passthrough leg, ROUTER_HOSTED_BEARER)
-// and router/test/conditional/tool-search-metered.test.mjs (metered codex relay, TOOL_SEARCH_METERED).
+// and router/test/conditional/tool-search-metered.test.mjs (codex relay).
 // Not a test file: the `*.test.mjs` glob does not load it. The method notes (bodies, token metric,
 // auth, fail-never-skip) live in the header of tool-search-conformance.test.mjs.
 
@@ -93,12 +93,13 @@ async function modelIds() {
   return ids;
 }
 
-// The user may re-jig the local model list at any time, so nothing here pins a claude-local id:
-// the preferred id is used when the gateway reports it, otherwise the first id on that leg.
-function resolveModel(ids, { preferred, prefix, listedAs = preferred }) {
+// Resolution rule: a billed leg (codex, passthrough) resolves its pinned id exactly or fails loudly
+// naming it. Only the claude-local leg passes `fallback: true`, because the user re-jigs the local
+// list at will: it uses the first id under the prefix, never a Qwen3.6/3.8 one (loading one is what
+// plans/test-qwen-load-minimization.md exists to prevent).
+function resolveModel(ids, { preferred, prefix, listedAs = preferred, fallback = false }) {
   if (ids.includes(listedAs)) return { id: preferred, exact: true };
-  // Never fall back onto a Qwen3.6/3.8 id: loading one is what plans/test-qwen-load-minimization.md
-  // exists to prevent, so a missing preferred id fails loudly instead.
+  assert.ok(fallback, `GET /v1/models does not list the pinned id ${listedAs}, so this leg cannot be exercised exactly. Got: ${ids.join(", ")}`);
   const alt = ids.find(id => id.startsWith(prefix) && !/qwen3[68]/i.test(id));
   assert.ok(alt, `GET /v1/models lists no ${prefix}* id (other than a Qwen3.6/3.8 one, which this suite never loads), so this leg cannot be exercised. Got: ${ids.join(", ")}`);
   return { id: alt, exact: false };
@@ -189,7 +190,7 @@ const LEGS = [
   {
     cell: "local",
     label: "local OpenAI-conversion",
-    pick: ids => resolveModel(ids, { preferred: "claude-local/nemotron-4b", prefix: "claude-local/" }),
+    pick: ids => resolveModel(ids, { preferred: "claude-local/nemotron-4b", prefix: "claude-local/", fallback: true }),
     // Synthetic bodies on the exact model, measured 2026-10-19 on nemotron-4b: on 897 / off 2233,
     // tools-only 866/2202, ratio 2.54x (floor 2.3x, ~10% slack).
     synth: { on: 897, off: 2233, minRatio: 2.3 },

@@ -23,8 +23,8 @@
 // shape cells and the unmetered count_tokens token gates for the local and codex legs (the codex
 // cells need the live codex-sidecar unit, but bill nothing), plus the local relay round-trip.
 // The hosted passthrough leg lives in conditional/tool-search-hosted.test.mjs
-// ($ROUTER_HOSTED_BEARER) and the metered codex relay in conditional/tool-search-metered.test.mjs
-// (TOOL_SEARCH_METERED=1); router/AGENTS.md "Gates" trigger table says when those run. Shared
+// ($ROUTER_HOSTED_BEARER) and the codex relay in conditional/tool-search-metered.test.mjs;
+// router/AGENTS.md "Gates" trigger table says when those run. Shared
 // helpers: ./tool-search-shared.mjs.
 //
 // Auth. The gateway key comes from $GATEWAY_KEY or $ROUTER_ENV_FILE

@@ -8,13 +8,9 @@
 // these tests FAIL; they never skip. A gate that quietly disappears when its target is down is
 // not a gate.
 //
-// METERED — this is why the flag exists. Each run bills two real turns against the operator's
-// Codex subscription (the test model in `router/test/test-models.json`, two ~64-token answers). A test that
-// silently spends the user's money on every commit-suite run is worse than
-// no test, and a test that silently SKIPS itself is worse than none either. So without
-// CODEX_METERED=1 the file registers exactly one test and that test FAILS, loudly, naming the
-// flag — never `skip`, never green-by-absence. `smoke-router.sh` guards its one metered codex
-// turn the same way (behind `--codex`); `router/AGENTS.md` "Gates" names this flag.
+// CONDITIONAL because it lives outside the per-commit glob (see below), not because of cost: it
+// runs approval-free at every sprint closeout on the codex test model (`router/test/test-models.json`,
+// two ~64-token answers).
 //
 // What is asserted, and why a LOG-ROW assertion rather than a token gate: the reasoning-token
 // delta between luna/low and luna/high on a one-word answer is small and noisy, while the
@@ -34,15 +30,13 @@
 // CONDITIONAL — lives in router/test/conditional/, outside the per-commit
 // `bun test router/test/*.test.mjs` glob. Trigger surface (router/AGENTS.md "Gates" trigger
 // table): `sidecar/` effort/request handling; codex providers in router/gateway.config.json; any
-// router patch; this file. Run with CODEX_METERED=1; a triggered run without it is reported as
-// not run, naming CODEX_METERED.
+// router patch; this file. Runs approval-free at every sprint closeout.
 //
 // Auth. The gateway key comes from $GATEWAY_KEY or $ROUTER_ENV_FILE (default
 // <code-root>/fleet-tools/.env) and is never printed.
 //
-// Env: CODEX_METERED (must be "1" to run the metered cases), ROUTER_BASE_URL
-//      (default http://127.0.0.1:4813), ROUTER_ENV_FILE, GATEWAY_KEY,
-//      SIDECAR_LOG_DIR (default ~/.local/state/codex-sidecar/logs — the sidecar's own default).
+// Env: ROUTER_BASE_URL (default http://127.0.0.1:4813), ROUTER_ENV_FILE, GATEWAY_KEY,
+//      CODEX_TEST_MODEL (one-run model override), SIDECAR_LOG_DIR (default ~/.local/state/codex-sidecar/logs — the sidecar's own default).
 
 import { routerEnvFile } from "../../fleet-env.mjs";
 import { codexTestModel } from "../test-models.mjs";
@@ -53,7 +47,6 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-const METERED = process.env.CODEX_METERED === "1";
 const BASE_URL = (process.env.ROUTER_BASE_URL || "http://127.0.0.1:4813").replace(/\/$/, "");
 // ROUTER_ENV_FILE, else `fleet-env path router` — resolved lazily, only when $GATEWAY_KEY is unset
 // (run under `fleet-env run router-client -- bun test …` and the file is never touched).
@@ -73,13 +66,7 @@ const LOG_SETTLE_MS = 2000;
 const SESSION_ID = crypto.randomUUID();
 const NONCE = `probe-${Date.now()}`;
 
-if (!METERED) {
-  test("codex effort mapping is a METERED gate and did not run", () => {
-    assert.fail("not run — set CODEX_METERED=1 (bills the Codex subscription)");
-  });
-} else {
-  run();
-}
+run();
 
 function run() {
   test("output_config.effort high reaches the sidecar as effort=high, effortSource=request",

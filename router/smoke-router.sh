@@ -42,8 +42,8 @@
 #   6. POST /v1/messages/count_tokens with an unresolvable model returns a 404-class JSON
 #      error body (patch 0004).
 #   7. (--subscription only) one claude -p call through the gateway returns a completion.
-#   8. (--codex only, metered: one turn on the operator's Codex subscription; SMOKE_CODEX_MODEL
-#      overrides the id, default codex-a/<test model> from router/test/test-models.json) one non-streamed completion via /v1/messages returns
+#   8. (--codex only: one turn on the operator's Codex subscription, codex-a/<test model>
+#      from router/test/test-models.json) one non-streamed completion via /v1/messages returns
 #      usage.output_tokens > 0 — proves the host sidecar leg (plans/codex-appserver-sidecar.md)
 #      end to end through the router: extra_hosts, the shared CODEX_SIDECAR_KEY, and the
 #      engine's baseurl-with-path derivation. (Not input_tokens: since 2026-09-13 the sidecar
@@ -300,12 +300,11 @@ else
 fi
 
 # ── 8. Codex sidecar leg, metered (--codex only) ────────────────────────────────────────────
-# SMOKE_CODEX_MODEL picks the routed id (default codex-a/<test model>, router/test/test-models.json) — the only end-to-end
-# proof a newly added codex id is accepted, since the sidecar's count_tokens never checks the id.
-if [ -z "${SMOKE_CODEX_MODEL:-}" ]; then
-	codex_test=$(codex_test_model) || exit 2
-fi
-CODEX_MODEL="${SMOKE_CODEX_MODEL:-codex-a/${codex_test:-}}"
+# The routed id is codex-a/<test model> (router/test/test-models.json; $CODEX_TEST_MODEL overrides
+# it for one run) — the only end-to-end proof a newly added codex id is accepted, since the sidecar's
+# count_tokens never checks the id.
+codex_test=$(codex_test_model) || exit 2
+CODEX_MODEL="codex-a/$codex_test"
 if [ "$CODEX" -eq 1 ]; then
 	note "--codex passed: running one non-streamed $CODEX_MODEL turn through $BASE_URL (bills the operator's Codex subscription)."
 	# The engine's anthropic-type leg needs *some* client bearer to build passthrough headers

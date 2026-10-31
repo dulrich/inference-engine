@@ -39,10 +39,12 @@
 #      full input_schema and `defer_loading:true` retained.
 #   4. Concrete tool materialised — the probe tool's own parameter names reach the final answer,
 #      which is only possible once its deferred schema was loaded.
-#   5. Within-leg token gate — request 1's `system`+`tools` count_tokens is at or below the
-#      measured on-threshold for THIS leg (plus 10% of drift: the throwaway profile's own paths and date move the system prompt by a few tokens, and each Claude Code release grows its own system prompt and built-in tool descriptions, ~+100 tokens 2026-10-19 → 2026-10-31), and above that same threshold
-#      under --control. Thresholds were measured with the pinned tool set (PINNED_TOOLS): local (claude-local/nemotron-4b) 3983 on / 7351 control and codex (codex-b/gpt-6-luna) 3529 on, both 2026-10-31 on Claude Code 2.1.314 (request 1 carries 6 tools, one deferred; local splits 1275 system / 2708 tools); codex control 6380 and passthrough 11465 on / 15111 control are the 2026-10-19 figures (codex then on gpt-5.6-luna, whose count_tokens is identical). The margins are ~46% (local), ~45% (codex) and ~32% (passthrough), so
-#      10% cannot mask an eager expansion. Cross-leg comparison is invalid (different catalogues, different tokenizers) and
+#   5. Within-leg token gate — request 1's `system`+`tools` count_tokens is at or below this leg's
+#      on-threshold (plus 10% drift allowance: the throwaway profile's paths/date and each Claude
+#      Code release move the system prompt a little), and above that same threshold under
+#      --control. Thresholds as coded: local 3983, codex 3529, passthrough 11470 (the 10% cannot
+#      mask an eager expansion). Measurement history: docs/tool-calling-gateway/tool-search-conformance-spike.md.
+#      Cross-leg comparison is invalid (different catalogues, different tokenizers) and
 #      is never attempted.
 #
 # How it observes request 1: Claude Code is pointed at a throwaway loopback capture proxy that
@@ -241,11 +243,15 @@ if [ -z "$model_ids" ]; then
 	exit 2
 fi
 
-pick_model() { # <preferred> <listed-as> <prefix>
+# Resolution rule: a billed leg (codex, passthrough) resolves its pinned id exactly, or pick_model
+# prints nothing and the caller fails the leg naming the id. Only the claude-local leg passes
+# fallback=1 (the user re-jigs the local list): first id under the prefix, never a Qwen3.6/3.8 one.
+pick_model() { # <preferred> <listed-as> <prefix> [fallback=1]
 	if echo "$model_ids" | grep -qx "$2"; then
 		echo "$1"
 		return 0
 	fi
+	[ "${4:-}" = "1" ] || return 0
 	echo "$model_ids" | grep -v -E '(^|/)(qwen3[68]|Qwen3\.[68])' | grep -m1 "^$3" || true
 }
 
@@ -452,7 +458,7 @@ run_leg() { # <leg> <model> <on-threshold>
 
 # ── legs ─────────────────────────────────────────────────────────────────────────────────────
 if [ "$WANT_LOCAL" -eq 1 ]; then
-	m=$(pick_model "claude-local/nemotron-4b" "claude-local/nemotron-4b" "claude-local/")
+	m=$(pick_model "claude-local/nemotron-4b" "claude-local/nemotron-4b" "claude-local/" 1)
 	if [ -z "$m" ]; then
 		bad "local: /v1/models lists no claude-local/* id"
 	else
@@ -465,7 +471,7 @@ if [ "$WANT_CODEX" -eq 1 ]; then
 	codex_test=$(codex_test_model) || exit 2
 	m=$(pick_model "codex-b/$codex_test" "codex-b/$codex_test" "codex-b/")
 	if [ -z "$m" ]; then
-		bad "codex: /v1/models lists no codex-b/* id"
+		bad "codex: /v1/models does not list the pinned id codex-b/$codex_test"
 	else
 		run_leg "codex" "$m" 3529
 	fi
@@ -477,7 +483,7 @@ if [ "$WANT_PASSTHROUGH" -eq 1 ]; then
 	note "--passthrough passed: this bills one turn on the operator's Claude subscription."
 	m=$(pick_model "claude-haiku-4-5" "anthropic/claude-haiku-4-5" "anthropic/")
 	if [ -z "$m" ]; then
-		bad "passthrough: /v1/models lists no anthropic/* id"
+		bad "passthrough: /v1/models does not list the pinned id anthropic/claude-haiku-4-5"
 	else
 		run_leg "passthrough" "$m" 11470
 	fi

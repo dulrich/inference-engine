@@ -19,8 +19,8 @@
 #                   put the secret on a command line. The key is never echoed.
 #   --local         the claude-local/* OpenAI-conversion leg. Unmetered (local GPU). DEFAULT
 #                   when no leg flag is given.
-#   --codex         the codex sidecar leg. METERED: one turn on the operator's Codex subscription.
-#   --passthrough   the hosted Claude leg. METERED: one turn on the operator's Claude subscription.
+#   --codex         the codex sidecar leg. Billed, approval-free: one turn on the operator's Codex subscription.
+#   --passthrough   the hosted Claude leg. Billed, approval-free: one turn on the operator's Claude subscription.
 #                   Needs the saved OAuth login; the fixture gets a READ-ONLY SYMLINK to
 #                   ~/.claude/.credentials.json — the credential is never copied and never read
 #                   by this script.
@@ -476,7 +476,7 @@ if [ "$WANT_CODEX" -eq 1 ]; then
 		run_leg "codex" "$m" 3529
 	fi
 else
-	note "--codex not passed: SKIPPING the metered codex sidecar leg (one Codex-subscription turn)."
+	note "--codex not passed: SKIPPING the codex sidecar leg (one Codex-subscription turn)."
 fi
 
 if [ "$WANT_PASSTHROUGH" -eq 1 ]; then
@@ -488,7 +488,7 @@ if [ "$WANT_PASSTHROUGH" -eq 1 ]; then
 		run_leg "passthrough" "$m" 11470
 	fi
 else
-	note "--passthrough not passed: SKIPPING the metered hosted leg (one Claude-subscription turn)."
+	note "--passthrough not passed: SKIPPING the hosted leg (one Claude-subscription turn)."
 fi
 
 echo

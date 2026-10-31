@@ -222,30 +222,36 @@ fn referenced_tool_defs(content: Option<&Content>, tools: &[Value]) -> Vec<Strin
         .collect()
 }
 
+/// The text relayed to codex for one `tool_result`: the content ladder, then the
+/// definitions of any `tool_reference`d tools appended under a fixed header.
+fn relayed_text(content: Option<&Content>, tools: &[Value]) -> String {
+    let text = match content {
+        Some(Content::Text(s)) => s.clone(),
+        c => {
+            let t = text_of(c);
+            match c {
+                _ if !t.is_empty() => t,
+                None | Some(Content::Other(Value::Null)) => "\"\"".into(),
+                Some(c) => c.to_value().to_string(),
+            }
+        }
+    };
+    let defs = referenced_tool_defs(content, tools);
+    if defs.is_empty() {
+        text
+    } else {
+        format!(
+            "{text}\n\nLoaded tool definitions (name, description, input schema):\n{}",
+            defs.join("\n")
+        )
+    }
+}
+
 /// Returns the number of re-sent results silently absorbed.
 pub fn deliver_tool_results(w: &mut World, rc: &Rc) -> usize {
     let mut deduped = 0;
     for tr in &rc.norm.tool_results() {
-        let text = match &tr.content {
-            Some(Content::Text(s)) => s.clone(),
-            c => {
-                let t = text_of(c.as_ref());
-                match c {
-                    _ if !t.is_empty() => t,
-                    None | Some(Content::Other(Value::Null)) => "\"\"".into(),
-                    Some(c) => c.to_value().to_string(),
-                }
-            }
-        };
-        let defs = referenced_tool_defs(tr.content.as_ref(), rc.norm.req.tool_list());
-        let text = if defs.is_empty() {
-            text
-        } else {
-            format!(
-                "{text}\n\nLoaded tool definitions (name, description, input schema):\n{}",
-                defs.join("\n")
-            )
-        };
+        let text = relayed_text(tr.content.as_ref(), rc.norm.req.tool_list());
         let id = tr.tool_use_id.clone().unwrap_or(Value::Null);
         let ok = !tr.is_error();
         let call = CallId(session::id_key(&id));
@@ -338,4 +344,40 @@ pub async fn start_turn(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HEADER: &str = "\n\nLoaded tool definitions (name, description, input schema):\n";
+
+    fn reference(name: &str) -> Content {
+        Content::from_value(json!([{ "type": "tool_reference", "tool_name": name }]))
+    }
+
+    #[test]
+    fn no_reference_keeps_the_text_ladder() {
+        let tools = [json!({ "name": "t", "description": "d" })];
+        let text = Content::Text("hello".into());
+        assert_eq!(relayed_text(Some(&text), &tools), "hello");
+        let other = Content::Other(json!({ "a": 1 }));
+        assert_eq!(relayed_text(Some(&other), &tools), "{\"a\":1}");
+        assert_eq!(relayed_text(None, &tools), "\"\"");
+    }
+
+    #[test]
+    fn reference_appends_the_definition() {
+        let tool = json!({ "name": "t", "description": "d", "input_schema": { "type": "object" } });
+        let want = to_dynamic_tools(std::slice::from_ref(&tool))[0].to_string();
+        let got = relayed_text(Some(&reference("t")), &[tool]);
+        assert!(got.ends_with(&format!("{HEADER}{want}")), "{got}");
+    }
+
+    #[test]
+    fn unknown_reference_is_skipped() {
+        let tools = [json!({ "name": "t", "description": "d" })];
+        let got = relayed_text(Some(&reference("missing")), &tools);
+        assert!(!got.contains(HEADER.trim()), "{got}");
+    }
 }

@@ -40,12 +40,9 @@
 #   4. Concrete tool materialised — the probe tool's own parameter names reach the final answer,
 #      which is only possible once its deferred schema was loaded.
 #   5. Within-leg token gate — request 1's `system`+`tools` count_tokens is at or below the
-#      measured on-threshold for THIS leg (plus 2% of fixture drift: the throwaway profile's
-#      own paths and date move the system prompt by a few tokens), and above that same threshold
-#      under --control. Thresholds were measured with the pinned tool set (PINNED_TOOLS) on
-#      2026-10-19: local (claude-local/nemotron-4b) 3883 on / control not re-measured here, must exceed 3883, codex 3419 on / 6380 control, passthrough
-#      11465 on / 15111 control. The margins are ~46% (local, codex) and ~32% (passthrough), so
-#      2% cannot mask an eager expansion. Cross-leg comparison is invalid (different catalogues, different tokenizers) and
+#      measured on-threshold for THIS leg (plus 10% of drift: the throwaway profile's own paths and date move the system prompt by a few tokens, and each Claude Code release grows its own system prompt and built-in tool descriptions, ~+100 tokens 2026-10-19 → 2026-10-31), and above that same threshold
+#      under --control. Thresholds were measured with the pinned tool set (PINNED_TOOLS): local (claude-local/nemotron-4b) 3983 on / 7351 control and codex (codex-b/gpt-6-luna) 3529 on, both 2026-10-31 on Claude Code 2.1.314 (request 1 carries 6 tools, one deferred; local splits 1275 system / 2708 tools); codex control 6380 and passthrough 11465 on / 15111 control are the 2026-10-19 figures (codex then on gpt-5.6-luna, whose count_tokens is identical). The margins are ~46% (local), ~45% (codex) and ~32% (passthrough), so
+#      10% cannot mask an eager expansion. Cross-leg comparison is invalid (different catalogues, different tokenizers) and
 #      is never attempted.
 #
 # How it observes request 1: Claude Code is pointed at a throwaway loopback capture proxy that
@@ -444,10 +441,10 @@ run_leg() { # <leg> <model> <on-threshold>
 		else
 			bad "$leg check 5 (control): the eager catalogue cost only $tok tokens, not above the WP-5 on-threshold $threshold — the control is no longer a control"
 		fi
-	elif [ "$tok" -le "$((threshold * 102 / 100))" ]; then
-		pass "$leg check 5: request 1 cost $tok system+tools tokens (tools block $((tok - ${sys_only:-0}))), within the WP-5 on-threshold $threshold +2%"
+	elif [ "$tok" -le "$((threshold * 110 / 100))" ]; then
+		pass "$leg check 5: request 1 cost $tok system+tools tokens (tools block $((tok - ${sys_only:-0}))), within the WP-5 on-threshold $threshold +10%"
 	else
-		bad "$leg check 5: request 1 cost $tok system+tools tokens, above the WP-5 on-threshold $threshold +2% ($((threshold * 102 / 100))) — the catalogue is being eagerly expanded"
+		bad "$leg check 5: request 1 cost $tok system+tools tokens, above the WP-5 on-threshold $threshold +10% ($((threshold * 110 / 100))) — the catalogue is being eagerly expanded"
 	fi
 }
 
@@ -457,17 +454,17 @@ if [ "$WANT_LOCAL" -eq 1 ]; then
 	if [ -z "$m" ]; then
 		bad "local: /v1/models lists no claude-local/* id"
 	else
-		run_leg "local" "$m" 3883
+		run_leg "local" "$m" 3983
 	fi
 fi
 
 if [ "$WANT_CODEX" -eq 1 ]; then
 	note "--codex passed: this bills one turn on the operator's Codex subscription."
-	m=$(pick_model "codex-b/gpt-5.6-luna" "codex-b/gpt-5.6-luna" "codex-b/")
+	m=$(pick_model "codex-b/gpt-6-luna" "codex-b/gpt-6-luna" "codex-b/")
 	if [ -z "$m" ]; then
 		bad "codex: /v1/models lists no codex-b/* id"
 	else
-		run_leg "codex" "$m" 3420
+		run_leg "codex" "$m" 3529
 	fi
 else
 	note "--codex not passed: SKIPPING the metered codex sidecar leg (one Codex-subscription turn)."

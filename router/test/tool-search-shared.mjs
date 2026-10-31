@@ -196,8 +196,9 @@ const LEGS = [
   {
     cell: "codex",
     label: "codex sidecar",
-    pick: ids => resolveModel(ids, { preferred: "codex-b/gpt-5.6-luna", prefix: "codex-b/" }),
-    // Synthetic bodies on the exact model, measured 2026-10-19: system+tools on 382 / off 1344,
+    pick: ids => resolveModel(ids, { preferred: "codex-b/gpt-6-luna", prefix: "codex-b/" }),
+    // Synthetic bodies on the exact model, measured 2026-10-19 on gpt-5.6-luna and re-measured
+    // identical on gpt-6-luna 2026-10-31: system+tools on 382 / off 1344,
     // tools-only ratio 3.62x (floor 3.2x, ~10% slack).
     synth: { on: 382, off: 1344, minRatio: 3.2 },
   },

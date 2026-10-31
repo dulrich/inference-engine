@@ -8,7 +8,7 @@ use crate::errors::{as_sidecar_error, SidecarError};
 use crate::messages::{superseded, Rc};
 use crate::persona;
 use crate::protocol::{base_instructions_of, text_of, to_dynamic_tools};
-use crate::request::{renders_transcript, turn_input_text, Content};
+use crate::request::{renders_transcript, turn_input_text, Content, ContentBlock};
 use crate::session;
 use crate::sidecar::{err, lock, Shared, World};
 use crate::thread_config::{feature_readings, verify_features, verify_instruction_sources};
@@ -192,6 +192,36 @@ pub async fn start_thread(me: &Shared, rc: &Rc) -> Result<(), SidecarError> {
     Ok(())
 }
 
+/// A ToolSearch result is bare `tool_reference` blocks. Codex registers tools once, at
+/// `thread/start`, so a tool the harness loads later never reaches an open thread's tool list;
+/// its definition (from the request's grown `tools`, in the `thread/start` shape) is relayed in
+/// the result text instead. Names absent from `tools` are skipped.
+fn referenced_tool_defs(content: Option<&Content>, tools: &[Value]) -> Vec<String> {
+    let Some(c) = content else {
+        return Vec::new();
+    };
+    c.blocks()
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Other(v)
+                if v.get("type").and_then(Value::as_str) == Some("tool_reference") =>
+            {
+                v.get("tool_name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }
+            _ => None,
+        })
+        .filter_map(|name| {
+            tools
+                .iter()
+                .find(|t| t.get("name").and_then(Value::as_str) == Some(name.as_str()))
+        })
+        .flat_map(|t| to_dynamic_tools(std::slice::from_ref(t)))
+        .map(|d| d.to_string())
+        .collect()
+}
+
 /// Returns the number of re-sent results silently absorbed.
 pub fn deliver_tool_results(w: &mut World, rc: &Rc) -> usize {
     let mut deduped = 0;
@@ -206,6 +236,15 @@ pub fn deliver_tool_results(w: &mut World, rc: &Rc) -> usize {
                     Some(c) => c.to_value().to_string(),
                 }
             }
+        };
+        let defs = referenced_tool_defs(tr.content.as_ref(), rc.norm.req.tool_list());
+        let text = if defs.is_empty() {
+            text
+        } else {
+            format!(
+                "{text}\n\nLoaded tool definitions (name, description, input schema):\n{}",
+                defs.join("\n")
+            )
         };
         let id = tr.tool_use_id.clone().unwrap_or(Value::Null);
         let ok = !tr.is_error();

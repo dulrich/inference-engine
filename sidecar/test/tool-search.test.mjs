@@ -138,8 +138,15 @@ test("a ToolSearch round-trip relays the tool_reference unchanged and the grown 
   assert.equal(concrete.name, "NotebookEdit", "the concrete deferred tool is the one that runs");
   assert.equal(concrete.input.notebook_path, "/tmp/probe.ipynb");
 
-  // the reference block is relayed to the app-server unchanged (no text block to flatten)
-  assert.equal(toolResponses(h)[0].contentItems[0].text, JSON.stringify(reference));
+  // the reference block is relayed unchanged, followed by the referenced tool's definition from
+  // the grown `tools` (codex registers tools only at thread/start, so the schema rides here)
+  const relayed = toolResponses(h)[0].contentItems[0].text;
+  assert.ok(relayed.startsWith(JSON.stringify(reference)), relayed);
+  const defLine = relayed.split("\n").find(l => l.startsWith("{"));
+  assert.ok(defLine, `no tool definition relayed: ${relayed}`);
+  const def = JSON.parse(defLine);
+  assert.equal(def.name, "NotebookEdit");
+  assert.deepEqual(def.inputSchema, NOTEBOOK_EDIT.input_schema, "the referenced tool's schema reaches the model");
   assert.equal(toolResponses(h)[0].success, true);
 
   // 3. the concrete tool's result closes the turn

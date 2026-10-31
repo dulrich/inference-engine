@@ -16,10 +16,9 @@
 #   --subscription  default OFF, and this script NEVER passes it to itself. Without it, the
 #                   hosted-leg check is skipped and only PRINTS what it would run — no request
 #                   ever reaches api.anthropic.com. Passing it runs one `claude -p` call through
-#                   this gateway on the operator's saved claude.ai login, which bills the real
-#                   subscription. This is WP-3's held-for-user step
-#                   (docs/tool-calling-gateway/oauth-passthrough-probe.md) — WP-1 implements the
-#                   code path but never exercises it.
+#                   this gateway on the operator's saved claude.ai login, pinned to claude-haiku-4-5 (one tiny
+#                   subscription turn). Standard since 2026-10-30: agents pass it without asking
+#                   (router/AGENTS.md "Conditional gates"; origin docs/tool-calling-gateway/oauth-passthrough-probe.md).
 #   --chained       chained-node mode (a client node whose claude-local/* and codex-*/* providers
 #                   use the upstream-gateway credential and relay to the tower's router, e.g.
 #                   host-b). Every Anthropic-ingress check runs unchanged (through the chain);
@@ -67,7 +66,7 @@ for _a in "$@"; do case "$_a" in --help|-h)
 
 # shellcheck source=/dev/null
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib/build-id.sh"
-# shellcheck source=test/test-models.sh
+# shellcheck source=/dev/null
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/test/test-models.sh"
 build_flags "${BASH_SOURCE[0]}" "$@"
 
@@ -279,14 +278,14 @@ else
 	bad "/v1/messages/count_tokens with an unresolvable model did not return a 404 body error (status=$wrong_model_status). Response: $wrong_model_json"
 fi
 
-# ── 7. Hosted-leg subscription probe (held; never run unattended) ──────────────────────────
+# ── 7. Hosted-leg subscription probe (opt-in flag; standard, pinned to haiku) ──────────────────────────
 if [ "$SUBSCRIPTION" -eq 1 ]; then
 	note "--subscription passed: running one claude -p call through $BASE_URL on the saved claude.ai login."
 	note "This bills the operator's real Claude subscription."
 	if ! command -v claude >/dev/null 2>&1; then
 		bad "--subscription: 'claude' CLI not found on PATH"
 	else
-		sub_out=$(ANTHROPIC_BASE_URL="$BASE_URL" ANTHROPIC_CUSTOM_HEADERS="x-gateway-key: $GATEWAY_KEY" claude -p "Reply with the single word: pong" 2>&1)
+		sub_out=$(ANTHROPIC_BASE_URL="$BASE_URL" ANTHROPIC_CUSTOM_HEADERS="x-gateway-key: $GATEWAY_KEY" claude -p --model claude-haiku-4-5 "Reply with the single word: pong" 2>&1)
 		sub_rc=$?
 		if [ "$sub_rc" -eq 0 ] && [ -n "$sub_out" ]; then
 			pass "--subscription: claude -p returned a non-empty completion through the hosted leg"
@@ -295,9 +294,9 @@ if [ "$SUBSCRIPTION" -eq 1 ]; then
 		fi
 	fi
 else
-	note "--subscription not passed: SKIPPING the hosted-leg claude -p probe (never run unattended — it bills"
-	note "the operator's live subscription). What it would run:"
-	note "  ANTHROPIC_BASE_URL=$BASE_URL ANTHROPIC_CUSTOM_HEADERS='x-gateway-key: <key>' claude -p 'Reply with the single word: pong'"
+	note "--subscription not passed: SKIPPING the hosted-leg claude -p probe (one haiku turn on the"
+	note "operator's Claude subscription). What it would run:"
+	note "  ANTHROPIC_BASE_URL=$BASE_URL ANTHROPIC_CUSTOM_HEADERS='x-gateway-key: <key>' claude -p --model claude-haiku-4-5 'Reply with the single word: pong'"
 fi
 
 # ── 8. Codex sidecar leg, metered (--codex only) ────────────────────────────────────────────

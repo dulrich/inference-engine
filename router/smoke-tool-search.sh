@@ -61,7 +61,7 @@ for _a in "$@"; do case "$_a" in --help|-h)
 
 # shellcheck source=/dev/null
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib/build-id.sh"
-# shellcheck source=test/test-models.sh
+# shellcheck source=/dev/null
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/test/test-models.sh"
 build_flags "${BASH_SOURCE[0]}" "$@"
 

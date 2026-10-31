@@ -61,6 +61,8 @@ for _a in "$@"; do case "$_a" in --help|-h)
 
 # shellcheck source=/dev/null
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib/build-id.sh"
+# shellcheck source=test/test-models.sh
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/test/test-models.sh"
 build_flags "${BASH_SOURCE[0]}" "$@"
 
 set -u
@@ -460,7 +462,8 @@ fi
 
 if [ "$WANT_CODEX" -eq 1 ]; then
 	note "--codex passed: this bills one turn on the operator's Codex subscription."
-	m=$(pick_model "codex-b/gpt-6-luna" "codex-b/gpt-6-luna" "codex-b/")
+	codex_test=$(codex_test_model) || exit 2
+	m=$(pick_model "codex-b/$codex_test" "codex-b/$codex_test" "codex-b/")
 	if [ -z "$m" ]; then
 		bad "codex: /v1/models lists no codex-b/* id"
 	else

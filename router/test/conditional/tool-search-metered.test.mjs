@@ -2,7 +2,7 @@
 // (ENABLE_TOOL_SEARCH) conformance gate, split out of router/test/tool-search-conformance.test.mjs
 // (plans/router-gate-consolidation.md WP-1). Helpers from ../tool-search-shared.mjs.
 //
-// METERED — the cell POSTs one real /v1/messages turn on codex-b/gpt-6-luna (one
+// METERED — the cell POSTs one real /v1/messages turn on codex-b/<test model> (router/test/test-models.json; one
 // Codex-subscription turn) carrying a tool_reference tool_result and a grown catalogue. Without
 // TOOL_SEARCH_METERED=1 the file registers one test and it FAILS loudly naming the flag — it was
 // a `t.skip()` before the split, and a silently-skipped gate is the failure mode these files exist
@@ -18,13 +18,14 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { codexTestModel } from "../test-models.mjs";
 
 const METERED = process.env.TOOL_SEARCH_METERED === "1";
 
 if (!METERED) {
   test("codex sidecar tool-search relay (metered): not run — set TOOL_SEARCH_METERED=1", () => {
     assert.fail("not run — set TOOL_SEARCH_METERED=1 to bill one Codex-subscription turn "
-      + "(POST /v1/messages on codex-b/gpt-6-luna with a tool_reference tool_result and a grown catalogue). "
+      + "(POST /v1/messages on the codex-b test model with a tool_reference tool_result and a grown catalogue). "
       + "This file fails rather than skips without it; report a triggered run without the flag as not run.");
   });
 } else {
@@ -32,7 +33,7 @@ if (!METERED) {
 
   test("codex sidecar: a tool_reference result and the grown catalogue are relayed, not rejected", async t => {
     const ids = await modelIds();
-    const { id: model } = resolveModel(ids, { preferred: "codex-b/gpt-6-luna", prefix: "codex-b/" });
+    const { id: model } = resolveModel(ids, { preferred: codexTestModel("codex-b"), prefix: "codex-b/" });
     t.diagnostic(`codex relay probe on ${model} (metered)`);
     const r = await call("/v1/messages", roundTripBody(model), { timeoutMs: 300000 });
     assert.equal(r.status, 200, `the codex leg rejected the discovery round-trip with ${r.status}: ${r.text.slice(0, 600)}${r.hint}`);

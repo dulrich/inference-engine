@@ -9,7 +9,7 @@
 // not a gate.
 //
 // METERED — this is why the flag exists. Each run bills two real turns against the operator's
-// Codex subscription (`gpt-6-luna`, two ~64-token answers). A test that
+// Codex subscription (the test model in `router/test/test-models.json`, two ~64-token answers). A test that
 // silently spends the user's money on every commit-suite run is worse than
 // no test, and a test that silently SKIPS itself is worse than none either. So without
 // CODEX_METERED=1 the file registers exactly one test and that test FAILS, loudly, naming the
@@ -45,6 +45,7 @@
 //      SIDECAR_LOG_DIR (default ~/.local/state/codex-sidecar/logs — the sidecar's own default).
 
 import { routerEnvFile } from "../../fleet-env.mjs";
+import { codexTestModel } from "../test-models.mjs";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -60,8 +61,8 @@ let envFileMemo;
 const envFile = () => (envFileMemo ??= routerEnvFile());
 const LOG_DIR = process.env.SIDECAR_LOG_DIR
   || path.join(process.env.HOME || os.homedir(), ".local", "state", "codex-sidecar", "logs");
-// gpt-6-luna: family default low, like the gpt-5.6-luna id this ran on until 2026-10-31.
-const MODEL = "codex-b/gpt-6-luna";
+// The live codex test model (router/test/test-models.json).
+const MODEL = codexTestModel("codex-b");
 // The engine's anthropic-type legs want *some* client bearer to build passthrough headers.
 const DUMMY_BEARER = "effort-mapping-codex-dummy-client-bearer";
 const REQUEST_TIMEOUT_MS = 300000;

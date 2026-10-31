@@ -44,13 +44,13 @@
 #      error body (patch 0004).
 #   7. (--subscription only) one claude -p call through the gateway returns a completion.
 #   8. (--codex only, metered: one turn on the operator's Codex subscription; SMOKE_CODEX_MODEL
-#      overrides the id, default codex-a/gpt-5.6-luna) one non-streamed completion via /v1/messages returns
+#      overrides the id, default codex-a/<test model> from router/test/test-models.json) one non-streamed completion via /v1/messages returns
 #      usage.output_tokens > 0 — proves the host sidecar leg (plans/codex-appserver-sidecar.md)
 #      end to end through the router: extra_hosts, the shared CODEX_SIDECAR_KEY, and the
 #      engine's baseurl-with-path derivation. (Not input_tokens: since 2026-09-13 the sidecar
 #      emits Anthropic usage semantics, so a fully cached turn legitimately reports
 #      input_tokens 0 with the prompt in cache_read_input_tokens.)
-#   9. POST /v1/messages/count_tokens via codex-a/gpt-5.6-luna returns an integer
+#   9. POST /v1/messages/count_tokens via the same codex id as check 8 returns an integer
 #      input_tokens (unmetered — the sidecar answers locally with a chars/4 estimate).
 #  10. (SMOKE_SYSTEMONE=1 only, metered: one OpenRouter decision call) POST /v1/systemone via
 #      openrouter-decide/typesafe/jev-1.13 with a synthetic state returns
@@ -67,6 +67,8 @@ for _a in "$@"; do case "$_a" in --help|-h)
 
 # shellcheck source=/dev/null
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib/build-id.sh"
+# shellcheck source=test/test-models.sh
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/test/test-models.sh"
 build_flags "${BASH_SOURCE[0]}" "$@"
 
 set -u
@@ -299,9 +301,12 @@ else
 fi
 
 # ── 8. Codex sidecar leg, metered (--codex only) ────────────────────────────────────────────
-# SMOKE_CODEX_MODEL picks the routed id (default codex-a/gpt-5.6-luna) — the only end-to-end
+# SMOKE_CODEX_MODEL picks the routed id (default codex-a/<test model>, router/test/test-models.json) — the only end-to-end
 # proof a newly added codex id is accepted, since the sidecar's count_tokens never checks the id.
-CODEX_MODEL="${SMOKE_CODEX_MODEL:-codex-a/gpt-5.6-luna}"
+if [ -z "${SMOKE_CODEX_MODEL:-}" ]; then
+	codex_test=$(codex_test_model) || exit 2
+fi
+CODEX_MODEL="${SMOKE_CODEX_MODEL:-codex-a/${codex_test:-}}"
 if [ "$CODEX" -eq 1 ]; then
 	note "--codex passed: running one non-streamed $CODEX_MODEL turn through $BASE_URL (bills the operator's Codex subscription)."
 	# The engine's anthropic-type leg needs *some* client bearer to build passthrough headers
@@ -325,20 +330,20 @@ else
 fi
 
 # ── 9. Codex sidecar count_tokens (unmetered) ───────────────────────────────────────────────
-note "checking POST /v1/messages/count_tokens (model=codex-a/gpt-5.6-luna) ..."
+note "checking POST /v1/messages/count_tokens (model=$CODEX_MODEL) ..."
 codex_ct_json=$(curl -s --max-time 30 -X POST "$BASE_URL/v1/messages/count_tokens" \
 	-H 'Content-Type: application/json' \
 	-H "x-gateway-key: $GATEWAY_KEY" \
 	-H 'authorization: Bearer smoke-dummy-client-bearer' \
-	-d '{"model":"codex-a/gpt-5.6-luna","messages":[{"role":"user","content":"Reply with the single word: pong"}]}') || codex_ct_json=""
+	-d "$(jq -nc --arg m "$CODEX_MODEL" '{model:$m,messages:[{role:"user",content:"Reply with the single word: pong"}]}')") || codex_ct_json=""
 codex_ct_value=$(echo "$codex_ct_json" | jq -r '
 	.input_tokens
 	| if type == "number" and (. == (. | floor)) then . else empty end
 ' 2>/dev/null)
 if [ -n "$codex_ct_value" ]; then
-	pass "/v1/messages/count_tokens (codex-a/gpt-5.6-luna) returned integer input_tokens=$codex_ct_value"
+	pass "/v1/messages/count_tokens ($CODEX_MODEL) returned integer input_tokens=$codex_ct_value"
 else
-	bad "/v1/messages/count_tokens (codex-a/gpt-5.6-luna) did not return an integer input_tokens. Response: $codex_ct_json"
+	bad "/v1/messages/count_tokens ($CODEX_MODEL) did not return an integer input_tokens. Response: $codex_ct_json"
 fi
 
 # ── 10. systemone decision route, metered (SMOKE_SYSTEMONE=1 only) ─────────────────────────

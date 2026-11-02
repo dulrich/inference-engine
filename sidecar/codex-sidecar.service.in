@@ -15,5 +15,42 @@ StandardInput=null
 Restart=on-failure
 RestartSec=5
 
+# Hardening: baseline block from fleet-tools/references/systemd-hardening.md (networked
+# variant); relaxations are commented inline.
+# Writes: the two persona CODEX_HOMEs (children refresh OAuth, sqlite, logs) and the sidecar
+# log/state dirs. Reads %t/fleet-env (EnvironmentFile) and ~/.local/lib/codex (codex release).
+# MemoryDenyWriteExecute is omitted on purpose: the codex children are unmeasured for a JIT.
+# PrivateTmp is kept; the sidecar and its children use no shared /tmp state.
+# codex bwrap sandbox (codex-cli 0.166; turns run "sandbox": "read-only" and unified_exec is
+# catalog-pinned on) needs: user+mnt+pid+ipc+net namespaces, @mount + seccomp + capset/pivot_root
+# (so ~@privileged is narrowed to its non-bwrap members), and AF_NETLINK (bwrap loopback setup).
+# Measured 2026-11-02 with `codex sandbox -- /bin/echo ok` under these exact properties.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.codex-a %h/.codex-b %h/.codex %h/.local/state/codex-sidecar
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=user mnt pid ipc net
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service @mount seccomp
+SystemCallFilter=~@resources @clock @cpu-emulation @debug @module @obsolete @raw-io @reboot @swap bpf chroot setuid setresuid setgroups
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
 [Install]
 WantedBy=default.target

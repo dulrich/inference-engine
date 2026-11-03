@@ -1,6 +1,6 @@
 # inference-engine-onnx — the fleet's always-resident GLiNER2-family CPU sidecar.
 #
-# Resulting tag: inference-engine-onnx:ort1.28-py312 (the runtime and its Python line baked into
+# Resulting tag: inference-engine-onnx:ort1.28-py313 (the runtime and its Python line baked into
 # the tag, so the tag alone says what is inside — same convention as the llama image's
 # b10121-swap243).
 #
@@ -35,7 +35,7 @@
 # container needs NO network at runtime. It never calls the HF hub — a missing model surfaces as
 # `loaded: false` on /health, not as a silent download.
 
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 # Source commit baked in for the fleet view (same convention as the fleet-tools images).
 # Declared BEFORE the apt layer deliberately: a new commit busts the cache from here down, so

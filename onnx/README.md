@@ -15,7 +15,7 @@ one is a **config append plus a weights fetch — no code**.
 | File | What it is |
 | --- | --- |
 | `models.yaml` | The alias registry. Bind-mounted read-only; **append-only** API surface with a consumer registry in its header. |
-| `Dockerfile` | `python:3.12-slim` + onnxruntime/numpy/tokenizers/PyYAML. No torch, no GPU. |
+| `Dockerfile` | `python:3.13-slim` + onnxruntime/numpy/tokenizers/PyYAML. No torch, no GPU. |
 | `entrypoint.sh` | Start-up assertions: torch is absent, onnxruntime resolved a CPU provider, the registry mount is real. |
 | `server/` | The service. `app.py` (routes), `registry.py` (aliases + residency), `runtime.py` (the torch-free GLiNER2 inference path). |
 | `tools/export_gliner2.py` | Host-side ONNX exporter **with a torch-parity gate**. Never shipped in the image. |

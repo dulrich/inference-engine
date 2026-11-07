@@ -2,7 +2,7 @@
 # Build context = router/gateway/. Pattern: fleet-tools/home_control/Dockerfile.
 # TLS: reqwest's `rustls` feature verifies via rustls-platform-verifier, which on Linux reads
 # the OS trust store, so the scratch image carries the alpine CA bundle.
-FROM rust:1.99.0-alpine3.24 AS rust-base
+FROM rust:1.99.1-alpine3.24 AS rust-base
 RUN apk add --no-cache musl-dev ca-certificates \
  && cargo install cargo-auditable --locked --version 0.7.7
 WORKDIR /src

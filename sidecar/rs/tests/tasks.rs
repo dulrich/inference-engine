@@ -65,15 +65,13 @@ async fn a_long_sse_turn_keeps_the_live_task_count_flat() {
     // reader/writer tasks for life, so the baseline is taken once they exist. Sampling right
     // after boot both excludes them and races the boot tasks' registration.
     stream_turn(h.port, "00000000-0000-0000-0000-000000000000").await;
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    let before = alive();
+    let before = settled_alive(|_| true).await;
 
     let (text, peak) = stream_turn(h.port, "11111111-2222-3333-4444-555555555555").await;
     let deltas = text.matches("event: content_block_delta").count();
     assert_eq!(deltas, DELTAS, "every delta streamed");
     assert!(text.contains("event: message_stop"));
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    let after = alive();
+    let after = settled_alive(|n| n <= before + 2).await;
     eprintln!("live tokio tasks: before={before} peak={peak} after={after} deltas={deltas}");
     assert!(
         peak <= before + 16,
@@ -85,6 +83,24 @@ async fn a_long_sse_turn_keeps_the_live_task_count_flat() {
     );
     h.close().await;
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Waits until the live task count is steady (unchanged across 5 samples 10 ms apart) and
+/// satisfies `done`, then returns it; at the 5 s deadline it returns the last sample so the
+/// caller's assertion reports it. Replaces fixed sleeps: the count is read once it settles.
+async fn settled_alive(done: impl Fn(usize) -> bool) -> usize {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let (mut last, mut steady) = (alive(), 0);
+    while tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let n = alive();
+        steady = if n == last { steady + 1 } else { 0 };
+        last = n;
+        if steady >= 5 && done(n) {
+            break;
+        }
+    }
+    last
 }
 
 /// One streamed `POST /codex-a/v1/messages` turn under `session_id`, read to EOF.

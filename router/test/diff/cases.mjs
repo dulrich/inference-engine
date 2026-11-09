@@ -236,20 +236,20 @@ export const cases = [
       await one(ctx, 'codex-a');
     } },
   { id: 'fallthrough-prefixed-model-single-target', tags: ['parity'],
-    script: { 'codex-a': { status: 500, body: 'david down' }, 'codex-b': OK('gpt-6-luna') },
+    script: { 'codex-a': { status: 500, body: 'a down' }, 'codex-b': OK('gpt-6-luna') },
     async run(ctx) {
       const r = await ctx.req('/v1/messages', { body: MSG('codex-a/gpt-6-luna') });
       assert.equal(r.status, 500);
-      assert.equal(r.text, 'david down');
+      assert.equal(r.text, 'a down');
       await one(ctx, 'codex-a');
     } },
   { id: 'target-providers-header-ignored', tags: ['changed'],
-    script: { 'codex-a': OK('gpt-6-luna', 'from-david'), 'codex-b': OK('gpt-6-luna', 'from-b') },
+    script: { 'codex-a': OK('gpt-6-luna', 'from-a'), 'codex-b': OK('gpt-6-luna', 'from-b') },
     async run(ctx) {
       // x-target-providers / x-target-provider are not read; the prefix alone routes.
       const r = await ctx.req('/v1/messages', { headers: { 'x-target-providers': 'codex-b', 'x-target-provider': 'nope' }, body: MSG('codex-a/gpt-6-luna') });
       assert.equal(r.status, 200, r.text);
-      assert.equal(JSON.parse(r.text).content[0].text, 'from-david');
+      assert.equal(JSON.parse(r.text).content[0].text, 'from-a');
       await one(ctx, 'codex-a');
     } },
 

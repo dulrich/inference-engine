@@ -1,5 +1,5 @@
 //! `inference-router healthcheck` — the compose healthcheck contract
-//! (the `inference-engine-router` service in `fleet-tools/fleet/compose.fleet.yml`): authenticate to the codex sidecar's
+//! (the `inference-engine-router` compose service): authenticate to the codex sidecar's
 //! `/healthz` with `CODEX_SIDECAR_KEY`, fail unless the JSON body's `status` is `"ok"`, 4 s
 //! timeout, no metered turn; additionally fail if this gateway's own `/health` does not answer.
 //! The sidecar is probed only when the loaded config routes to it (`probes_sidecar`).

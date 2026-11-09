@@ -46,8 +46,8 @@
 // cache_creation_input_tokens` — the same path the gateway's local leg uses (Decision 3). Exact
 // equality, no tolerance. The bogus-effort Jinja control uses llama's `/v1/chat/completions`.
 //
-// Auth. The gateway key comes from $GATEWAY_KEY or $ROUTER_ENV_FILE (default
-// <code-root>/fleet-tools/.env) and is never printed. The upstream needs no key.
+// Auth. The gateway key comes from $GATEWAY_KEY or $ROUTER_ENV_FILE
+// (default: `fleet-env path router`) and is never printed. The upstream needs no key.
 //
 // Env: ROUTER_BASE_URL (default http://127.0.0.1:4813), ROUTER_ENV_FILE, GATEWAY_KEY,
 //      LLAMA_UPSTREAM_URL (default http://127.0.0.1:4811 — the host port of the llama container),

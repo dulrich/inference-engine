@@ -250,14 +250,17 @@ async fn exposure_records_never_route_or_list() {
 #[test]
 fn check_catalog_exit_codes() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let committed = root.join("catalog/catalog.json");
+    let committed = root.join("test/fixtures/catalog.router.fixture.json");
     let run = |path: &Path| {
         std::process::Command::new(env!("CARGO_BIN_EXE_inference-router"))
             .arg("check-catalog")
             .arg(path)
             // No gateway or provider keys: only the static config path.
             .env_clear()
-            .env("GATEWAY_CONFIG_PATH", root.join("gateway.config.json"))
+            .env(
+                "GATEWAY_CONFIG_PATH",
+                root.join("test/fixtures/gateway.config.fixture.json"),
+            )
             .output()
             .unwrap()
     };

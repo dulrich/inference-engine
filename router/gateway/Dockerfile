@@ -1,5 +1,5 @@
 # inference-router: one static musl Rust binary (plans/router-rust-gateway.md WP-5).
-# Build context = router/gateway/. Pattern: fleet-tools/home_control/Dockerfile.
+# Build context = router/gateway/ (the compose build context for the router service).
 # TLS: reqwest's `rustls` feature verifies via rustls-platform-verifier, which on Linux reads
 # the OS trust store, so the scratch image carries the alpine CA bundle.
 FROM rust:1.99.1-alpine3.24 AS rust-base

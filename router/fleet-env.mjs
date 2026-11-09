@@ -1,5 +1,5 @@
 // fleet-env.mjs — the router's side of the fleet-wide fleet-env store
-// (fleet-tools plans/env-management.md, fleet_env/AGENTS.md). Not a test file.
+// (the fleet-env tool, found on PATH or via $FLEET_ENV_BIN). Not a test file.
 //
 // Store-only: there is no switch and no legacy env file. The default env file is the tmpfs
 // projection `fleet-env path router`, and exec consumers re-exec under `fleet-env run <id>`.
@@ -7,9 +7,30 @@
 // Prints paths only, never a value.
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync, statSync } from "node:fs";
+import path from "node:path";
 
-const bin = () => process.env.FLEET_ENV_BIN || "<code-root>/fleet-tools/fleet/fleet_env/bin/fleet-env";
+const isExec = p => {
+  try {
+    accessSync(p, constants.X_OK);
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * The fleet-env executable: ${FLEET_ENV_BIN:-fleet-env}. A name without a slash is searched on
+ * PATH; a path is used as given. Returns null when it does not resolve to an executable file.
+ */
+export function resolveFleetEnv(env = process.env) {
+  const want = env.FLEET_ENV_BIN || "fleet-env";
+  if (want.includes("/")) return isExec(want) ? want : null;
+  for (const dir of (env.PATH || "").split(path.delimiter)) {
+    if (dir && isExec(path.join(dir, want))) return path.join(dir, want);
+  }
+  return null;
+}
 
 function die(msg) {
   process.stderr.write(`fleet-env: ${msg}\n`);
@@ -17,8 +38,8 @@ function die(msg) {
 }
 
 function requireBin() {
-  const b = bin();
-  if (!existsSync(b)) die(`${b} is missing; refusing to run without credentials`);
+  const b = resolveFleetEnv();
+  if (!b) die(`${process.env.FLEET_ENV_BIN || "fleet-env"} is missing or not an executable on PATH (set FLEET_ENV_BIN or put fleet-env on PATH); refusing to run without credentials`);
   return b;
 }
 

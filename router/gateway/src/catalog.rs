@@ -413,11 +413,11 @@ mod tests {
     }
 
     fn settings() -> crate::config::Settings {
-        let text = include_str!("../../gateway.config.json");
+        let text = include_str!("../../test/fixtures/gateway.config.fixture.json");
         from_json(&serde_json::from_str(text).unwrap(), &keys).unwrap()
     }
 
-    const CATALOG: &str = include_str!("../../catalog/catalog.json");
+    const CATALOG: &str = include_str!("../../test/fixtures/catalog.router.fixture.json");
 
     fn with(provider: &str, models: Value) -> Result<Catalog, String> {
         let s = settings();

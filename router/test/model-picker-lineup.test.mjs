@@ -18,8 +18,10 @@ const FIXTURE_CATALOG = path.join(HERE, "fixtures", "catalog.fixture.json");
 // (plans/serving-control-redesign.md WP-3), so a run that named only --config would silently
 // read the repo's own catalog against a fixture config.
 const FIXTURE_ARGS = ["--config", FIXTURE_CONFIG, "--catalog", FIXTURE_CATALOG];
-const REAL_CONFIG = path.join(HERE, "..", "gateway.config.json");
-const REAL_CATALOG = path.join(HERE, "..", "catalog", "catalog.json");
+// A router-shaped catalog (full effort ids, the codex suffix ids on two personas, no retired ids)
+// for the invariants that hold for any valid visibility choice; the tombstone fixture above keeps
+// the retired OpenRouter ids on purpose, so the two cannot share one file.
+const ROUTER_CATALOG = path.join(HERE, "fixtures", "catalog.router.fixture.json");
 const DUMMY_KEY = "fixture-dummy-key-not-a-secret";
 
 function tempHome(t) {
@@ -87,15 +89,17 @@ test("renders one row per Claude-Code-visible non-anthropic id, with the documen
   }
 });
 
-// The real catalog's `consumers` lists are OPERATOR STATE: the serving dispatcher rewrites them
-// on every dashboard `set-visibility`, and the user toggles them by hand. So this test never pins
-// which ids are rows, nor how many — only what holds for every valid visibility choice: the
-// rendered rows are exactly the catalog's Claude-Code-visible set, and the append-only/tombstone
-// id contracts hold. The exact-lineup and label behaviour is pinned against the fixture catalog.
-test("the real config renders exactly the catalog's Claude-Code-visible ids, whatever they are", () => {
-  const rows = JSON.parse(run(["--config", REAL_CONFIG, "--catalog", REAL_CATALOG]).stdout);
-  const config = JSON.parse(fs.readFileSync(REAL_CONFIG, "utf8"));
-  const catalog = JSON.parse(fs.readFileSync(REAL_CATALOG, "utf8"));
+// A catalog's `consumers` lists are operator state in a deployment (the serving dispatcher rewrites
+// them on every dashboard `set-visibility`), so this test never pins which ids are rows, nor how
+// many — only what holds for every valid visibility choice: the rendered rows are exactly the
+// catalog's Claude-Code-visible set, and the append-only/tombstone id contracts hold. It runs on a
+// router-shaped fixture; the deployed catalog gets the same checks in
+// conditional/model-picker-real-catalog.test.mjs. The exact-lineup and label behaviour is pinned
+// against the fixture catalog.
+test("a router-shaped config renders exactly the catalog's Claude-Code-visible ids, whatever they are", () => {
+  const rows = JSON.parse(run(["--config", FIXTURE_CONFIG, "--catalog", ROUTER_CATALOG]).stdout);
+  const config = JSON.parse(fs.readFileSync(FIXTURE_CONFIG, "utf8"));
+  const catalog = JSON.parse(fs.readFileSync(ROUTER_CATALOG, "utf8"));
   const models = rows.map((r) => r.model);
   assert.equal(new Set(models).size, models.length, "no duplicate picker rows");
   assert.equal(models.filter((m) => m.startsWith("anthropic/")).length, 0);
@@ -452,9 +456,9 @@ test("a drifted generated env key fails --check --launch-profile and --write res
   assert.equal(env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE, "1");
 });
 
-// fleet-env store (fleet-tools plans/env-management.md): a stubbed fleet-env binary only;
+// fleet-env store (plans/env-management.md in the fleet control repo): a stubbed fleet-env binary only;
 // no env file is read by these tests (the key comes from the stub or FLEET_ENV_RUN's environment).
-function runFleetEnv(t, extraEnv, args) {
+function runFleetEnv(t, extraEnv, args, { onPath = false } = {}) {
   const { dir, settings } = tempHome(t);
   const stub = path.join(dir, "fleet-env");
   fs.writeFileSync(stub, `#!/usr/bin/env bash
@@ -468,7 +472,7 @@ exit 2
   const { spawnSync } = process.getBuiltinModule("node:child_process");
   const r = spawnSync(process.execPath, [SCRIPT, ...FIXTURE_ARGS, "--home", dir, ...args], {
     encoding: "utf8",
-    env: { PATH: process.env.PATH, HOME: dir, FLEET_ENV_BIN: stub, ...extraEnv },
+    env: { PATH: onPath ? `${dir}${path.delimiter}${process.env.PATH}` : process.env.PATH, HOME: dir, FLEET_ENV_BIN: stub, ...extraEnv },
   });
   const calls = fs.existsSync(path.join(dir, "calls")) ? fs.readFileSync(path.join(dir, "calls"), "utf8") : "";
   return { ...r, calls, settings };
@@ -481,6 +485,13 @@ test("fleet-env store: --launch-profile re-execs under fleet-env run model-picke
   const parsed = JSON.parse(fs.readFileSync(r.settings, "utf8"));
   assert.equal(parsed.env.ANTHROPIC_CUSTOM_HEADERS, `x-gateway-key: ${DUMMY_KEY}`);
   assert.ok(!r.stdout.includes(DUMMY_KEY) && !r.stderr.includes(DUMMY_KEY));
+});
+
+test("fleet-env store: with FLEET_ENV_BIN unset the binary is found on PATH", (t) => {
+  // Same stub as runFleetEnv, but reachable only through PATH (its dir is runFleetEnv's own tempHome).
+  const r = runFleetEnv(t, { FLEET_ENV_BIN: "" }, ["--write", "--launch-profile"], { onPath: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.calls, "run model-picker\n");
 });
 
 test("fleet-env store: bare --write never consults fleet-env", (t) => {

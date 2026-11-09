@@ -5,12 +5,14 @@
     {
       "name": "claude-local",
       "type": "openai_chat_completions",
+      "localLeg": "native-messages",
       "apikey": "local-dummy-key-not-a-secret",
       "baseurl": "http://inference-engine-llama:4806/v1"
     },
     {
       "name": "anthropic",
       "type": "anthropic",
+      "credential": "caller-oauth-passthrough",
       "baseurl": "https://api.anthropic.com"
     },
     {
@@ -24,6 +26,12 @@
       "type": "anthropic",
       "apiKeyEnv": "OPENROUTER_API_KEY",
       "baseurl": "https://openrouter.ai/api"
+    },
+    {
+      "name": "openrouter-decide",
+      "type": "systemone",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "baseurl": "https://openrouter.ai/api/v1"
     },
     {
       "name": "codex-a",

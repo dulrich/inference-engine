@@ -219,10 +219,10 @@ mod tests {
     use crate::config::from_json;
 
     fn settings() -> Vec<Arc<Provider>> {
-        let text = include_str!("../../gateway.config.json");
+        let text = include_str!("../../test/fixtures/gateway.config.fixture.json");
         let env = |k: &str| (k == "AUTH_STATIC_API_KEYS").then(|| "gk".to_string());
         let s = from_json(&serde_json::from_str(text).unwrap(), &env).unwrap();
-        let cat = include_str!("../../catalog/catalog.json");
+        let cat = include_str!("../../test/fixtures/catalog.router.fixture.json");
         crate::catalog::check(&s.providers, cat.as_bytes())
             .unwrap()
             .providers
@@ -280,7 +280,7 @@ mod tests {
         assert!(n(Ingress::Messages, "nope/claude-opus-5-5").is_empty());
         assert!(n(Ingress::Chat, "openai/qwen36-a3b").is_empty());
         assert_eq!(
-            n(Ingress::Messages, "codex-b/gpt-6-luna"),
+            n(Ingress::Messages, "CODEX-B/gpt-6-luna"),
             own("codex-b", "gpt-6-luna", Leg::Anthropic)
         );
     }

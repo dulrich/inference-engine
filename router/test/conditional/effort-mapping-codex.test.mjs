@@ -32,14 +32,14 @@
 // table): `sidecar/` effort/request handling; codex providers in router/gateway.config.json; any
 // router patch; this file. Runs approval-free at every sprint closeout.
 //
-// Auth. The gateway key comes from $GATEWAY_KEY or $ROUTER_ENV_FILE (default
-// <code-root>/fleet-tools/.env) and is never printed.
+// Auth. The gateway key comes from $GATEWAY_KEY or $ROUTER_ENV_FILE
+// (default: `fleet-env path router`) and is never printed.
 //
 // Env: ROUTER_BASE_URL (default http://127.0.0.1:4813), ROUTER_ENV_FILE, GATEWAY_KEY,
-//      CODEX_TEST_MODEL (one-run model override), SIDECAR_LOG_DIR (default ~/.local/state/codex-sidecar/logs — the sidecar's own default).
+//      CODEX_TEST_PERSONA (required: the codex persona to send turns to), CODEX_TEST_MODEL (one-run model override), SIDECAR_LOG_DIR (default ~/.local/state/codex-sidecar/logs — the sidecar's own default).
 
 import { routerEnvFile } from "../../fleet-env.mjs";
-import { codexTestModel } from "../test-models.mjs";
+import { codexPersona, codexTestModel } from "../test-models.mjs";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -55,7 +55,7 @@ const envFile = () => (envFileMemo ??= routerEnvFile());
 const LOG_DIR = process.env.SIDECAR_LOG_DIR
   || path.join(process.env.HOME || os.homedir(), ".local", "state", "codex-sidecar", "logs");
 // The live codex test model (router/test/test-models.json).
-const MODEL = codexTestModel("codex-b");
+const MODEL = codexTestModel(codexPersona());
 // The engine's anthropic-type legs want *some* client bearer to build passthrough headers.
 const DUMMY_BEARER = "effort-mapping-codex-dummy-client-bearer";
 const REQUEST_TIMEOUT_MS = 300000;

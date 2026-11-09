@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn production_config_loads_under_the_strict_loader() {
-        let text = include_str!("../../gateway.config.json");
+        let text = include_str!("../../test/fixtures/gateway.config.fixture.json");
         let raw: Value = serde_json::from_str(text).unwrap();
         let s = from_json(&raw, &env_of(&[KEYS])).unwrap();
         let local = s

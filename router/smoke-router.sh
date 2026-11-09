@@ -19,9 +19,12 @@
 #                   this gateway on the operator's saved claude.ai login, pinned to claude-haiku-4-5 (one tiny
 #                   subscription turn). Standard since 2026-10-30: agents pass it without asking
 #                   (router/AGENTS.md "Conditional gates"; origin docs/tool-calling-gateway/oauth-passthrough-probe.md).
+#   Env: CODEX_TEST_PERSONA (persona for the --codex turn; default: first codex-* provider /v1/models lists),
+#   CODEX_TEST_PERSONAS (space separated; the personas whose model ids check 1 requires; default: all listed).
+#
 #   --chained       chained-node mode (a client node whose claude-local/* and codex-*/* providers
 #                   use the upstream-gateway credential and relay to the tower's router, e.g.
-#                   host-b). Every Anthropic-ingress check runs unchanged (through the chain);
+#                   a laptop relaying to the main host). Every Anthropic-ingress check runs unchanged (through the chain);
 #                   check 4 instead asserts that /v1/chat/completions on claude-local/* is an
 #                   intentional 400 protocol refusal (the chained provider speaks only the
 #                   Anthropic protocol). Default (tower) mode is unchanged.
@@ -42,7 +45,7 @@
 #   6. POST /v1/messages/count_tokens with an unresolvable model returns a 404-class JSON
 #      error body (patch 0004).
 #   7. (--subscription only) one claude -p call through the gateway returns a completion.
-#   8. (--codex only: one turn on the operator's Codex subscription, codex-a/<test model>
+#   8. (--codex only: one turn on the operator's Codex subscription, <codex persona>/<test model>
 #      from router/test/test-models.json) one non-streamed completion via /v1/messages returns
 #      usage.output_tokens > 0 — proves the host sidecar leg (plans/codex-appserver-sidecar.md)
 #      end to end through the router: extra_hosts, the shared CODEX_SIDECAR_KEY, and the
@@ -133,8 +136,11 @@ bad() {
 # router-client consumer, which puts only GATEWAY_KEY in the environment — this script never
 # opens a projection or other credential file, and never echoes the key.
 if [ -z "${GATEWAY_KEY:-}" ] && [ "${FLEET_ENV_RUN:-}" != router-client ]; then
-	FLEET_ENV="${FLEET_ENV_BIN:-<code-root>/fleet-tools/fleet/fleet_env/bin/fleet-env}"
-	[ -x "$FLEET_ENV" ] || { echo "FATAL: fleet-env binary $FLEET_ENV is missing; refusing to run without credentials" >&2; exit 2; }
+	FLEET_ENV=$(command -v "${FLEET_ENV_BIN:-fleet-env}" 2>/dev/null) || FLEET_ENV=""
+	if [ ! -f "$FLEET_ENV" ]; then
+		echo "FATAL: fleet-env binary ${FLEET_ENV_BIN:-fleet-env} not found (set FLEET_ENV_BIN or put fleet-env on PATH); refusing to run without credentials" >&2
+		exit 2
+	fi
 	exec "$FLEET_ENV" run router-client -- bash "${BASH_SOURCE[0]}" "$@"
 fi
 : "${GATEWAY_KEY:?no gateway key: pass <gateway-key>, set GATEWAY_KEY, or run under fleet-env run router-client}"
@@ -169,13 +175,21 @@ for id in anthropic/claude-sonnet-5 anthropic/claude-sonnet-5-5 anthropic/claude
 	fi
 done
 models_codex_ok=1
-for id in codex-a/gpt-5.6-luna codex-a/gpt-5.6-sol codex-a/gpt-6-astra codex-a/gpt-6-sol codex-a/gpt-6.1-sol codex-a/gpt-6.1-terra codex-a/gpt-6-luna codex-b/gpt-5.6-luna codex-b/gpt-5.6-sol codex-b/gpt-6-astra codex-b/gpt-6-sol codex-b/gpt-6.1-sol codex-b/gpt-6.1-terra codex-b/gpt-6-luna; do
-	if ! echo "$model_ids" | grep -qx "$id"; then
-		models_codex_ok=0
-	fi
+# Personas under test: $CODEX_TEST_PERSONAS (space separated), else every codex-* provider the
+# router lists. The pinned gpt-* ids must be listed under each of them.
+codex_personas="${CODEX_TEST_PERSONAS:-$(echo "$model_ids" | sed -n 's|^\(codex-[^/]*\)/.*|\1|p' | sort -u | tr '\n' ' ')}"
+if [ -z "${codex_personas// /}" ]; then
+	models_codex_ok=0
+fi
+for persona in $codex_personas; do
+	for m in gpt-5.6-luna gpt-5.6-sol gpt-6-astra gpt-6-sol gpt-6.1-sol gpt-6.1-terra gpt-6-luna; do
+		if ! echo "$model_ids" | grep -qx "$persona/$m"; then
+			models_codex_ok=0
+		fi
+	done
 done
 if [ "$models_local_ok" -eq 1 ] && [ "$models_hosted_ok" -eq 1 ] && [ "$models_codex_ok" -eq 1 ]; then
-	pass "/v1/models lists all claude-local/*, anthropic/* and codex-{david,b}/* ids"
+	pass "/v1/models lists all claude-local/*, anthropic/* and codex-*/* ids"
 else
 	bad "/v1/models missing expected ids (local ok=$models_local_ok, hosted ok=$models_hosted_ok, codex ok=$models_codex_ok). Got: $(echo "$model_ids" | tr '\n' ',')"
 fi
@@ -308,11 +322,12 @@ else
 fi
 
 # ── 8. Codex sidecar leg, metered (--codex only) ────────────────────────────────────────────
-# The routed id is codex-a/<test model> (router/test/test-models.json; $CODEX_TEST_MODEL overrides
+# The routed id is <codex persona>/<test model> (router/test/test-models.json; $CODEX_TEST_MODEL overrides
 # it for one run) — the only end-to-end proof a newly added codex id is accepted, since the sidecar's
 # count_tokens never checks the id.
 codex_test=$(codex_test_model) || exit 2
-CODEX_MODEL="codex-a/$codex_test"
+codex_persona=$(codex_test_persona "$model_ids") || exit 2
+CODEX_MODEL="$codex_persona/$codex_test"
 if [ "$CODEX" -eq 1 ]; then
 	note "--codex passed: running one non-streamed $CODEX_MODEL turn through $BASE_URL (bills the operator's Codex subscription)."
 	# The engine's anthropic-type leg needs *some* client bearer to build passthrough headers

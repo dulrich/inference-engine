@@ -20,6 +20,7 @@
 #   --local         the claude-local/* OpenAI-conversion leg. Unmetered (local GPU). DEFAULT
 #                   when no leg flag is given.
 #   --codex         the codex sidecar leg. Billed, approval-free: one turn on the operator's Codex subscription.
+#                   The persona is $CODEX_TEST_PERSONA, else the first codex-* provider /v1/models lists.
 #   --passthrough   the hosted Claude leg. Billed, approval-free: one turn on the operator's Claude subscription.
 #                   Needs the saved OAuth login; the fixture gets a READ-ONLY SYMLINK to
 #                   ~/.claude/.credentials.json — the credential is never copied and never read
@@ -74,6 +75,7 @@ for _a in "$@"; do case "$_a" in --help|-h)
 # shellcheck source=/dev/null
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/test/test-models.sh"
 build_flags "${BASH_SOURCE[0]}" "$@"
+REPO_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 
 set -u
 
@@ -139,8 +141,11 @@ bad() {
 # router-client consumer, which puts only GATEWAY_KEY in the environment — this script never
 # opens a projection or other credential file, and never echoes the key.
 if [ -z "${GATEWAY_KEY:-}" ] && [ "${FLEET_ENV_RUN:-}" != router-client ]; then
-	FLEET_ENV="${FLEET_ENV_BIN:-<code-root>/fleet-tools/fleet/fleet_env/bin/fleet-env}"
-	[ -x "$FLEET_ENV" ] || { echo "FATAL: fleet-env binary $FLEET_ENV is missing; refusing to run without credentials" >&2; exit 2; }
+	FLEET_ENV=$(command -v "${FLEET_ENV_BIN:-fleet-env}" 2>/dev/null) || FLEET_ENV=""
+	if [ ! -f "$FLEET_ENV" ]; then
+		echo "FATAL: fleet-env binary ${FLEET_ENV_BIN:-fleet-env} not found (set FLEET_ENV_BIN or put fleet-env on PATH); refusing to run without credentials" >&2
+		exit 2
+	fi
 	exec "$FLEET_ENV" run router-client -- bash "${BASH_SOURCE[0]}" "$@"
 fi
 : "${GATEWAY_KEY:?no gateway key: pass <gateway-key>, set GATEWAY_KEY, or run under fleet-env run router-client}"
@@ -300,8 +305,8 @@ make_fixture() { # <leg> <model> <tool-search-on> <proxy-url> -> echoes the fixt
 		    "deny": [
 		      "Edit(//$HOME/**)",
 		      "Write(//$HOME/**)",
-		      "Edit(/<code-root>/**)",
-		      "Write(/<code-root>/**)",
+		      "Edit(/$REPO_ROOT/**)",
+		      "Write(/$REPO_ROOT/**)",
 		      "WebFetch",
 		      "WebSearch"
 		    ],
@@ -477,9 +482,10 @@ fi
 if [ "$WANT_CODEX" -eq 1 ]; then
 	note "--codex passed: this bills one turn on the operator's Codex subscription."
 	codex_test=$(codex_test_model) || exit 2
-	m=$(pick_model "codex-b/$codex_test" "codex-b/$codex_test" "codex-b/")
+	codex_persona=$(codex_test_persona "$model_ids") || exit 2
+	m=$(pick_model "$codex_persona/$codex_test" "$codex_persona/$codex_test" "$codex_persona/")
 	if [ -z "$m" ]; then
-		bad "codex: /v1/models does not list the pinned id codex-b/$codex_test"
+		bad "codex: /v1/models does not list the pinned id $codex_persona/$codex_test"
 	else
 		run_leg "codex" "$m" 3529
 	fi

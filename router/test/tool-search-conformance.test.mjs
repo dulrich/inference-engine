@@ -28,7 +28,7 @@
 // helpers: ./tool-search-shared.mjs.
 //
 // Auth. The gateway key comes from $GATEWAY_KEY or $ROUTER_ENV_FILE
-// (default <code-root>/fleet-tools/.env) and is never printed.
+// (default: `fleet-env path router`) and is never printed.
 //
 // Env: ROUTER_BASE_URL, ROUTER_ENV_FILE, GATEWAY_KEY.
 

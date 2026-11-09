@@ -28,6 +28,11 @@
         {"id": "z-ai/glm-5.3"}
       ]
     },
+    "openrouter-decide": {
+      "models": [
+        {"id": "typesafe/jev-1.13", "consumers": ["router"]}
+      ]
+    },
     "codex-a": {
       "models": [
         {"id": "gpt-5.6-luna"},

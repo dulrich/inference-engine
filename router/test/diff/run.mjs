@@ -16,7 +16,7 @@ export const GW_KEY = 'test-gw-key';
 const DEFAULT_STUB_IMAGE = 'node:24-slim';
 
 function parseArgs(argv) {
-  const a = { slow: false, keep: false, caseGlob: '*', configSource: path.join(repoRouter, 'gateway.config.json'), catalogSource: path.join(repoRouter, 'catalog', 'catalog.json') };
+  const a = { slow: false, keep: false, caseGlob: '*', configSource: path.join(repoRouter, 'test', 'fixtures', 'gateway.config.fixture.json'), catalogSource: path.join(repoRouter, 'test', 'fixtures', 'catalog.router.fixture.json') };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === '--target') a.target = argv[++i];

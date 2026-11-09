@@ -6,7 +6,20 @@ import fs from "node:fs";
 
 const FILE = new URL("./test-models.json", import.meta.url);
 
-/** The routed codex id for `persona`, e.g. codexTestModel("codex-b") → "codex-b/gpt-6-luna". */
+/**
+ * The codex persona the live tests send turns to: $CODEX_TEST_PERSONA, else (when `ids`, the
+ * router's /v1/models id list, is given) the first `codex-*` provider listed. Fails loudly when
+ * neither names one -- never a silent default.
+ */
+export function codexPersona(ids) {
+  const fromEnv = process.env.CODEX_TEST_PERSONA?.trim();
+  if (fromEnv) return fromEnv;
+  const hit = (ids ?? []).map(id => /^(codex-[^/]+)\//.exec(id)?.[1]).find(Boolean);
+  if (hit) return hit;
+  throw new Error("test-models: no codex persona: set $CODEX_TEST_PERSONA (or list a codex-* provider in /v1/models)");
+}
+
+/** The routed codex id for `persona`, e.g. codexTestModel("codex-a") → "codex-a/gpt-6-luna". */
 export function codexTestModel(persona) {
   const fromEnv = process.env.CODEX_TEST_MODEL?.trim();
   const model = fromEnv || JSON.parse(fs.readFileSync(FILE, "utf8")).codex;

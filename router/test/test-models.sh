@@ -28,3 +28,13 @@ codex_test_model() { # prints the bare codex model id (no persona prefix); non-z
 	esac
 	printf '%s\n' "$model"
 }
+
+codex_test_persona() { # <model-ids, newline separated>; prints the codex persona; non-zero when none is named
+	local persona="${CODEX_TEST_PERSONA:-}"
+	[ -n "$persona" ] || persona=$(printf '%s\n' "${1:-}" | sed -n 's|^\(codex-[^/]*\)/.*|\1|p' | head -n1)
+	if [ -z "$persona" ]; then
+		echo "test-models: no codex persona: set \$CODEX_TEST_PERSONA (or list a codex-* provider in /v1/models)" >&2
+		return 1
+	fi
+	printf '%s\n' "$persona"
+}

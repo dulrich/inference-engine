@@ -614,10 +614,7 @@ impl telemetry::Telemetry for Recorder {
 #[tokio::test]
 async fn telemetry_finalizes_once_on_success_and_client_disconnect() {
     let mut script = Script::new();
-    script.insert(
-        "/codex-a/v1/messages",
-        (200, "application/json", "SLOW"),
-    );
+    script.insert("/codex-a/v1/messages", (200, "application/json", "SLOW"));
     let up = stub(script).await;
     let raw = json!({"host": "127.0.0.1", "port": 0, "providers": [
         {"name": "codex-a", "type": "anthropic", "apikey": "k", "baseurl": format!("http://{}/codex-a", up.addr), "models": ["gpt-x"]},

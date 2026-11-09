@@ -192,7 +192,7 @@ pub fn read_config(env: &HashMap<String, String>) -> Result<Config, String> {
             .unwrap_or("172.17.0.1")
             .to_string(),
         personas: get("SIDECAR_PERSONAS")
-            .unwrap_or("codex-a,codex-b")
+            .unwrap_or("codex")
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())

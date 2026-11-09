@@ -18,7 +18,7 @@ fn defaults_match_readme_environment() {
     assert_eq!(c.key, "");
     assert_eq!(c.port, 4877);
     assert_eq!(c.bind_extra, "172.17.0.1");
-    assert_eq!(c.personas, ["codex-a", "codex-b"]);
+    assert_eq!(c.personas, ["codex"]);
     assert_eq!(c.state_dir, "/home/u/.local/state/codex-sidecar");
     assert_eq!(
         c.cwd_fallback,

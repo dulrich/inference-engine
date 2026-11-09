@@ -10,14 +10,14 @@ Description=codex app-server sidecar (Anthropic Messages front end for codex per
 Type=simple
 ExecStart=@EXEC@
 Environment=PATH=@PATH@
+Environment=SIDECAR_PERSONAS=@PERSONAS@
 EnvironmentFile=@ENV_FILE@
 StandardInput=null
 Restart=on-failure
 RestartSec=5
 
-# Hardening: baseline block from fleet-tools/references/systemd-hardening.md (networked
-# variant); relaxations are commented inline.
-# Writes: the two persona CODEX_HOMEs (children refresh OAuth, sqlite, logs) and the sidecar
+# Hardening: networked baseline sandbox block; relaxations are commented inline.
+# Writes: the persona CODEX_HOMEs (children refresh OAuth, sqlite, logs) and the sidecar
 # log/state dirs. Reads %t/fleet-env (EnvironmentFile) and ~/.local/lib/codex (codex release).
 # MemoryDenyWriteExecute is omitted on purpose: the codex children are unmeasured for a JIT.
 # PrivateTmp is kept; the sidecar and its children use no shared /tmp state.
@@ -28,7 +28,7 @@ RestartSec=5
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/.codex-a %h/.codex-b %h/.codex %h/.local/state/codex-sidecar
+ReadWritePaths=@RW_PATHS@ %h/.local/state/codex-sidecar
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 const INSTALL = path.join(import.meta.dirname, "..", "install.sh");
 const DUMMY = "fixture-sidecar-key-not-a-secret";
 
-function setup({ projection = true, args = [], prepare, fleetEnvBin } = {}) {
+function setup({ projection = true, args = [], prepare, fleetEnvBin, noPersonas = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidecar-install-"));
   const bin = path.join(root, "bin");
   const home = path.join(root, "home");
@@ -21,7 +21,7 @@ function setup({ projection = true, args = [], prepare, fleetEnvBin } = {}) {
     fs.writeFileSync(path.join(bin, name), `#!/usr/bin/env bash\n${body}\n`);
     fs.chmodSync(path.join(bin, name), 0o755);
   };
-  for (const p of ["codex-a", "codex-b"]) stub(p, "exit 0");
+  for (const p of ["codex", "codex-a", "codex-b"]) stub(p, "exit 0");
   stub("systemctl", `echo "systemctl $*" >> "${calls}"`);
   stub("loginctl", `echo "loginctl $*" >> "${calls}"`);
   const proj = path.join(root, "xdg", "fleet-env", "codex-sidecar.env");
@@ -38,7 +38,8 @@ esac`);
   if (prepare) prepare({ root, home });
   // A stub "binary" stands in for the release build (no cargo in tests) unless args pass one.
   const binArgs = args.includes("--rust-bin") ? [] : ["--rust-bin", rustStub(root, "v0")];
-  const run = () => spawnSync("bash", [INSTALL, "--home", home, ...binArgs, ...args], {
+  const personaArgs = args.some((a) => a.startsWith("--personas")) || noPersonas ? [] : ["--personas", "codex-a,codex-b"];
+  const run = () => spawnSync("bash", [INSTALL, "--home", home, ...binArgs, ...personaArgs, ...args], {
     encoding: "utf8",
     env: { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: root, FLEET_ENV_BIN: fleetEnvBin ?? path.join(bin, "fleet-env") },
   });
@@ -79,9 +80,60 @@ test("store-only: the projection missing fails closed", () => {
 test("store-only: a missing fleet-env binary fails closed, nothing written", () => {
   const r = setup({ fleetEnvBin: "/nonexistent/fleet-env" });
   assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /is missing/);
+  assert.match(r.stderr, /not found on PATH/);
   assert.equal(r.unit, "", "no unit written");
   assert.ok(!fs.existsSync(path.dirname(r.legacyEnv)), "no legacy config dir");
+});
+
+test("personas: default is stock codex; ReadWritePaths and SIDECAR_PERSONAS render from the list", () => {
+  const d = setup({ noPersonas: true });
+  assert.equal(d.status, 0, d.stderr);
+  assert.match(d.unit, /^ReadWritePaths=%h\/\.codex %h\/\.local\/state\/codex-sidecar$/m);
+  assert.match(d.unit, /^Environment=SIDECAR_PERSONAS=codex$/m);
+  const two = setup({ args: ["--personas", "codex-a,codex-b"] });
+  assert.equal(two.status, 0, two.stderr);
+  assert.match(two.unit, /^ReadWritePaths=%h\/\.codex-a %h\/\.codex-b %h\/\.local\/state\/codex-sidecar$/m);
+  assert.match(two.unit, /^Environment=SIDECAR_PERSONAS=codex-a,codex-b$/m);
+  assert.doesNotMatch(two.unit, /@[A-Z_]+@/);
+});
+
+test("personas: invalid, duplicate and missing-wrapper personas fail loudly", () => {
+  for (const bad of ["bob", "codex-", "codex-a,codex-a", "codex-a/../x", " , "]) {
+    const r = setup({ args: ["--personas", bad] });
+    assert.notEqual(r.status, 0, bad);
+    assert.equal(r.unit, "", `no unit for ${bad}`);
+  }
+  const r = setup({ args: ["--personas", "codex-nowrapper"] });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /persona wrapper 'codex-nowrapper' not found on PATH/);
+});
+
+test("--env-file: mode 0600 enforced, EnvironmentFile points at it, no fleet-env use or ordering", () => {
+  let good, loose, nokey;
+  const prep = ({ root }) => {
+    good = path.join(root, "good.env"); fs.writeFileSync(good, "SIDECAR_KEY=" + DUMMY + "\n", { mode: 0o600 });
+    loose = path.join(root, "loose.env"); fs.writeFileSync(loose, "SIDECAR_KEY=" + DUMMY + "\n"); fs.chmodSync(loose, 0o644);
+    nokey = path.join(root, "nokey.env"); fs.writeFileSync(nokey, "OTHER=1\n", { mode: 0o600 });
+  };
+  const ok = setup({ prepare: prep, fleetEnvBin: "/nonexistent/fleet-env", args: [] });
+  // prepare ran before the first run, so re-run the real case with the prepared path
+  const run = (file) => spawnSync("bash", [INSTALL, "--home", ok.home, "--personas", "codex-a", "--rust-bin", rustStub(ok.root, "e"), "--env-file", file], {
+    encoding: "utf8",
+    env: { PATH: `${path.join(ok.root, "bin")}:/usr/bin:/bin`, HOME: ok.root, FLEET_ENV_BIN: "/nonexistent/fleet-env" },
+  });
+  const r = run(good);
+  assert.equal(r.status, 0, r.stderr);
+  const unit = fs.readFileSync(path.join(ok.home, ".config", "systemd", "user", "codex-sidecar.service"), "utf8");
+  assert.ok(unit.split("\n").includes(`EnvironmentFile=${good}`));
+  assert.doesNotMatch(unit, /^(After|Requires)=fleet-env/m);
+  assert.ok(!(r.stdout + r.stderr).includes(DUMMY));
+  assert.doesNotMatch(ok.calls, /fleet-env/);
+  const l = run(loose);
+  assert.notEqual(l.status, 0);
+  assert.match(l.stderr, /mode 0600/);
+  assert.notEqual(run(nokey).status, 0);
+  assert.notEqual(run("relative.env").status, 0);
+  assert.notEqual(run(path.join(ok.root, "absent.env")).status, 0);
 });
 
 // A stub "binary" stands in for the release build (no cargo in tests).

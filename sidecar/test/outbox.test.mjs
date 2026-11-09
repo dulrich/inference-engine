@@ -1,6 +1,4 @@
-// outbox.test.mjs — the sidecar's half of the tracker event seam (plan
-// `fleet-tools/plans/tracker-event-seam.md`, WP-2; append log per
-// `fleet-tools/plans/outbox-append-log.md`, WP-2). The reader lives in another repo, so
+// outbox.test.mjs — the sidecar's half of the tracker event seam. The reader lives in another repo, so
 // the line format is pinned by byte equality against its `serializeRow` in
 // rs/tests/outbox.rs; this file keeps the black-box HTTP cases against the target binary.
 import test from "node:test";

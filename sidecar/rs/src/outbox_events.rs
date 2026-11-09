@@ -1,4 +1,4 @@
-//! The sidecar's rows in the fleet-tools initiative tracker.
+//! The sidecar's rows in the initiative tracker.
 //!
 //! Every call is fail-open (the writer swallows). Never any message content — only identity,
 //! model/effort and token totals.

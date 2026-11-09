@@ -34,14 +34,20 @@ build_flags "${BASH_SOURCE[0]}" "$@"
 set -euo pipefail
 
 INSTALL_HOME="${SIDECAR_INSTALL_HOME:-$HOME}"
-# Store-only (plans/env-management.md): the env file is the fleet-env projection, the same as
-# install.sh. A missing binary or failed lookup is a loud exit 1 -- never a silent fallback.
-FLEET_ENV="${FLEET_ENV_BIN:-<code-root>/fleet-tools/fleet/fleet_env/bin/fleet-env}"
-if [[ ! -x "$FLEET_ENV" ]]; then
-  printf '%s: fleet-env binary %s is missing; refusing to run without credentials\n' "$0" "$FLEET_ENV" >&2
-  exit 1
+# Default: the env file is the fleet-env projection, the same as install.sh (the binary is
+# resolved through PATH; FLEET_ENV_BIN overrides). SIDECAR_ENV_FILE=<path> reads a user env
+# file instead (the file passed to install.sh --env-file). A missing binary or failed lookup
+# is a loud exit 1 -- never a silent fallback.
+if [[ -n "${SIDECAR_ENV_FILE:-}" ]]; then
+  ENV_FILE="$SIDECAR_ENV_FILE"
+else
+  FLEET_ENV="$(command -v -- "${FLEET_ENV_BIN:-fleet-env}" || true)"
+  if [[ -z "$FLEET_ENV" || ! -x "$FLEET_ENV" ]]; then
+    printf '%s: fleet-env binary %s not found on PATH; refusing to run without credentials (or set SIDECAR_ENV_FILE)\n' "$0" "${FLEET_ENV_BIN:-fleet-env}" >&2
+    exit 1
+  fi
+  ENV_FILE="$("$FLEET_ENV" path codex-sidecar)" || { printf 'fleet-env path codex-sidecar failed\n' >&2; exit 1; }
 fi
-ENV_FILE="$("$FLEET_ENV" path codex-sidecar)" || { printf 'fleet-env path codex-sidecar failed\n' >&2; exit 1; }
 PORT="${SIDECAR_PORT:-4877}"
 
 printf '== systemctl --user status codex-sidecar ==\n'

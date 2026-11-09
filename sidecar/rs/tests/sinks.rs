@@ -22,14 +22,8 @@ fn wire_model_id_restores_the_persona_prefix() {
     );
     // the request's `String(model ?? "")`
     let model = |v: Value| Request::parse(json!({ "model": v })).unwrap().model_text();
-    assert_eq!(
-        wire_model_id("codex-a", &model(Value::Null)),
-        "codex-a/"
-    );
-    assert_eq!(
-        wire_model_id("codex-a", &model(json!(5))),
-        "codex-a/5"
-    );
+    assert_eq!(wire_model_id("codex-a", &model(Value::Null)), "codex-a/");
+    assert_eq!(wire_model_id("codex-a", &model(json!(5))), "codex-a/5");
 }
 
 #[test]

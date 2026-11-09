@@ -1,6 +1,6 @@
 # codex-sidecar
 
-An Anthropic-Messages front end over `codex app-server`. Claude Code talks to the router at `:4813`; the router's `codex-a` / `codex-b` providers talk to this sidecar; the sidecar drives one long-lived `<persona> app-server` child per persona over JSON-RPC on the child's stdio pipe.
+An Anthropic-Messages front end over `codex app-server`. Claude Code talks to the router at `:4813`; the router's `codex-<persona>` providers talk to this sidecar; the sidecar drives one long-lived `<persona> app-server` child per persona over JSON-RPC on the child's stdio pipe.
 
 A single Rust binary (`rs/`, binary `codex-sidecar`). The black-box test suite under `test/` runs under bun (`bun test ./test`), `node:*` built-ins only, zero npm dependencies.
 
@@ -17,7 +17,7 @@ Claude Code ──► router :4813 ──► codex-sidecar :4877 ──► codex
 - **Working directory** comes from the `Primary working directory:` line of the `role:"system"` environment message, parsed *before* those entries are filtered out of the conversation. Fallbacks: `SIDECAR_CWD`, then an empty state directory (so no stray `AGENTS.md` is loaded).
 - **Interleaved `role:"system"` messages are dropped from the *turn* but their text is kept.** They are never a new turn, so `conversational()` filters them out of `messages[]` — but Claude Code advertises the deferred-tool name list (`ENABLE_TOOL_SEARCH`), the agent-type listing and the installed-skills listing **only** there, never in top-level `system`. `interleavedSystemText()` collects them in message order and `baseInstructionsOf()` folds them into the thread's `baseInstructions` after the preamble and the client's system text. With nothing interleaved the result is byte-identical to the old preamble + system string. It is computed once, at `thread/start`; the subagent discriminator hashes top-level `system` and is unaffected. `config-verified` carries `interleavedSystemChars`, and the `http` row's `nSystemRole` still counts the dropped entries.
 - **The security boundary is a runtime item-type filter, not thread config.** Any `item/started` whose `item.type` is not `agentMessage | reasoning | dynamicToolCall | userMessage | contextCompaction` (compaction is codex's own context management, not execution, so it is in band) — and any approval request, since `approvalPolicy` is `never` — triggers `turn/interrupt`, an HTTP 502, a `security-event` log line, and marks the persona `degraded`; the child is then killed so the normal restart path brings it back. The filter and the pinned `features.*` flags are **not** env-overridable.
-- **`thread-config.json` sets `model_auto_compact_token_limit: 200000`.** With autocompact off, Claude Code hard-blocks a session at window − 23,000 = 235,400 tokens; compacting the codex thread at 200,000 leaves ~35k headroom below that block. It is a lever, not a guarantee (see `plans/codex-sidecar-context-hygiene.md` Assumptions). The `contextCompaction` items codex emits while compacting are in band, and an all-input-zero `thread/tokenUsage/updated` interim during compaction never replaces the last non-zero usage figure.
+- **`thread-config.json` sets `model_auto_compact_token_limit: 200000`.** With autocompact off, Claude Code hard-blocks a session at window − 23,000 = 235,400 tokens; compacting the codex thread at 200,000 leaves ~35k headroom below that block. It is a lever, not a guarantee. The `contextCompaction` items codex emits while compacting are in band, and an all-input-zero `thread/tokenUsage/updated` interim during compaction never replaces the last non-zero usage figure.
 - **The prefix trim is verified, not assumed.** `thread/start` sends the pinned `thread-config.json` (`project_doc_max_bytes: 0` plus twenty `features.*` flags set `false`, `standalone_web_search` among them); the response's `instructionSources` must contain at most the persona `AGENTS.md`, and no hook or MCP-server startup may have fired. Anything else fails closed with a 502 and a `config-unverified` line, because `config` silently ignores unknown keys.
 - **The declared feature posture is read back and verified too** (2026-09-14). After those checks, `thread/start` reads `experimentalFeature/list {threadId}` — the app-server's per-thread flag oracle — and any declared key the thread reports with the other value fails the thread closed the same way (`features not honoured: multi_agent=true (declared false)`); so does an oracle that errors (`feature oracle unavailable: …`), never a warning. `unified_exec` is exempt (catalog-pinned true), and a key this binary does not report at all is counted on `unknownFeatures` rather than treated as drift. `config-verified` carries `features`, `unknownFeatures` and `multiAgentMode`. This verifies *config*: WP-1 measured that on codex-cli 0.154.0 these flags do not remove the collab tools or code mode, so the runtime item-type filter above stays the enforcement line and `status.sh` probes the posture at install time.
 - **The astra fix is a pinned preamble** (`preamble.txt`, 306 chars) prepended to `baseInstructions` ahead of the client's system text. Not a knob.
@@ -88,10 +88,10 @@ Spike-09 fixture task through the router at `:4813`, six metered `claude -p` run
 
 | run | model | effort | gate | turns | tool calls | codex cumulative input | output (sidecar / Claude Code) | security-event | config-unverified | title-local | wall |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `luna-david` | `codex-a/gpt-5.6-luna` | low | green | 9 | 8 | 23,131 | 526 / 526 | 0 | 0 | 1 (`pinned`) | 22.5 s |
+| `luna-a` | `codex-a/gpt-5.6-luna` | low | green | 9 | 8 | 23,131 | 526 / 526 | 0 | 0 | 1 (`pinned`) | 22.5 s |
 | `sol-b` | `codex-b/gpt-5.6-sol` | medium | green | 10 | 9 | 28,396 | 1,037 / 1,037 | 0 | 0 | 1 (`pinned`) | 37.1 s |
 | `astra-b` | `codex-b/gpt-6-astra` | medium | green | 11 | 10 | 27,096 | 321 / 321 | 0 | 0 | 1 (`pinned`) | 26.5 s |
-| `astra-david` | `codex-a/gpt-6-astra` | medium | green | 11 | 10 | 26,880 | 312 / 312 | 0 | 0 | 1 (`pinned`) | 20.9 s |
+| `astra-a` | `codex-a/gpt-6-astra` | medium | green | 11 | 10 | 26,880 | 312 / 312 | 0 | 0 | 1 (`pinned`) | 20.9 s |
 | `luna-conc-a` | `codex-a/gpt-5.6-luna` | low | green | 5 | 4 | 23,274 | 597 / 597 | 0 | 0 | 1 (`pinned`) | 18.3 s |
 | `luna-conc-b` | `codex-a/gpt-5.6-luna` | low | green | 12 | 11 | 25,368 | 861 / 861 | 0 | 0 | 1 (`pinned`) | 30.6 s |
 
@@ -108,12 +108,12 @@ Integer variables (ports, `*_MS`, days, tokens, here and under Test seams) are s
 | `SIDECAR_BIND_EXTRA` | `172.17.0.1` | Second bind (the docker0 gateway, so the router container can reach it). Empty string skips it. At boot docker0 may not exist yet (`docker.service` started 3.6 s after this unit on 2026-09-14 and the bind failed `EADDRNOTAVAIL`; a user unit cannot order after a system unit, and `network.target` does not exist in the user manager) — so a failed extra bind is retried in the background and `/healthz` reports `degraded` until it lands. |
 | `SIDECAR_BIND_RETRY_MS` | `500` | First retry delay for the extra bind; doubles per attempt to a 5 s cap. |
 | `SIDECAR_BIND_RETRY_BUDGET_MS` | `60000` | Total wall-clock the extra-bind retry may spend before giving up (`bind-extra-failed`); health stays `degraded` after a give-up. |
-| `SIDECAR_PERSONAS` | `codex-a,codex-b` | Personas to serve; each is spawned as `<persona> app-server`. |
+| `SIDECAR_PERSONAS` | `codex` | Personas to serve; each is spawned as `<persona> app-server`. `install.sh --personas` writes it into the unit. |
 | `SIDECAR_CWD` | *(unset)* | Fallback working directory when the request carries no environment block. |
 | `SIDECAR_LOG_DIR` | `~/.local/state/codex-sidecar/logs` | JSONL log directory (`0700`, files `0600`). |
 | `SIDECAR_LOG_KEEP_DAYS` | `14` | Log retention; pruned at startup and at each UTC day rollover. |
 | `SIDECAR_STATE_DIR` | `~/.local/state/codex-sidecar` | State root (holds `empty-cwd/`). |
-| `SIDECAR_OUTBOX_PATH` | *(unset)* | Legacy event-outbox path for the fleet-tools initiative tracker; rows are appended to `<dirname>/log/<YYYY-MM-DD>.jsonl` day-files beside it (the `events.db` itself is never written). Unset = off. |
+| `SIDECAR_OUTBOX_PATH` | *(unset)* | Legacy event-outbox path for an initiative tracker; rows are appended to `<dirname>/log/<YYYY-MM-DD>.jsonl` day-files beside it (the `events.db` itself is never written). Unset = off. |
 | `SIDECAR_CONTEXT_WINDOW_TOKENS` | `258400` | Fallback window for the wire-usage clamp (catalog 272,000 at the 95% auto-compact scope limit). Used only when the app-server reports no `modelContextWindow` for the thread. |
 
 `ANTHROPIC_API_KEY` is never read, set or forwarded. The execution-boundary item filter and the pinned `features.*` flags have no environment override by design.
@@ -132,7 +132,7 @@ These exist only so the suite can run without a real codex binary and without wa
 
 ## Rust binary
 
-`rs/` is the implementation (`codex-sidecar` binary; ported from the retired Node sidecar by `plans/codex-sidecar-rust-port.md`, Node retired by `plans/codex-sidecar-context-hygiene.md` WP-1). Install it with `sidecar/install.sh`, which runs `cargo build --release --manifest-path sidecar/rs/Cargo.toml` from this checkout, installs the binary atomically to `~/.local/lib/codex-sidecar/codex-sidecar` (previous build kept as `codex-sidecar.prev`) and renders `ExecStart=` to that path with no node directory on the unit `PATH`; `--rust-bin <path>` (or `SIDECAR_RUST_BIN`) installs a prebuilt binary instead. The installed binary reads the pinned files (`preamble.txt`, `thread-config.json`) from the checkout it was built from; moving the checkout requires a reinstall. It never enables or restarts anything: run `systemctl --user daemon-reload && systemctl --user restart codex-sidecar.service` yourself. Rollback: restore `codex-sidecar.prev` over the binary and check out the pinned files from the known-good commit, then the same reload + restart (`AGENTS.md` Rollback).
+`rs/` is the implementation (`codex-sidecar` binary). Install it with `sidecar/install.sh`, which runs `cargo build --release --manifest-path sidecar/rs/Cargo.toml` from this checkout, installs the binary atomically to `~/.local/lib/codex-sidecar/codex-sidecar` (previous build kept as `codex-sidecar.prev`) and renders `ExecStart=` to that path with no node directory on the unit `PATH`; `--rust-bin <path>` (or `SIDECAR_RUST_BIN`) installs a prebuilt binary instead. The installed binary reads the pinned files (`preamble.txt`, `thread-config.json`) from the checkout it was built from; moving the checkout requires a reinstall. It never enables or restarts anything: run `systemctl --user daemon-reload && systemctl --user restart codex-sidecar.service` yourself. Rollback: restore `codex-sidecar.prev` over the binary and check out the pinned files from the known-good commit, then the same reload + restart (`AGENTS.md` Rollback).
 
 ## Logs
 
@@ -168,18 +168,21 @@ The suite spawns `rs/target/release/codex-sidecar` out-of-process by default (a 
 
 ## Launch
 
-The sidecar runs as a `systemd --user` service. The unit template lives here (`codex-sidecar.service.in`); `install.sh` renders it with absolute paths, because the systemd user PATH on this host does not contain the persona-wrapper dir.
+The sidecar runs as a `systemd --user` service. The unit template lives here (`codex-sidecar.service.in`); `install.sh` renders it with absolute paths, because the systemd user PATH may not contain the persona-wrapper dir.
 
 **Install** (safe to re-run; a second run reports `unchanged`):
 
 ```sh
-sidecar/install.sh                 # renders ~/.config/systemd/user/codex-sidecar.service
-sidecar/install.sh --home /tmp/x   # test render into a throwaway root; skips daemon-reload
+sidecar/install.sh --env-file ~/.config/codex-sidecar/env        # stock `codex`, key from your own file
+sidecar/install.sh --personas codex-a,codex-b --env-file …       # several accounts, via wrapper scripts
+sidecar/install.sh --home /tmp/x --env-file …                    # test render into a throwaway root; skips daemon-reload
 ```
 
-It builds and installs the binary (see [Rust binary](#rust-binary)), resolves both persona wrappers (`codex-a`, `codex-b`), renders `EnvironmentFile=%t/fleet-env/codex-sidecar.env` (the tmpfs projection) with `After=`/`Requires=fleet-env-project.service`, checks `CODEX_SIDECAR_KEY` is present via `fleet-env run sidecar-install` (never printed) and that the projection exists (a missing fleet-env binary or projection fails loudly), and creates no env file or key; `status.sh` reads `fleet-env path codex-sidecar`. The fleet-env store is the only copy of the key. Nothing is enabled or started: the installer ends by printing the lines below for you to run.
+- `--personas a,b` (or `SIDECAR_PERSONAS`; default `codex`) names the personas to serve. `codex` is the stock binary with the default `~/.codex` login. Any other persona must be called `codex-<name>` and be an executable of that name on `PATH`, normally a one-line wrapper that sets `CODEX_HOME=~/.codex-<name>` and execs `codex "$@"` (log in once with that wrapper). The unit gets `SIDECAR_PERSONAS=…` and a writable `%h/.codex` / `%h/.codex-<name>` path per persona.
+- `--env-file <path>` reads the key from your own file: an absolute path, mode `0600`, containing `SIDECAR_KEY=<secret>` (and optionally the other variables in the table above). The unit's `EnvironmentFile=` points at it; the installer neither copies nor prints the key. `status.sh` reads the same file when `SIDECAR_ENV_FILE=<path>` is set.
+- Without `--env-file` the installer uses a `fleet-env` credential store instead: the `fleet-env` binary is found through `PATH` (`FLEET_ENV_BIN` overrides), the unit reads its tmpfs projection `%t/fleet-env/codex-sidecar.env` ordered after `fleet-env-project.service`, and a missing binary or projection fails loudly. There is no silent fallback between the two modes.
 
-The fleet value for `SIDECAR_OUTBOX_PATH` is `<code-root>/fleet-tools/data/outbox/events.db`; it lives in the fleet-env store (`fleet-env set SIDECAR_OUTBOX_PATH`), reaches the unit through the `codex-sidecar` projection (`fleet-env project --consumer codex-sidecar`), and takes effect on `systemctl --user restart codex-sidecar`.
+The installer builds and installs the binary (see [Rust binary](#rust-binary)) and resolves each persona executable. Nothing is enabled or started: it ends by printing the lines below for you to run.
 
 **Enable** (`hold-for-user` — the agent cannot do this):
 
@@ -194,23 +197,15 @@ systemctl --user enable --now codex-sidecar
 sidecar/status.sh
 ```
 
-`status.sh` prints `systemctl --user status codex-sidecar` (tolerating a not-installed unit), then an authenticated `GET /healthz` on **every** expected bind — loopback and `SIDECAR_BIND_EXTRA` (read from the fleet-env projection; default `172.17.0.1`, empty skips it) — status code and body, never the key. It asserts on the body (`"status":"ok"`), and exits non-zero on a 503 (a degraded persona or a missing bind), a non-`ok` body, or a refused connection on any bind. Probing loopback alone was blind to the docker0 bind race by construction. It then runs one fixture turn as a posture probe, not tied to a fixed account: it tries the personas loopback `/healthz` lists, in order, reports and skips any whose turn does not complete (e.g. a persona not logged in on that node), probes the first that does, and fails only when none completes; `SIDECAR_PROBE_PERSONA="<name> [<name>…]"` replaces that list (tried in the order given).
+`status.sh` prints `systemctl --user status codex-sidecar` (tolerating a not-installed unit), then an authenticated `GET /healthz` on **every** expected bind — loopback and `SIDECAR_BIND_EXTRA` (read from the env file; default `172.17.0.1`, empty skips it) — status code and body, never the key. It asserts on the body (`"status":"ok"`), and exits non-zero on a 503 (a degraded persona or a missing bind), a non-`ok` body, or a refused connection on any bind. Probing loopback alone was blind to the docker0 bind race by construction. It then runs one fixture turn as a posture probe, not tied to a fixed account: it tries the personas loopback `/healthz` lists, in order, reports and skips any whose turn does not complete (e.g. a persona not logged in on that node), probes the first that does, and fails only when none completes; `SIDECAR_PROBE_PERSONA="<name> [<name>…]"` replaces that list (tried in the order given).
 
-**Rotate the key:**
+**Rotate the key:** replace `SIDECAR_KEY` in the env file (or the store entry in fleet-env mode), `systemctl --user restart codex-sidecar`, and give the router the same value.
 
-```sh
-openssl rand -hex 32 | fleet-env set CODEX_SIDECAR_KEY   # value from stdin, never echoed
-fleet-env project
-systemctl --user restart codex-sidecar
-```
-
-The store holds the one copy for both sides, so then restart the router (`hc restart inference-engine-router`) to pick up the same value.
-
-**Compose side:** the router reaches the sidecar with the same shared key under the name `CODEX_SIDECAR_KEY` in the fleet-env store (one copy for both sides). The router's provider entries (`router/gateway.config.json`) and the compose `extra_hosts` consume it.
+**Router side:** the router reaches the sidecar with the same shared key; point its codex provider entries at `http://<sidecar-host>:4877/<persona>`.
 
 ## Multi-node
 
-- host-a runs the sidecar for both personas; host-b runs its own sidecar (same unit, same `install.sh`) and routes only the personas logged in on the laptop to it (today `codex-a`). Every other persona (today `codex-b`) stays on the WG chain to host-a.
+- A sidecar runs per machine that holds codex logins; a router on another machine can route the personas logged in there to its local sidecar and send the rest to the sidecar elsewhere.
 - Logins are independent per machine: `codex login --device-auth` on each, never a copied `auth.json` (see `docs/codex-multi-node-login-spike.md`).
 - A node router whose config points a provider at the local sidecar (`http://host.docker.internal:4877/<persona>`) health-checks it, so that router's health depends on the local sidecar.
-- On the laptop both personas still start; the persona that is not logged in is simply unauthenticated and never routed to. The outbox writer creates its `log/` directory on first use and writes node-local day-files.
+- On a machine where only some personas are logged in, all configured personas still start; one that is not logged in is simply unauthenticated and never routed to. The outbox writer creates its `log/` directory on first use and writes node-local day-files.

@@ -5,6 +5,6 @@
   "type": "module",
   "scripts": {
     "test": "bun test ./test",
-    "fleetkit:verify": "bash <code-root>/fleet-tools/fleetkit/install.sh --verify --dest rs"
+    "fleetkit:verify": "bash \"${FLEETKIT_INSTALL:?set FLEETKIT_INSTALL to the fleetkit install.sh path}\" --verify --dest rs"
   }
 }

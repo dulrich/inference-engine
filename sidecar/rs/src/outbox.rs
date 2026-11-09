@@ -1,5 +1,5 @@
 //! The sidecar's WRITE half of the tracker event seam: rows appended to JSONL
-//! day-files shared with the Claude Code hooks (`fleet-tools/scripts/outbox.mjs` copy).
+//! day-files shared with the Claude Code hooks (the initiative tracker's `outbox.mjs` writer).
 //!
 //! Invariants (shared with that writer): pinned, byte-identical line format; one day-file per UTC date
 //! of the row's `ts` under `<dirname(path)>/log/`; dir 0700, files 0600; one append per row; a

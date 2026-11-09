@@ -31,7 +31,7 @@ test("both header forms are accepted and /healthz reports every persona", async 
 
   const bearer = await req(h, "/healthz", { method: "GET" });
   assert.equal(bearer.status, 200);
-  assert.deepEqual(Object.keys(bearer.json.personas).sort(), ["codex-b", "codex-a"]);
+  assert.deepEqual(Object.keys(bearer.json.personas).sort(), ["codex-a", "codex-b"]);
   assert.equal(bearer.json.degraded, false);
 
   const apiKey = await req(h, "/healthz", { method: "GET", keyHeader: "x-api-key" });
@@ -42,12 +42,12 @@ test("?beta=true is tolerated and both persona routes drive their own child", as
   const h = await withSidecar({ scenario });
   t.after(() => h.close());
 
-  const david = await req(h, "/codex-a/v1/messages?beta=true", { body: msgBody({}) });
-  assert.equal(david.status, 200, david.text);
-  assert.equal(david.json.content[0].text, "hello world");
+  const first = await req(h, "/codex-a/v1/messages?beta=true", { body: msgBody({}) });
+  assert.equal(first.status, 200, first.text);
+  assert.equal(first.json.content[0].text, "hello world");
 
-  const b = await req(h, "/codex-b/v1/messages", { body: msgBody({ model: "gpt-5.6-sol" }) });
-  assert.equal(b.status, 200, b.text);
+  const second = await req(h, "/codex-b/v1/messages", { body: msgBody({ model: "gpt-5.6-sol" }) });
+  assert.equal(second.status, 200, second.text);
 
   assert.equal(sentTo(h.trace("codex-a"), "thread/start").length, 1);
   assert.equal(sentTo(h.trace("codex-b"), "thread/start").length, 1);

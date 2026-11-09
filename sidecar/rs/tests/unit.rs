@@ -46,12 +46,7 @@ fn effort_lives_in_the_model_id_suffix() {
         ("gpt-6.1-sol-low", "gpt-6.1-sol", "low", "suffix"),
         ("gpt-6.1-terra", "gpt-6.1-terra", "low", "default"),
         ("gpt-6.1-terra-high", "gpt-6.1-terra", "high", "suffix"),
-        (
-            "codex-b/gpt-6.1-sol-high",
-            "gpt-6.1-sol",
-            "high",
-            "suffix",
-        ),
+        ("codex-b/gpt-6.1-sol-high", "gpt-6.1-sol", "high", "suffix"),
         ("gpt-6-luna-high", "gpt-6-luna", "high", "suffix"),
         (
             "codex-a/gpt-5.6-luna-medium",

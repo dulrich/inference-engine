@@ -5,11 +5,11 @@ Consolidated stats across both Ling-3.0-tiny plans. Previously scattered across
 numbers into one comparison table. The comment in `config.yaml` remains the canonical live
 record (it travels with the config it documents); this doc is the readable summary.
 
-Source plans: `plans/ling-3-tiny-bakeoff-and-gpu-hang-watchdog.md` (IMPLEMENTED, established the
-four quants at `-c 8192`) and `plans/ling-3-tiny-context-ceiling.md` (IMPLEMENTED, raised `-c` to
+Source plans: the `ling-3-tiny-bakeoff-and-gpu-hang-watchdog` plan (IMPLEMENTED, established the
+four quants at `-c 8192`) and the `ling-3-tiny-context-ceiling` plan (IMPLEMENTED, raised `-c` to
 131072 and tested a KV-cache-quantization compatibility experiment). Source reports:
-`runs/dispatch/wp-1-report.md`, `runs/dispatch/wp-2-report.md` (context-ceiling plan). The
-"Round-2 retest" section below is WP-3 of `plans/serving-harness-round-2.md`. See also
+the `wp-1-report` dispatch record, the `wp-2-report` dispatch record (context-ceiling plan). The
+"Round-2 retest" section below is WP-3 of the `serving-harness-round-2` plan. See also
 `docs/gemma-4-12b-qat-bakeoff-results.md`, `docs/qwen36-35b-a3b-bakeoff-results.md` (Qwen3.6-35B-A3B
 MoE), and `docs/qwen38-27b-bakeoff-results.md` (Qwen3.8-27B dense).
 
@@ -125,7 +125,7 @@ near-ceiling correctness failure — not pursued further, not applied to any oth
 
 ## Round-2 retest — comparable-format numbers under the new bake-off harness
 
-WP-3 of `plans/serving-harness-round-2.md`: three of the four `ling-bakeoff` quants (Q8_0,
+WP-3 of the `serving-harness-round-2` plan: three of the four `ling-bakeoff` quants (Q8_0,
 UD-Q6_K_XL, UD-Q4_K_XL — UD-Q6_K_XL and UD-Q4_K_XL were not previously needle-probed at
 moderate size in the context-ceiling plan; Q8_0 was) re-run through the new
 `llama/bakeoff/run_harness.py` (WP-1) purely to capture comparable-format numbers — cold/warm/hot
@@ -134,8 +134,8 @@ for this model family — **not a fresh safety validation**; `-c 131072`/f16 cac
 proven safe by the results above. UD-Q4_K_XL's config entry was not touched (already f16-cache,
 `-c 131072`). Raw records: `llama/bakeoff/records/ling-3-tiny-q8-full/`,
 `llama/bakeoff/records/ling-3-tiny-ud-q6-xl-full/`, `llama/bakeoff/records/ling-3-tiny-ud-q4-xl-full/`. Driver
-script and its full stdout: `runs/dispatch/wp3-driver-script.py`,
-`runs/dispatch/wp3-driver-full-output.log`.
+script and its full stdout: the `wp3-driver-script` dispatch record,
+the `wp3-driver-full-output` dispatch record.
 
 ### Methodology
 

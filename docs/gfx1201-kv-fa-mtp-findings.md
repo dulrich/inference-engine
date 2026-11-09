@@ -1,6 +1,6 @@
 # gfx1201 spike 2 — KV-quant × flash-attention × backend + MTP findings (2026-08-25)
 
-Executed under `plans/gfx1201-kv-fa-mtp-spike.md` (one watchdog-gated window, user save-work confirmation, `gpu-hang-watchdog.service` verified `active` before the first HIP dispatch and at close). Follows `docs/rocm-gfx1201-spike-findings.md` (spike 1); same instruments — llama.cpp **b10534** built twice on host (HIP gfx1201 + rocWMMA FA; Vulkan RADV/KHR_coopmat), the same GGUF files production bind-mounts.
+Executed under the `gfx1201-kv-fa-mtp-spike` plan (one watchdog-gated window, user save-work confirmation, `gpu-hang-watchdog.service` verified `active` before the first HIP dispatch and at close). Follows `docs/rocm-gfx1201-spike-findings.md` (spike 1); same instruments — llama.cpp **b10534** built twice on host (HIP gfx1201 + rocWMMA FA; Vulkan RADV/KHR_coopmat), the same GGUF files production bind-mounts.
 
 ## Verdict, one paragraph
 
@@ -8,7 +8,7 @@ The spike-1 pattern — **HIP wins wherever the workload leaves the big-fused-ma
 
 ## Setup
 
-- llama.cpp b10534, host builds from spike 1 (`runs/rocm-spike/build-{hip,vulkan}/bin/`), reproduction recipe in the spike-1 findings doc.
+- llama.cpp b10534, host builds from spike 1 (scratch `build-{hip,vulkan}/bin/` trees), reproduction recipe in the spike-1 findings doc.
 - KV matrix: `llama-bench -fa 1 -p 2048 -n 64 -d 0,16384 -r 3 -o json` per cell (`bench-kv.sh`); `@16384` columns are measured with a pre-filled 16384-token cache — where KV-read cost actually shows. Symmetric KV types only ({f16, q8_0/q8_0, q4_0/q4_0}); asymmetric K/V silently falls back to the non-fused attention path on all backends and was excluded by design.
 - MTP A/B: `llama-server -ngl 99 -fa on -c 8192` ± `--spec-type draft-mtp` (`mtp-ab.sh`), 3 fixed generation prompts at temperature 0, 384 tokens each; throughput and acceptance read from the response-body `timings` (probe by body, never status code).
 - **llama-bench flag trap (measured)**: `-p/-n/-d` **accumulate** across repeats (b10534 `llama-bench.cpp` uses `insert`, not assign) — appending them to a wrapper's baked flags multiplies cells instead of overriding. `bench-kv.sh` refuses them as passthrough flags.
@@ -100,9 +100,9 @@ Downloaded `unsloth/Qwen3.6-35B-A3B-MTP-GGUF` UD-Q4_K_XL (21.3 GiB; separate rep
 - Adoption is **not** a config tweak: the MTP variant is a *different backing file* than the live `qwen36-a3b` alias — per the alias contract (and the gemma-qat precedent in `llama/config.yaml`), that's a new-alias-or-deliberate-repoint decision with output-equivalence verification, i.e. its own small plan. Depth behavior (acceptance at long context) also unmeasured here.
 - Second candidate noted: unsloth's gemma QAT repo ships `mtp-*` sidecar files (config.yaml comment records they were deliberately skipped at alias creation).
 
-Raw results: `runs/rocm-spike/results/kv-*`, `mtp-*` (scratch); snapshot + WP reports archived in archive-repo under `inference-engine/gfx1201-kv-fa-mtp-spike/`.
+Raw results: scratch `kv-*`, `mtp-*` result files; snapshot + WP reports archived in the fleet's archive.
 
-## Addendum 2026-08-25 — MTP rollout executed (plans/mtp-serving-rollout.md)
+## Addendum 2026-08-25 — MTP rollout executed (the `mtp-serving-rollout` plan)
 
 The rollout landed the same day, with user-directed scope amendments (rev 2–3: Ling quant reduction; qwen36 held to Q4 only, Q5/Q6 MTP downloads cancelled). Serving state after WP-2/WP-3, all verified live by response body:
 
@@ -110,14 +110,14 @@ The rollout landed the same day, with user-directed scope amendments (rev 2–3:
 |---|---|---|---|
 | `gemma-4-12b-qat` | +`--mmproj` (vision) +`-md` sidecar +`--spec-type draft-mtp`, `-c 32768` | 9.73 GiB used → **≈6.2 GiB free** (stable across chat + vision probes) | draft_n 36/29 accepted (0.81), 81.9 tok/s |
 | `qwen36-a3b` | `-m` → MTP-GGUF variant +`--spec-type draft-mtp`, `-ncmoe 32`, `-c 100000` | 10.74 GiB used peak → **≈5.2 GiB free**; +16 MB only across a 4,992-token needle probe (pre-allocated) | acceptance 0.85/0.83, tg 54.3–54.6 tok/s (vs ≈29–30 pre-MTP: **+~85% at short generations**) |
-| `gemma-4-12b` | REMOVED (user-directed; consumers repoint to `gemma-4-12b-qat`, tracked in INITIATIVE.md) | — | — |
+| `gemma-4-12b` | REMOVED (user-directed; consumers repoint to `gemma-4-12b-qat`, tracked in the initiative backlog) | — | — |
 | `ling-3-tiny-q4-m`, `qwen36-a3b-q5`, `qwen36-a3b-q6` | REMOVED (quant reductions; no consumers) | — | — |
 
 Neither fit gate tripped — no `-c` step-down anywhere; the draft-context-scales-with-`-c` concern was real but small at these contexts (qwen's whole MTP+KV+buffer overhead at `-c 100000` is ~4.5 GiB above weights-resident, dominated by pre-allocated KV, not the draft context). Ladder-v1 was retired terminal (`completed` + retirement annotation — batch.py has no cancelled state; 2 finished gemma cells retained); the plain qwen dir (76 GiB), the lmstudio gemma dir (7.1 GiB), and the Ling Q4_K_M file (4.5 GiB) were deleted (~88 GiB reclaimed), and a post-deletion probe confirmed serving reads only the MTP paths. A future ladder-v2 measures the MTP recipes.
 
 **Dual-backend image: retired as a queued item entirely** (user decision 2026-08-25, superseding recommendation 4's HIP re-evaluate trigger): decode is the limiter for most real workflows, Vulkan+MTP owns decode, and HIP's remaining pp advantage does not justify the second load-bearing pin, the silent-alias failure class, and the rebuild coupling documented in the spike. HIP numbers above stay as measurement record only.
 
-## Addendum 2026-08-25 — long-context serving defaults landed (plans/long-context-serving-default.md)
+## Addendum 2026-08-25 — long-context serving defaults landed (the `long-context-serving-default` plan)
 
 Goal (user): 128k+ (`-c ≥ 131072`) as the serving default on every chat alias where ceiling + VRAM permit, with 262144 live-tested per alias for valid configuration (collapse check). All probes: needle-at-depth at ~89–90% real prompt fill (`usage.prompt_tokens`, never assumed), temp 0, trace-read classification; fit gate ≥~1.5 GiB free at peak; card = 15.92 GiB nameplate, ~0.85 GB desktop baseline.
 
@@ -138,4 +138,4 @@ Cross-cutting findings:
 - **256k prefill walls (measured)**: nemotron 142 s; gemma 6.8 min; qwen36 16.9 min at `-ub 512` (the `-ub 2048` gain would roughly halve it, landed config applies at ≤131072).
 - Candidate follow-ups (not planned): KV slot save/restore (`--slot-save-path` + `/slots` API) for pausable long-context agent sessions — tiering via page cache/tmpfs, restore ≈1–2 s vs 3–17 min re-prefill; caveats to verify: geometry lock, MTP draft state coverage, hybrid-mamba (nemotron) session-save support. `-ub` sweep beyond 2048 for the `-ncmoe` split.
 
-Verification recipe unchanged from the rollout: probe by response body; count `content + reasoning_content` before calling a recall wrong; fused-fa via VRAM arithmetic (llama-swap never surfaces child stdout). ladder-v2 (`llama/bakeoff/queues/ladder-v2.json`, 11 cells over the landed recipes incl. both 256k-valid points, needle+timing batteries) was deleted un-run by `plans/overnight-test-matrix-redesign.md` WP-3 — superseded by the `matrix-v1-shared`/`matrix-v1-dedicated` pilot matrix queues (`llama/bakeoff/queues/`, see that README's "Test matrix" section); its aliases retire unused but stay reserved under the append-only alias contract.
+Verification recipe unchanged from the rollout: probe by response body; count `content + reasoning_content` before calling a recall wrong; fused-fa via VRAM arithmetic (llama-swap never surfaces child stdout). ladder-v2 (`llama/bakeoff/queues/ladder-v2.json`, 11 cells over the landed recipes incl. both 256k-valid points, needle+timing batteries) was deleted un-run by the `overnight-test-matrix-redesign` plan WP-3 — superseded by the `matrix-v1-shared`/`matrix-v1-dedicated` pilot matrix queues (`llama/bakeoff/queues/`, see that README's "Test matrix" section); its aliases retire unused but stay reserved under the append-only alias contract.

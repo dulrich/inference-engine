@@ -1,6 +1,6 @@
 # Claude Code on local models via `:4811` — live-verified profile and wire findings
 
-Plan: `plans/capability-surfacing-and-local-agent-endpoints.md` WP-4. All behavior below was observed live on 2026-08-24 against llama.cpp b10534 / llama-swap v243 (image `b10534-swap243`) with **Claude Code 2.1.243** in headless (`claude -p`, `query_source: "sdk"`) mode. Nothing here is assumed from docs; every claim was probed by response body or captured off the wire with a local sink.
+Plan: the `capability-surfacing-and-local-agent-endpoints` plan WP-4. All behavior below was observed live on 2026-08-24 against llama.cpp b10534 / llama-swap v243 (image `b10534-swap243`) with **Claude Code 2.1.243** in headless (`claude -p`, `query_source: "sdk"`) mode. Nothing here is assumed from docs; every claim was probed by response body or captured off the wire with a local sink.
 
 ## Verdict
 
@@ -21,10 +21,10 @@ Project `.claude/settings.json` in the session's working directory:
   },
   "permissions": {
     "deny": [
-      "Write(/~/**)",
-      "Edit(/~/**)",
-      "Write(/**)",
-      "Edit(/**)",
+      "Write(//home/<user>/**)",
+      "Edit(//home/<user>/**)",
+      "Write(/<repo>/**)",
+      "Edit(/<repo>/**)",
       "WebFetch",
       "WebSearch"
     ]
@@ -39,7 +39,7 @@ This is documentation, not active config — the fixture that ran it was disposa
 
 ### Containment: deny rules work, allow scoping does not
 
-In headless mode the harness happily wrote to absolute paths **outside** the session's working directory (observed: `~/fizzbuzz.py` created despite an allow-list of only `Write(./**)` — relative allow entries do not constrain absolute-path writes, and no permission prompt exists in `-p` mode). Explicit absolute `deny` rules **do** enforce: with `Write(/~/**)` denied, the same request was blocked and the model reported the denial. Rule: a headless local-model profile must carry explicit `deny` entries for every sensitive root (or run under a throwaway `$HOME`/container); do not rely on allow-list scoping.
+In headless mode the harness happily wrote to absolute paths **outside** the session's working directory (observed: `/home/<user>/fizzbuzz.py` created despite an allow-list of only `Write(./**)` — relative allow entries do not constrain absolute-path writes, and no permission prompt exists in `-p` mode). Explicit absolute `deny` rules **do** enforce: with `Write(//home/<user>/**)` denied, the same request was blocked and the model reported the denial. Rule: a headless local-model profile must carry explicit `deny` entries for every sensitive root (or run under a throwaway `$HOME`/container); do not rely on allow-list scoping.
 
 **Errata (WP-5, 2026-08-25)**: 2.1.243 warns at startup that `Write(//path/**)` rules are *not* matched by file permission checks — only `Edit(path)` rules cover file-editing tools. The profile above enforced because it carries both forms; when writing deny rules, use `Edit(//path/**)` (optionally alongside `Write(...)`) — an `Edit` rule covers all file-editing tools including Write.
 

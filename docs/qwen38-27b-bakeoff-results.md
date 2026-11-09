@@ -1,6 +1,6 @@
 # Qwen3.8-27B dense bake-off — results
 
-WP-5 of `plans/serving-harness-round-2.md`: 3-bit fit/quality frontier for a dense 27B model on
+WP-5 of the `serving-harness-round-2` plan: 3-bit fit/quality frontier for a dense 27B model on
 this 16 GiB card, run under the standard benchmark profile as the default operating state. See
 also `docs/gemma-4-12b-qat-bakeoff-results.md`, `docs/ling-3-tiny-bakeoff-results.md`,
 `docs/qwen36-35b-a3b-bakeoff-results.md`.
@@ -137,7 +137,7 @@ across all three quants.
 
 ---
 
-# KV-cache quantization follow-on (UD-IQ3_S only) — `plans/qwen38-27b-kv-cache-quantization.md`
+# KV-cache quantization follow-on (UD-IQ3_S only) — the `qwen38-27b-kv-cache-quantization` plan
 
 WP-2/WP-3 of a follow-on plan (2026-08-21/22): can KV-cache quantization raise `UD-IQ3_S`'s
 practical context ceiling from the `-c 40960` f16-cache landing above toward a genuine ~100K
@@ -160,12 +160,12 @@ throughout, `gpu-hang-watchdog.service` re-checked before/after every load.
 
 **Deviation, documented explicitly**: the plan's literal candidate "E" was "a mixed q4/q8
 combination." A literal mixed (asymmetric-type) pair was expected, per the plan's own audit
-disposition, to hit `plans/ling-3-tiny-context-ceiling.md`'s documented non-fused-attention-
+disposition, to hit the `ling-3-tiny-context-ceiling` plan's documented non-fused-attention-
 fallback penalty for a mismatched quantized K/V pair (its own tested case: `q8_0` K / `q4_0` V) —
 a low-expected-value test. D's own data showed the actual fix needed is quantizing V (the dominant
 cost), so **symmetric `q4_0/q4_0`** was tested instead — matched types, like B's own `q8_0/q8_0`,
 confirmed live (not assumed) to keep `flash_attn` fused with zero fallback on every load. Full
-rationale: `runs/dispatch/wp-2-report.md`.
+rationale: the `wp-2-report` dispatch record.
 
 ## Proof the landed KV type is actually active
 

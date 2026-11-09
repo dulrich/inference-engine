@@ -1,6 +1,6 @@
 # RAM A/B/C spike — closeout: EXPO helps, four DIMMs untested
 
-WP-7 closeout of `plans/qwen4exp-ram-ab-spike.md`. Two states measured to completion (A: 2-DIMM JEDEC, B: 2-DIMM EXPO); the third (C: 4-DIMM) is **untested at JEDEC — deferred by the user**, not "not viable" (see "State C"). Raw records: `llama/bakeoff/records/qwen4exp-ram-2dimm-jedec-v1/`, `llama/bakeoff/records/qwen4exp-ram-2dimm-expo-v1/`. Window narratives: `runs/dispatch/ram-ab-wp-2-report.md` (A), `runs/dispatch/ram-ab-wp-4-report.md` (B). State captures (outside the repo): `~/.local/state/inference-bakeoff/ram-ab/{a-2dimm-jedec,b-2dimm-expo,c-4dimm}/`.
+WP-7 closeout of the `qwen4exp-ram-ab-spike` plan. Two states measured to completion (A: 2-DIMM JEDEC, B: 2-DIMM EXPO); the third (C: 4-DIMM) is **untested at JEDEC — deferred by the user**, not "not viable" (see "State C"). Raw records: `llama/bakeoff/records/qwen4exp-ram-2dimm-jedec-v1/`, `llama/bakeoff/records/qwen4exp-ram-2dimm-expo-v1/`. Window narratives: the `ram-ab-wp-2-report` dispatch record (A), the `ram-ab-wp-4-report` dispatch record (B). State captures (outside the repo): `~/.local/state/inference-bakeoff/ram-ab/{a-2dimm-jedec,b-2dimm-expo,c-4dimm}/`.
 
 ## Verdict
 
@@ -8,7 +8,7 @@ WP-7 closeout of `plans/qwen4exp-ram-ab-spike.md`. Two states measured to comple
 2. **More RAM (B → C, four DIMMs) is untested, at any clock.** The user's mixed-kit four-DIMM EXPO attempt failed to POST/train; the auto/JEDEC retry the plan's WP-5 protocol calls for before concluding anything was **not attempted** — the user exited BIOS with EXPO still enabled and pulled the spare DIMMs instead. Per the plan's own convergence rule (cycle-2 M1), an EXPO-training failure and a four-DIMM-topology failure are different verdicts and are never conflated: this is the former, not the latter. Every state-C field below is "not collected."
 3. **The GPU-resident baselines are still comparable.** The control cell (`mxdp-qwen36-c128k-f16-timing-mtp-think`, the ordinary GPU-resident production shape) moved hot decode +0.9% (54.59 → 55.09 tok/s median), inside its own round-to-round spread in both states (A 51.5–57.7, B 52.2–58.0 tok/s) and inside the spread of its served-configuration predecessor record (`mxdp-qwen36-c128k-f16-mtp-prod-…-f330211a`, 2026-08-26: cold 52.5, hot 48.7/52.2 tok/s) — no downclock signal, no serving-relevant drift. **VRAM read-backs are not byte-identical, though**: every one of the five cells reads **~31.9 MiB higher in B than in A** (see "VRAM read-backs"), a small, uniform, cell-size-independent offset — consistent with a baseline-VRAM drift between reboots (compositor/driver), not anything RAM-clock- or model-driven. It is two to three orders of magnitude below anything that would change a fit decision, so existing `records/` remain a valid comparison baseline.
 
-## Keep/remove decision (user, 2026-09-07 — recorded here per WP-7's override, not appended to `INITIATIVE.md`)
+## Keep/remove decision (user, 2026-09-07 — recorded here per WP-7's override, not appended to the initiative backlog)
 
 **Keep the 2 × 32 GB Kingston KF560C36-32 pair at EXPO 6000 MT/s (state B).** This is already the live BIOS configuration: the failed four-DIMM attempt's own recovery capture (`c-4dimm/dmidecode-attempt1-failed.txt`) shows the pair still trained at 6000 MT/s after the spares were pulled, so no further action is needed to "keep" it. **Adding the second pair (96 GB, state C) is deferred until a model makes it compelling.** The numbers behind the call:
 
@@ -146,7 +146,7 @@ Both windows show the same shape as the campaign precedent (`docs/qwen4exp-bakeo
 
 ## Verifier summary (both windows)
 
-`qwen4exp-ram-2dimm-jedec-v1`: 22 pass, 1 fail (`prompt_tokens_tolerance`, `q4x-ncmoe38-c16k`, one trial 12,320 vs 13,926 target — the carried calibration caveat from the campaign, see `docs/qwen4exp-bakeoff-results.md` "Measured `chars_per_token`"), 3 unknown (no needle battery on the three timing-only cells), 5 informational (`classifier_distribution`, both c16k cells 9/9). `qwen4exp-ram-2dimm-expo-v1`: identical shape (22 pass, 1 fail on the same cell/trial, 3 unknown, 5 informational). `records_present`, `schema_conformant`, `vram_arithmetic`, `wilson_min_trials` pass on all 5 cells in both windows. Full detail: `runs/dispatch/ram-ab-wp-2-report.md`, `runs/dispatch/ram-ab-wp-4-report.md`, and each window's `verify_report.md`.
+`qwen4exp-ram-2dimm-jedec-v1`: 22 pass, 1 fail (`prompt_tokens_tolerance`, `q4x-ncmoe38-c16k`, one trial 12,320 vs 13,926 target — the carried calibration caveat from the campaign, see `docs/qwen4exp-bakeoff-results.md` "Measured `chars_per_token`"), 3 unknown (no needle battery on the three timing-only cells), 5 informational (`classifier_distribution`, both c16k cells 9/9). `qwen4exp-ram-2dimm-expo-v1`: identical shape (22 pass, 1 fail on the same cell/trial, 3 unknown, 5 informational). `records_present`, `schema_conformant`, `vram_arithmetic`, `wilson_min_trials` pass on all 5 cells in both windows. Full detail: the `ram-ab-wp-2-report` dispatch record, the `ram-ab-wp-4-report` dispatch record, and each window's `verify_report.md`.
 
 ## Figures that could not be traced further than stated
 
@@ -156,8 +156,8 @@ Both windows show the same shape as the campaign precedent (`docs/qwen4exp-bakeo
 
 ## Quirk added
 
-One quirk added to `llama/AGENTS.md` (generalizable — a mixed-kit four-DIMM EXPO attempt is not a fair topology test on this board family, and the distinction matters beyond this one spike): "mixed-kit four-DIMM EXPO training failures are not four-DIMM-topology failures — the JEDEC/auto retry is the only fair test."
+One quirk added to the llama area contract (generalizable — a mixed-kit four-DIMM EXPO attempt is not a fair topology test on this board family, and the distinction matters beyond this one spike): "mixed-kit four-DIMM EXPO training failures are not four-DIMM-topology failures — the JEDEC/auto retry is the only fair test."
 
 ## Plan status
 
-`plans/qwen4exp-ram-ab-spike.md` Status set to **IMPLEMENTED**, closing on states A and B; state C recorded as untested/deferred, not failed. Commit list: WP-1 `5bbbaff` (queue onboarding), WP-2 `a50e8d2` (window A), WP-4 `2f0f59b` (window B), plan-record commits `95408bf`, `e62b709`, `87bd5c4`, `5f575b7` (WP-4 landing through the WP-5 outcome and mixed-kit note). Deregistered from `INITIATIVE.md` `pending-plans`.
+the `qwen4exp-ram-ab-spike` plan Status set to **IMPLEMENTED**, closing on states A and B; state C recorded as untested/deferred, not failed. Commit list: WP-1 `5bbbaff` (queue onboarding), WP-2 `a50e8d2` (window A), WP-4 `2f0f59b` (window B), plan-record commits `95408bf`, `e62b709`, `87bd5c4`, `5f575b7` (WP-4 landing through the WP-5 outcome and mixed-kit note). Deregistered from the initiative backlog `pending-plans`.

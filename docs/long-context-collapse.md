@@ -1,6 +1,6 @@
 # Long-context collapse: causes and remediations
 
-Sourced reference for `plans/quant-sweep-harness-and-instrument-v2.md` WP-2, written against the
+Sourced reference for the `quant-sweep-harness-and-instrument-v2` plan WP-2, written against the
 2026-08-23 finding that live-measured `gemma-4-12b-qat` at `-c 65536` (scratch server, production
 `llama_server_chat_common` flags — no `-ctk`/`-ctv`/`-fa` overrides, so f16 KV cache and
 `--flash-attn auto`) produced correct needle recall up to ~42K real prompt tokens, then a
@@ -161,7 +161,7 @@ abort** ([`ggml-org/llama.cpp` issue #25382](https://github.com/ggml-org/llama.c
 open as of 2026-07-07; root cause identified as quantized-K-cache triggering a Hadamard-rotation
 fallback path, `build_raw_attention`, that mishandles the model's sparse-attention specialization;
 confirmed on both CPU and CUDA backends). This is the exact "guard passes and the thing is wrong"
-shape `llama/AGENTS.md` already curates for this stack — but it is **architecture-specific**
+shape the llama area contract already curates for this stack — but it is **architecture-specific**
 (DeepSeek's sparse-attention + Hadamard-rotation combination), not evidence that Gemma 4's
 dense-per-local-window SWA architecture has the same fragility. **Not directly applicable to
 the observed cliff**: `gemma-4-12b-qat`'s config carries no `-ctk`/`-ctv` override
@@ -170,7 +170,7 @@ the observed cliff**: `gemma-4-12b-qat`'s config carries no `-ctk`/`-ctv` overri
 cause of *that specific observation*, but it remains a real, separately-gated risk for any future
 sweep cell that does quantize `gemma-4-12b-qat`'s cache.
 
-**A related, first-party finding from this repo.** `plans/ling-3-tiny-context-ceiling.md` (lines
+**A related, first-party finding from this repo.** the `ling-3-tiny-context-ceiling` plan (lines
 79–97, its own primary-source research) found that **asymmetric K/V quant types silently fall back
 to the slower non-fused attention path — no warning, no error logged** — sourced from
 `llama.cpp` PR #26608 (BailingMoE3's own merge) and
@@ -345,7 +345,7 @@ gemma-4-12b-qat cliff run.
 
 ## 8. Corroboration/divergence with the user's reference doc
 
-`references/consumer-gpu-moe-inference-and-long-context-recovery.md` (a search report over the
+the `consumer-gpu-moe-inference-and-long-context-recovery` reference note (a search report over the
 user's personal semantic index, practitioner-sourced, 2026-08-23) is not peer-reviewed research
 and none of its throughput numbers are independently verified in this doc — it is cited here only
 for the parts its own text already flags as a genuine finding vs. a single-practitioner claim.

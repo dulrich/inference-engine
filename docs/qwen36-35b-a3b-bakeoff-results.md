@@ -1,6 +1,6 @@
 # Qwen3.6-35B-A3B bake-off — results
 
-WP-4 of `plans/serving-harness-round-2.md`: offload-placement search (configs A/B/C) plus a full
+WP-4 of the `serving-harness-round-2` plan: offload-placement search (configs A/B/C) plus a full
 `llama/bakeoff/run_harness.py` (WP-1) run against the winning placement, landed as the new
 `qwen36-a3b` testing alias (`qwen36-a3b-bakeoff` group). See also
 `docs/gemma-4-12b-qat-bakeoff-results.md`, `docs/ling-3-tiny-bakeoff-results.md`, and
@@ -15,14 +15,14 @@ hybrid of attention and SSM/recurrent layers (only 10 of 40 blocks carry convent
 pattern already seen in Ling-3.0-tiny's hybrid KDA/MLA architecture), 256 fine-grained routed
 experts + 1 shared expert per MoE block, 8 experts active per token. Real context ceiling per the
 GGUF header: 262,144 tokens — this WP's own scope target was the "~100K useful long-context"
-point from `references/serving-harness-test-round-2.md` §3, not that full ceiling.
+point from the `serving-harness-test-round-2` reference note §3, not that full ceiling.
 
 **Artifact lineage** (config.yaml `models.Qwen3.6-35B-A3B-UD-Q4_K_XL`):
 `hf_repo: unsloth/Qwen3.6-35B-A3B-GGUF`, `hf_revision: 9280dd353ab587157920d5bd391ada414d84e552`,
 `sha256: 707a55a8a4397ecde44de0c499d3e68c1ad1d240d1da65826b4949d1043f4450` (this value is also the
 HF hub cache's own blob identifier for this file — an independent corroboration, not just a
 self-computed number), `llama_cpp_build: b10534`. Repositioned from the HF cache into
-`/srv/models/unsloth/Qwen3.6-35B-A3B-GGUF/` (WP-4 step 2), verified byte-identical (size
+`$MODELS_DIR/unsloth/Qwen3.6-35B-A3B-GGUF/` (WP-4 step 2), verified byte-identical (size
 + sha256) before the cache copy was removed.
 
 ## Methodology
@@ -117,7 +117,7 @@ correctness question.
 
 `-ngl 99 -ncmoe 32 -c 100000 --jinja` (config B), landed as `qwen36-a3b` in the
 `qwen36-a3b-bakeoff` group. Activated via `docker compose restart inference-engine-llama`
-(plain config-only restart — this is a bind-mounted `config.yaml` edit, not a `compose.fleet.yml`
+(plain config-only restart — this is a bind-mounted `config.yaml` edit, not a the fleet compose
 resource-limit change, so it does not need `--force-recreate`), full `smoke-inference.sh` re-run
 clean.
 
@@ -221,7 +221,7 @@ full download completed, so the config could be written and the download run in 
 `qwen36-a3b-q5` (`-ncmoe 34`, UD-Q5_K_XL, 26,592,508,896 B / 24.77 GiB — sha256 verified against
 HF's own recorded hash) and `qwen36-a3b-q6` (`-ncmoe 35`, UD-Q6_K_XL, 31,843,777,504 B / 29.66 GiB
 — sha256 likewise verified). Both fresh downloads, both placed directly in
-`/srv/models/unsloth/Qwen3.6-35B-A3B-GGUF/` (no HF-cache repositioning needed, unlike the
+`$MODELS_DIR/unsloth/Qwen3.6-35B-A3B-GGUF/` (no HF-cache repositioning needed, unlike the
 canary). Landed together with the canary's config.yaml edit, `docker compose restart` +
 `smoke-inference.sh` clean, then the full WP-1 harness run against both real router aliases.
 

@@ -1,10 +1,10 @@
 # qwen4exp on-disk PLE spike — measurement and verdict
 
-*WP-3 deliverable of `plans/qwen4exp-image-and-ple-spike.md`. Measured 2026-08-31/09-01 against `crucible-llamacpp-vulkan:b10664-swap243` (image id `94399d86bbc5`) on `unsloth/Qwen3.8-Flash-Next-GGUF` `UD-Q2_K_XL` at `/models/unsloth/Qwen3.8-Flash-Next-GGUF/`.*
+*WP-3 deliverable of the `qwen4exp-image-and-ple-spike` plan. Measured 2026-08-31/09-01 against `crucible-llamacpp-vulkan:b10664-swap243` (image id `94399d86bbc5`) on `unsloth/Qwen3.8-Flash-Next-GGUF` `UD-Q2_K_XL` at `/models/unsloth/Qwen3.8-Flash-Next-GGUF/`.*
 
 ## Verdict
 
-**On-disk PLE is viable. Do not buy the 32 GB DIMMs.** The 26.82 GiB per-layer-embedding table stays on `/models` NVMe as a `CPU_Mapped` mmap, and the model serves at **16–17 tok/s decode and 30–40 tok/s prefill** at `-c 4096` on the RX 9070, using **12.2 GiB of VRAM**. Under a sustained, topically diverse prompt stream the resident working set **converges at ~34 GB** — comfortably inside the 62 GiB of installed RAM — and disk I/O decays toward zero rather than thrashing. The 32 GB hardware decision does not need re-opening, and `plans/qwen4exp-bakeoff-campaign.md` is cleared to proceed on its own merits.
+**On-disk PLE is viable. Do not buy the 32 GB DIMMs.** The 26.82 GiB per-layer-embedding table stays on `/models` NVMe as a `CPU_Mapped` mmap, and the model serves at **16–17 tok/s decode and 30–40 tok/s prefill** at `-c 4096` on the RX 9070, using **12.2 GiB of VRAM**. Under a sustained, topically diverse prompt stream the resident working set **converges at ~34 GB** — comfortably inside the 62 GiB of installed RAM — and disk I/O decays toward zero rather than thrashing. The 32 GB hardware decision does not need re-opening, and the `qwen4exp-bakeoff-campaign` plan is cleared to proceed on its own merits.
 
 The premise that motivated the RAM question — "the n-gram embeddings should always live in RAM" — is not what the measurement shows. The table is accessed sparsely (one row per token), so it behaves like a paged lookup structure, not like resident weights.
 
@@ -67,7 +67,7 @@ Arm C config, eight topically unrelated prompts, 128 tokens each. If the on-disk
 
 1. **Finding E1 is disproven, not "proven real".** The `-ot` pattern matches correctly. The `tensor … buffer type overridden to …` line is emitted at **debug** level and is invisible at the default verbosity 3 — it requires **`-lv 5`**. The prior session's `grep -c … = 0` was a verbosity artifact, not a match failure. Confirmed twice over: at `-lv 5` the line reads `tensor per_layer_token_embd.weight (27465 MiB iq4_nl) buffer type overridden to CPU`, and 27465 MiB matches the 26.82 GiB derived independently from the tensor directory. The mechanism was first isolated on a 67 MB model in seconds rather than on the 73 GiB one.
 2. **The assertion string is build-specific and placement is two-stage.** `-ot …=CPU` is first resolved to `Vulkan_Host`, then downgraded to `CPU_Mapped` because mmap is enabled. Assert on the `CPU_Mapped model buffer size` lines, not on the debug target name.
-3. **Readiness literal**: this build logs `llama_server: listening on http://…`, not `server is listening`. A poll loop on the old string hangs against a healthy server — the root-`AGENTS.md` "a healthy service has told you nothing" family, in its inverse form.
+3. **Readiness literal**: this build logs `llama_server: listening on http://…`, not `server is listening`. A poll loop on the old string hangs against a healthy server — the root contract's "a healthy service has told you nothing" family, in its inverse form.
 4. **`-ngl auto` silently abandons fitting when `-ot` is set** (`common_fit_params: … tensor_buft_overrides already set by user, abort`) and continues as a *warning*. Every `-ot` arm must pass an explicit `-ngl`.
 5. **`--load-mode none` is a trap on this model**, despite the loader's own hint recommending it against CPU overrides. It defeats mmap and would pull ~69.7 GiB of off-GPU tensors into anonymous memory against 62 GiB of RAM. The hint is written for models that fit; do not follow it here.
 6. **The card is 15.92 GiB (17,095,983,104 B), not the ~12.8 GiB the plan assumes throughout.** The extra headroom is what makes arm C's 10 expert layers affordable.

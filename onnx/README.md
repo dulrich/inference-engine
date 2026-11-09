@@ -67,7 +67,7 @@ Notes:
   true` on a classification for the sigmoid/threshold behaviour; the result is then a *list* of
   `{label, confidence}`, again matching the library.
 - `relations` and JSON `structures` are **not served** and return `400 bad_schema` rather than a
-  plausible-looking wrong answer — see [AGENTS.md](AGENTS.md) for why.
+  plausible-looking wrong answer — see the area contract for why.
 - Schemas are compiled and cached per `(alias, schema-hash)`; label **order** is part of the
   prompt, so two orderings are two schemas.
 - **The schema is validated, never coerced.** A wrong-typed field is a `400 bad_schema` naming
@@ -95,7 +95,7 @@ request can never yield a dropped connection or a partial result:
 | `missing_model` | 400 | No `model` in the request. |
 | `bad_json` / `bad_request` | 400 | Body is not valid JSON / not a JSON object, is empty, or `Content-Length` is unparseable. |
 | `payload_too_large` | 413 | Body over the server's `MAX_BODY_BYTES`. |
-| `unknown_model` | 404 | Alias not in the registry. Never falls back to a default — see [AGENTS.md](AGENTS.md). |
+| `unknown_model` | 404 | Alias not in the registry. Never falls back to a default — see the area contract. |
 | `not_found` | 404 | No such route. |
 | `model_unavailable` | 503 | Alias is registered but its model failed to load. |
 | `schema_failed` / `extract_failed` | 500 | Unexpected server-side failure. `schema_failed` should be unreachable — it exists so a validation bug can never become a dropped connection. |
@@ -110,7 +110,7 @@ Two deliberate asymmetries, both pinned by tests in `tests/test_schema.py`:
 
 ### `POST /v1/classify`
 
-For `type: seqcls` models only (an `hsc-seqcls/1` bundle; see `AGENTS.md`).
+For `type: seqcls` models only (an `hsc-seqcls/1` bundle; see the area contract).
 
 ```jsonc
 {"model": "hsc-turn-state", "texts": ["..."]}          // 1..32 strings; a bare string is a 400
@@ -170,7 +170,7 @@ carries no torch and the service is multi-model and always-resident.
 
 ## Gates
 
-Per the repo `AGENTS.md`: `bash -n` on the shell scripts, executables `0755`, `file` + `LC_ALL=C
+Per the repo's gate contract: `bash -n` on the shell scripts, executables `0755`, `file` + `LC_ALL=C
 grep -caP '\0'` clean on everything touched, and `smoke-extract.sh` green against the running
 container after any change that affects it. Model or runtime changes additionally re-run
 `tools/export_gliner2.py --verify-only` for every configured alias.

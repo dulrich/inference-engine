@@ -6,7 +6,7 @@
 # Why this exists: for ~30 hours in August 2026 a glibc ABI skew killed every llama-server
 # child at dynamic-link time, but llama-swap is a static Go binary, so it kept answering
 # `/health` with `OK` throughout and `docker compose ps` said (healthy) the entire time. The
-# compose healthcheck (compose.fleet.yml) only ever proves "router up" — it is deliberately kept
+# compose healthcheck (fleet compose) only ever proves "router up" — it is deliberately kept
 # shallow and fast (30s interval) because bge-small-en-v1.5-f16 has `ttl: 1800` in config.yaml,
 # and any probe interval under 1800s resets the idle timer and never lets the model unload, so
 # it could never observe a genuine cold spawn even if it tried. Hence the split: the compose
@@ -30,12 +30,12 @@
 #
 # Scheduling: INSTALLED 2026-08-24 in the user crontab (see llama/README.md "Deep health check"):
 #
-#   19 * * * * mkdir -p $HOME/.local/state/inference-engine && llama/deep-health-check.sh >>$HOME/.local/state/inference-engine/deep-health-check.log 2>&1
+#   19 * * * * mkdir -p $HOME/.local/state/inference-engine && /path/to/inference-engine/llama/deep-health-check.sh >>$HOME/.local/state/inference-engine/deep-health-check.log 2>&1
 #
 # Alerting: the log above is human-readable and nothing reads it. So every exit path — PASS,
 # FAIL, SKIP and FATAL — also writes a machine-readable, timestamped artifact (atomic rename) at
 # DEEP_HEALTH_ARTIFACT_PATH (default $HOME/.local/state/inference-engine/deep-health-check.json).
-# Command Center (fleet-tools) reads it and renders a verdict on the `inference-engine-router`
+# The fleet's dashboard (Command Center) reads it and renders a verdict on the `inference-engine-router`
 # service card; an artifact older than its staleness bound, missing, or malformed renders
 # non-healthy there, so a dead cron cannot leave a stale PASS on screen. SKIP is written too, on
 # purpose: a multi-hour bake-off window must keep the timestamp fresh or it would read as stale.

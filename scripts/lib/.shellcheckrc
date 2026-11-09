@@ -1,2 +1,2 @@
-# Sourced helper copied byte-for-byte from fleet-tools/scripts/build-id/build-id.sh (no shebang).
+# Sourced helper copied byte-for-byte from the fleet's shared build-id.sh (no shebang).
 shell=bash

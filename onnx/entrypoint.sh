@@ -89,7 +89,7 @@ CONFIG_PATH="${ONNX_MODELS_CONFIG:-/app/models.yaml}"
 if [ ! -f "$CONFIG_PATH" ]; then
 	log "FATAL: model registry not found at $CONFIG_PATH"
 	log "       compose bind-mounts onnx/models.yaml there; a stale mount source silently"
-	log "       becomes an empty directory, so check the path in compose.fleet.yml first."
+	log "       becomes an empty directory, so check the bind-mount path in your compose file first."
 	exit 1
 fi
 log "model registry: $CONFIG_PATH"

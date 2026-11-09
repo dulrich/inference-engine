@@ -3,8 +3,8 @@
 #
 # This file is bind-mounted read-only at /app/config.yaml by the compose service — it is NEVER
 # baked into the image (the Dockerfile does not COPY it), specifically so it can be edited
-# without a rebuild. The compose wiring for that mount lives in fleet-tools's
-# compose.fleet.yml; this file only defines the router shape. Config edits apply on container
+# without a rebuild. The compose wiring for that mount lives in the fleet compose;
+# this file only defines the router shape. Config edits apply on container
 # restart, not on save.
 #
 # ── Aliases are the API surface — APPEND ONLY, never rename or delete ──────────────────────────
@@ -237,7 +237,7 @@ macros:
   # `--embeddings` / `--reranking` each imply their own pooling on top of that — do not add
   # `--pooling` back in "to be explicit". `-ngl 99` offloads every layer to the GPU. `-c 8192
   # -b 8192` keep bge-m3's full context and logical batch, but `-ub` is 4096, not 8192
-  # (2026-10-14, fleet-tools plans/fleet-memory-crush.md WP-1): at `-ub 8192` one long input
+  # (2026-10-14, fleet-memory-crush plan WP-1): at `-ub 8192` one long input
   # grows a compute buffer past the Vulkan device max buffer size, ggml_vulkan logs `Failed to
   # allocate pinned memory`, and the buffer falls back to HOST RAM — measured 143 MiB → 6.96 GiB
   # anonymous for bge-m3 after a single ~2.6k-token request; at `-ub 4096` the same load holds
@@ -1120,7 +1120,7 @@ models:
   # `chat_template_kwargs` on the upstream body, from the per-model `effortKwargs` table in
   # router/gateway.config.json -- no model-id rewrite and no swap. (The earlier reading, from
   # plans/local-leg-claude-code-serving-fit.md WP-1's spike
-  # (fleet-tools/runs/dispatch/local-leg-serving-fit-spike-record.md, probe 3) -- that the
+  # (the fleet's local-leg-serving-fit spike record, probe 3) -- that the
   # conversion leg forwards NO effort/thinking field of any shape, so the model id is the only
   # effort surface that reaches the model -- was measured on the pre-`0007` router and is
   # superseded.) The four entries below remain the explicit SERVER-ENFORCED HARD-CAP surface:
@@ -1397,7 +1397,7 @@ models:
 # Per-model weights are exact file sizes (`stat -c %s`) on the candidate GGUFs already on disk
 # (paths below mapped at measurement time to `~/.lmstudio/models/<publisher>/<repo>/…`; the
 # GGUF-home move has since completed, and the host layout is now
-# `/srv/models/<publisher>/<repo>/…`). KV cache is computed from each GGUF's own
+# `$MODELS_DIR/<publisher>/<repo>/…`). KV cache is computed from each GGUF's own
 # header metadata (block count, per-layer attention.head_count_kv,
 # attention.key_length/value_length, attention.sliding_window — read directly, no model
 # loaded) at f16 KV (llama.cpp's default cache type, unquantized) and is SWA-aware: gemma4

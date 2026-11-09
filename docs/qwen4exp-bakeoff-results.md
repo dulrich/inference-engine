@@ -1,6 +1,6 @@
 # qwen4exp bake-off campaign — results
 
-WP-3 closeout of `plans/qwen4exp-bakeoff-campaign.md` (a viability probe, not a quant sweep — the campaign's own predecessor and design intent were "can this model class run here, and how does it serve"). See also `docs/qwen4exp-ple-ondisk-spike.md` (the predecessor spike measurement that unblocked this campaign) and `plans/qwen4exp-image-and-ple-spike.md` (the spike's own plan). Raw records: `llama/bakeoff/records/qwen4exp-viability-v1/`.
+WP-3 closeout of the `qwen4exp-bakeoff-campaign` plan (a viability probe, not a quant sweep — the campaign's own predecessor and design intent were "can this model class run here, and how does it serve"). See also `docs/qwen4exp-ple-ondisk-spike.md` (the predecessor spike measurement that unblocked this campaign) and the `qwen4exp-image-and-ple-spike` plan (the spike's own plan). Raw records: `llama/bakeoff/records/qwen4exp-viability-v1/`.
 
 ## What this is
 
@@ -17,7 +17,7 @@ Every cell shares `--host 0.0.0.0`, `-lv 9`, `-ctk f16`, `-ctv f16`, `-fa auto`,
 
 ## Methodology
 
-Standard queue-runner execution (`batch.py run`), not a scratch-server probe: `run-window.sh` stopped the live router, ran the four-cell queue to `queue_state: completed` unattended, then restarted the router on its original image and re-ran `smoke-inference.sh` green by response body. `gpu-hang-watchdog.service` was active throughout and zero amdgpu ring/timeout/reset/MES signature appeared in `journalctl -k` across the window. Full timeline, every raw number, and the host-memory investigation are in `runs/dispatch/qwen4exp-bakeoff-campaign-wp-2-report.md` (gitignored, main-checkout only); this doc reproduces the load-bearing figures from that report and from the committed records rather than re-deriving them.
+Standard queue-runner execution (`batch.py run`), not a scratch-server probe: `run-window.sh` stopped the live router, ran the four-cell queue to `queue_state: completed` unattended, then restarted the router on its original image and re-ran `smoke-inference.sh` green by response body. `gpu-hang-watchdog.service` was active throughout and zero amdgpu ring/timeout/reset/MES signature appeared in `journalctl -k` across the window. Full timeline, every raw number, and the host-memory investigation are in the `qwen4exp-bakeoff-campaign-wp-2-report` dispatch record (gitignored, main-checkout only); this doc reproduces the load-bearing figures from that report and from the committed records rather than re-deriving them.
 
 ## VRAM — per-cell read-backs
 

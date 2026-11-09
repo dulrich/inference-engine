@@ -93,7 +93,7 @@ Against the live sink (read-only; never rotate or delete these files). A row's `
 
 ```sh
 node docs/tool-calling-gateway/scripts/router-session-report.mjs \
-  ~/.local/state/inference-router/logs/router-2026-09-13.0.jsonl \
+  $HOME/.local/state/inference-router/logs/router-2026-09-13.0.jsonl \
   --since 2026-09-13T16:59:01Z --until 2026-09-13T17:05:00Z \
   --leg claude-local --md
 ```

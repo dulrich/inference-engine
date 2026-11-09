@@ -41,7 +41,7 @@ into the name so it's visible without opening the Dockerfile.
 
 The compose service itself (`crucible-inference`, port mapping, `/models` and `config.yaml`
 mounts, `/dev/dri` passthrough, `mem_limit`) lives in the fleet repo,
-`fleet-tools/fleet/compose.fleet.yml`.
+the fleet compose.
 
 ## Dual-use image, on purpose
 
@@ -149,7 +149,7 @@ Exits non-zero on any failed check.
 
 ## Scheduling — moved to eval-harness
 
-The bake-off queue scheduling (nightly window, minutely research dispatcher, `cron-nightly.sh`, `run-window.sh`) moved with the harness to `eval-harness/inference_research/harness` (plan `research-to-eval-harness`); its README's "Scheduling" section is the single home for the crontab lines. What stays here is the shared interface: the window holds an exclusive flock on `~/.local/state/inference-bakeoff/cron.lock` (and GPU exclusivity against the router is the harness's own container stop/start), and `deep-health-check.sh` reads that same lock as its stand-down signal — see below. The only cron entry for this repo is `control/serving-dispatch.sh` (`control/AGENTS.md`).
+The bake-off queue scheduling (nightly window, minutely research dispatcher, `cron-nightly.sh`, `run-window.sh`) moved with the harness to eval-harness `inference_research/harness`; its README's "Scheduling" section is the single home for the crontab lines. What stays here is the shared interface: the window holds an exclusive flock on `~/.local/state/inference-bakeoff/cron.lock` (and GPU exclusivity against the router is the harness's own container stop/start), and `deep-health-check.sh` reads that same lock as its stand-down signal — see below. The only cron entry for this repo is the fleet-side serving-control dispatcher, which is not shipped in the public tree.
 
 ## Deep health check
 
@@ -158,7 +158,7 @@ narrower, guardrail-shaped sibling meant to run unattended and repeatedly, to ca
 compose healthcheck structurally cannot: a total serving outage behind a green router.
 
 The split exists because one probe cannot both detect an outage promptly and exercise a cold
-model load. The compose healthcheck (`compose.fleet.yml`) hits llama-swap's own `/health` every
+model load. The compose healthcheck hits llama-swap's own `/health` every
 30s — fast enough to be a useful "is the router up" signal, but llama-swap is a static Go
 binary, so it kept answering `OK` for ~30 hours in August 2026 while every `llama-server` child
 was dead at dynamic-link time (the ABI trap, above). `/health` proves the router process is up;
@@ -180,14 +180,14 @@ llama/deep-health-check.sh                                   # default target :4
 llama/deep-health-check.sh --url http://127.0.0.1:4811 --model bge-small
 ```
 
-**Installed 2026-08-24** (user crontab), closing the outage-detection gap the August
+**Installed 2026-08-24** (user crontab; the fleet's exact line, with its wrapper scripts, is recorded in the area contract, and the shape below is generic), closing the outage-detection gap the August
 incident exposed:
 
 ```
-*/5 * * * * mkdir -p $HOME/.local/state/inference-engine && <code-root>/fleet-tools/scripts/cron-run deep-health-check-tick --max-age 15m -- /usr/bin/flock -n -E 0 ~/.local/state/inference-engine/deep-health-check.lock /usr/local/bin/bun <code-root>/fleet-tools/scripts/run-if-stale.mjs --json-field ~/.local/state/inference-engine/deep-health-check.json:observed_at --max-age 55m -- <code-root>/fleet-tools/scripts/cron-run deep-health-check --max-age 2h -- sh -c 'llama/deep-health-check.sh >>~/.local/state/inference-engine/deep-health-check.log 2>&1' > ~/.local/state/inference-engine/deep-health-check-tick.log 2>&1
+*/5 * * * * mkdir -p $HOME/.local/state/inference-engine && <your-cron-wrapper> -- /usr/bin/flock -n -E 0 $HOME/.local/state/inference-engine/deep-health-check.lock <your-stale-gate> --json-field $HOME/.local/state/inference-engine/deep-health-check.json:observed_at --max-age 55m -- sh -c '/path/to/inference-engine/llama/deep-health-check.sh >>$HOME/.local/state/inference-engine/deep-health-check.log 2>&1' > $HOME/.local/state/inference-engine/deep-health-check-tick.log 2>&1
 ```
 
-A 5-minute tick (`flock` + `run-if-stale.mjs` on the artifact's `observed_at`, max age 55m; tick output in `deep-health-check-tick.log`) runs the check at most hourly, so every run is still a genuine cold spawn past the 1800s `ttl` above, and after a boot the artifact catches up within 5 minutes instead of up to an hour (2026-10-25). The check relies on every exit path writing the artifact with `observed_at`. It logs under
+A 5-minute tick (`flock` + a stale-gate wrapper on the artifact's `observed_at`, max age 55m; tick output in `deep-health-check-tick.log`) runs the check at most hourly, so every run is still a genuine cold spawn past the 1800s `ttl` above, and after a boot the artifact catches up within 5 minutes instead of up to an hour (2026-10-25). The check relies on every exit path writing the artifact with `observed_at`. It logs under
 `$HOME/.local/state` rather than `/var/log`, which is root-owned on this box: a user
 crontab redirecting into an unwritable directory fails *before* the script runs, which
 would leave this guardrail silently dead — the same shape of bug it exists to detect. The
@@ -198,7 +198,7 @@ whole window, so the check test-and-releases the window's own `cron.lock` first 
 **Alerting (2026-09-14):** nothing reads the log, so every run also writes a timestamped JSON
 artifact — `$HOME/.local/state/inference-engine/deep-health-check.json` (override with
 `DEEP_HEALTH_ARTIFACT_PATH`), atomically replaced, `status` ∈ `pass|fail|skip|fatal` with
-`observed_at`, `attempts` and `detail`. Command Center (fleet-tools) bind-mounts that
+`observed_at`, `attempts` and `detail`. The fleet's dashboard bind-mounts that
 directory read-only and renders the verdict as a pill on the `inference-engine-router` service
 card; a missing, malformed, or stale artifact (older than `DEEP_HEALTH_STALE_MS`, default
 150 min = 2.5× the hourly cadence) renders non-healthy rather than retaining the last PASS —
@@ -275,7 +275,7 @@ docker exec inference-engine-llama cat /usr/local/share/llama-abi/libc6.version
 docker exec inference-engine-llama ldd -r /usr/local/bin/llama-server   # no unresolved symbols
 ```
 
-The durable lesson is the one in `AGENTS.md`: a green healthcheck is not evidence. Run
+The durable lesson is the one in this repo's area contract: a green healthcheck is not evidence. Run
 `smoke-inference.sh` after every rebuild.
 
 ## A reranker is not an embedding model
@@ -340,13 +340,13 @@ started.
 
 ## The bake-off image (`b10664-swap243`)
 
-`crucible-llamacpp-vulkan:b10664-swap243` is a second, additive image sitting alongside the production tag, built for the qwen4exp bake-off (`plans/qwen4exp-image-and-ple-spike.md`). `unsloth/Qwen3.8-Flash-Next-GGUF` declares `general.architecture: qwen4exp`, and upstream support for that architecture first appears in build `b10664` — at the pinned `b10534` the model cannot be loaded at all. Build it through the documented rebuild path above, overriding only the llama.cpp tag and letting `LLAMA_SWAP_TAG` / `LLAMA_SWAP_COMMIT` default, so the router half of the image stays identical to production's:
+`crucible-llamacpp-vulkan:b10664-swap243` is a second, additive image sitting alongside the production tag, built for the qwen4exp bake-off (the `qwen4exp-image-and-ple-spike` plan). `unsloth/Qwen3.8-Flash-Next-GGUF` declares `general.architecture: qwen4exp`, and upstream support for that architecture first appears in build `b10664` — at the pinned `b10534` the model cannot be loaded at all. Build it through the documented rebuild path above, overriding only the llama.cpp tag and letting `LLAMA_SWAP_TAG` / `LLAMA_SWAP_COMMIT` default, so the router half of the image stays identical to production's:
 
 ```bash
 docker build --build-arg LLAMA_CPP_TAG=b10664 -t crucible-llamacpp-vulkan:b10664-swap243 llama
 ```
 
-A future rebuild of that tag through this same build-arg path inherits the source-build `swap` stage automatically; the existing `b10664-swap243` image is deliberately left as built rather than rebuilt now (`plans/container-critical-high-cve-remediation.md`, "Decisions locked").
+A future rebuild of that tag through this same build-arg path inherits the source-build `swap` stage automatically; the existing `b10664-swap243` image is deliberately left as built rather than rebuilt now (the `container-critical-high-cve-remediation` plan, "Decisions locked").
 
 **The `Dockerfile` default deliberately stays `b10534`, and the compose service is not repointed.** The new tag exists only as a build-arg override, reachable by the bake-off harness through `BAKEOFF_SCRATCH_IMAGE` (`run-window.sh` in `eval-harness/inference_research/harness`). Moving the default instead would drag all eight production models, the embedding agreement harness, and the whole glibc/Mesa ABI surface 130 upstream builds forward for the benefit of one experiment — and both traps above are on record from exactly that class of change. Keeping the experiment in its own tag is what contains the *image* risk. It does not contain the *availability* cost: a bake-off window stops the router regardless of which image it runs.
 
@@ -403,7 +403,7 @@ started.
 ## Migration status
 
 **Cutover complete (2026-07-26).** `crucible-inference` is the live and only inference path:
-the compose service runs always-on in `fleet-tools/fleet/compose.fleet.yml`, Crucible's two
+the compose service runs always-on in the fleet compose, Crucible's two
 retrieval provider entries pointed at `127.0.0.1:4806` (repointed to `4811` on 2026-07-27,
 when the transitional 4806 publish was retired), and the smoke test plus the
 chat-evicts-retrieval interleave (two evict→reload cycles, byte-identical embeddings after each

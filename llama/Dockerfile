@@ -102,7 +102,7 @@ RUN cmake -B build \
 # pins its own toolchain via `actions/setup-go`'s `go-version-file: go.mod`, and `go.mod`'s `go
 # 1.26.1` line is a *minimum*, not a `toolchain` pin — every prebuilt release, including ones
 # newer than this fleet's scan, links against that same go1.26.1 stdlib. All 20 HIGH `gobinary`
-# findings in `fleet-tools/data/security-scan/inference-engine.images.json` are CVEs fixed
+# findings in the fleet's image security-scan report are CVEs fixed
 # somewhere between go1.25.9 and go1.26.6/1.27.0-rc.3 — i.e. closed by any newer toolchain, with
 # zero code or config change, since llama-swap's own module carries no `toolchain` directive that
 # would override it. Building here under `golang:1.26.7-trixie` closed all 20; by 2026-10-09 the
@@ -208,7 +208,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # Read-only mount point for the GGUF library. Nothing in this image ever writes to it.
 VOLUME ["/models"]
 
-# /app/config.yaml is where the compose service (fleet-tools, WP-6) bind-mounts
+# /app/config.yaml is where the compose service (the fleet compose) bind-mounts
 # config.yaml read-only. It is NEVER COPYed into the image — llama-swap's config must be
 # editable without a rebuild, and baking it in would defeat that. This just ensures the mount
 # point directory exists.

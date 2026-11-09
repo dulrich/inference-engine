@@ -1,8 +1,8 @@
 # Mixed local/hosted routing — evaluation spike decision
 
-> **Resident service shipped** (2026-08-25, `plans/resident-router-ai-gateway.md`): the successor plan this doc anticipated landed the router as `inference-engine-router` on `:4813`, with the subscription-Claude OAuth passthrough this doc recorded as unsupported now proven and patched in (`oauth-passthrough-probe.md` superseded that finding). Consumer guide: `resident-router.md`. The evidence below stands as the measurement record it was.
+> **Resident service shipped** (2026-08-25, the `resident-router-ai-gateway` plan): the successor plan this doc anticipated landed the router as `inference-engine-router` on `:4813`, with the subscription-Claude OAuth passthrough this doc recorded as unsupported now proven and patched in (`oauth-passthrough-probe.md` superseded that finding). Consumer guide: `resident-router.md`. The evidence below stands as the measurement record it was.
 
-Plan: `plans/capability-surfacing-and-local-agent-endpoints.md` WP-5. All observations live-measured 2026-08-25 on this host against llama.cpp b10534 / llama-swap v243 (`:4811`) with Claude Code 2.1.243 headless (`claude -p`). Probed by response body throughout. All proxies were throwaway (installs under `/tmp/wp5-*`, loopback-only binds on 3456/4000, torn down at close); no service, port claim, compose change, or alias landed.
+Plan: the `capability-surfacing-and-local-agent-endpoints` plan WP-5. All observations live-measured 2026-08-25 on this host against llama.cpp b10534 / llama-swap v243 (`:4811`) with Claude Code 2.1.243 headless (`claude -p`). Probed by response body throughout. All proxies were throwaway (installs under `/tmp/wp5-*`, loopback-only binds on 3456/4000, torn down at close); no service, port claim, compose change, or alias landed.
 
 ## Decision
 

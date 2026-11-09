@@ -29,7 +29,7 @@
 # ── Weights are mounted, never baked ──────────────────────────────────────────────────────────
 #
 # The exported ONNX artifacts are ~0.8-1.2 GB per model and live under the fleet's shared
-# /srv/models tree (mounted read-only at /models), keyed <publisher>/<repo>-onnx, the
+# models tree (host $MODELS_DIR, mounted read-only at /models), keyed <publisher>/<repo>-onnx, the
 # same layout the llama tier uses for GGUFs. Baking them would make the image multi-GB and make
 # "add a model" a rebuild instead of a config append. Consequence, and it is deliberate: this
 # container needs NO network at runtime. It never calls the HF hub — a missing model surfaces as
@@ -37,7 +37,7 @@
 
 FROM python:3.13-slim
 
-# Source commit baked in for the fleet view (same convention as the fleet-tools images).
+# Source commit baked in for the fleet view (same convention as the fleet's other images).
 # Declared BEFORE the apt layer deliberately: a new commit busts the cache from here down, so
 # `apt-get upgrade` re-runs and picks up base-package security fixes instead of serving a stale
 # cached layer (the util-linux deb13u1 lesson, 2026-08-17). OS packages only — the python wheels

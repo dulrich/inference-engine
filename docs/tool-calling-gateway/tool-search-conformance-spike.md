@@ -1,6 +1,6 @@
 # Deferred-tool-search conformance through the resident router — measured wire spike
 
-Plan: `plans/router-observability-and-tool-search-conformance.md` WP-5. Measurement spike, run 2026-09-12 against the **resident** router at `http://127.0.0.1:4813` (observed only — never restarted or reconfigured) with Claude Code 2.1.270 in headless `claude -p` mode. Every number below was measured on this run through `POST /v1/messages/count_tokens` on the leg it describes; nothing is quoted from `fleet-tools/references/tool-search-routing.md`. Capture files are cited per claim and live in `/tmp/wp5-capture/` (throwaway, kept for orchestrator review).
+Plan: the `router-observability-and-tool-search-conformance` plan WP-5. Measurement spike, run 2026-09-12 against the **resident** router at `http://127.0.0.1:4813` (observed only — never restarted or reconfigured) with Claude Code 2.1.270 in headless `claude -p` mode. Every number below was measured on this run through `POST /v1/messages/count_tokens` on the leg it describes; nothing is quoted from the fleet's `tool-search-routing` reference. Capture files are cited per claim and live in `/tmp/wp5-capture/` (throwaway, kept for orchestrator review).
 
 ## Verdict
 
@@ -96,7 +96,7 @@ Because Claude Code puts the deferred-tool name list **only** in that message (v
 
 Severity: silent. It produces neither a 4xx nor a "tool not found" — the two failure modes the reference told us to watch for. It degrades capability invisibly, and it also silently discards the agent-type listing and skills listing that share that message, so the codex leg's `Agent` and `Skill` tools are impaired by the same line.
 
-Fix scope for WP-6 is a `sidecar/codex-sidecar.mjs` change plus its `node --test` suite — a **unit restart**, not a router rebuild or a `gateway.config.json` change. The shape suggested by the evidence is to fold the dropped `role:"system"` text into `baseInstructions` alongside `systemText` (which also repairs `Agent`/`Skill`), rather than to special-case the deferred-tools paragraph.
+Fix scope for WP-6 is a `sidecar/codex-sidecar.mjs` change plus its `node --test` suite — a **unit restart**, not a router rebuild or a the router's gateway config change. The shape suggested by the evidence is to fold the dropped `role:"system"` text into `baseInstructions` alongside `systemText` (which also repairs `Agent`/`Skill`), rather than to special-case the deferred-tools paragraph.
 
 ## Incidental finding — the router already fixes the qwen38 blocker
 
@@ -133,10 +133,10 @@ Project `.claude/settings.json` in a disposable `/tmp` working dir, with `HOME` 
   },
   "permissions": {
     "deny": [
-      "Edit(/~/**)",
-      "Write(/~/**)",
-      "Edit(/<code-root>/**)",
-      "Write(/<code-root>/**)",
+      "Edit(//home/<user>/**)",
+      "Write(//home/<user>/**)",
+      "Edit(//home/<shared>/**)",
+      "Write(//home/<shared>/**)",
       "WebFetch",
       "WebSearch"
     ],

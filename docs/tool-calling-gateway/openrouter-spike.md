@@ -1,6 +1,6 @@
 # OpenRouter tee through the resident router — integration spike record
 
-Live measurement run 2026-08-25 (user-directed: `OPENROUTER_API_KEY` added to gitignored `inference-engine/.env`; test model `z-ai/glm-5.2:free` — free tier, non-prompt-training provider, user-selected). Successor to the strategic assessment recorded in `plans/router-prefill-keepalive-and-protocol-gaps.md`'s Audit record: *OR OpenAI-compat leg ≈ config-only; OR Anthropic-compat leg needs a live spike; count_tokens decided per-leg*. Rig: transient container `or-spike-rig` from the production image (`fleet-tools-inference-engine-router:latest`, the four-patch 782cd51 build), `--network host`, port 4701, temp config = production `gateway.config.json` + two OR providers, static-key auth on `x-gateway-key`, torn down at close. All observations by response body, never status code.
+Live measurement run 2026-08-25 (user-directed: `OPENROUTER_API_KEY` added to gitignored `inference-engine/.env`; test model `z-ai/glm-5.2:free` — free tier, non-prompt-training provider, user-selected). Successor to the strategic assessment recorded in the `router-prefill-keepalive-and-protocol-gaps` plan's Audit record: *OR OpenAI-compat leg ≈ config-only; OR Anthropic-compat leg needs a live spike; count_tokens decided per-leg*. Rig: transient container `or-spike-rig` from the production image (`the fleet-built router image`, the four-patch 782cd51 build), `--network host`, port 4701, temp config = production the router's gateway config + two OR providers, static-key auth on `x-gateway-key`, torn down at close. All observations by response body, never status code.
 
 ## Verdict
 
@@ -15,7 +15,7 @@ Live measurement run 2026-08-25 (user-directed: `OPENROUTER_API_KEY` added to gi
 
 **A credential must be configured on any OR provider** (either type): a provider with a configured key gets the client credential replaced via `applyProviderCredentials`; a no-key anthropic-type provider passes the incoming bearer through — which on this fleet would leak the caller's subscription OAuth bearer to OpenRouter. Never wire OR as a passthrough provider.
 
-**`apiKeyEnv` keeps the secret out of the committed config** (verified live): the engine's provider loader resolves `apikey || apiKey || process.env[<apiKeyEnv>]` (also accepts the `apikeyEnv` spelling). A rig configured with `"apiKeyEnv": "OPENROUTER_API_KEY"` and the env var injected at `docker run` authenticated against OR successfully. This is the landing form — the committed `gateway.config.json` never carries the key; compose injects `OPENROUTER_API_KEY` into the container environment.
+**`apiKeyEnv` keeps the secret out of the committed config** (verified live): the engine's provider loader resolves `apikey || apiKey || process.env[<apiKeyEnv>]` (also accepts the `apikeyEnv` spelling). A rig configured with `"apiKeyEnv": "OPENROUTER_API_KEY"` and the env var injected at `docker run` authenticated against OR successfully. This is the landing form — the committed the router's gateway config never carries the key; compose injects `OPENROUTER_API_KEY` into the container environment.
 
 **Auth-before-pool proof rule** (negative control, measured): OR returns `401 {"error":{"message":"User not found.","code":401}}` for a bogus key *before* any upstream pool check — so every `upstream_429` observed in this spike was an authenticated request. This is what makes the 429-window measurements probative: a gateway-relayed 429 proves the provider's real key reached OR (a leaked dummy client bearer would have 401'd).
 
@@ -37,9 +37,9 @@ Live measurement run 2026-08-25 (user-directed: `OPENROUTER_API_KEY` added to gi
 
 ## Config landing decision
 
-**Land both legs in the live `router/gateway.config.json`, config-only** (no patch 0005; the audit's replace-vs-integrate exit trigger is not touched):
+**Land both legs in the live the router's gateway config, config-only** (no patch 0005; the audit's replace-vs-integrate exit trigger is not touched):
 
 - `openrouter` (`openai_chat_completions`, baseurl `https://openrouter.ai/api/v1`, `apiKeyEnv: OPENROUTER_API_KEY`) — conversion leg; keepalive-covered; ids invisible to Claude Code picker discovery.
 - `or-anthropic` (`anthropic`, baseurl `https://openrouter.ai/api`, `apiKeyEnv: OPENROUTER_API_KEY`) — native passthrough leg; higher fidelity (OR cost fields, native SSE); picker-visible by substring; clients must send some bearer (finding 3) — Claude Code local-mode posture does.
 - Models on both: `z-ai/glm-5.2:free`, `z-ai/glm-5.3`. Model ids are stored identifiers once consumers adopt them — the alias append-only contract applies to these provider names and ids from landing onward.
-- Compose (`fleet-tools/fleet/compose.fleet.yml`) injects `OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}` into the router environment (key in gitignored `fleet-tools/.env`); env changes need container recreation (`up -d`), not restart, then `router/smoke-router.sh` green plus one live OR-leg probe.
+- Compose (the fleet compose) injects `OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}` into the router environment (key in gitignored the fleet `.env`); env changes need container recreation (`up -d`), not restart, then `router/smoke-router.sh` green plus one live OR-leg probe.

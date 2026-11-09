@@ -1,17 +1,17 @@
 # ROCm gfx1201 spike — findings (2026-08-24)
 
-Executed under `plans/rocm-gfx1201-spike.md` (watchdog-gated window, user save-work confirmation, `gpu-hang-watchdog.service` verified `active` before the first HIP dispatch and at window close). One bench window, ~35 min, GPU otherwise idle, `inference-engine-llama` stopped for the window and smoked green after.
+Executed under the `rocm-gfx1201-spike` plan (watchdog-gated window, user save-work confirmation, `gpu-hang-watchdog.service` verified `active` before the first HIP dispatch and at window close). One bench window, ~35 min, GPU otherwise idle, `inference-engine-llama` stopped for the window and smoked green after.
 
 ## Verdict, one paragraph
 
-Official ROCm 7.2.2 with native gfx1201 kernels ran **9 bench cells with zero kernel-journal noise and no hang** — the MES-wedge class documented in `fleet-tools/references/rdna4-gpu-hang.md` did not reproduce, consistent with its trigger being *invalid* GPU programs (arch overrides, missing-arch kernels), none of which exist on this stack anymore. On throughput, **Vulkan (RADV) remains the right production default** — it wins or ties everywhere except one workload class: **CPU-offloaded MoE (`-ncmoe`), where HIP is ~2.5× faster at prompt processing** and ~15% faster at decode. That class is exactly how production serves `qwen36-a3b` today, so a per-alias HIP experiment is a legitimate future plan; nothing changes now (production stays Vulkan per the root `AGENTS.md` contract).
+Official ROCm 7.2.2 with native gfx1201 kernels ran **9 bench cells with zero kernel-journal noise and no hang** — the MES-wedge class documented in the fleet's `rdna4-gpu-hang` reference did not reproduce, consistent with its trigger being *invalid* GPU programs (arch overrides, missing-arch kernels), none of which exist on this stack anymore. On throughput, **Vulkan (RADV) remains the right production default** — it wins or ties everywhere except one workload class: **CPU-offloaded MoE (`-ncmoe`), where HIP is ~2.5× faster at prompt processing** and ~15% faster at decode. That class is exactly how production serves `qwen36-a3b` today, so a per-alias HIP experiment is a legitimate future plan; nothing changes now (production stays Vulkan per the root contract).
 
 ## Setup
 
-- llama.cpp **b10534** (exact production-container tag), built twice on host from one checkout — backend is the only variable. GGUFs are the same files production bind-mounts (`/srv/models/...`).
+- llama.cpp **b10534** (exact production-container tag), built twice on host from one checkout — backend is the only variable. GGUFs are the same files production bind-mounts (`$MODELS_DIR/...`).
 - HIP: ROCm 7.2.2, `-DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1201 -DGGML_HIP_ROCWMMA_FATTN=ON`; gfx1201 code objects verified via `llvm-objdump --offloading` before any dispatch. Runtime banner: `Device 0: AMD Radeon RX 9070, gfx1201 (0x1201), Wave Size: 32`.
 - Vulkan: host RADV (Mesa 26.1.7 kisak), `KHR_coopmat` matrix cores. Host Mesa differs from the container's pinned Mesa — these numbers compare backends at one tag, not host-vs-container.
-- Bench: `llama-bench -fa 1 -p 512,4096 -n 128 -r 3 -o json`, VRAM high-water sampled from `/sys/class/drm/card1/device/mem_info_vram_used` at 1 Hz. Raw JSON: `runs/rocm-spike/results/` (scratch, untracked).
+- Bench: `llama-bench -fa 1 -p 512,4096 -n 128 -r 3 -o json`, VRAM high-water sampled from `/sys/class/drm/card1/device/mem_info_vram_used` at 1 Hz. Raw JSON: scratch result files (untracked).
 
 ## Results (avg t/s over 3 reps)
 
@@ -63,11 +63,11 @@ cmake -S llama.cpp -B build-vulkan -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CXX_FLAGS="-isystem $PWD/spirv-headers-install/include"
 cmake --build build-vulkan --target llama-bench llama-server -j 20
 
-# one cell (see bench.sh in runs/rocm-spike/ while scratch survives; driver core:)
+# one cell (see the scratch bench.sh while it survives; driver core:)
 build-$backend/bin/llama-bench -m $model -fa 1 -p 512,4096 -n 128 -r 3 -o json [-ncmoe 32]
 ```
 
-The full `bench.sh` driver (VRAM sampler + `HSA_OVERRIDE_GFX_VERSION` refusal guard) is archived with the WP records in archive-repo under `inference-engine/rocm-gfx1201-spike/`.
+The full `bench.sh` driver (VRAM sampler + `HSA_OVERRIDE_GFX_VERSION` refusal guard) is archived with the WP records in the fleet's archive under `inference-engine/rocm-gfx1201-spike/`.
 
 ## Recommendation
 

@@ -32,7 +32,7 @@
 #                                         on purpose.
 #   gliner2-pii       (prospective)       eval-harness / news-ingestion PII sprints — append the
 #                                         row here when the first consumer lands.
-#   hsc-turn-state    fleet-tools     `scripts/wait-classifier-hook.mjs` (POST /v1/classify);
+#   hsc-turn-state    a fleet hook        a sibling repo's classifier hook (POST /v1/classify);
 #                                         the alias is stored as the outbox `turn.classified`
 #                                         event's `classifier` field.
 #

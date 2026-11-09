@@ -45,7 +45,7 @@ So `matrix` expresses the budget directly: a small chat model sits beside retrie
 
 ## WP-0b — OpenRouter preset id on both legs
 
-One request per leg, sent straight to the upstream URL each leg uses (`router/gateway.config.json`: `openrouter` = `openai_chat_completions` at `https://openrouter.ai/api/v1`, `or-anthropic` = `anthropic` at `https://openrouter.ai/api` + `/v1/messages`), with the router's key and `"model": "@preset/gpt-6-luna"` (the user's preset). Today the gateway itself would 400 an id outside `models[]`, so the probe bypasses it on purpose.
+One request per leg, sent straight to the upstream URL each leg uses (the router's gateway config: `openrouter` = `openai_chat_completions` at `https://openrouter.ai/api/v1`, `or-anthropic` = `anthropic` at `https://openrouter.ai/api` + `/v1/messages`), with the router's key and `"model": "@preset/gpt-6-luna"` (the user's preset). Today the gateway itself would 400 an id outside `models[]`, so the probe bypasses it on purpose.
 
 | Leg | Result |
 |---|---|

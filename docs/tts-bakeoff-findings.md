@@ -1,6 +1,6 @@
 # TTS engine bake-off findings (2026-09-29)
 
-Outcome of `plans/tts-engine-bakeoff-spike.md`: which local TTS engine audio-gen starts on, and the design inputs for the inference-engine TTS tier. Raw evidence (untracked) lives in `runs/tts-bakeoff/`: `sweep/` and `sweep-r2/` hold results JSONs, WAVs and `scores.json`; `voices/` and `voices-r2/` hold the frozen references; `pack-combined/` holds the rated pack and `key.json`; `window/` and `window2/` hold the GPU-window journals and notes.
+Outcome of the `tts-engine-bakeoff-spike` plan: which local TTS engine audio-gen starts on, and the design inputs for the inference-engine TTS tier. Raw evidence (untracked) lives in a scratch `tts-bakeoff/` tree: `sweep/` and `sweep-r2/` hold results JSONs, WAVs and `scores.json`; `voices/` and `voices-r2/` hold the frozen references; `pack-combined/` holds the rated pack and `key.json`; `window/` and `window2/` hold the GPU-window journals and notes.
 
 ## Decision
 
@@ -89,9 +89,9 @@ Higgs is the only candidate with inline categorical emotion tags, and that match
 
 ## Serving (addendum, 2026-09-29)
 
-The tier from `plans/tts-tier.md` now serves this decision: `inference-engine-tts` on loopback `:4814`, run only inside `tts/tier/window.sh` render windows that stop llama and always restore it. Numbers and traps are in `tts/tier/README.md` "Measured".
+The tier from the `tts-tier` plan now serves this decision: `inference-engine-tts` on loopback `:4814`, run only inside its render windows that stop llama and always restore it. Numbers and traps are in the TTS tier's README, "Measured".
 
 - **Containerized ROCm works:** torch 2.11.0+rocm7.2 wheels inside a python:3.12-slim image run real gfx1201 kernels with no `HSA_OVERRIDE_GFX_VERSION`.
 - **First live window:** exit 0 in 102 s end to end, llama smoke green after restore. The card high-water was 13010 MiB (MOSS design), consistent with the table above.
 - **Speed:** the single short Higgs render measured RTF ≈ 5.0 synthesis-only, against a bake-off median of 2.3. Treat it as one first-call sample, and re-measure on the first real chapter before sizing book windows. An engine swap costs 13–20 s inside the request, so batch by engine.
-- **The "Backend conflict" design input above is superseded:** ROCm on gfx1201 is a supported backend (root `AGENTS.md`, user decision 2026-09-29).
+- **The "Backend conflict" design input above is superseded:** ROCm on gfx1201 is a supported backend (root contract, user decision 2026-09-29).

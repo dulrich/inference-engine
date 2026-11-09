@@ -12,13 +12,13 @@ obsidian-crucible's `docs/local-inference.md` §10 when the router graduated to 
   produces invalid GPU programs, which is the workload class that wedges this GPU hard enough to
   cost a desktop session. Signature, triggers, recovery paths (SSH or SysRq `S`-`U`-`B`; capture
   `/sys/class/drm/card1/device/devcoredump/data` *before* rebooting — it is in-memory only) are in
-  `fleet-tools/references/rdna4-gpu-hang.md`. Read it before any GPU experiment on this class
+  the fleet's `rdna4-gpu-hang` reference. Read it before any GPU experiment on this class
   of hardware; it is deliberately not duplicated here.
 - **Vulkan is not blocked.** RADV drives gfx1201 today and has run sustained embedding and rerank
   workloads without instability. The hazard is invalid GPU programs, not mature inference kernels.
 - **The Mesa version is load-bearing.** gfx1201 needs Mesa ≥ 26. A container based on Debian
   trixie or Ubuntu 24.04 ships 24.x/25.0.x and falls back to `llvmpipe` *silently* (see
-  `../llama/AGENTS.md`) — `debian:sid-slim` ships 26.1.5. "Stabilising" the base image is the
+  the llama area contract) — `debian:sid-slim` ships 26.1.5. "Stabilising" the base image is the
   failure, not the fix.
 - **The bundled ROCm llama.cpp build has never been probed.** llama.cpp compiles for a different
   target set than PyTorch, so it may support gfx1201 where torch does not. Since Vulkan already

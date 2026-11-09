@@ -22,7 +22,7 @@ models:
   gliner2-base:
     name: GLiNER2 base
     source_model: fastino/gliner2-base-v1
-    path: /srv/models/fastino/gliner2-base-v1-onnx
+    path: /models/fastino/gliner2-base-v1-onnx
     preload: true
     notes: launch model
 """
@@ -48,7 +48,7 @@ class TestValidRegistry(RegistryYamlTestCase):
         entry = registry.get("gliner2-base")
         self.assertEqual(entry.name, "GLiNER2 base")
         self.assertEqual(entry.source_model, "fastino/gliner2-base-v1")
-        self.assertEqual(entry.path, Path("/srv/models/fastino/gliner2-base-v1-onnx"))
+        self.assertEqual(entry.path, Path("/models/fastino/gliner2-base-v1-onnx"))
         self.assertIs(entry.preload, True)
         self.assertEqual(entry.notes, "launch model")
 

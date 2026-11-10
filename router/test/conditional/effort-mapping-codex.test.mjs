@@ -2,7 +2,7 @@
 // (plans/codex-leg-effort-and-auditor-unpinning.md WP-1; the sidecar counterpart of
 // conditional/effort-mapping.test.mjs, which gates the local leg's patch 0007).
 //
-// BLACK BOX, same shape as effort-mapping.test.mjs (this directory) and tool-search-conformance.test.mjs: nothing
+// BLACK BOX, same shape as effort-mapping.test.mjs and tool-search-conformance-live.test.mjs (this directory): nothing
 // here imports the sidecar. Every assertion is made over HTTP against the running router at
 // :4813 plus the sidecar's own JSONL log on disk. When the router or the sidecar is unreachable
 // these tests FAIL; they never skip. A gate that quietly disappears when its target is down is
@@ -38,7 +38,7 @@
 // Env: ROUTER_BASE_URL (default http://127.0.0.1:4813), ROUTER_ENV_FILE, GATEWAY_KEY,
 //      CODEX_TEST_PERSONA (required: the codex persona to send turns to), TEST_SLOT_CODEX_SIDECAR_CHEAP (one-run model override), SIDECAR_LOG_DIR (default ~/.local/state/codex-sidecar/logs — the sidecar's own default).
 
-import { routerEnvFile } from "../../fleet-env.mjs";
+import { call } from "../gateway-client.mjs";
 import { codexPersona, testSlot } from "../../../scripts/lib/test-slots.mjs";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -47,17 +47,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-const BASE_URL = (process.env.ROUTER_BASE_URL || "http://127.0.0.1:4813").replace(/\/$/, "");
-// ROUTER_ENV_FILE, else `fleet-env path router` — resolved lazily, only when $GATEWAY_KEY is unset
-// (run under `fleet-env run router-client -- bun test …` and the file is never touched).
-let envFileMemo;
-const envFile = () => (envFileMemo ??= routerEnvFile());
 const LOG_DIR = process.env.SIDECAR_LOG_DIR
   || path.join(process.env.HOME || os.homedir(), ".local", "state", "codex-sidecar", "logs");
 // The live codex test model (the CODEX_SIDECAR_CHEAP slot of test-slots.json).
 const MODEL = `${codexPersona()}/${testSlot("CODEX_SIDECAR_CHEAP")}`;
-// The engine's anthropic-type legs want *some* client bearer to build passthrough headers.
-const DUMMY_BEARER = "effort-mapping-codex-dummy-client-bearer";
 const REQUEST_TIMEOUT_MS = 300000;
 const TEST_TIMEOUT_MS = 600000;
 // The sidecar writes its row after the response is finished; give the fd a moment either way.
@@ -110,49 +103,8 @@ function probeBody(effort) {
   };
 }
 
-function gatewayKey() {
-  if (process.env.GATEWAY_KEY) return process.env.GATEWAY_KEY;
-  let text = "";
-  try {
-    text = fs.readFileSync(envFile(), "utf8");
-  } catch (err) {
-    assert.fail(`no gateway key: $GATEWAY_KEY is unset and ${envFile()} is unreadable (${err.code}). `
-      + "Set GATEWAY_KEY (`fleet-env run router-client -- bun test …`) or point ROUTER_ENV_FILE at the env file holding INFERENCE_ROUTER_GATEWAY_KEY.");
-  }
-  const hit = /^INFERENCE_ROUTER_GATEWAY_KEY=(.*)$/m.exec(text);
-  if (!hit || !hit[1].trim()) {
-    assert.fail(`${envFile()} carries no INFERENCE_ROUTER_GATEWAY_KEY; set $GATEWAY_KEY instead.`);
-  }
-  return hit[1].trim();              // never logged, never asserted on
-}
-
-async function messages(body, { timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
-  let res;
-  try {
-    res = await fetch(`${BASE_URL}/v1/messages`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-gateway-key": gatewayKey(),
-        "anthropic-version": "2023-06-01",
-        authorization: `Bearer ${DUMMY_BEARER}`,
-      },
-      body: JSON.stringify(body),
-      signal: ac.signal,
-    });
-  } catch (err) {
-    assert.fail(`gateway at ${BASE_URL} is unreachable (POST /v1/messages): ${err.name}: ${err.message}. `
-      + "This test is a black-box gate against the router and the codex sidecar behind it, and "
-      + "fails rather than skips when either is down. Start them, or point ROUTER_BASE_URL elsewhere.");
-  } finally {
-    clearTimeout(timer);
-  }
-  const text = await res.text();
-  let json = null;
-  try { json = JSON.parse(text); } catch { /* not json */ }
-  return { status: res.status, text, json };
+function messages(body, { timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+  return call("/v1/messages", body, { timeoutMs });
 }
 
 function assertTextAnswer(r, label) {

@@ -1,7 +1,7 @@
 // tool-search-hosted.test.mjs — the hosted Claude passthrough leg of the deferred-tool
 // (ENABLE_TOOL_SEARCH) conformance gate, split out of router/test/tool-search-conformance.test.mjs
-// (plans/router-gate-consolidation.md WP-1). Same cells, same method notes as that file's header;
-// helpers from ../tool-search-shared.mjs.
+// (plans/router-gate-consolidation.md WP-1). Same cells, same method notes as the header of
+// ./tool-search-conformance-live.test.mjs; helpers from ../tool-search-shared.mjs.
 //
 // CONDITIONAL — lives in router/test/conditional/, outside the per-commit
 // `bun test router/test/*.test.mjs` glob. Trigger surface (router/AGENTS.md "Gates" trigger

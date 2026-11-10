@@ -1,6 +1,7 @@
 // tool-search-metered.test.mjs — the codex-sidecar relay cell of the deferred-tool
-// (ENABLE_TOOL_SEARCH) conformance gate, split out of router/test/tool-search-conformance.test.mjs
-// (plans/router-gate-consolidation.md WP-1). Helpers from ../tool-search-shared.mjs.
+// (ENABLE_TOOL_SEARCH) conformance gate, split out of the commit-suite file
+// router/test/tool-search-conformance.test.mjs (plans/router-gate-consolidation.md WP-1; its sibling live cells now
+// live in ./tool-search-conformance-live.test.mjs). Helpers from ../tool-search-shared.mjs and ../gateway-client.mjs.
 //
 // The cell POSTs one real /v1/messages turn on <codex persona>/<test model> (test-slots.json, CODEX_SIDECAR_CHEAP)
 // carrying a tool_reference tool_result and a grown catalogue. The model must be listed exactly:
@@ -16,7 +17,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { codexPersona, slotNotServed, testSlot } from "../../../scripts/lib/test-slots.mjs";
-import { call, modelIds, roundTripBody } from "../tool-search-shared.mjs";
+import { call, modelIds } from "../gateway-client.mjs";
+import { roundTripBody } from "../tool-search-shared.mjs";
 
 test("codex sidecar: a tool_reference result and the grown catalogue are relayed, not rejected", async t => {
   const ids = await modelIds();

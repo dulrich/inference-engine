@@ -1,97 +1,20 @@
 // tool-search-shared.mjs — helpers shared by the deferred-tool (ENABLE_TOOL_SEARCH) conformance
-// files: router/test/tool-search-conformance.test.mjs (local + unmetered codex legs, per commit),
+// files: router/test/tool-search-conformance.test.mjs (offline fixture self-check, default glob),
+// router/test/conditional/tool-search-conformance-live.test.mjs (local + unmetered codex legs, local relay),
 // router/test/conditional/tool-search-hosted.test.mjs (hosted passthrough leg, ROUTER_HOSTED_BEARER)
-// and router/test/conditional/tool-search-metered.test.mjs (codex relay).
+// and router/test/conditional/tool-search-metered.test.mjs (codex relay). The gateway client lives in ./gateway-client.mjs;
+// importing this module reads no key and touches no network.
 // Not a test file: the `*.test.mjs` glob does not load it. The method notes (bodies, token metric,
-// auth, fail-never-skip) live in the header of tool-search-conformance.test.mjs.
+// auth, fail-never-skip) live in the header of tool-search-conformance.test.mjs and the live file.
 
-import { routerEnvFile } from "../fleet-env.mjs";
 import { codexPersona, slotNotServed, testSlot } from "../../scripts/lib/test-slots.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { DUMMY_BEARER, call, envFile, modelIds } from "./gateway-client.mjs";
 import test from "node:test";
-
-const BASE_URL = (process.env.ROUTER_BASE_URL || "http://127.0.0.1:4813").replace(/\/$/, "");
-// ROUTER_ENV_FILE, else `fleet-env path router` — resolved lazily, only when $GATEWAY_KEY is unset
-// (run under `fleet-env run router-client -- bun test …` and the file is never touched).
-let envFileMemo;
-const envFile = () => (envFileMemo ??= routerEnvFile());
-// The engine's anthropic-type legs want *some* client bearer to build passthrough headers; the
-// provider's own apiKeyEnv replaces it before the upstream (smoke-router.sh checks 7 and 8).
-const DUMMY_BEARER = "tool-search-conformance-dummy-client-bearer";
 
 const ADVERT_PHRASE = "deferred tools are now available via ToolSearch";
 const PROBE_TOOL = "NotebookEdit";
-
-// ───────────────────────────────────────────────────────────────────────────── key + transport
-
-function gatewayKey() {
-  if (process.env.GATEWAY_KEY) return process.env.GATEWAY_KEY;
-  let text = "";
-  try {
-    text = fs.readFileSync(envFile(), "utf8");
-  } catch (err) {
-    assert.fail(`no gateway key: $GATEWAY_KEY is unset and ${envFile()} is unreadable (${err.code}). `
-      + "Set GATEWAY_KEY (`fleet-env run router-client -- bun test …`) or point ROUTER_ENV_FILE at the env file holding INFERENCE_ROUTER_GATEWAY_KEY.");
-  }
-  const hit = /^INFERENCE_ROUTER_GATEWAY_KEY=(.*)$/m.exec(text);
-  if (!hit || !hit[1].trim()) {
-    assert.fail(`${envFile()} carries no INFERENCE_ROUTER_GATEWAY_KEY; set $GATEWAY_KEY instead.`);
-  }
-  return hit[1].trim();          // never logged, never asserted on
-}
-
-const KEY = gatewayKey();
-
-async function call(pathname, body, { bearer = DUMMY_BEARER, timeoutMs = 60000 } = {}) {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
-  let res;
-  try {
-    res = await fetch(`${BASE_URL}${pathname}`, {
-      method: body === undefined ? "GET" : "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-gateway-key": KEY,
-        "anthropic-version": "2023-06-01",
-        ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: ac.signal,
-    });
-  } catch (err) {
-    assert.fail(`gateway at ${BASE_URL} is unreachable (${pathname}): ${err.name}: ${err.message}. `
-      + "This test is a black-box gate against the resident router and fails rather than skips when it is down. "
-      + "Start it, or point ROUTER_BASE_URL elsewhere.");
-  } finally {
-    clearTimeout(timer);
-  }
-  const text = await res.text();
-  let json = null;
-  try { json = JSON.parse(text); } catch { /* not json */ }
-  return { status: res.status, text, json, hint: upstreamHint(text) };
-}
-
-// A leg whose upstream is simply absent (the llama container stopped, the sidecar unit down)
-// returns a generic 502; say which upstream, so the red is diagnosable at a glance.
-function upstreamHint(text) {
-  if (!/upstream_connect|All target providers failed/.test(text)) return "";
-  const leg = /"target_provider_names":\["([^"]+)"/.exec(text)?.[1] ?? "unknown";
-  return ` — the "${leg}" upstream is not reachable from the gateway, so this leg cannot be exercised right now `
-    + "(for claude-local/* that is the inference-engine-llama container; for codex-* the codex-sidecar unit). "
-    + "This is an environment red, not a conformance red.";
-}
-
-let modelIdsCache = null;
-async function modelIds() {
-  if (modelIdsCache) return modelIdsCache;
-  const r = await call("/v1/models");
-  assert.equal(r.status, 200, `GET /v1/models returned ${r.status}: ${r.text.slice(0, 400)}`);
-  const ids = (r.json?.data ?? []).map(d => d?.id).filter(Boolean);
-  assert.ok(ids.length > 0, `GET /v1/models listed no ids: ${r.text.slice(0, 400)}`);
-  modelIdsCache = ids;
-  return ids;
-}
 
 // Resolution rule: every leg resolves its slot id (test-slots.json) exactly or fails loudly with the
 // slotNotServed text — there is no fallback to another model.
@@ -244,9 +167,10 @@ async function countTokens(leg, model, src, opts = {}) {
 
 const deferredEntries = tools => tools.filter(t => t && t.defer_loading === true);
 const byName = (tools, name) => tools.find(t => t?.name === name);
-// Registers the two per-leg cells (deferred shape; within-leg token gate) for one leg.
-export function registerLegTests(leg) {
-  test(`${leg.label}: request 1 carries the deferred shape, and the eager control does not`, async t => {
+// Registers the fixture self-check ONCE (not per leg): the synthetic bodies carry the deferred shape and
+// the eager control does not. Sends nothing — it is the offline cell of the default glob.
+export function registerDeferredShapeCheck() {
+  test("request 1 carries the deferred shape, and the eager control does not (fixture self-check)", () => {
     const onSrc = synthOn();
     const offSrc = synthOff();
 
@@ -270,7 +194,10 @@ export function registerLegTests(leg) {
     assert.equal(byName(offSrc.tools, "ToolSearch"), undefined, "the eager control must carry no ToolSearch tool");
     assert.ok(offSrc.tools.length > onSrc.tools.length, "the eager control must materialise a larger catalogue");
   });
+}
 
+// Registers the per-leg within-leg token gate (live: count_tokens against the gateway) for one leg.
+export function registerLegTests(leg) {
   test(`${leg.label}: the deferred catalogue is not eagerly expanded (within-leg token gate)`, async t => {
     const ids = await modelIds();
     const { id: model } = leg.pick(ids);
@@ -343,6 +270,6 @@ function roundTripBody(model) {
 }
 
 export {
-  ADVERT_PHRASE, BASE_URL, LEGS, PROBE_TOOL,
-  call, countTokens, hostedBearer, modelIds, resolveModel, roundTripBody, synthOff, synthOn,
+  ADVERT_PHRASE, LEGS, PROBE_TOOL,
+  countTokens, hostedBearer, resolveModel, roundTripBody, synthOff, synthOn,
 };

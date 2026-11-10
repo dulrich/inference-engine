@@ -3,7 +3,8 @@
 // catalog. No network, no credentials; part of the default per-commit glob.
 //
 // The forbidden set is computed at run time, never listed here (root AGENTS.md gate 6):
-//   (a) every routed `<provider>/<id>` of every catalog entry;
+//   (a) every routed `<provider>/<id>` of every catalog entry (router/catalog/catalog.json when present, else the
+//       router/test/fixtures/catalog.router.fixture.json fixture — a checkout without the live catalog still lints);
 //   (b) every slot value in test-slots.json (OPENROUTER_ADD_PROBE included, bare);
 //   (c) every bare catalog id that "looks like a model id": a digit AND one of `-` `.` `/`, length >= 5.
 // Matching is on token boundaries (the neighbours are not [A-Za-z0-9._/-]), so `gpt-6-luna-high`
@@ -25,23 +26,28 @@ import test from "node:test";
 import { SLOT_FILE } from "../../scripts/lib/test-slots.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const CATALOG_FILE = path.join(ROOT, "router", "catalog", "catalog.json");
+const LIVE_CATALOG_FILE = path.join(ROOT, "router", "catalog", "catalog.json");
+const FIXTURE_CATALOG_FILE = path.join(ROOT, "router", "test", "fixtures", "catalog.router.fixture.json");
+const CATALOG_FILE = fs.existsSync(LIVE_CATALOG_FILE) ? LIVE_CATALOG_FILE : FIXTURE_CATALOG_FILE;
 const CONDITIONAL_DIR = path.join(ROOT, "router", "test", "conditional");
 
 const FIXED_FILES = [
   "router/smoke-router.sh",
   "router/smoke-tool-search.sh",
-  "router/smoke-catalog.sh",
   "router/test/tool-search-shared.mjs",
   "sidecar/status.sh",
   "llama/smoke-inference.sh",
 ];
 
+// Fleet-only: linted when present, allowed to be absent (a projected public tree does not ship it).
+const OPTIONAL_FILES = ["router/smoke-catalog.sh"];
+
 function listFiles() {
   const conditional = fs.existsSync(CONDITIONAL_DIR)
     ? fs.readdirSync(CONDITIONAL_DIR).filter((f) => f.endsWith(".test.mjs")).sort().map((f) => `router/test/conditional/${f}`)
     : [];
-  return [...FIXED_FILES, ...conditional];
+  const optional = OPTIONAL_FILES.filter((f) => fs.existsSync(path.join(ROOT, f)));
+  return [...FIXED_FILES, ...optional, ...conditional];
 }
 
 export function stripShComments(text) {
@@ -121,6 +127,7 @@ export function findPins(text, ext, forbidden) {
 test("the file list is non-empty, every listed file exists, the forbidden set is non-empty", () => {
   const files = listFiles();
   assert.ok(files.length > 0);
+  for (const f of FIXED_FILES) assert.ok(files.includes(f), `required live-test file is missing: ${f}`);
   for (const f of files) assert.ok(fs.existsSync(path.join(ROOT, f)), `listed live-test file is missing: ${f}`);
   assert.ok(forbiddenSet().size > 0, "forbidden model set is empty");
 });

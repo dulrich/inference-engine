@@ -57,23 +57,15 @@
 //      must carry an effortKwargs row),
 //      EFFORT_MAPPING_LOCAL (must be "1": this file loads the 27B).
 
-import { routerEnvFile } from "../../fleet-env.mjs";
+import { call } from "../gateway-client.mjs";
 import { testSlot } from "../../../scripts/lib/test-slots.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
 const OPT_IN = process.env.EFFORT_MAPPING_LOCAL === "1";
-const BASE_URL = (process.env.ROUTER_BASE_URL || "http://127.0.0.1:4813").replace(/\/$/, "");
 const UPSTREAM_URL = (process.env.LLAMA_UPSTREAM_URL || "http://127.0.0.1:4811").replace(/\/$/, "");
-// ROUTER_ENV_FILE, else `fleet-env path router` — resolved lazily, only when $GATEWAY_KEY is unset
-// (run under `fleet-env run router-client -- bun test …` and the file is never touched).
-let envFileMemo;
-const envFile = () => (envFileMemo ??= routerEnvFile());
 const CATALOG_FILE = new URL("../../catalog/catalog.json", import.meta.url);
-// The engine's anthropic-type legs want *some* client bearer to build passthrough headers; the
-// provider's own apikey replaces it before the upstream (smoke-router.sh checks 7 and 8).
-const DUMMY_BEARER = "effort-mapping-dummy-client-bearer";
 const REQUEST_TIMEOUT_MS = 120000;
 
 const SYSTEM = "Be brief.";
@@ -95,24 +87,6 @@ const UPSTREAM_MODEL = testSlot("LOCAL_EFFORT");
 // What each client intent must deliver to the template: read from the slot's catalog row.
 const ROW = LOCAL_EFFORT[UPSTREAM_MODEL] ?? {};
 const ROUTER_MODEL = `claude-local/${UPSTREAM_MODEL}`;
-
-function gatewayKey() {
-  if (process.env.GATEWAY_KEY) return process.env.GATEWAY_KEY;
-  let text = "";
-  try {
-    text = fs.readFileSync(envFile(), "utf8");
-  } catch (err) {
-    assert.fail(`no gateway key: $GATEWAY_KEY is unset and ${envFile()} is unreadable (${err.code}). `
-      + "Set GATEWAY_KEY (`fleet-env run router-client -- bun test …`) or point ROUTER_ENV_FILE at the env file holding INFERENCE_ROUTER_GATEWAY_KEY.");
-  }
-  const hit = /^INFERENCE_ROUTER_GATEWAY_KEY=(.*)$/m.exec(text);
-  if (!hit || !hit[1].trim()) {
-    assert.fail(`${envFile()} carries no INFERENCE_ROUTER_GATEWAY_KEY; set $GATEWAY_KEY instead.`);
-  }
-  return hit[1].trim();              // never logged, never asserted on
-}
-
-const KEY = OPT_IN ? gatewayKey() : "";
 
 // Without the flag the file registers exactly one test, and it FAILS naming the variable; the real
 // tests are registered through `reg`, which is a no-op in that case.
@@ -189,19 +163,14 @@ async function upstreamPromptTokens(kwargs) {
 }
 
 async function routerOccupancy(extra, label) {
-  const r = await post(`${BASE_URL}/v1/messages`, {
-    "content-type": "application/json",
-    "x-gateway-key": KEY,
-    "anthropic-version": "2023-06-01",
-    authorization: `Bearer ${DUMMY_BEARER}`,
-  }, {
+  const r = await call("/v1/messages", {
     model: ROUTER_MODEL,
     max_tokens: 1,
     temperature: 0,
     system: SYSTEM,
     messages: [{ role: "user", content: USER }],
     ...extra,
-  }, "gateway");
+  }, { timeoutMs: REQUEST_TIMEOUT_MS });
   assert.ok(r.status >= 200 && r.status < 300,
     `${label}: router expected 2xx, got ${r.status}: ${r.text.slice(0, 400)}${upstreamHint(r.text)}`);
   const u = r.json?.usage;

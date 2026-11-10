@@ -3,7 +3,7 @@
 // catalog. No network, no credentials; part of the default per-commit glob.
 //
 // The forbidden set is computed at run time, never listed here (root AGENTS.md gate 6):
-//   (a) every routed `<provider>/<id>` of every catalog entry (router/catalog/catalog.json when present, else the
+//   (a) every routed `<provider>/<id>` of every catalog entry (the live router catalog when present, else the
 //       router/test/fixtures/catalog.router.fixture.json fixture — a checkout without the live catalog still lints);
 //   (b) every slot value in test-slots.json (OPENROUTER_ADD_PROBE included, bare);
 //   (c) every bare catalog id that "looks like a model id": a digit AND one of `-` `.` `/`, length >= 5.

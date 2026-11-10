@@ -1,8 +1,7 @@
 // tool-search-conformance-live.test.mjs — the live cells of the deferred-tool (ENABLE_TOOL_SEARCH)
 // conformance gate through the resident gateway, locked from the WP-5 wire spike
 // (docs/tool-calling-gateway/tool-search-conformance-spike.md). Split out of
-// router/test/tool-search-conformance.test.mjs, which keeps only the offline fixture self-check
-// (plans/publication-and-test-gate-remediation.md WP-R1).
+// router/test/tool-search-conformance.test.mjs, which keeps only the offline fixture self-check.
 //
 // CONDITIONAL — lives in router/test/conditional/, outside the per-commit
 // `bun test router/test/*.test.mjs` glob, because every cell sends a request to the live gateway

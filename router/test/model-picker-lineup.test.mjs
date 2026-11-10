@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { assertPickerInvariants } from "./picker-invariants.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(HERE, "..", "model-picker-lineup.mjs");
@@ -100,29 +101,7 @@ test("a router-shaped config renders exactly the catalog's Claude-Code-visible i
   const rows = JSON.parse(run(["--config", FIXTURE_CONFIG, "--catalog", ROUTER_CATALOG]).stdout);
   const config = JSON.parse(fs.readFileSync(FIXTURE_CONFIG, "utf8"));
   const catalog = JSON.parse(fs.readFileSync(ROUTER_CATALOG, "utf8"));
-  const models = rows.map((r) => r.model);
-  assert.equal(new Set(models).size, models.length, "no duplicate picker rows");
-  assert.equal(models.filter((m) => m.startsWith("anthropic/")).length, 0);
-  // Derive the expected set from the live catalog itself: an explicit `cc` tag is a row on every
-  // non-anthropic provider the static config serves; an explicit tag list without `cc` never is.
-  // (An absent `consumers` — legal off claude-local — is covered by the fixture tests.)
-  const served = new Set((config.providers ?? []).map((p) => p.name).filter((n) => n !== "anthropic"));
-  const expected = new Set();
-  const excluded = new Set();
-  for (const [name, provider] of Object.entries(catalog.providers)) {
-    if (!served.has(name)) continue;
-    for (const e of provider.models ?? []) {
-      if (!Array.isArray(e.consumers)) continue;
-      (e.consumers.includes("cc") ? expected : excluded).add(`${name}/${e.id}`);
-    }
-  }
-  for (const m of expected) assert.ok(models.includes(m), `${m} is cc-tagged in the catalog but is not a picker row`);
-  for (const m of excluded) assert.equal(models.includes(m), false, `${m} is not cc-tagged but is a picker row`);
-  for (const row of rows) {
-    assert.ok(row.description.length < 90, `description too long: ${row.description}`);
-    // A bare codex id (whichever are visible) takes its effort from the harness.
-    if (/^codex-[^/]+\/(?!.*-(low|medium|high)$)/.test(row.model)) assert.match(row.description, /effort via the harness/);
-  }
+  assertPickerInvariants(rows, config, catalog, ["codex-a", "codex-b"]);
   // Alias contract (append-only): visibility may hide an id, never remove it — the qwen38 effort
   // ids and the codex suffix ids stay RESOLVABLE in their provider's models[] (an id dropped from
   // there 400s at model_resolution). /v1/models on the live router is smoke-router.sh check 1's job.
@@ -152,18 +131,6 @@ test("a router-shaped config renders exactly the catalog's Claude-Code-visible i
       assert.ok(idsOf(persona).includes(id), `${persona}/${id} must stay resolvable in models[]`);
     }
   }
-  // TOMBSTONE GATE (user decision 2026-09-14, router/AGENTS.md): z-ai/glm-5.2:free and z-ai/glm-5.3
-  // were retired from serving. Assert they are gone from the CATALOG entirely, on both legs, so a
-  // future edit cannot quietly re-add one. The names stay reserved forever; re-adding either string
-  // for different weights is the append-only violation this gate exists to catch.
-  for (const legName of ["openrouter", "or-anthropic"]) {
-    for (const id of ["z-ai/glm-5.2:free", "z-ai/glm-5.3"]) {
-      assert.equal(idsOf(legName).includes(id), false, `retired id ${legName}/${id} must stay removed`);
-    }
-  }
-  // The conversion leg keeps a resolvable id: an empty models[] is a WILDCARD on a credentialed
-  // OR provider.
-  assert.ok(idsOf("openrouter").length > 0, "openrouter models[] must never be empty (wildcard)");
 });
 
 test("consumer tags still govern every provider EXCEPT claude-local, unchanged", () => {

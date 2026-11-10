@@ -1,5 +1,10 @@
 # router/test/diff — differential contract harness
 
+Fixtures in `router/test/fixtures/` (all persona-neutral, none is deployed operator data):
+- `catalog.fixture.json` — the small catalog with a deliberate lineup (retired OpenRouter ids kept on purpose); only `router/test/model-picker-lineup.test.mjs` reads it, for the exact-lineup and label cases.
+- `catalog.router.fixture.json` — the large router-shaped catalog (full effort ids, codex suffix ids on two personas, no retired ids); needed by this harness (`run.mjs` default), the picker invariants test, the live-test pin lint and the gateway Rust tests (`catalog.rs`, `routing.rs`, `tests/catalog.rs`).
+- `gateway.config.fixture.json` — the static gateway config paired with either catalog; read by this harness, the picker test and the gateway config/catalog/routing Rust tests.
+
 Runs one gateway (an image or a host binary of the Rust gateway, `router/gateway/`) against a recording stub upstream and asserts, per case, on what the stub received and what the client got back. Plan: `plans/router-rust-gateway.md` WP-1. Nothing here touches the live router (`:4813`) or any fleet port, and nothing leaves the host: all credentials are fake (`test-gw-key`, `test-or-key`, `test-codex-key`, a fake OAuth bearer).
 
 ## Run

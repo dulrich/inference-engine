@@ -12,17 +12,26 @@ case $_shguard_m in
 esac
 # <<< shguard
 test_slot() { # <NAME>; prints the slot value; non-zero (stderr names the slot and source) when unusable
-	local name="${1:-}" file val src ovr
+	local name="${1:-}" file val src ovr known ok k
 	file="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../test-slots.json"
-	case "$name" in
-	ANTHROPIC_CHEAP | CODEX_SIDECAR_CHEAP | LOCAL_SMALL | LOCAL_EFFORT | OPENROUTER_ADD_PROBE) ;;
-	*)
-		echo "test-slots: unknown slot '${name}' (known: ANTHROPIC_CHEAP CODEX_SIDECAR_CHEAP LOCAL_SMALL LOCAL_EFFORT OPENROUTER_ADD_PROBE)" >&2
-		return 1
-		;;
-	esac
+	# The known slot names are the keys of the file minus the `_`-prefixed ones (`_comment`);
+	# every slot value is a bare id (no "/") except OPENROUTER_ADD_PROBE, an @preset/<slug> id.
 	ovr="TEST_SLOT_${name}"
-	val="${!ovr:-}"
+	case "$name" in
+	'' | *[!A-Za-z0-9_]*) val="" ;; # not a variable-name suffix: no override to read
+	*) val="${!ovr:-}" ;;
+	esac
+	if known=$(jq -er 'keys_unsorted | map(select(startswith("_") | not)) | join(" ")' "$file" 2>/dev/null); then
+		ok=
+		for k in $known; do if [ "$k" = "$name" ]; then ok=1; fi; done
+		if [ -z "$ok" ]; then
+			echo "test-slots: unknown slot '${name}' (known: ${known})" >&2
+			return 1
+		fi
+	elif [ -z "$val" ]; then
+		echo "test-slots: slot ${name} is unreadable: the file is missing or not a JSON object (${file})" >&2
+		return 1
+	fi
 	src="the ${ovr} override"
 	if [ -z "$val" ]; then
 		src=$file

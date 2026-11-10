@@ -144,6 +144,14 @@ else
   FLEET_ENV="$(command -v -- "$FLEET_ENV" || true)"
   [ -n "$FLEET_ENV" ] || die "fleet-env binary '${FLEET_ENV_BIN:-fleet-env}' not found on PATH; refusing to install without the credential store (pass --env-file <path> to use a key file instead)"
   [ -x "$FLEET_ENV" ] || die "fleet-env at $FLEET_ENV is not executable"
+  # The key is read only through the canonical store (`fleet-env run sidecar-install`), and
+  # only tested for presence -- never printed, never written to a file here. Checked before
+  # the build and before any write, like the --env-file branch.
+  # shellcheck disable=SC2016  # expanded by the child shell, not here
+  "$FLEET_ENV" run sidecar-install -- bash -c '[ -n "${CODEX_SIDECAR_KEY:-}" ]' \
+    || die "CODEX_SIDECAR_KEY is not available from the fleet-env store (fleet-env check)"
+  projection="$("$FLEET_ENV" path codex-sidecar)" || die "fleet-env path codex-sidecar failed"
+  [ -f "$projection" ] || die "$projection is missing; run fleet-env project (or install fleet-env-project.service)"
 fi
 
 REAL_HOME=0
@@ -243,13 +251,6 @@ printf 'unit    %s (%s)\n' "$UNIT_FILE" "$unit_state"
 if [ -n "$ENV_FILE_ARG" ]; then
   printf 'env     %s (user env file, mode 0600; unit EnvironmentFile= points at it)\n' "$ENV_FILE_ARG"
 else
-  # The key is read only through the canonical store (`fleet-env run sidecar-install`), and
-  # only tested for presence -- never printed, never written to a file here.
-  # shellcheck disable=SC2016  # expanded by the child shell, not here
-  "$FLEET_ENV" run sidecar-install -- bash -c '[ -n "${CODEX_SIDECAR_KEY:-}" ]' \
-    || die "CODEX_SIDECAR_KEY is not available from the fleet-env store (fleet-env check)"
-  projection="$("$FLEET_ENV" path codex-sidecar)" || die "fleet-env path codex-sidecar failed"
-  [ -f "$projection" ] || die "$projection is missing; run fleet-env project (or install fleet-env-project.service)"
   printf 'env     %s (fleet-env projection; CODEX_SIDECAR_KEY from the canonical store)\n' "$projection"
 fi
 

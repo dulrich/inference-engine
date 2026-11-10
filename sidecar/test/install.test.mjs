@@ -17,7 +17,7 @@ after(() => {
   for (const root of ROOTS) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function setup({ projection = true, args = [], prepare, fleetEnvBin, noPersonas = false } = {}) {
+function setup({ projection = true, args = [], prepare, fleetEnvBin, noPersonas = false, noRun = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidecar-install-"));
   ROOTS.push(root);
   const bin = path.join(root, "bin");
@@ -51,13 +51,14 @@ esac`);
     encoding: "utf8",
     env: { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: root, FLEET_ENV_BIN: fleetEnvBin ?? path.join(bin, "fleet-env") },
   });
-  const r = run();
+  const r = noRun ? {} : run();
   const unit = path.join(home, ".config", "systemd", "user", "codex-sidecar.service");
   return {
     ...r,
     root,
     home,
     run,
+    readCalls: () => (fs.existsSync(calls) ? fs.readFileSync(calls, "utf8") : ""),
     unit: fs.existsSync(unit) ? fs.readFileSync(unit, "utf8") : "",
     legacyEnv: path.join(home, ".config", "codex-sidecar", "env"),
     calls: fs.existsSync(calls) ? fs.readFileSync(calls, "utf8") : "",
@@ -83,6 +84,10 @@ test("store-only: the projection missing fails closed", () => {
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /is missing; run fleet-env project/);
   assert.ok(!fs.existsSync(r.legacyEnv));
+  assert.equal(r.unit, "", "no unit written");
+  assert.ok(!fs.existsSync(path.join(r.home, ".config", "systemd", "user", "codex-sidecar.service")), "no unit file");
+  assert.ok(!fs.existsSync(path.join(r.home, ".local", "lib", "codex-sidecar", "codex-sidecar")), "no binary written");
+  assert.deepEqual(fs.readdirSync(r.home), [], "nothing written under the install home");
 });
 
 test("store-only: a missing fleet-env binary fails closed, nothing written", () => {
@@ -123,8 +128,7 @@ test("--env-file: mode 0600 enforced, EnvironmentFile points at it, no fleet-env
     loose = path.join(root, "loose.env"); fs.writeFileSync(loose, "SIDECAR_KEY=" + DUMMY + "\n"); fs.chmodSync(loose, 0o644);
     nokey = path.join(root, "nokey.env"); fs.writeFileSync(nokey, "OTHER=1\n", { mode: 0o600 });
   };
-  const ok = setup({ prepare: prep, fleetEnvBin: "/nonexistent/fleet-env", args: [] });
-  // prepare ran before the first run, so re-run the real case with the prepared path
+  const ok = setup({ prepare: prep, fleetEnvBin: "/nonexistent/fleet-env", args: [], noRun: true });
   const run = (file) => spawnSync("bash", [INSTALL, "--home", ok.home, "--personas", "codex-a", "--rust-bin", rustStub(ok.root, "e"), "--env-file", file], {
     encoding: "utf8",
     env: { PATH: `${path.join(ok.root, "bin")}:/usr/bin:/bin`, HOME: ok.root, FLEET_ENV_BIN: "/nonexistent/fleet-env" },
@@ -135,13 +139,13 @@ test("--env-file: mode 0600 enforced, EnvironmentFile points at it, no fleet-env
   assert.ok(unit.split("\n").includes(`EnvironmentFile=${good}`));
   assert.doesNotMatch(unit, /^(After|Requires)=fleet-env/m);
   assert.ok(!(r.stdout + r.stderr).includes(DUMMY));
-  assert.doesNotMatch(ok.calls, /fleet-env/);
   const l = run(loose);
   assert.notEqual(l.status, 0);
   assert.match(l.stderr, /mode 0600/);
   assert.notEqual(run(nokey).status, 0);
   assert.notEqual(run("relative.env").status, 0);
   assert.notEqual(run(path.join(ok.root, "absent.env")).status, 0);
+  assert.doesNotMatch(ok.readCalls(), /fleet-env/, "no fleet-env call across all runs");
 });
 
 // A stub "binary" stands in for the release build (no cargo in tests).

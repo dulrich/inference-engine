@@ -28,6 +28,8 @@ for _a in "$@"; do case "$_a" in --help|-h)
 
 # shellcheck source=/dev/null
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib/build-id.sh"
+# shellcheck source=/dev/null
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib/test-slots.sh"
 build_flags "${BASH_SOURCE[0]}" "$@"
 
 set -u
@@ -205,7 +207,10 @@ fi
 # `content` is asserted non-empty here; `reasoning_content` (if present) is not inspected.
 # gemma-4-12b → gemma-4-12b-qat 2026-08-25: the non-QAT alias was removed from serving
 # (plans/mtp-serving-rollout.md WP-2); the QAT entry is its chat+vision+MTP replacement.
-CHAT_ALIASES="gemma-4-12b-qat nemotron-4b"
+# The second chat model is the LOCAL_SMALL slot (test-slots.json; $TEST_SLOT_LOCAL_SMALL overrides one run).
+# gemma-4-12b-qat stays literal: it is a llama-only alias, not a Console catalog entry, and not a slot.
+local_small=$(test_slot LOCAL_SMALL) || exit 2
+CHAT_ALIASES="gemma-4-12b-qat $local_small"
 for chat_alias in $CHAT_ALIASES; do
 	note "checking POST /v1/chat/completions (model=$chat_alias) ..."
 	chat_json=$(curl -s --max-time 120 "$URL/v1/chat/completions" \

@@ -29,6 +29,8 @@ for _a in "$@"; do case "$_a" in --help|-h)
 
 # shellcheck source=/dev/null
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib/build-id.sh"
+# shellcheck source=/dev/null
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib/test-slots.sh"
 build_flags "${BASH_SOURCE[0]}" "$@"
 
 set -euo pipefail
@@ -122,8 +124,10 @@ fi
 
 # A fresh session id per run, so the probe's own log rows are findable among live traffic.
 probe_sid="$(cat /proc/sys/kernel/random/uuid)"
-probe_body="$(jq -nc --arg sid "$probe_sid" '{
-  model: "gpt-5.6-luna",
+# The probe model is the CODEX_SIDECAR_CHEAP slot (test-slots.json; bare id -- the persona comes from the URL path).
+probe_model="$(test_slot CODEX_SIDECAR_CHEAP)" || exit 1
+probe_body="$(jq -nc --arg sid "$probe_sid" --arg model "$probe_model" '{
+  model: $model,
   max_tokens: 64,
   stream: false,
   system: [{ type: "text", text: "You are a posture probe. Answer in one word." }],

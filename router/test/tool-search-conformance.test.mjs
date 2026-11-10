@@ -11,8 +11,8 @@
 // a fully-schema'd ToolSearch, exactly one `defer_loading: true` DeferredToolPlaceholder, the
 // always-on tools; the deferred names advertised in an interleaved role:"system" message; the
 // eager control materialises all 20). The token thresholds are measured on these bodies per leg
-// (LEGS[].synth in ./tool-search-shared.mjs), not the spike's real-profile figures, and apply only
-// on the exact model measured; a leg without them asserts ordering only. (The spike's captured
+// (LEGS[].synth in ./tool-search-shared.mjs), not the spike's real-profile figures; each leg asserts
+// ordering plus its measured tools-only ratio floor (LEGS[].synth.minRatio). (The spike's captured
 // /tmp bodies were throwaway and are no longer replayed, 2026-10-19.)
 //
 // Token metric. Exactly the spike's: POST /v1/messages/count_tokens with the cell's own

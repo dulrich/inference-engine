@@ -25,14 +25,16 @@
 // upstream-direct `prompt_tokens` for the kwargs that row is expected to deliver. Both legs are
 // measured in the same run; no count is hardcoded.
 //
-// Coverage (the six-row `effortKwargs` map of router/catalog/catalog.json plus the no-op):
+// Coverage (the six-row `effortKwargs` map of the LOCAL_EFFORT slot's catalog row plus the no-op):
 //   - low, medium, high (→ medium since 0009), xhigh, max (→ xhigh), thinking disabled
 //     (→ enable_thinking:false): router occupancy == upstream prompt_tokens for the expected kwargs.
 //   - an unknown effort value: the router forwards nothing (no-op invariant), so occupancy ==
 //     upstream with NO kwargs — and the upstream-direct negative control proves forwarding it
 //     would have mattered: llama 500s with `Jinja Exception: Unexpected reasoning effort`.
 //   - upstream low / medium / absent are pairwise distinct, so the oracle can tell those rows apart.
-//   - the contract table below equals the catalog's effortKwargs row (config drift is a red).
+//   - the LOCAL_EFFORT slot's catalog row exists and has the shape these cases need (keys a superset of
+//     low, medium, high, xhigh, max, disabled; each value a non-empty plain object); every case below
+//     reads its expected kwargs from that row, so the row's contents are operator data, never pinned here.
 // Limit: xhigh (and max → xhigh) is the template DEFAULT, so it renders identically to absent
 // kwargs — this oracle cannot tell a delivered xhigh from a dropped one. Forwarding identity for
 // those two rows is owned by the crate tests in router/gateway/tests/local_leg.rs
@@ -51,10 +53,12 @@
 //
 // Env: ROUTER_BASE_URL (default http://127.0.0.1:4813), ROUTER_ENV_FILE, GATEWAY_KEY,
 //      LLAMA_UPSTREAM_URL (default http://127.0.0.1:4811 — the host port of the llama container),
-//      EFFORT_UPSTREAM_MODEL (default qwen38-27b-iq3s; must carry an effortKwargs row),
+//      TEST_SLOT_LOCAL_EFFORT (optional; the model is the LOCAL_EFFORT slot of test-slots.json, which
+//      must carry an effortKwargs row),
 //      EFFORT_MAPPING_LOCAL (must be "1": this file loads the 27B).
 
 import { routerEnvFile } from "../../fleet-env.mjs";
+import { testSlot } from "../../../scripts/lib/test-slots.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
@@ -75,15 +79,8 @@ const REQUEST_TIMEOUT_MS = 120000;
 const SYSTEM = "Be brief.";
 const USER = "Say hi.";
 
-// The contract: what each client intent must deliver to the template.
-const EXPECTED = {
-  low: { reasoning_effort: "low" },
-  medium: { reasoning_effort: "medium" },
-  high: { reasoning_effort: "medium" },
-  xhigh: { reasoning_effort: "xhigh" },
-  max: { reasoning_effort: "xhigh" },
-  disabled: { enable_thinking: false },
-};
+// The levels every case below needs a kwargs object for (the row's keys must be a superset).
+const LEVELS = ["low", "medium", "high", "xhigh", "max", "disabled"];
 const BOGUS = "bogus-effort-level";
 
 const CATALOG = JSON.parse(fs.readFileSync(CATALOG_FILE, "utf8"));
@@ -94,7 +91,9 @@ const LOCAL_EFFORT = Object.fromEntries(
     .map((e) => [e.id, e.effortKwargs]),
 );
 const EFFORT_MODELS = Object.keys(LOCAL_EFFORT);
-const UPSTREAM_MODEL = process.env.EFFORT_UPSTREAM_MODEL || "qwen38-27b-iq3s";
+const UPSTREAM_MODEL = testSlot("LOCAL_EFFORT");
+// What each client intent must deliver to the template: read from the slot's catalog row.
+const ROW = LOCAL_EFFORT[UPSTREAM_MODEL] ?? {};
 const ROUTER_MODEL = `claude-local/${UPSTREAM_MODEL}`;
 
 function gatewayKey() {
@@ -210,11 +209,16 @@ async function routerOccupancy(extra, label) {
   return occupancy(u);
 }
 
-reg("catalog: claude-local's effortKwargs row equals the contract table", () => {
+reg("catalog: the LOCAL_EFFORT slot's effortKwargs row exists and has the shape the cases need", () => {
   assert.ok(LOCAL_EFFORT[UPSTREAM_MODEL],
-    `router/catalog/catalog.json claude-local has no effortKwargs row for ${UPSTREAM_MODEL} (rows: ${JSON.stringify(EFFORT_MODELS)})`);
-  assert.deepEqual(LOCAL_EFFORT[UPSTREAM_MODEL], EXPECTED,
-    `catalog.json effortKwargs of ${UPSTREAM_MODEL} drifted from this test's contract table`);
+    `slot LOCAL_EFFORT=${UPSTREAM_MODEL} has no effortKwargs row in router/catalog/catalog.json claude-local `
+    + `(rows: ${JSON.stringify(EFFORT_MODELS)}) — edit LOCAL_EFFORT in test-slots.json`);
+  const row = LOCAL_EFFORT[UPSTREAM_MODEL];
+  for (const level of LEVELS) {
+    const v = row[level];
+    assert.ok(v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length > 0,
+      `effortKwargs of ${UPSTREAM_MODEL} (slot LOCAL_EFFORT, test-slots.json) lacks a non-empty object for '${level}'`);
+  }
 });
 
 reg("upstream control: an unknown reasoning_effort is a 500 Jinja exception at llama", async () => {
@@ -225,8 +229,8 @@ reg("upstream control: an unknown reasoning_effort is a 500 Jinja exception at l
 });
 
 reg("upstream control: low, medium and absent kwargs render pairwise-distinct prompts", async () => {
-  const low = await upstreamPromptTokens(EXPECTED.low);
-  const medium = await upstreamPromptTokens(EXPECTED.medium);
+  const low = await upstreamPromptTokens(ROW.low);
+  const medium = await upstreamPromptTokens(ROW.medium);
   const absent = await upstreamPromptTokens(undefined);
   console.log(`[effort] oracle=native upstream occupancy low=${low} medium=${medium} absent=${absent}`);
   assert.equal(new Set([low, medium, absent]).size, 3,
@@ -234,17 +238,17 @@ reg("upstream control: low, medium and absent kwargs render pairwise-distinct pr
 });
 
 for (const level of ["low", "medium", "high", "xhigh", "max"]) {
-  reg(`output_config.effort ${level} delivers ${JSON.stringify(EXPECTED[level])}`, async () => {
-    const want = await upstreamPromptTokens(EXPECTED[level]);
+  reg(`output_config.effort ${level} delivers ${JSON.stringify(ROW[level])}`, async () => {
+    const want = await upstreamPromptTokens(ROW[level]);
     const got = await routerOccupancy({ output_config: { effort: level } }, `effort ${level}`);
     console.log(`[effort] ${level}: router occupancy=${got} upstream=${want}`);
     assert.equal(got, want, `effort ${level}: router occupancy ${got} != upstream prompt_tokens ${want} for `
-      + `${JSON.stringify(EXPECTED[level])} — the mapping is not delivering that row's kwargs to the template.`);
+      + `${JSON.stringify(ROW[level])} — the mapping is not delivering that row's kwargs to the template.`);
   });
 }
 
-reg(`thinking:{type:"disabled"} delivers ${JSON.stringify(EXPECTED.disabled)}`, async () => {
-  const want = await upstreamPromptTokens(EXPECTED.disabled);
+reg(`thinking:{type:"disabled"} delivers ${JSON.stringify(ROW.disabled)}`, async () => {
+  const want = await upstreamPromptTokens(ROW.disabled);
   const got = await routerOccupancy({ thinking: { type: "disabled" } }, "thinking disabled");
   console.log(`[effort] disabled: router occupancy=${got} upstream=${want}`);
   assert.equal(got, want, `thinking disabled: router occupancy ${got} != upstream prompt_tokens ${want} `

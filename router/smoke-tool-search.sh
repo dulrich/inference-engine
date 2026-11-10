@@ -43,7 +43,7 @@
 #   5. Within-leg token gate — request 1's `system`+`tools` count_tokens is at or below this leg's
 #      on-threshold (plus 10% drift allowance: the throwaway profile's paths/date and each Claude
 #      Code release move the system prompt a little), and above that same threshold under
-#      --control. Thresholds as coded: local 3983, codex 3529, passthrough 11470 (the 10% cannot
+#      --control. Thresholds as coded (see the legs at the bottom; passthrough re-measured on the ANTHROPIC_CHEAP slot): local 3983, codex 3529, passthrough 6240 (the 10% cannot
 #      mask an eager expansion). Measurement history: docs/tool-calling-gateway/tool-search-conformance-spike.md.
 #      Cross-leg comparison is invalid (different catalogues, different tokenizers) and
 #      is never attempted.
@@ -248,7 +248,7 @@ const server = http.createServer((req, res) => {
 server.listen(0, "127.0.0.1", () => fs.writeFileSync(portFile, String(server.address().port)));
 PROXY
 
-# ── model resolution: whatever the gateway reports right now, never a pinned local id ────────
+# ── model resolution: the test slots, resolved exactly against what the gateway lists right now ────────
 models_json=$(curl -s --max-time 10 -H "x-gateway-key: $GATEWAY_KEY" "$BASE_URL/v1/models") || models_json=""
 model_ids=$(echo "$models_json" | jq -r '.data[]?.id // empty' 2>/dev/null)
 if [ -z "$model_ids" ]; then
@@ -256,16 +256,13 @@ if [ -z "$model_ids" ]; then
 	exit 2
 fi
 
-# Resolution rule: a billed leg (codex, passthrough) resolves its pinned id exactly, or pick_model
-# prints nothing and the caller fails the leg naming the id. Only the claude-local leg passes
-# fallback=1 (the user re-jigs the local list): first id under the prefix, never a Qwen3.6/3.8 one.
-pick_model() { # <preferred> <listed-as> <prefix> [fallback=1]
-	if echo "$model_ids" | grep -qx "$2"; then
+# Resolution rule: every leg resolves its slot id (test-slots.json) exactly. pick_model prints <preferred>
+# when <listed-as> is listed, else nothing — the caller fails the leg with slot_not_served; there is
+# no fallback to another model.
+pick_model() { # <preferred> <listed-as>
+	if printf '%s\n' "$model_ids" | grep -qxF -- "$2"; then
 		echo "$1"
-		return 0
 	fi
-	[ "${4:-}" = "1" ] || return 0
-	echo "$model_ids" | grep -v -E '(^|/)(qwen3[68]|Qwen3\.[68])' | grep -m1 "^$3" || true
 }
 
 # ── fixture profile (documentation of record: the spike's "Fixture profile used") ────────────
@@ -471,9 +468,11 @@ run_leg() { # <leg> <model> <on-threshold>
 
 # ── legs ─────────────────────────────────────────────────────────────────────────────────────
 if [ "$WANT_LOCAL" -eq 1 ]; then
-	m=$(pick_model "claude-local/nemotron-4b" "claude-local/nemotron-4b" "claude-local/" 1)
+	local_small=$(test_slot LOCAL_SMALL) || exit 2
+	m=$(pick_model "claude-local/$local_small" "claude-local/$local_small")
 	if [ -z "$m" ]; then
-		bad "local: /v1/models lists no claude-local/* id"
+		slot_not_served LOCAL_SMALL "$local_small"
+		bad "local: /v1/models does not list the pinned id claude-local/$local_small"
 	else
 		run_leg "local" "$m" 3983
 	fi
@@ -483,7 +482,7 @@ if [ "$WANT_CODEX" -eq 1 ]; then
 	note "--codex passed: this bills one turn on the operator's Codex subscription."
 	codex_test=$(test_slot CODEX_SIDECAR_CHEAP) || exit 2
 	codex_persona=$(codex_test_persona "$model_ids") || exit 2
-	m=$(pick_model "$codex_persona/$codex_test" "$codex_persona/$codex_test" "$codex_persona/")
+	m=$(pick_model "$codex_persona/$codex_test" "$codex_persona/$codex_test")
 	if [ -z "$m" ]; then
 		bad "codex: /v1/models does not list the pinned id $codex_persona/$codex_test ($(slot_not_served CODEX_SIDECAR_CHEAP "$codex_test" 2>&1))"
 	else
@@ -495,11 +494,15 @@ fi
 
 if [ "$WANT_PASSTHROUGH" -eq 1 ]; then
 	note "--passthrough passed: this bills one turn on the operator's Claude subscription."
-	m=$(pick_model "claude-haiku-4-5" "anthropic/claude-haiku-4-5" "anthropic/")
+	anthropic_slot=$(test_slot ANTHROPIC_CHEAP) || exit 2
+	m=$(pick_model "$anthropic_slot" "anthropic/$anthropic_slot")
 	if [ -z "$m" ]; then
-		bad "passthrough: /v1/models does not list the pinned id anthropic/claude-haiku-4-5"
+		slot_not_served ANTHROPIC_CHEAP "$anthropic_slot"
+		bad "passthrough: /v1/models does not list the pinned id anthropic/$anthropic_slot"
 	else
-		run_leg "passthrough" "$m" 11470
+		# Re-measured 2026-11-10 on claude-haiku-5-5: request 1 cost 6233 system+tools tokens (was 11470 on
+		# claude-haiku-4-5); rounded up to the nearest 10. check 5 adds its own +10%.
+		run_leg "passthrough" "$m" 6240
 	fi
 else
 	note "--passthrough not passed: SKIPPING the hosted leg (one Claude-subscription turn)."

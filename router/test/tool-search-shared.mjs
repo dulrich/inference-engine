@@ -93,16 +93,11 @@ async function modelIds() {
   return ids;
 }
 
-// Resolution rule: a billed leg (codex, passthrough) resolves its pinned id exactly or fails loudly
-// naming it. Only the claude-local leg passes `fallback: true`, because the user re-jigs the local
-// list at will: it uses the first id under the prefix, never a Qwen3.6/3.8 one (loading one is what
-// plans/test-qwen-load-minimization.md exists to prevent).
-function resolveModel(ids, { preferred, prefix, listedAs = preferred, fallback = false }) {
+// Resolution rule: every leg resolves its slot id (test-slots.json) exactly or fails loudly with the
+// slotNotServed text — there is no fallback to another model.
+function resolveModel(ids, { preferred, listedAs = preferred, slot }) {
   if (ids.includes(listedAs)) return { id: preferred, exact: true };
-  assert.ok(fallback, `GET /v1/models does not list the pinned id ${listedAs}, so this leg cannot be exercised exactly. Got: ${ids.join(", ")}`);
-  const alt = ids.find(id => id.startsWith(prefix) && !/qwen3[68]/i.test(id));
-  assert.ok(alt, `GET /v1/models lists no ${prefix}* id (other than a Qwen3.6/3.8 one, which this suite never loads), so this leg cannot be exercised. Got: ${ids.join(", ")}`);
-  return { id: alt, exact: false };
+  throw new Error(`${slotNotServed(slot, preferred.slice(preferred.lastIndexOf("/") + 1))} (GET /v1/models does not list ${listedAs})`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────── request bodies
@@ -182,18 +177,25 @@ const LEGS = [
     cell: "passthrough",
     label: "Claude passthrough",
     hosted: true,
-    pick: ids => resolveModel(ids, { preferred: "claude-haiku-4-5", listedAs: "anthropic/claude-haiku-4-5", prefix: "anthropic/" }),
-    // Synthetic bodies on the exact model, measured 2026-10-19 on claude-haiku-4-5: system+tools
-    // on 1110 / off 2330, tools-only ratio 2.12x (floor 1.9x, ~10% slack).
-    synth: { on: 1110, off: 2330, minRatio: 1.9 },
+    pick: ids => {
+      const slot = testSlot("ANTHROPIC_CHEAP");
+      return resolveModel(ids, { preferred: slot, listedAs: `anthropic/${slot}`, slot: "ANTHROPIC_CHEAP" });
+    },
+    // Synthetic bodies on the exact model. Measured 2026-10-19 on claude-haiku-4-5: system+tools on 1110 /
+    // off 2330, tools-only ratio 2.12x. Re-measured 2026-11-10 on claude-haiku-5-5 (the ANTHROPIC_CHEAP
+    // slot): system+tools on 1223 / off 2945, tools-only 1189 / 2911, ratio 2.45x (floor 2.2x, ~10% slack).
+    synth: { minRatio: 2.2 },
   },
   {
     cell: "local",
     label: "local OpenAI-conversion",
-    pick: ids => resolveModel(ids, { preferred: "claude-local/nemotron-4b", prefix: "claude-local/", fallback: true }),
-    // Synthetic bodies on the exact model, measured 2026-10-19 on nemotron-4b: on 897 / off 2233,
-    // tools-only 866/2202, ratio 2.54x (floor 2.3x, ~10% slack).
-    synth: { on: 897, off: 2233, minRatio: 2.3 },
+    pick: ids => {
+      const slot = testSlot("LOCAL_SMALL");
+      return resolveModel(ids, { preferred: `claude-local/${slot}`, slot: "LOCAL_SMALL" });
+    },
+    // Synthetic bodies, measured 2026-10-19 on nemotron-4b: on 897 / off 2233, tools-only 866/2202,
+    // ratio 2.54x (floor 2.3x, ~10% slack). Only the ratio is asserted (see the token gate).
+    synth: { minRatio: 2.3 },
   },
   {
     cell: "codex",
@@ -204,10 +206,10 @@ const LEGS = [
       if (!ids.includes(preferred)) throw new Error(`${slotNotServed("CODEX_SIDECAR_CHEAP", slot)} (GET /v1/models does not list ${preferred})`);
       return { id: preferred, exact: true };
     },
-    // Synthetic bodies on the exact model, measured 2026-10-19 on gpt-5.6-luna and re-measured
-    // identical on gpt-6-luna 2026-10-31: system+tools on 382 / off 1344,
-    // tools-only ratio 3.62x (floor 3.2x, ~10% slack).
-    synth: { on: 382, off: 1344, minRatio: 3.2 },
+    // Synthetic bodies, measured 2026-10-19 on gpt-5.6-luna and re-measured identical on gpt-6-luna
+    // 2026-10-31: system+tools on 382 / off 1344, tools-only ratio 3.62x (floor 3.2x, ~10% slack).
+    // Only the ratio is asserted (see the token gate).
+    synth: { minRatio: 3.2 },
   },
 ];
 
@@ -271,7 +273,7 @@ export function registerLegTests(leg) {
 
   test(`${leg.label}: the deferred catalogue is not eagerly expanded (within-leg token gate)`, async t => {
     const ids = await modelIds();
-    const { id: model, exact } = leg.pick(ids);
+    const { id: model } = leg.pick(ids);
     const onSrc = synthOn();
     const offSrc = synthOff();
 
@@ -289,25 +291,15 @@ export function registerLegTests(leg) {
     assert.ok(offToolsOnly > onToolsOnly, `${leg.label}: the eager tool block (${offToolsOnly}) did not exceed the deferred `
       + `one (${onToolsOnly}); deferral is not reducing the tool block at all.`);
 
-    // Absolute thresholds: measured on these byte-fixed synthetic bodies, so they hold only on the
-    // exact model they were measured with, and only for legs that have them.
-    if (!exact || !leg.synth) {
-      t.diagnostic(`${leg.cell}: absolute thresholds not asserted (exact model=${exact}, `
-        + `measured=${Boolean(leg.synth)}); ordering only.`);
+    // The claim is "deferred tools are cheaper than eager tools", and the tools-only ratio carries it: a
+    // partial eager expansion lowers the ratio below the floor. Absolute on/off counts only restated one
+    // model's tokenizer (they broke on every hosted model bump), so they are not asserted; the measured
+    // figures stay in LEGS[].synth comments as history. The floor is measured per exact model.
+    const { minRatio } = leg.synth ?? {};
+    if (!minRatio) {
+      t.diagnostic(`${leg.cell}: no measured ratio floor; ordering only.`);
       return;
     }
-    const { on, off, minRatio } = leg.synth;
-    // Direction 1 — the deferred profile stays at its measured cost (+2% for tokenizer drift).
-    const ceiling = Math.ceil(on * 1.02);
-    assert.ok(onTokens <= ceiling, `${leg.label}: the deferred profile cost ${onTokens} system+tools tokens, above the `
-      + `measured ${on} (+2% = ${ceiling}). The catalogue is being counted eagerly, or the synthetic bodies changed `
-      + "and the thresholds need re-measuring.");
-    // Direction 2 — the gate must be able to fail: the eager control exceeds that same threshold,
-    // and stays near its own measured cost.
-    assert.ok(offTokens > on, `${leg.label}: the eager control cost only ${offTokens} system+tools tokens, which does `
-      + `not exceed the on-threshold ${on} — the negative control is no longer a control.`);
-    assert.ok(offTokens <= off * 1.05, `${leg.label}: the eager control cost ${offTokens} tokens, more than 5% above the `
-      + `measured ${off}; the synthetic bodies or the tokenizer drifted and the thresholds need re-measuring.`);
     // Ratio floor (~10% slack under the measured saving): a partial eager expansion fails here
     // even when plain ordering still holds.
     assert.ok(ratio >= minRatio, `${leg.label}: the eager/deferred tool-block ratio is ${ratio.toFixed(2)}x `

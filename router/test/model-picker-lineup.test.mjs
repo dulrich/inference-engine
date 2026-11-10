@@ -104,21 +104,16 @@ test("a router-shaped config renders exactly the catalog's Claude-Code-visible i
   assert.equal(new Set(models).size, models.length, "no duplicate picker rows");
   assert.equal(models.filter((m) => m.startsWith("anthropic/")).length, 0);
   // Derive the expected set from the live catalog itself: an explicit `cc` tag is a row on every
-  // provider the static config serves; an explicit tag list without `cc` never is. The hosted
-  // `anthropic` provider is opt-in (an absent `consumers` is no row) and its rows use the bare id.
-  // (An absent `consumers` elsewhere — legal off claude-local — is covered by the fixture tests.)
-  const served = new Set((config.providers ?? []).map((p) => p.name));
+  // non-anthropic provider the static config serves; an explicit tag list without `cc` never is.
+  // (An absent `consumers` — legal off claude-local — is covered by the fixture tests.)
+  const served = new Set((config.providers ?? []).map((p) => p.name).filter((n) => n !== "anthropic"));
   const expected = new Set();
   const excluded = new Set();
   for (const [name, provider] of Object.entries(catalog.providers)) {
     if (!served.has(name)) continue;
     for (const e of provider.models ?? []) {
-      const key = name === "anthropic" ? e.id : `${name}/${e.id}`;
-      if (!Array.isArray(e.consumers)) {
-        if (name === "anthropic") excluded.add(key);
-        continue;
-      }
-      (e.consumers.includes("cc") ? expected : excluded).add(key);
+      if (!Array.isArray(e.consumers)) continue;
+      (e.consumers.includes("cc") ? expected : excluded).add(`${name}/${e.id}`);
     }
   }
   for (const m of expected) assert.ok(models.includes(m), `${m} is cc-tagged in the catalog but is not a picker row`);
@@ -182,30 +177,6 @@ test("consumer tags still govern every provider EXCEPT claude-local, unchanged",
   // ["cc","openwebui"]: a multi-consumer tag that includes cc keeps its rows.
   assert.ok(models.has("codex-b/gpt-5.6-sol"));
   assert.ok(models.has("codex-b/gpt-5.6-luna-high"));
-});
-
-// Hosted anthropic is opt-in: an untagged id is covered by Claude Code's built-in rows, so only an
-// explicit `cc` tag (a model newer than the installed Claude Code) renders, as the bare id.
-test("anthropic ids are rows only on an explicit cc tag, bare id and catalog label", (t) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "picker-anthropic-"));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const catalog = JSON.parse(fs.readFileSync(FIXTURE_CATALOG, "utf8"));
-  catalog.providers.anthropic.models = [
-    { id: "claude-sonnet-5" },
-    { id: "claude-opus-5", consumers: ["openwebui"] },
-    { id: "claude-new-9", consumers: ["cc"], label: "Claude New 9" },
-    { id: "claude-new-10", consumers: ["cc", "openwebui"] },
-  ];
-  const catalogPath = path.join(dir, "catalog.json");
-  fs.writeFileSync(catalogPath, JSON.stringify(catalog));
-  const rows = JSON.parse(run(["--config", FIXTURE_CONFIG, "--catalog", catalogPath]).stdout);
-  const byModel = Object.fromEntries(rows.map((r) => [r.model, r]));
-  assert.equal(rows.filter((r) => r.model.startsWith("anthropic/")).length, 0);
-  assert.equal(byModel["claude-sonnet-5"], undefined);
-  assert.equal(byModel["claude-opus-5"], undefined);
-  assert.equal(byModel["claude-new-9"].label, "Claude New 9");
-  assert.equal(byModel["claude-new-10"].label, "claude-new-10");
-  for (const row of rows) assert.ok(row.description.length < 90, `description too long: ${row.description}`);
 });
 
 // For claude-local an absent tag is NOT "every consumer". `some-future-model-9b` is the case that
@@ -450,13 +421,14 @@ test("regenerating over an input that already carries both keys is a byte-for-by
       ENABLE_TOOL_SEARCH: "true",
       CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",
       CLAUDE_CODE_MAX_CONTEXT_TOKENS: "258400",
+      _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL: "1",
     },
   };
   fs.writeFileSync(settings, `${JSON.stringify(before, null, 2)}\n`);
   run([...FIXTURE_ARGS, "--home", dir, "--env-file", envFile, "--write", "--launch-profile"]);
   const first = fs.readFileSync(settings, "utf8");
   const env = JSON.parse(first).env;
-  // No duplication: the five generated keys, in their original order, and nothing added.
+  // No duplication: the six generated keys, in their original order, and nothing added.
   assert.deepEqual(Object.keys(env), Object.keys(before.env));
   assert.equal(env.ENABLE_TOOL_SEARCH, "true");
   assert.equal(env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE, "1");
@@ -483,6 +455,19 @@ test("a drifted generated env key fails --check --launch-profile and --write res
   const env = JSON.parse(fs.readFileSync(settings, "utf8")).env;
   assert.equal(env.ENABLE_TOOL_SEARCH, "true");
   assert.equal(env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE, "1");
+});
+
+// Behind the router's base URL Claude Code hides the server-published model catalog from `/model`
+// unless told the URL is first-party; the generator owns that key so a regeneration never drops it.
+test("--launch-profile owns the first-party base-URL key and --check catches its loss", (t) => {
+  const { dir, envFile, settings } = tempHome(t);
+  fs.writeFileSync(settings, `${JSON.stringify({ env: {} }, null, 2)}\n`);
+  run([...FIXTURE_ARGS, "--home", dir, "--env-file", envFile, "--write", "--launch-profile"]);
+  const written = JSON.parse(fs.readFileSync(settings, "utf8"));
+  assert.equal(written.env._CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL, "1");
+  delete written.env._CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL;
+  fs.writeFileSync(settings, `${JSON.stringify(written, null, 2)}\n`);
+  run([...FIXTURE_ARGS, "--home", dir, "--env-file", envFile, "--check", "--launch-profile"], 1);
 });
 
 // fleet-env store (plans/env-management.md in the fleet control repo): a stubbed fleet-env binary only;

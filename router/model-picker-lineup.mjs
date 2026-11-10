@@ -4,11 +4,8 @@
 // The catalog (`router/catalog/catalog.json`, schema `model-catalog-v1`) is the single source of
 // truth for the id list and for visibility: there is no hand-maintained list here, only the
 // family/label table below. Every `<provider>/<model>` id in the catalog becomes one picker row,
-// except any id Claude Code is not a declared consumer of. The hosted `anthropic` provider is
-// OPT-IN: its ids normally duplicate Claude Code's built-in rows, so an entry becomes a row only
-// when it explicitly carries `cc` in `consumers` — the case of a model newer than the installed
-// Claude Code build (claude-fable-5-2 on 2.1.322). Such a row uses the bare id (what Claude Code
-// sends and the gateway routes to `anthropic`) and the entry's catalog `label`.
+// except the hosted `anthropic` provider (its ids duplicate Claude Code's built-in rows, and the
+// bare id is what Claude Code sends anyway) and any id Claude Code is not a declared consumer of.
 // Provider order is the static `gateway.config.json`'s (the gateway's routing order).
 // `replaceBuiltInOptions` is never written, so the built-in subscription rows stay first.
 //
@@ -38,8 +35,8 @@ const DEFAULT_CATALOG = path.join(SCRIPT_DIR, "catalog", "catalog.json");
 const GATEWAY_KEY_VAR = "INFERENCE_ROUTER_GATEWAY_KEY";
 const ROUTER_URL = "http://127.0.0.1:4813";
 
-// Providers whose ids become picker rows only on an explicit `cc` tag (see the header).
-const OPT_IN_PROVIDERS = new Set(["anthropic"]);
+// Providers whose ids never become picker rows.
+const EXCLUDED_PROVIDERS = new Set(["anthropic"]);
 // Consumer tagging (plans/local-leg-claude-code-serving-fit.md WP-2; moved onto catalog entries in
 // plans/serving-control-redesign.md WP-2/WP-3). `consumers` is an optional per-entry list in the
 // catalog. ABSENT MEANS EVERY CONSUMER on every provider except `claude-local` (DECLARED_PROVIDER),
@@ -71,10 +68,19 @@ const FORBIDDEN_ENV_KEYS = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"];
 // both persona catalogs declares — measured 2026-09-14), so the meter and the wire agree on one
 // ceiling. The env is global, so the local leg's smaller windows (120k–131k `-c`) are over-declared
 // too — they already were at the 200k default; llama's own length error remains their backstop.
+// _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL makes Claude Code treat the router's base URL as
+// first-party. Without it (any host but api.anthropic.com) Claude Code drops the server-published
+// model catalog from `/model` and gates the Fable row on ANTHROPIC_DEFAULT_FABLE_MODEL, so a new
+// hosted model (claude-fable-5-2, 2026-11-10, Claude Code 2.1.322) was routable by `--model` but had
+// no picker row. With it the built-in lineup follows Anthropic's catalog with no per-release step —
+// which is why the hosted `anthropic` provider still gets no generated rows. It is an internal
+// (underscore) variable: if a Claude Code release drops it, new hosted models vanish from the picker
+// again — re-check `/model` after a Claude Code upgrade that coincides with a model release.
 const LAUNCH_PROFILE_ENV = {
   ENABLE_TOOL_SEARCH: "true",
   CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",
   CLAUDE_CODE_MAX_CONTEXT_TOKENS: "258400",
+  _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL: "1",
 };
 
 // Family/label table. `prefix` families may carry an effort suffix (`-low|-medium|-high`, plus
@@ -216,8 +222,6 @@ function isClaudeCodeModel(providerName, entry) {
   // claude-local: an undeclared entry is drift (--check reports it), never "every consumer", so a
   // stale catalog can never silently add a row.
   if (providerName === DECLARED_PROVIDER) return tags !== null && tags.includes(CLAUDE_CODE_CONSUMER);
-  // Hosted anthropic: absent means "a built-in row covers it", never a generated row.
-  if (OPT_IN_PROVIDERS.has(providerName)) return tags !== null && tags.includes(CLAUDE_CODE_CONSUMER);
   return tags === null || tags.includes(CLAUDE_CODE_CONSUMER);
 }
 
@@ -225,18 +229,11 @@ export function buildRows(config, catalog) {
   const rows = [];
   for (const provider of config.providers ?? []) {
     if (!provider || typeof provider.name !== "string") continue;
+    if (EXCLUDED_PROVIDERS.has(provider.name)) continue;
     const leg = LEG_NAMES[provider.name] ?? provider.name;
     for (const catalogEntry of catalogEntries(catalog, provider.name)) {
       const modelId = catalogEntry.id;
       if (!isClaudeCodeModel(provider.name, catalogEntry)) continue;
-      if (OPT_IN_PROVIDERS.has(provider.name)) {
-        rows.push({
-          model: modelId,
-          label: typeof catalogEntry.label === "string" && catalogEntry.label ? catalogEntry.label : modelId,
-          description: "Hosted Anthropic via the router (:4813); no built-in row in this Claude Code",
-        });
-        continue;
-      }
       const entry = describeFamily(modelId);
       const effort = effortOf(modelId, entry);
       // Codex bare ids carry the proper model name only (user, 2026-09-13): effort is the

@@ -1,6 +1,6 @@
 // install.sh, store-only (no switch, no legacy env file): stubbed fleet-env, systemctl and persona
 // wrappers on PATH, a mkdtemp --home. Never touches the real home, units or store.
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -10,8 +10,16 @@ import { spawnSync } from "node:child_process";
 const INSTALL = path.join(import.meta.dirname, "..", "install.sh");
 const DUMMY = "fixture-sidecar-key-not-a-secret";
 
+// Every setup() root is removed once the file finishes (they used to leak into $TMPDIR, /dev/shm,
+// on every run). A plain rmSync fits well inside bun's 5000 ms hook cap.
+const ROOTS = [];
+after(() => {
+  for (const root of ROOTS) fs.rmSync(root, { recursive: true, force: true });
+});
+
 function setup({ projection = true, args = [], prepare, fleetEnvBin, noPersonas = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidecar-install-"));
+  ROOTS.push(root);
   const bin = path.join(root, "bin");
   const home = path.join(root, "home");
   fs.mkdirSync(bin);

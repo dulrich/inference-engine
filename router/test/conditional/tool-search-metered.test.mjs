@@ -2,7 +2,7 @@
 // (ENABLE_TOOL_SEARCH) conformance gate, split out of router/test/tool-search-conformance.test.mjs
 // (plans/router-gate-consolidation.md WP-1). Helpers from ../tool-search-shared.mjs.
 //
-// The cell POSTs one real /v1/messages turn on <codex persona>/<test model> (router/test/test-models.json)
+// The cell POSTs one real /v1/messages turn on <codex persona>/<test model> (test-slots.json, CODEX_SIDECAR_CHEAP)
 // carrying a tool_reference tool_result and a grown catalogue. The model must be listed exactly:
 // an unlisted pinned id fails the cell naming it, before any turn is spent.
 //
@@ -11,16 +11,18 @@
 // table): `sidecar/` request handling; any router patch; this file (plus
 // `router/smoke-tool-search.sh … --codex`). Runs approval-free at every sprint closeout.
 //
-// Env: ROUTER_BASE_URL, ROUTER_ENV_FILE, GATEWAY_KEY, CODEX_TEST_MODEL (one-run override), CODEX_TEST_PERSONA.
+// Env: ROUTER_BASE_URL, ROUTER_ENV_FILE, GATEWAY_KEY, TEST_SLOT_CODEX_SIDECAR_CHEAP (one-run override), CODEX_TEST_PERSONA.
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { codexPersona, codexTestModel } from "../test-models.mjs";
-import { call, modelIds, resolveModel, roundTripBody } from "../tool-search-shared.mjs";
+import { codexPersona, slotNotServed, testSlot } from "../../../scripts/lib/test-slots.mjs";
+import { call, modelIds, roundTripBody } from "../tool-search-shared.mjs";
 
 test("codex sidecar: a tool_reference result and the grown catalogue are relayed, not rejected", async t => {
   const ids = await modelIds();
-  const { id: model } = resolveModel(ids, { preferred: codexTestModel(codexPersona(ids)), prefix: `${codexPersona(ids)}/` });
+  const slot = testSlot("CODEX_SIDECAR_CHEAP");
+  const model = `${codexPersona(ids)}/${slot}`;
+  assert.ok(ids.includes(model), `${slotNotServed("CODEX_SIDECAR_CHEAP", slot)} (GET /v1/models does not list ${model})`);
   t.diagnostic(`codex relay probe on ${model}`);
   const r = await call("/v1/messages", roundTripBody(model), { timeoutMs: 300000 });
   assert.equal(r.status, 200, `the codex leg rejected the discovery round-trip with ${r.status}: ${r.text.slice(0, 600)}${r.hint}`);

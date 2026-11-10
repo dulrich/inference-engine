@@ -9,7 +9,7 @@
 // not a gate.
 //
 // CONDITIONAL because it lives outside the per-commit glob (see below), not because of cost: it
-// runs approval-free at every sprint closeout on the codex test model (`router/test/test-models.json`,
+// runs approval-free at every sprint closeout on the codex test model (`test-slots.json`,
 // two ~64-token answers).
 //
 // What is asserted, and why a LOG-ROW assertion rather than a token gate: the reasoning-token
@@ -36,10 +36,10 @@
 // (default: `fleet-env path router`) and is never printed.
 //
 // Env: ROUTER_BASE_URL (default http://127.0.0.1:4813), ROUTER_ENV_FILE, GATEWAY_KEY,
-//      CODEX_TEST_PERSONA (required: the codex persona to send turns to), CODEX_TEST_MODEL (one-run model override), SIDECAR_LOG_DIR (default ~/.local/state/codex-sidecar/logs — the sidecar's own default).
+//      CODEX_TEST_PERSONA (required: the codex persona to send turns to), TEST_SLOT_CODEX_SIDECAR_CHEAP (one-run model override), SIDECAR_LOG_DIR (default ~/.local/state/codex-sidecar/logs — the sidecar's own default).
 
 import { routerEnvFile } from "../../fleet-env.mjs";
-import { codexPersona, codexTestModel } from "../test-models.mjs";
+import { codexPersona, testSlot } from "../../../scripts/lib/test-slots.mjs";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -54,8 +54,8 @@ let envFileMemo;
 const envFile = () => (envFileMemo ??= routerEnvFile());
 const LOG_DIR = process.env.SIDECAR_LOG_DIR
   || path.join(process.env.HOME || os.homedir(), ".local", "state", "codex-sidecar", "logs");
-// The live codex test model (router/test/test-models.json).
-const MODEL = codexTestModel(codexPersona());
+// The live codex test model (the CODEX_SIDECAR_CHEAP slot of test-slots.json).
+const MODEL = `${codexPersona()}/${testSlot("CODEX_SIDECAR_CHEAP")}`;
 // The engine's anthropic-type legs want *some* client bearer to build passthrough headers.
 const DUMMY_BEARER = "effort-mapping-codex-dummy-client-bearer";
 const REQUEST_TIMEOUT_MS = 300000;

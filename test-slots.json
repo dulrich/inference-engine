@@ -1,0 +1,8 @@
+{
+  "_comment": "The live test models: this file is the only place a live test or smoke gets its model from. TEST_SLOT_<NAME> overrides one slot for one run. Slots: ANTHROPIC_CHEAP = bare hosted-Claude id (served as anthropic/<id>); CODEX_SIDECAR_CHEAP = bare codex id without the persona prefix (the persona is $CODEX_TEST_PERSONA); LOCAL_SMALL = bare claude-local alias of a small local model; LOCAL_EFFORT = bare claude-local alias of the effort-mapping local model; OPENROUTER_ADD_PROBE = the @preset/<slug> id the OpenRouter add probe uses.",
+  "ANTHROPIC_CHEAP": "claude-haiku-5-5",
+  "CODEX_SIDECAR_CHEAP": "gpt-6-luna",
+  "LOCAL_SMALL": "nemotron-4b",
+  "LOCAL_EFFORT": "qwen38-27b-iq3s",
+  "OPENROUTER_ADD_PROBE": "@preset/gpt-6-luna"
+}

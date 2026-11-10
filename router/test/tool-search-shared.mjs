@@ -6,7 +6,7 @@
 // auth, fail-never-skip) live in the header of tool-search-conformance.test.mjs.
 
 import { routerEnvFile } from "../fleet-env.mjs";
-import { codexPersona, codexTestModel } from "./test-models.mjs";
+import { codexPersona, slotNotServed, testSlot } from "../../scripts/lib/test-slots.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
@@ -198,7 +198,12 @@ const LEGS = [
   {
     cell: "codex",
     label: "codex sidecar",
-    pick: ids => resolveModel(ids, { preferred: codexTestModel(codexPersona(ids)), prefix: `${codexPersona(ids)}/` }),
+    pick: ids => {
+      const slot = testSlot("CODEX_SIDECAR_CHEAP");
+      const preferred = `${codexPersona(ids)}/${slot}`;
+      if (!ids.includes(preferred)) throw new Error(`${slotNotServed("CODEX_SIDECAR_CHEAP", slot)} (GET /v1/models does not list ${preferred})`);
+      return { id: preferred, exact: true };
+    },
     // Synthetic bodies on the exact model, measured 2026-10-19 on gpt-5.6-luna and re-measured
     // identical on gpt-6-luna 2026-10-31: system+tools on 382 / off 1344,
     // tools-only ratio 3.62x (floor 3.2x, ~10% slack).

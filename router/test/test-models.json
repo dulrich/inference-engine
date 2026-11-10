@@ -1,4 +1,0 @@
-{
-  "_comment": "The codex model (no persona prefix) every live codex test and smoke sends turns to: smoke-router.sh checks 8-9, smoke-tool-search.sh --codex, the codex legs in test/tool-search-shared.mjs, conditional/effort-mapping-codex.test.mjs and conditional/tool-search-metered.test.mjs. Change it here only; $CODEX_TEST_MODEL overrides it for one run. Pick a cheap family whose id is listed under both codex personas in /v1/models.",
-  "codex": "gpt-6-luna"
-}

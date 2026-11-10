@@ -45,8 +45,8 @@
 #   6. POST /v1/messages/count_tokens with an unresolvable model returns a 404-class JSON
 #      error body (patch 0004).
 #   7. (--subscription only) one claude -p call through the gateway returns a completion.
-#   8. (--codex only: one turn on the operator's Codex subscription, <codex persona>/<test model>
-#      from router/test/test-models.json) one non-streamed completion via /v1/messages returns
+#   8. (--codex only: one turn on the operator's Codex subscription, <codex persona>/<CODEX_SIDECAR_CHEAP slot>
+#      from test-slots.json) one non-streamed completion via /v1/messages returns
 #      usage.output_tokens > 0 — proves the host sidecar leg (plans/codex-appserver-sidecar.md)
 #      end to end through the router: extra_hosts, the shared CODEX_SIDECAR_KEY, and the
 #      engine's baseurl-with-path derivation. (Not input_tokens: since 2026-09-13 the sidecar
@@ -78,7 +78,7 @@ for _a in "$@"; do case "$_a" in --help|-h)
 # shellcheck source=/dev/null
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib/build-id.sh"
 # shellcheck source=/dev/null
-. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/test/test-models.sh"
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib/test-slots.sh"
 build_flags "${BASH_SOURCE[0]}" "$@"
 
 set -u
@@ -322,13 +322,16 @@ else
 fi
 
 # ── 8. Codex sidecar leg, metered (--codex only) ────────────────────────────────────────────
-# The routed id is <codex persona>/<test model> (router/test/test-models.json; $CODEX_TEST_MODEL overrides
+# The routed id is <codex persona>/<CODEX_SIDECAR_CHEAP slot> (test-slots.json; $TEST_SLOT_CODEX_SIDECAR_CHEAP overrides
 # it for one run) — the only end-to-end proof a newly added codex id is accepted, since the sidecar's
 # count_tokens never checks the id.
-codex_test=$(codex_test_model) || exit 2
+codex_test=$(test_slot CODEX_SIDECAR_CHEAP) || exit 2
 codex_persona=$(codex_test_persona "$model_ids") || exit 2
 CODEX_MODEL="$codex_persona/$codex_test"
-if [ "$CODEX" -eq 1 ]; then
+if [ "$CODEX" -eq 1 ] && ! printf '%s\n' "$model_ids" | grep -qxF -- "$CODEX_MODEL"; then
+	slot_not_served CODEX_SIDECAR_CHEAP "$codex_test"
+	bad "/v1/messages ($CODEX_MODEL): the routed id is not listed in /v1/models"
+elif [ "$CODEX" -eq 1 ]; then
 	note "--codex passed: running one non-streamed $CODEX_MODEL turn through $BASE_URL (bills the operator's Codex subscription)."
 	# The engine's anthropic-type leg needs *some* client bearer to build passthrough headers
 	# (openrouter-spike finding 3); the provider's apiKeyEnv replaces it before the sidecar.

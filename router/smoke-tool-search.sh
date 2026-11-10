@@ -73,7 +73,7 @@ for _a in "$@"; do case "$_a" in --help|-h)
 # shellcheck source=/dev/null
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib/build-id.sh"
 # shellcheck source=/dev/null
-. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/test/test-models.sh"
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib/test-slots.sh"
 build_flags "${BASH_SOURCE[0]}" "$@"
 REPO_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 
@@ -481,11 +481,11 @@ fi
 
 if [ "$WANT_CODEX" -eq 1 ]; then
 	note "--codex passed: this bills one turn on the operator's Codex subscription."
-	codex_test=$(codex_test_model) || exit 2
+	codex_test=$(test_slot CODEX_SIDECAR_CHEAP) || exit 2
 	codex_persona=$(codex_test_persona "$model_ids") || exit 2
 	m=$(pick_model "$codex_persona/$codex_test" "$codex_persona/$codex_test" "$codex_persona/")
 	if [ -z "$m" ]; then
-		bad "codex: /v1/models does not list the pinned id $codex_persona/$codex_test"
+		bad "codex: /v1/models does not list the pinned id $codex_persona/$codex_test ($(slot_not_served CODEX_SIDECAR_CHEAP "$codex_test" 2>&1))"
 	else
 		run_leg "codex" "$m" 3529
 	fi

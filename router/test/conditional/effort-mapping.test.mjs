@@ -221,6 +221,18 @@ reg("catalog: the LOCAL_EFFORT slot's effortKwargs row exists and has the shape 
   }
 });
 
+// Warm-up (unmeasured): load the slot's model before any measured case, so the 27B's cold
+// llama-swap spawn never lands inside a measured case's default 5000 ms budget (3 of 10 cases
+// timed out cold on 2026-11-10). It is a TEST, not a before() hook: bun's node:test hooks ignore a
+// timeout option and die at 5000 ms (measured, bun 1.4.4). One upstream call loads the model; one
+// router call warms the gateway leg. Neither result is compared with anything.
+reg("warm-up: the LOCAL_EFFORT model is loaded upstream and reachable through the router (unmeasured)",
+  { timeout: 2 * REQUEST_TIMEOUT_MS + 30000 }, async () => {
+    const up = await upstreamCall(undefined);
+    assert.equal(up.status, 200, `warm-up: upstream ${UPSTREAM_MODEL} returned ${up.status}: ${up.text.slice(0, 400)}`);
+    await routerOccupancy({}, "warm-up");
+  });
+
 reg("upstream control: an unknown reasoning_effort is a 500 Jinja exception at llama", async () => {
   const r = await upstreamCall({ reasoning_effort: BOGUS });
   assert.equal(r.status, 500, `upstream bogus effort: expected 500, got ${r.status}: ${r.text.slice(0, 400)}`);

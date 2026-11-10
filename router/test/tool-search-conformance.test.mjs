@@ -36,6 +36,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { LEGS, call, modelIds, registerLegTests, roundTripBody } from "./tool-search-shared.mjs";
 
+// Warm-up (unmeasured): load the local leg's model before any measured cell, so a cold llama-swap
+// spawn never lands inside a measured test's default 5000 ms budget. It is a TEST, not a before()
+// hook: bun's node:test hooks ignore a timeout option and die at 5000 ms (measured, bun 1.4.4).
+test("warm-up: the local leg's model is loaded and answers (unmeasured)", { timeout: 240000 }, async t => {
+  const { id: model } = LEGS.find(l => l.cell === "local").pick(await modelIds());
+  t.diagnostic(`warm-up on ${model}`);
+  const r = await call("/v1/messages", { model, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }, { timeoutMs: 180000 });
+  assert.equal(r.status, 200, `warm-up on ${model} failed with ${r.status}: ${r.text.slice(0, 400)}${r.hint}`);
+});
+
 for (const leg of LEGS.filter(l => !l.hosted)) registerLegTests(leg);
 
 // ───────────────────────────────────────────────────────── relay of the discovery round-trip

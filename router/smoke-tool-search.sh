@@ -184,17 +184,35 @@ async function replayCount(url, headers, body) {
   const shot = async withTools => {
     const payload = { model: body.model, system: body.system, messages: [{ role: "user", content: "hi" }] };
     if (withTools) payload.tools = body.tools;
-    const r = await fetch(`${target}${base}/v1/messages/count_tokens`, {
+    const post = h => fetch(`${target}${base}/v1/messages/count_tokens`, {
       method: "POST",
-      headers: { ...headers, "content-type": "application/json" },
+      headers: { ...h, "content-type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const j = await r.json().catch(() => null);
-    return typeof j?.input_tokens === "number" ? j.input_tokens : null;
+    let r = await post(headers);
+    let text = await r.text();
+    // The live request's anthropic-beta list is the /v1/messages one; count_tokens refuses a beta it
+    // does not take (400, naming each value). Drop exactly the values it names and replay once.
+    const named = r.status === 400 && /for the `anthropic-beta` header/.test(text)
+      ? [...text.split("for the `anthropic-beta` header")[0].matchAll(/`([^`]+)`/g)].map(m => m[1]) : [];
+    if (named.length && typeof headers["anthropic-beta"] === "string") {
+      const kept = headers["anthropic-beta"].split(",").map(v => v.trim()).filter(v => v && !named.includes(v));
+      const h = { ...headers };
+      if (kept.length) h["anthropic-beta"] = kept.join(","); else delete h["anthropic-beta"];
+      r = await post(h);
+      text = await r.text();
+    }
+    let j = null;
+    try { j = JSON.parse(text); } catch { /* not json */ }
+    if (typeof j?.input_tokens === "number") return j.input_tokens;
+    // A refused replay says why (status and the error body's head; an upstream error body carries no credential).
+    refused.push(`${withTools ? "withTools" : "systemOnly"}: HTTP ${r.status} ${text.slice(0, 200)}`);
+    return null;
   };
+  const refused = [];
   try {
     const [withTools, systemOnly] = [await shot(true), await shot(false)];
-    fs.writeFileSync(path.join(outDir, "count.json"), JSON.stringify({ withTools, systemOnly }));
+    fs.writeFileSync(path.join(outDir, "count.json"), JSON.stringify({ withTools, systemOnly, ...(refused.length ? { refused } : {}) }));
   } catch (e) {
     fs.writeFileSync(path.join(outDir, "count.json"), JSON.stringify({ error: String(e && e.message) }));
   }

@@ -169,7 +169,7 @@ for id in \
 	fi
 done
 models_hosted_ok=1
-for id in anthropic/claude-sonnet-5 anthropic/claude-sonnet-5-5 anthropic/claude-opus-5 anthropic/claude-opus-5-5 anthropic/claude-fable-5 anthropic/claude-fable-5-1 anthropic/claude-haiku-4-5 anthropic/claude-haiku-4-5-20251001 anthropic/claude-haiku-5-5; do
+for id in anthropic/claude-sonnet-5 anthropic/claude-sonnet-5-5 anthropic/claude-opus-5 anthropic/claude-opus-5-5 anthropic/claude-fable-5 anthropic/claude-fable-5-1 anthropic/claude-fable-5-2 anthropic/claude-haiku-4-5 anthropic/claude-haiku-4-5-20251001 anthropic/claude-haiku-5-5; do
 	if ! echo "$model_ids" | grep -qx "$id"; then
 		models_hosted_ok=0
 	fi

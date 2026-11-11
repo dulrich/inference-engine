@@ -721,7 +721,7 @@ async fn removed_mimic_surfaces_are_ignored() {
 
 #[tokio::test]
 async fn connect_error_is_retried_once_after_150ms() {
-    // Pattern 4 (references/test-ports.md): bind now, never release, `listen()` on the same
+    // Pattern 4 (fleet test-ports contract): bind now, never release, `listen()` on the same
     // socket later, so the port is never free for another process to draw.
     let sock = socket2::Socket::new(
         socket2::Domain::IPV4,

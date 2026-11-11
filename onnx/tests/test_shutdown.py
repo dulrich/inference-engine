@@ -39,7 +39,7 @@ sys.exit(app.main())
 
 
 def reserve_port() -> tuple[socket.socket, int]:
-    """Held, never-listening SO_REUSEADDR reservation (references/test-ports.md pattern 3a): no other
+    """Held, never-listening SO_REUSEADDR reservation (fleet test-ports contract pattern 3a): no other
     process can draw the number via bind(0); the child's SO_REUSEADDR bind shares it. Close it only
     after the child reports listening."""
     r = socket.socket()

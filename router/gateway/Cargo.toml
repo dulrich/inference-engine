@@ -26,6 +26,8 @@ fleetkit = { path = "crates/fleetkit", features = ["shutdown"] }
 [dev-dependencies]
 # Paused-clock tests of the telemetry progress cadence (tests/telemetry.rs); no new crate.
 tokio = { version = "1", features = ["test-util"] }
+# Held bind-now/listen-later socket in the connect-retry test (references/test-ports.md pattern 4).
+socket2 = "=0.6.5"
 
 [workspace]
 exclude = ["crates/fleetkit"]

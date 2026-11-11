@@ -38,10 +38,14 @@ sys.exit(app.main())
 """
 
 
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+def reserve_port() -> tuple[socket.socket, int]:
+    """Held, never-listening SO_REUSEADDR reservation (references/test-ports.md pattern 3a): no other
+    process can draw the number via bind(0); the child's SO_REUSEADDR bind shares it. Close it only
+    after the child reports listening."""
+    r = socket.socket()
+    r.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    r.bind(("127.0.0.1", 0))
+    return r, r.getsockname()[1]
 
 
 class DeadlineEnvTest(unittest.TestCase):
@@ -74,7 +78,8 @@ class SigtermSubprocessTest(unittest.TestCase):
         model_dir.mkdir()
         cfg = Path(tmp.name) / "models.yaml"
         cfg.write_text(f"models:\n  stub:\n    path: {model_dir}\n    preload: false\n")
-        port = free_port()
+        reservation, port = reserve_port()
+        self.addCleanup(reservation.close)
         env = dict(os.environ, ONNX_MODELS_CONFIG=str(cfg), ONNX_HOST="127.0.0.1",
                    ONNX_PORT=str(port), **{shutdown.DEADLINE_ENV: str(TEST_DEADLINE_S)})
         proc = subprocess.Popen([sys.executable, "-c", DRIVER, mode], cwd=ONNX_DIR, env=env,
@@ -86,6 +91,7 @@ class SigtermSubprocessTest(unittest.TestCase):
                 break
         else:
             self.fail("server never reported listening")
+        reservation.close()  # the child now serves; the held number is no longer needed
         return proc, port
 
     def test_blocked_request_does_not_hold_the_exit_past_the_deadline(self):

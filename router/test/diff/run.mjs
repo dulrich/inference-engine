@@ -4,7 +4,6 @@
 //        [--case <glob>] [--slow] [--config-source <path>] [--catalog-source <path>] [--keep] [--stub-image <tag>]
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -96,17 +95,6 @@ const fakeEnv = (telemetryDir) => ({
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const s = net.createServer();
-    s.once('error', reject);
-    s.listen(0, '127.0.0.1', () => {
-      const { port } = s.address();
-      s.close(() => resolve(port));
-    });
-  });
-}
-
 async function waitFor(url, ms, label) {
   const deadline = Date.now() + ms;
   for (;;) {
@@ -164,13 +152,23 @@ async function startBin(binPath, run, cleanups) {
   run.stubUrl = `http://127.0.0.1:${stubPort}`;
   fs.writeFileSync(run.configPath, generateConfig(fs.readFileSync(run.configSource, 'utf8'), run.stubUrl));
   writeCatalog(run);
-  const gwPort = await freePort();
   const gw = spawn(path.resolve(binPath), [], {
-    stdio: ['ignore', process.env.RRDIFF_GW_LOG ? fs.openSync(process.env.RRDIFF_GW_LOG, 'w') : 'ignore', 'inherit'],
-    env: { PATH: process.env.PATH, HOST: '127.0.0.1', PORT: String(gwPort), GATEWAY_CONFIG_PATH: run.configPath, GATEWAY_CATALOG_PATH: path.join(run.catalogDir, 'catalog.json'), ...fakeEnv(run.telemetryDir) },
+    stdio: ['ignore', process.env.RRDIFF_GW_LOG ? fs.openSync(process.env.RRDIFF_GW_LOG, 'w') : 'ignore', 'pipe'],
+    env: { PATH: process.env.PATH, HOST: '127.0.0.1', PORT: '0', GATEWAY_CONFIG_PATH: run.configPath, GATEWAY_CATALOG_PATH: path.join(run.catalogDir, 'catalog.json'), ...fakeEnv(run.telemetryDir) },
   });
   cleanups.push(() => gw.kill('SIGTERM'));
-  run.gwUrl = `http://127.0.0.1:${gwPort}`;
+  // Port 0 with report-back: the gateway prints `inference-router listening on <addr>` on stderr.
+  const gwAddr = await new Promise((resolve, reject) => {
+    let buf = '';
+    gw.stderr.on('data', (d) => {
+      process.stderr.write(d);
+      buf += d;
+      const m = /inference-router listening on (\S+)\n/.exec(buf);
+      if (m) resolve(m[1]);
+    });
+    gw.once('exit', (c) => reject(new Error(`gateway exited ${c}`)));
+  });
+  run.gwUrl = `http://${gwAddr}`;
   await waitFor(`${run.gwUrl}/v1/models`, 30000, 'gateway');
 }
 

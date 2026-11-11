@@ -721,10 +721,23 @@ async fn removed_mimic_surfaces_are_ignored() {
 
 #[tokio::test]
 async fn connect_error_is_retried_once_after_150ms() {
-    // Reserve a port, release it, and listen on it only after the first attempt has failed.
-    let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = reserved.local_addr().unwrap();
-    drop(reserved);
+    // Pattern 4 (references/test-ports.md): bind now, never release, `listen()` on the same
+    // socket later, so the port is never free for another process to draw.
+    let sock = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )
+    .unwrap();
+    sock.set_reuse_address(true).unwrap();
+    sock.bind(
+        &"127.0.0.1:0"
+            .parse::<std::net::SocketAddr>()
+            .unwrap()
+            .into(),
+    )
+    .unwrap();
+    let addr = sock.local_addr().unwrap().as_socket().unwrap();
     let raw = json!({"host": "127.0.0.1", "port": 0, "providers": [
         {"name": "side", "type": "anthropic", "apikey": "k", "baseurl": format!("http://{addr}/cd"), "models": ["gpt-x"]}]});
     let state = fixture_state(raw, &keys_env);
@@ -732,8 +745,12 @@ async fn connect_error_is_retried_once_after_150ms() {
     tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
     let gw = format!("http://{}", rx.await.unwrap());
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(40)).await;
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        // No in-test signal marks the failed first attempt (it is not logged or recorded before
+        // the retry), so this is timed late in the 150 ms retry window, not gated on the failure.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        sock.listen(128).unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let listener = tokio::net::TcpListener::from_std(sock.into()).unwrap();
         let ok = || async { r#"{"ok":true}"# };
         axum::serve(listener, axum::Router::new().fallback(ok))
             .await

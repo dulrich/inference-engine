@@ -1,4 +1,4 @@
-# crucible-inference — llama.cpp on Vulkan + llama-swap
+# inference-engine-llama — llama.cpp on Vulkan + llama-swap
 
 One always-on GPU inference router serving the fleet's embedding, reranking, chat and vision
 models from a single container on **127.0.0.1:4811** (host publish; the
@@ -30,7 +30,7 @@ Dockerfile          multi-stage build: llama.cpp b10534 (Vulkan) + llama-swap v2
 entrypoint.sh       refuses to start on a software rasteriser (see "The llvmpipe trap") or on a
                     glibc-skewed image (see "The ABI trap"); dual-use exec tail — runs whatever
                     command it's given (llama-swap or a bare llama-server)
-config.yaml         llama-swap router config: models, aliases, ttl, groups — bind-mounted, not baked in
+config.yaml         llama-swap router config: models, aliases, ttl, residency `matrix` — bind-mounted, not baked in
 smoke-inference.sh  host-run smoke test against a running router (see "Smoke testing" below)
 ```
 
@@ -39,7 +39,7 @@ into the name so it's visible without opening the Dockerfile.
 
 `tools/hf-gguf-fetch.sh <org/repo> <file> [<file>...]` — resumable GGUF fetcher: downloads from Hugging Face into `/models/<org>/<repo>/<file>`, byte-size-verified against the HF tree API, idempotent (see the script's header for details).
 
-The compose service itself (`crucible-inference`, port mapping, `/models` and `config.yaml`
+The compose service itself (`inference-engine-llama`, port mapping, `/models` and `config.yaml`
 mounts, `/dev/dri` passthrough, `mem_limit`) lives in the fleet repo,
 the fleet compose.
 
@@ -71,25 +71,28 @@ Bind-mounted **read-only** at `/app/config.yaml`; the Dockerfile does not `COPY`
 it (adding a model, changing a `ttl`) needs no image rebuild — only a container restart. See the
 file itself for the full annotated shape; the essentials:
 
-The live alias set, as of 2026-09-13 (refreshed from `config.yaml` itself — the retired
+The live alias set, as of 2026-11-16 (refreshed from `config.yaml` itself — the retired
 `gemma-4-12b` row is gone; see the tombstone in that file's consumer-registry header):
 
-| Alias | Group | Role | ttl | Notes |
+| Alias | Matrix set(s) | Role | ttl | Notes |
 |---|---|---|---|---|
-| `bge-m3` | `retrieval` | embedding | 1800s | f16, 1024d, `--embeddings` |
-| `bge-reranker-v2` | `retrieval` | rerank | 1800s | Q8_0, `/rerank` only |
-| `bge-small` | `retrieval` | embedding | 1800s | f16, 384d; news-ingestion stores it as `bge-small-en-v1.5` |
-| `nemotron-4b` | `chat` | chat | 1800s | UD-Q4_K_XL, `-c 131072`, `--jinja`; small/fast option |
-| `ling-3-tiny-ud-q4-xl` | `ling-bakeoff` | chat | 1800s | Ling-3.0-tiny UD-Q4_K_XL, `-c 131072` (its real ceiling) |
-| `ling-3-tiny-ud-q6-xl` | `ling-bakeoff` | chat | 1800s | same model, UD-Q6_K_XL |
-| `ling-3-tiny-q8` | `ling-bakeoff` | chat | 1800s | same model, Q8_0 reference quant |
-| `gemma-4-12b-qat` | `gemma-qat-bakeoff` | chat + vision | 1800s | QAT UD-Q4_K_XL, `-c 131072`, `--mmproj`, MTP sidecar (`--spec-type draft-mtp`) |
-| `qwen36-a3b` | `qwen36-a3b-bakeoff` | chat | 1800s | MoE UD-Q4_K_XL, `-c 131072`, `-ncmoe 32` + `--load-mode none`, `-ub 2048`, embedded MTP heads |
-| `gemma-4-26b-a4b` | `gemma-26b-a4b` | chat + vision | 1800s | MoE QAT UD-Q4_K_XL, `-c 131072`, `-ncmoe 18` + `--load-mode none`, `-ub 2048`, `--mmproj`, MTP sidecar; served rung of the measured context ladder |
-| `qwen38-27b-iq3xxs` | `qwen38-27b-bakeoff` | chat | 1800s | dense UD-IQ3_XXS, `-c 131072`, q4_0/q4_0 KV, `-fa on` |
-| `qwen38-27b-iq3s` | `qwen38-27b-bakeoff` | chat | 1800s | dense UD-IQ3_S, same KV recipe; `--reasoning-budget 8192` backstop; the Claude Code picker row |
-| `qwen38-27b-q3kxl` | `qwen38-27b-bakeoff` | chat | 1800s | dense UD-Q3_K_XL, `-c 65536` (its max-safe rung) |
-| `qwen38-27b-iq3s-off` / `-low` / `-medium` / `-high` | `qwen38-27b-bakeoff` | chat | 1800s | the IQ3_S weights again, differing only in their server-enforced reasoning hard cap (off / 1024 / 4096 / unbudgeted); router-internal consumer only |
+| `bge-m3` | every `*_retrieval` set | embedding | 1800s | f16, 1024d, `--embeddings` |
+| `bge-reranker-v2` | every `*_retrieval` set | rerank | 1800s | Q8_0, `/rerank` only |
+| `bge-small` | every `*_retrieval` set | embedding | 1800s | f16, 384d; news-ingestion stores it as `bge-small-en-v1.5` |
+| `nemotron-4b` | `nemo_retrieval` | chat | 1800s | UD-Q4_K_XL, `-c 131072`, `--jinja`; small/fast option |
+| `ling-3-tiny-ud-q4-xl` | solo | chat | 1800s | Ling-3.0-tiny UD-Q4_K_XL, `-c 131072` (its real ceiling) |
+| `ling-3-tiny-ud-q6-xl` | solo | chat | 1800s | same model, UD-Q6_K_XL |
+| `ling-3-tiny-q8` | solo | chat | 1800s | same model, Q8_0 reference quant |
+| `gemma-4-12b-qat` | `gqat_retrieval` | chat + vision | 1800s | QAT UD-Q4_K_XL, `-c 131072`, `--mmproj`, MTP sidecar (`--spec-type draft-mtp`) |
+| `qwen36-a3b` | solo | chat | 1800s | MoE UD-Q4_K_XL, `-c 131072`, `-ncmoe 32` + `--load-mode none`, `-ub 2048`, embedded MTP heads |
+| `gemma-4-26b-a4b` | solo | chat + vision | 1800s | MoE QAT UD-Q4_K_XL, `-c 131072`, `-ncmoe 18` + `--load-mode none`, `-ub 2048`, `--mmproj`, MTP sidecar; served rung of the measured context ladder |
+| `qwen38-27b-iq3xxs` | solo | chat | 1800s | dense UD-IQ3_XXS, `-c 131072`, q4_0/q4_0 KV, `-fa on` |
+| `qwen38-27b-iq3s` | solo | chat | 1800s | dense UD-IQ3_S, same KV recipe; `--reasoning-budget 8192` backstop; the Claude Code picker row |
+| `qwen38-27b-q3kxl` | solo | chat | 1800s | dense UD-Q3_K_XL, `-c 65536` (its max-safe rung) |
+| `qwen38-27b-iq3s-off` / `-low` / `-medium` / `-high` | solo | chat | 1800s | the IQ3_S weights again, differing only in their server-enforced reasoning hard cap (off / 1024 / 4096 / unbudgeted); router-internal consumer only |
+| `minicpm5-2b-q6k-c32k-kvf16` | `cpm32_retrieval` | chat | 1800s | MiniCPM5-2B Q6_K, `-c 32768`, f16 KV |
+| `minicpm5-2b-q6k-c64k-kvq8` | `cpm64_retrieval` | chat | 1800s | same weights, `-c 65536`, q8_0 KV |
+| `minicpm5-2b-q6k-c128k-kvq4` | `cpm128_retrieval` | chat | 1800s | same weights, `-c 131072`, q4_0 KV |
 
 - **Aliases are the API surface, append-only.** `bge-m3` and `bge-reranker-v2` are the exact
   `modelId` values Crucible's live plugin settings (`data.json`) already store for the embed and
@@ -97,22 +100,7 @@ The live alias set, as of 2026-09-13 (refreshed from `config.yaml` itself — th
   change instead of a model-id rewrite. Never rename or delete an alias once a vault may be
   using it; only add new ones. `gemma-4-12b` and `nemotron-4b` were the first two additions
   (`gemma-4-12b` has since been removed from serving — the alias stays reserved forever).
-- **`retrieval` group** (`swap: false, exclusive: false, persistent: false`) holds all three
-  retrieval models — small enough, and used closely enough together by one search/rerank flow, that
-  neither should evict the other. `ttl: 1800` (30 min) unloads an idle model and returns its
-  VRAM; `persistent` staying `false` is what lets that `ttl` actually apply.
-- **`chat` group** (`swap: true, exclusive: true, persistent: false`) today holds `nemotron-4b`
-  alone (it held `gemma-4-12b` too until that alias was removed from serving 2026-08-25); every
-  later chat model got its own same-shaped group instead, one per family — the opposite policy
-  from `retrieval`, because a chat model is large enough
-  that it cannot safely coexist with another chat model or the retrieval pair under this GPU's
-  VRAM. `exclusive: true` means a chat request evicts `bge-m3`/`bge-reranker-v2` first; a
-  retrieval request afterward reloads without evicting the chat model. The eviction mechanics
-  were verified at cutover (two full evict→reload cycles, byte-identical embeddings, no amdgpu
-  errors); the specific model list above is new and gets the live smoke test (including the
-  chat-completion checks below) before being treated as validated in production. See
-  `config.yaml`'s `chat` group comment for the full VRAM fit math — measured host GPU VRAM,
-  per-model weight sizes, and why `gemma-4-26B-A4B`/27B/31B/35B-A3B are excluded.
+- **Residency is one `matrix:`** (it replaced the per-family `groups:` 2026-10-19; rule and measured semantics in `AGENTS.md` "Residency: `matrix`, not `groups`"). Each `sets:` entry names models allowed resident together under the ~12.8 GiB budget: the three retrieval models share a set with each small chat model (`nemo_retrieval`, `gqat_retrieval`, `cpm*_retrieval`), so a retrieval request beside one of them evicts nothing; the 27B family and the research-only aliases are solo sets, and loading one evicts everything else. `ttl: 1800` (30 min) unloads an idle model and returns its VRAM. Each set carries its fit rationale as a comment in `config.yaml`; the old chat-group VRAM math survives there as "Former `chat` group history".
 - `-b/-ub 8192`, `-ngl 99`, and the **absence** of `--pooling` on the retrieval macro are carried
   over verbatim from the compose invocations this service replaces — don't add `--pooling` back;
   the GGUF metadata and `--embeddings`/`--reranking` already select the right pooling. The chat
@@ -138,11 +126,10 @@ not a script fact); `/rerank` for `bge-reranker-v2` against 3 documents returns 
 with a unique index in `[0,2]` and a numeric `relevance_score` each; `/api/v0/models` (an LM
 Studio-only endpoint llama-swap doesn't implement) fails fast — any 4xx/5xx within ~5s, not a
 hang — per the fleet's standing "an endpoint that never fails loudly can still be silently
-broken" lesson; `/v1/chat/completions` for each configured chat alias (`gemma-4-12b`,
-`nemotron-4b`) with `max_tokens: 256` returns a non-empty `content` (the first request evicts
-the retrieval group, per the `chat` group's `exclusive: true`, so this check budgets a longer
-timeout for the cold spawn). The `ttl`-unload check is opt-in and slow (`--wait-ttl`) because the
-retrieval group's `ttl` is 1800s; without the flag it's reported as skipped, not silently
+broken" lesson; `/v1/chat/completions` for each configured chat alias (`gemma-4-12b-qat` and the
+`LOCAL_SMALL` test-slot alias from `test-slots.json`) with `max_tokens: 256` returns a non-empty
+`content` (this check budgets a longer timeout for the cold spawn). The `ttl`-unload check is opt-in and slow (`--wait-ttl`) because the
+retrieval models' `ttl` is 1800s; without the flag it's reported as skipped, not silently
 omitted.
 
 Exits non-zero on any failed check.
@@ -168,12 +155,12 @@ probe also *cannot* be turned into a spawn test: `bge-small-en-v1.5-f16` has `tt
 actually unloads — the probe would only ever observe an already-warm process.
 
 `deep-health-check.sh` is the other half: it `POST`s `/v1/embeddings` for `bge-small` (the
-cheapest model in the retrieval group) and asserts the response **body** — `data[0].embedding`
+cheapest retrieval model) and asserts the response **body** — `data[0].embedding`
 must be an array of exactly 384 finite numbers — never a status code, for the same reason
 `smoke-inference.sh` does: LM Studio answers unknown endpoints with HTTP 200 and an error body,
 and a status-code check would have reported the August outage as healthy the entire time. It
-tolerates one transient failure before declaring FAIL, because the `chat` group's
-`exclusive: true` can legitimately evict `bge-small` mid-probe.
+tolerates one transient failure before declaring FAIL, because loading a solo matrix set
+can legitimately evict `bge-small` mid-probe.
 
 ```bash
 llama/deep-health-check.sh                                   # default target :4811, model bge-small
@@ -239,7 +226,7 @@ RX 9070 (RADV GFX1201)`. The assertion does not depend on that continuing to be 
 The llvmpipe trap's sibling, and the one that actually took the service down for ~30 hours in
 August 2026. Same shape: the guard passed and the thing was wrong.
 
-All three build stages start `FROM debian:sid-slim`, which rolls forward. The build stage
+The build and runtime stages start `FROM debian:sid-slim`, which rolls forward (the `swap` stage is a golang image). The build stage
 installs `build-essential`, which drags in `libc6-dev` and upgrades `libc6` as a side effect;
 the runtime stage's package list never mentioned `libc6`, so it stayed on the base layer's
 older one. `COPY --from=build` then dropped binaries linked against the newer glibc onto the
@@ -287,7 +274,7 @@ they return properly normalised vectors at exactly the widths real embedders use
 `bge-reranker-v2-m3` (colliding with `bge-m3`) and 768d for `bge-reranker-base` (colliding with
 `nomic-embed-text`). Measured (61 parallel Wikipedia articles, en/fr/ja): cross-lingual P@1
 collapses to 19.7%/13.1% against 100%/98.4% for the same model family used correctly, and
-ordering is inverted — see `docs/local-inference.md` for the full numbers.
+ordering is inverted — see obsidian-crucible's (archived) `docs/local-inference.md` for the full numbers.
 
 The same weights score correctly through a real rerank endpoint — this container's `/v1/rerank`
 puts an on-topic document at a strongly positive logit and irrelevant ones strongly negative. It
@@ -314,7 +301,7 @@ precision, the vector scan filters by it, and mixing two spaces in one vault is 
 upsert. So switching the embedding provider to this service is a deliberate act that re-embeds
 the vault.
 
-Verify agreement rather than assuming it, with `scripts/embedding-agreement.mjs`. This image's
+Verify agreement rather than assuming it, with obsidian-crucible's (archived) `scripts/embedding-agreement.mjs`. This image's
 output was checked against the LM Studio llama.cpp build at the same precision: **MIN cosine
 0.999983** across ten texts with a 0.309 control, i.e. the same space, so measurements taken
 through LM Studio transfer to this container. This did not change with the llama-swap addition —
@@ -348,7 +335,7 @@ docker build --build-arg LLAMA_CPP_TAG=b10664 -t crucible-llamacpp-vulkan:b10664
 
 A future rebuild of that tag through this same build-arg path inherits the source-build `swap` stage automatically; the existing `b10664-swap243` image is deliberately left as built rather than rebuilt now (the `container-critical-high-cve-remediation` plan, "Decisions locked").
 
-**The `Dockerfile` default deliberately stays `b10534`, and the compose service is not repointed.** The new tag exists only as a build-arg override, reachable by the bake-off harness through `BAKEOFF_SCRATCH_IMAGE` (`run-window.sh` in `eval-harness/inference_research/harness`). Moving the default instead would drag all eight production models, the embedding agreement harness, and the whole glibc/Mesa ABI surface 130 upstream builds forward for the benefit of one experiment — and both traps above are on record from exactly that class of change. Keeping the experiment in its own tag is what contains the *image* risk. It does not contain the *availability* cost: a bake-off window stops the router regardless of which image it runs.
+**The `Dockerfile` default deliberately stays `b10534`, and the compose service is not repointed.** The new tag exists only as a build-arg override, reachable by the bake-off harness through `BAKEOFF_SCRATCH_IMAGE` (`run-window.sh` in `eval-harness/inference_research/harness`). Moving the default instead would drag every production model, the embedding agreement harness, and the whole glibc/Mesa ABI surface 130 upstream builds forward for the benefit of one experiment — and both traps above are on record from exactly that class of change. Keeping the experiment in its own tag is what contains the *image* risk. It does not contain the *availability* cost: a bake-off window stops the router regardless of which image it runs.
 
 One sharp edge on that seam: the harness's `run-window.sh` reads `BAKEOFF_SCRATCH_IMAGE` only on its `docker run` path. If a `bakeoff-scratch` container already exists but is stopped, the script `docker start`s it with the image and mounts it was *created* with, and the env var is silently ignored. Setting the variable is therefore not enough — `docker rm -f bakeoff-scratch` first, or inspect it and recreate it on an image mismatch.
 
@@ -402,7 +389,7 @@ started.
 
 ## Migration status
 
-**Cutover complete (2026-07-26).** `crucible-inference` is the live and only inference path:
+**Cutover complete (2026-07-26).** The llama service (then `crucible-inference`, now `inference-engine-llama`) is the live and only inference path:
 the compose service runs always-on in the fleet compose, Crucible's two
 retrieval provider entries pointed at `127.0.0.1:4806` (repointed to `4811` on 2026-07-27,
 when the transitional 4806 publish was retired), and the smoke test plus the
@@ -411,14 +398,7 @@ reload, no amdgpu errors) passed against the real service before anything was re
 interleave test used gemma-4-12B as a throwaway chat member to prove the eviction mechanics —
 `config.yaml` did not yet carry a real `chat` group.
 
-**Chat models added, not yet part of "cutover complete" above.** `config.yaml` now configures
-`gemma-4-12b` and `nemotron-4b` in a real `chat` group (see the model table and VRAM fit math
-earlier in this file); this authoring pass did not start the container, load either model, or
-touch the live service — the orchestrator reloads `crucible-inference` and runs
-`smoke-inference.sh`'s new chat-completion checks against it separately. Once that passes,
-adding a plugin-side chat provider entry (`openai-compatible`, base URL
-`http://127.0.0.1:4811/v1`, model id `gemma-4-12b` or `nemotron-4b`) is a Crucible settings
-change, not a code change.
+**Chat models since cutover** were added alias by alias (table above) with their own smoke runs; `gemma-4-12b`, the first, has since been removed from serving and its alias stays reserved.
 
 Retired in the same cutover, all recoverable from git history if ever needed:
 
@@ -427,4 +407,4 @@ Retired in the same cutover, all recoverable from git history if ever needed:
 - The per-model compose services `crucible-embed-gpu`/`crucible-rerank-gpu` (4804/4805).
 - The Infinity CPU pair `crucible-embedder`/`crucible-reranker` (4802/4803) and their HF cache
   volumes. For a host with no usable GPU, the recipe survives as route (d) in
-  [`docs/local-inference.md`](../../docs/local-inference.md).
+  obsidian-crucible's (archived) `docs/local-inference.md`.

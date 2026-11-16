@@ -1,6 +1,6 @@
 # inference-engine-onnx — the GLiNER2-family CPU sidecar
 
-An always-resident HTTP service on **127.0.0.1:4812** that serves the
+An HTTP service (hot models resident, rare ones lazy-loaded with idle unload) on **127.0.0.1:4812** that serves the
 [`fastino/gliner2-family`](https://huggingface.co/collections/fastino/gliner2-family) models for
 **entity extraction + zero-shot classification**, on CPU, through onnxruntime. It is the CPU half
 of this repo's two-tier design: everything llama.cpp cannot serve — encoder + span-head models,
@@ -17,7 +17,7 @@ one is a **config append plus a weights fetch — no code**.
 | `models.yaml` | The alias registry. Bind-mounted read-only; **append-only** API surface with a consumer registry in its header. |
 | `Dockerfile` | `python:3.13-slim` + onnxruntime/numpy/tokenizers/PyYAML. No torch, no GPU. |
 | `entrypoint.sh` | Start-up assertions: torch is absent, onnxruntime resolved a CPU provider, the registry mount is real. |
-| `server/` | The service. `app.py` (routes), `registry.py` (aliases + residency), `runtime.py` (the torch-free GLiNER2 inference path). |
+| `server/` | The service. `app.py` (routes), `registry.py` (aliases + residency), `runtime.py` (the torch-free GLiNER2 inference path), `runtime_seqcls.py` (classifier heads), `schema.py` (request boundary), `shutdown.py`. |
 | `tools/export_gliner2.py` | Host-side ONNX exporter **with a torch-parity gate**. Never shipped in the image. |
 | `smoke-extract.sh` | Host-run smoke test. Shape assertions, body probes, one negative check. |
 | `smoke-classify.sh` | Host-run smoke for `POST /v1/classify` (seqcls models): shape assertions plus wrong-type 400 on both routes. |
@@ -159,18 +159,15 @@ family (DeBERTa-v3-base / mDeBERTa-v3-base) and both counting layers (`count_lst
 
 | | |
 | --- | --- |
-| Cold load, warm page cache | `gliner2-base` 1.5 s, `gliner2-pii` 2.0 s (preloaded before the listener opens) |
-| Peak RSS, both models resident, 8-way concurrent batch | 2.86 GiB VmHWM (`mem_limit: 4g`) |
+| Cold load, warm page cache | `gliner2-base` 1.5 s, `gliner2-pii` 2.0 s (preloaded at the time; both are now `preload: false`, loaded on first request and unloaded after 900 s idle — `models.yaml`) |
+| Peak RSS, both models resident, 8-way concurrent batch | 2.86 GiB VmHWM (`mem_limit: 4g` then; now `7g`, sized for every model loaded at once) |
 | Throughput, crisis24-length paragraphs, `gliner2-base` | 9.1–12.0 texts/s in a single request stream (32-text and 16-text batches respectively), 25.7 texts/s at 8-way concurrency |
 | Export artifacts on disk | 805 MB (`gliner2-base`), 1.2 GB (`gliner2-pii`) |
 
 Torch/CPU reference for the same model and schema, measured the same day: 2.5 s load, ~2.07 GB
 RSS, ~10 texts/s. The point of the ONNX path is not raw speed — it is that the runtime image
-carries no torch and the service is multi-model and always-resident.
+carries no torch and the service is multi-model (residency: `AGENTS.md`).
 
 ## Gates
 
-Per the repo's gate contract: `bash -n` on the shell scripts, executables `0755`, `file` + `LC_ALL=C
-grep -caP '\0'` clean on everything touched, and `smoke-extract.sh` green against the running
-container after any change that affects it. Model or runtime changes additionally re-run
-`tools/export_gliner2.py --verify-only` for every configured alias.
+Authoritative list: `AGENTS.md` Gates (unit tests, shell lint, `smoke-extract.sh` / `smoke-classify.sh` against the running container, and `tools/export_gliner2.py --verify-only` for every configured alias on model or runtime changes).

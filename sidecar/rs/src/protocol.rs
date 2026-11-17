@@ -15,6 +15,8 @@ pub const MODEL_FAMILIES: &[(&str, &str)] = &[
     ("gpt-6-astra", "medium"),
     ("gpt-6-sol", "medium"),
     ("gpt-6.1-sol", "medium"),
+    ("gpt-6.2-sol", "medium"),
+    ("gpt-6.2-astra", "low"),
     ("gpt-6.1-terra", "low"),
     ("gpt-6-luna", "low"),
 ];

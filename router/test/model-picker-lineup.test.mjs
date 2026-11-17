@@ -123,6 +123,10 @@ test("a router-shaped config renders exactly the catalog's Claude-Code-visible i
     "gpt-6-sol-high",
     "gpt-6.1-sol-low",
     "gpt-6.1-sol-high",
+    "gpt-6.2-sol-low",
+    "gpt-6.2-sol-high",
+    "gpt-6.2-astra-medium",
+    "gpt-6.2-astra-high",
     "gpt-6-luna-medium",
     "gpt-6-luna-high",
   ];

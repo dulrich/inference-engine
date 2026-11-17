@@ -208,10 +208,44 @@
           ]
         },
         {
-          "id": "gpt-6.1-sol",
+          "id": "gpt-6.2-sol",
           "consumers": [
             "cc"
           ]
+        },
+        {
+          "id": "gpt-6.2-sol-low",
+          "consumers": [
+            "router"
+          ]
+        },
+        {
+          "id": "gpt-6.2-sol-high",
+          "consumers": [
+            "router"
+          ]
+        },
+        {
+          "id": "gpt-6.2-astra",
+          "consumers": [
+            "cc"
+          ]
+        },
+        {
+          "id": "gpt-6.2-astra-medium",
+          "consumers": [
+            "router"
+          ]
+        },
+        {
+          "id": "gpt-6.2-astra-high",
+          "consumers": [
+            "router"
+          ]
+        },
+        {
+          "id": "gpt-6.1-sol",
+          "consumers": []
         },
         {
           "id": "gpt-6.1-sol-low",
@@ -331,10 +365,44 @@
           ]
         },
         {
-          "id": "gpt-6.1-sol",
+          "id": "gpt-6.2-sol",
           "consumers": [
             "cc"
           ]
+        },
+        {
+          "id": "gpt-6.2-sol-low",
+          "consumers": [
+            "router"
+          ]
+        },
+        {
+          "id": "gpt-6.2-sol-high",
+          "consumers": [
+            "router"
+          ]
+        },
+        {
+          "id": "gpt-6.2-astra",
+          "consumers": [
+            "cc"
+          ]
+        },
+        {
+          "id": "gpt-6.2-astra-medium",
+          "consumers": [
+            "router"
+          ]
+        },
+        {
+          "id": "gpt-6.2-astra-high",
+          "consumers": [
+            "router"
+          ]
+        },
+        {
+          "id": "gpt-6.1-sol",
+          "consumers": []
         },
         {
           "id": "gpt-6.1-sol-low",

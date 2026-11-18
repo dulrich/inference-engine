@@ -70,7 +70,7 @@ test("the WireGuard socket is opt-in and refuses a wildcard address", t => {
   const r = run(["--home", f.home, "--env-file", f.env, "--rust-bin", f.bin]);
   assert.equal(r.code, 0, r.err);
   const sock = fs.readFileSync(path.join(units(f.home), "inference-router-wg.socket"), "utf8");
-  assert.match(sock, /^ListenStream=10\.8\.0\.1:4813$/m);
+  assert.match(sock, /^ListenStream=192\.0\.2\.1:4813$/m);
   assert.match(sock, /^FreeBind=yes$/m);
   assert.match(fs.readFileSync(path.join(units(f.home), "inference-router@.service"), "utf8"),
     /^Sockets=inference-router\.socket inference-router-wg\.socket$/m);

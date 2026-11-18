@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # build-id.sh — fleet build-id helper (canonical copy-in template).
 # Sourceable copy-in template; bash + coreutils + git only.
 # Build id = last commit under the tool root, ignoring control-plane paths (the pathspecs

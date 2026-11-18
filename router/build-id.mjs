@@ -1,6 +1,10 @@
-// build-id.mjs — fleet build-id helper (plans/fleet-build-version-gate.md, Decision 3).
-// Self-contained copy-in template: node builtins only. scripts/help-gate.mjs imports this
+// build-id.mjs — fleet build-id helper (canonical copy-in template).
+// Self-contained copy-in template: node builtins only. The fleet help gate imports this
 // file directly, so the checker and the JS/TS helper are the same code.
+//
+// Build id = last commit under the tool root, ignoring control-plane paths (the exclude
+// pathspecs below, relative to the tool root), plus `-dirty` when a tracked non-excluded
+// file is modified; `unknown` without git metadata or when no commit matches.
 //
 //   import { handleBuildFlags } from "./build-id.mjs";
 //   if (argv.includes("--help")) { ...usage...; process.exit(0); }   // --help wins
@@ -10,6 +14,9 @@
 import { spawnSync } from "node:child_process";
 import { lstatSync, realpathSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
+
+/** Pathspecs every build-id git call uses, relative to the tool root (same literal text in every language). */
+export const BUILD_ID_EXCLUDES = Object.freeze([".", ":(exclude)plans", ":(exclude)references", ":(exclude,glob)**/FEEDBACK.md", ":(exclude,glob)**/INITIATIVE.md"]);
 
 function git(cwd, args) {
   const r = spawnSync("git", ["--no-optional-locks", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
@@ -44,9 +51,9 @@ export function buildId(path) {
     }
     if (d === top) break;
   }
-  const sha = git(top, ["log", "-1", "--format=%H", "--", tool])?.trim();
+  const sha = git(top, ["-C", tool, "log", "-1", "--format=%H", "--", ...BUILD_ID_EXCLUDES])?.trim();
   if (!sha) return "unknown";
-  const st = git(top, ["status", "--porcelain", "--untracked-files=no", "--", tool]);
+  const st = git(top, ["-C", tool, "status", "--porcelain", "--untracked-files=no", "--", ...BUILD_ID_EXCLUDES]);
   return st && st.trim() ? `${sha}-dirty` : sha;
 }
 

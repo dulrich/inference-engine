@@ -6,7 +6,7 @@
 //! the response — dropped with the handler future, or with the streamed body — and fires
 //! the sink's close hook.
 
-use crate::config::{BODY_LIMIT, VERSION};
+use crate::config::{BODY_LIMIT, BUILD_ID, VERSION};
 use crate::errors::{as_sidecar_error, SidecarError};
 use crate::logging::redact_headers;
 use crate::messages::{admit, on_joiner_close, on_owner_close, run, Admit};
@@ -51,6 +51,9 @@ pub fn health_body(w: &World) -> Value {
     json!({
         "status": if degraded { "degraded" } else { "ok" },
         "version": VERSION,
+        "activation": w.cfg.activation,
+        "build": BUILD_ID,
+        "retiring": w.retiring,
         "personas": personas,
         "binds": { "expected": w.binds.expected, "bound": w.binds.bound, "missing": missing },
         "degraded": degraded,

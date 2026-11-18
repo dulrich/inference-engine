@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Report the codex-sidecar unit state and the authenticated /healthz result on EVERY bind
-# the sidecar is expected to hold — loopback and the docker0 gateway (172.17.0.1, the bind
-# the router container uses). Probing loopback alone was blind to the boot-time docker0
+# Report the codex-sidecar generations — the accepting one and any retiring one, each with its
+# activation id, unit state and build id — and the authenticated /healthz result on EVERY
+# listener the sidecar is expected to hold — loopback and the docker0 gateway (172.17.0.1, the
+# listener the router container uses; probed while codex-sidecar-docker0.socket exists). Probing loopback alone was blind to the boot-time docker0
 # bind race by construction: that bind always works. Asserts on the body (`"status":"ok"`),
 # never on the status code alone. Never prints SIDECAR_KEY. Exits non-zero when unhealthy.
 #
@@ -52,8 +53,32 @@ else
 fi
 PORT="${SIDECAR_PORT:-4877}"
 
-printf '== systemctl --user status codex-sidecar ==\n'
-if command -v systemctl >/dev/null 2>&1; then
+UNIT_DIR="$INSTALL_HOME/.config/systemd/user"
+GEN_ROOT="$INSTALL_HOME/.local/lib/codex-sidecar/generations"
+printf '== generations ==\n'
+if [ -f "$UNIT_DIR/codex-sidecar.socket" ] && command -v systemctl >/dev/null 2>&1; then
+  systemctl --user list-units --plain --no-legend 'codex-sidecar*.socket' codex-sidecar-hold.service || true
+  boot="$(cat -- "$INSTALL_HOME/.local/lib/codex-sidecar/current" 2>/dev/null || true)"
+  printf 'boot generation: %s\n' "${boot:-none recorded}"
+  gens="$(systemctl --user list-units --plain --no-legend --state=active,activating,deactivating,reloading \
+    'codex-sidecar@*.service' | awk '{print $1}' || true)"
+  if [ -z "$gens" ]; then
+    printf 'no generation is running (connections queue on the socket)\n'
+    rc_gen=1
+  fi
+  for u in $gens; do
+    act="${u#codex-sidecar@}"; act="${act%.service}"
+    st="$(systemctl --user show -p StatusText --value "$u" 2>/dev/null || true)"
+    role="accepting"
+    [ "$st" = "retiring" ] && role="retiring"
+    build="unknown"
+    if [ -x "$GEN_ROOT/$act/codex-sidecar" ]; then
+      build="$("$GEN_ROOT/$act/codex-sidecar" --build 2>/dev/null || printf unknown)"
+    fi
+    printf '%-9s activation=%s build=%s (%s)\n' "$role" "$act" "$build" "${st:-no status}"
+  done
+elif command -v systemctl >/dev/null 2>&1; then
+  printf 'no generation units installed; legacy unit:\n'
   systemctl --user status codex-sidecar --no-pager || true
 else
   printf 'systemctl not found; skipping unit status\n'
@@ -71,8 +96,13 @@ if [ -z "$key" ]; then
   exit 1
 fi
 
-# Same default as sidecar/rs/src/config.rs read_config(): unset → docker0 gateway; empty → no extra bind.
-if grep -q '^SIDECAR_BIND_EXTRA=' -- "$ENV_FILE"; then
+# Generations: the socket units are the listeners (the binary's own bind settings are unused).
+# Legacy unit: same default as sidecar/rs/src/config.rs read_config(): unset → docker0
+# gateway; empty → no extra bind.
+if [ -f "$UNIT_DIR/codex-sidecar.socket" ]; then
+  extra=""
+  if [ -f "$UNIT_DIR/codex-sidecar-docker0.socket" ]; then extra="172.17.0.1"; fi
+elif grep -q '^SIDECAR_BIND_EXTRA=' -- "$ENV_FILE"; then
   extra="$(sed -n 's/^SIDECAR_BIND_EXTRA=//p' -- "$ENV_FILE" | tail -n 1)"
 else
   extra="${SIDECAR_BIND_EXTRA-172.17.0.1}"
@@ -83,7 +113,7 @@ if [ -n "$extra" ]; then hosts="$hosts $extra"; fi
 body_file="$(mktemp)"
 trap 'rm -f -- "$body_file"' EXIT
 
-rc=0
+rc="${rc_gen:-0}"
 personas=""
 for host in $hosts; do
   url="http://${host}:${PORT}/healthz"
@@ -108,6 +138,9 @@ for host in $hosts; do
   # The configured persona set, from the sidecar itself (loopback), in its declared order.
   if [ "$host" = "127.0.0.1" ] && command -v jq >/dev/null 2>&1; then
     personas="$(jq -r '(.personas // {}) | keys_unsorted[]' -- "$body_file" 2>/dev/null || true)"
+    printf 'answered by activation %s (build %s)\n' \
+      "$(jq -r '.activation // "?"' -- "$body_file" 2>/dev/null || true)" \
+      "$(jq -r '.build // "?"' -- "$body_file" 2>/dev/null || true)"
   fi
 done
 

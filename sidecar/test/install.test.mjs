@@ -52,7 +52,7 @@ esac`);
     env: { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: root, FLEET_ENV_BIN: fleetEnvBin ?? path.join(bin, "fleet-env") },
   });
   const r = noRun ? {} : run();
-  const unit = path.join(home, ".config", "systemd", "user", "codex-sidecar.service");
+  const unit = path.join(home, ".config", "systemd", "user", "codex-sidecar@.service");
   return {
     ...r,
     root,
@@ -85,7 +85,7 @@ test("store-only: the projection missing fails closed", () => {
   assert.match(r.stderr, /is missing; run fleet-env project/);
   assert.ok(!fs.existsSync(r.legacyEnv));
   assert.equal(r.unit, "", "no unit written");
-  assert.ok(!fs.existsSync(path.join(r.home, ".config", "systemd", "user", "codex-sidecar.service")), "no unit file");
+  assert.ok(!fs.existsSync(path.join(r.home, ".config", "systemd", "user", "codex-sidecar@.service")), "no unit file");
   assert.ok(!fs.existsSync(path.join(r.home, ".local", "lib", "codex-sidecar", "codex-sidecar")), "no binary written");
   assert.deepEqual(fs.readdirSync(r.home), [], "nothing written under the install home");
 });
@@ -135,7 +135,7 @@ test("--env-file: mode 0600 enforced, EnvironmentFile points at it, no fleet-env
   });
   const r = run(good);
   assert.equal(r.status, 0, r.stderr);
-  const unit = fs.readFileSync(path.join(ok.home, ".config", "systemd", "user", "codex-sidecar.service"), "utf8");
+  const unit = fs.readFileSync(path.join(ok.home, ".config", "systemd", "user", "codex-sidecar@.service"), "utf8");
   assert.ok(unit.split("\n").includes(`EnvironmentFile=${good}`));
   assert.doesNotMatch(unit, /^(After|Requires)=fleet-env/m);
   assert.ok(!(r.stdout + r.stderr).includes(DUMMY));
@@ -156,7 +156,14 @@ function rustStub(root, tag) {
   return p;
 }
 
-test("render: ExecStart is the installed binary, no node path, binary 0755", () => {
+const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const genDirs = home => {
+  const root = path.join(home, ".local", "lib", "codex-sidecar", "generations");
+  return fs.existsSync(root) ? fs.readdirSync(root).sort() : [];
+};
+const pointer = (home, name) => fs.readFileSync(path.join(home, ".local", "lib", "codex-sidecar", name), "utf8").trim();
+
+test("render: the generation template, sockets and hold unit; ExecStart is the generation's binary", () => {
   let stub;
   const r = setup({ prepare: ({ root }) => { stub = rustStub(root, "v1"); }, args: [] });
   // first run above installed the v0 stub; re-run with v1 against the same home
@@ -165,28 +172,54 @@ test("render: ExecStart is the installed binary, no node path, binary 0755", () 
     env: { PATH: `${path.join(r.root, "bin")}:/usr/bin:/bin`, HOME: r.root, FLEET_ENV_BIN: path.join(r.root, "bin", "fleet-env") },
   });
   assert.equal(rr.status, 0, rr.stderr);
-  const unit = fs.readFileSync(path.join(r.home, ".config", "systemd", "user", "codex-sidecar.service"), "utf8");
-  const dest = path.join(r.home, ".local", "lib", "codex-sidecar", "codex-sidecar");
-  assert.match(unit, new RegExp(`^ExecStart=${dest.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
-  assert.match(unit, new RegExp(`^Environment=PATH=${path.join(r.root, "bin").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:/usr/local/bin:/usr/bin:/bin$`, "m"));
-  assert.doesNotMatch(unit, /\.nvm|node|@EXEC@|@PATH@/);
-  assert.equal(fs.statSync(dest).mode & 0o777, 0o755);
-  assert.match(fs.readFileSync(dest, "utf8"), /# v1/);
+  const units = path.join(r.home, ".config", "systemd", "user");
+  const unit = fs.readFileSync(path.join(units, "codex-sidecar@.service"), "utf8");
+  const lib = path.join(r.home, ".local", "lib", "codex-sidecar");
+  assert.match(unit, new RegExp(`^ExecStart=${esc(lib)}/generations/%i/codex-sidecar$`, "m"));
+  assert.match(unit, /^Type=notify$/m);
+  assert.match(unit, /^Environment=SIDECAR_ACTIVATION=%i$/m);
+  assert.match(unit, /^Sockets=codex-sidecar\.socket codex-sidecar-docker0\.socket$/m);
+  assert.match(unit, new RegExp(`^Environment=PATH=${esc(path.join(r.root, "bin"))}:/usr/local/bin:/usr/bin:/bin$`, "m"));
+  assert.doesNotMatch(unit, /\.nvm|node|@[A-Z_]+@/);
+  for (const u of ["codex-sidecar.socket", "codex-sidecar-docker0.socket", "codex-sidecar-hold.service"]) {
+    assert.equal(fs.readFileSync(path.join(units, u), "utf8"), fs.readFileSync(path.join(import.meta.dirname, "..", u), "utf8"), u);
+  }
+  const cur = pointer(r.home, "current");
+  assert.match(cur, /^\d{8}T\d{6}Z-[0-9a-f]{8}$/, "activation id: timestamp + random suffix");
+  const gen = path.join(lib, "generations", cur);
+  assert.equal(fs.statSync(path.join(gen, "codex-sidecar")).mode & 0o777, 0o755);
+  assert.match(fs.readFileSync(path.join(gen, "codex-sidecar"), "utf8"), /# v1/);
+  for (const f of ["preamble.txt", "thread-config.json"]) {
+    assert.equal(fs.readFileSync(path.join(gen, f), "utf8"), fs.readFileSync(path.join(import.meta.dirname, "..", f), "utf8"), f);
+  }
   assert.doesNotMatch(rr.stdout, /cargo build/);
+  assert.doesNotMatch(r.readCalls(), /systemctl|loginctl/, "a test home never touches systemd");
 });
 
-test("reinstall keeps the previous build as codex-sidecar.prev", () => {
-  let v1, v2;
-  const r = setup({ args: ["--rust-bin", "PLACEHOLDER"], prepare: ({ root }) => { v1 = rustStub(root, "v1"); v2 = rustStub(root, "v2"); } });
+test("generations: current + previous kept, older pruned; --rollback starts a new generation from the previous one", () => {
+  let v1, v2, v3;
+  const r = setup({ args: ["--rust-bin", "PLACEHOLDER"], prepare: ({ root }) => { v1 = rustStub(root, "v1"); v2 = rustStub(root, "v2"); v3 = rustStub(root, "v3"); } });
   assert.notEqual(r.status, 0, "placeholder path is rejected");
   assert.match(r.stderr, /--rust-bin is not an executable file/);
   const env = { PATH: `${path.join(r.root, "bin")}:/usr/bin:/bin`, HOME: r.root, FLEET_ENV_BIN: path.join(r.root, "bin", "fleet-env") };
-  for (const b of [v1, v2]) {
+  const ids = [];
+  for (const b of [v1, v2, v3]) {
     const x = spawnSync("bash", [INSTALL, "--home", r.home, "--rust-bin", b], { encoding: "utf8", env });
     assert.equal(x.status, 0, x.stderr);
+    ids.push(pointer(r.home, "current"));
   }
-  const lib = path.join(r.home, ".local", "lib", "codex-sidecar");
-  assert.match(fs.readFileSync(path.join(lib, "codex-sidecar"), "utf8"), /# v2/);
-  assert.match(fs.readFileSync(path.join(lib, "codex-sidecar.prev"), "utf8"), /# v1/);
-  assert.deepEqual(fs.readdirSync(lib).sort(), ["codex-sidecar", "codex-sidecar.prev"], "no temp files left behind");
+  assert.equal(new Set(ids).size, 3, "a new activation id per run, even for the same tree");
+  assert.deepEqual(genDirs(r.home), [ids[1], ids[2]].sort(), "only current and previous are kept");
+  assert.equal(pointer(r.home, "previous"), ids[1]);
+
+  assert.notEqual(spawnSync("bash", [INSTALL, "--home", r.home, "--rollback", "--rust-bin", v1], { encoding: "utf8", env }).status, 0, "--rollback refuses --rust-bin");
+  const rb = spawnSync("bash", [INSTALL, "--home", r.home, "--rollback"], { encoding: "utf8", env });
+  assert.equal(rb.status, 0, rb.stderr);
+  const now = pointer(r.home, "current");
+  assert.ok(!ids.includes(now), "a rollback is a new generation");
+  const lib = path.join(r.home, ".local", "lib", "codex-sidecar", "generations");
+  assert.match(fs.readFileSync(path.join(lib, now, "codex-sidecar"), "utf8"), /# v2/, "the previous generation's binary");
+  assert.equal(pointer(r.home, "previous"), ids[2]);
+  assert.deepEqual(genDirs(r.home), [ids[2], now].sort());
+  assert.ok(!fs.readdirSync(lib).some(n => n.startsWith(".")), "no temp dirs left behind");
 });

@@ -1,20 +1,31 @@
 [Unit]
-Description=codex app-server sidecar (Anthropic Messages front end for codex personas)
+Description=codex-sidecar generation %i (Anthropic Messages front end for codex personas)
+# One generation per install run: %i is the activation id, %i's directory under
+# generations/ holds the binary and the pinned files it reads. The listen sockets belong to
+# the socket units; a generation inherits them (Sockets=) and never binds itself.
+# SIGUSR1 retires a generation (stop admitting, finish in-flight requests, exit 0; exit 3
+# when the retire deadline cut streams). install.sh runs every start, retire and switch.
 # No After= line on purpose. `network.target` is LoadState=not-found in the systemd *user*
 # manager (it orders against nothing), and a user unit cannot order after a system unit such
-# as docker.service. The docker0 bind race is handled in-process instead: the sidecar retries
-# the extra bind and reports /healthz degraded until it lands. Do not re-add an ordering line.
+# as docker.service. A generation binds nothing: the docker0 listener is
+# codex-sidecar-docker0.socket (FreeBind=yes, so it holds the address before docker0 exists).
+# Do not re-add an ordering line.
 @FLEET_ENV_UNIT@
 
 [Service]
-Type=simple
-ExecStart=@EXEC@
+Type=notify
+NotifyAccess=main
+Sockets=codex-sidecar.socket codex-sidecar-docker0.socket
+ExecStart=@LIB_DIR@/generations/%i/codex-sidecar
 Environment=PATH=@PATH@
 Environment=SIDECAR_PERSONAS=@PERSONAS@
 EnvironmentFile=@ENV_FILE@
+Environment=SIDECAR_ACTIVATION=%i
 StandardInput=null
 Restart=on-failure
 RestartSec=5
+# Exit 3 is a retire that hit its deadline: a finished generation, never restarted.
+RestartPreventExitStatus=3
 
 # Hardening: networked baseline sandbox block; relaxations are commented inline.
 # Writes: the persona CODEX_HOMEs (children refresh OAuth, sqlite, logs) and the sidecar

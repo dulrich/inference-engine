@@ -1,0 +1,13 @@
+[Unit]
+Description=codex-sidecar listen socket on the docker0 gateway (the container router's path)
+# A separate unit from codex-sidecar.socket so that removing this listener (when the router
+# leaves its container) never changes an active socket unit. FreeBind: docker0 may not exist
+# yet when the user manager starts.
+
+[Socket]
+ListenStream=172.17.0.1:4877
+FreeBind=yes
+Service=codex-sidecar-hold.service
+
+[Install]
+WantedBy=sockets.target

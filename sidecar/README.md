@@ -36,7 +36,7 @@ All modules live under `rs/src/`. `main.rs` is the entry point and `sidecar.rs` 
 | `http` | Auth (before any body byte is read), the closed route table, the 32 MiB body cap, the bind-aware `/healthz` payload, and the close guard that fires a sink's close hook. |
 | `lib` | The crate root: declares the modules. |
 | `logging` | The day-rolled JSONL log, its retention prune, and the header-redaction rule. |
-| `main` | The binary: boot, print the listening line, graceful shutdown on SIGTERM/SIGINT; any boot failure exits 1. |
+| `main` | The binary: boot (inherited sockets and `NOTIFY_SOCKET` taken first), print the listening line, `READY=1`, graceful shutdown on SIGTERM/SIGINT, the SIGUSR1 retire; any boot failure exits 1. |
 | `messages` | `POST /<persona>/v1/messages` as the explicit sequence normalization → session disposition → turn execution → outcome emission, plus the owner/joiner close handling. |
 | `outbox` | The event-outbox writer itself: the pinned line format, appended to JSONL day-files. |
 | `outbox_events` | The tracker rows one completed turn produces (`turn.completed`, `child.spawned`, `usage`, `rate_limit`). |
@@ -58,7 +58,7 @@ All routes are authenticated with `authorization: Bearer <SIDECAR_KEY>` **or** `
 | `POST /<persona>/v1/messages` | Anthropic Messages, streaming and `stream:false`. `max_tokens` is accepted and ignored. |
 | `POST /<persona>/v1/messages/count_tokens` | `ceil(totalChars / 4)` estimate, always 200. Claude Code never calls it in practice. |
 | `HEAD\|GET /<persona>/api/hello` | 200 `{}` (Claude Code's pre-flight). |
-| `GET /healthz` | `{status, personas:{<persona>:{alive,degraded}}, binds:{expected,bound,missing}, degraded}`; **503** when any persona is degraded **or any expected bind is missing** (`binds.missing` non-empty) — a sidecar the router cannot reach must not read `ok`. |
+| `GET /healthz` | `{status, version, activation, build, retiring, personas:{<persona>:{alive,degraded}}, binds:{expected,bound,missing}, degraded}` (`activation` = the generation's activation id, `unmanaged` for a process started without one; `build` = the tool-scoped build id; `retiring` = SIGUSR1 received, readable only on a connection opened before it); **503** when any persona is degraded **or any expected bind is missing** (`binds.missing` non-empty) — a sidecar the router cannot reach must not read `ok`. |
 
 Errors are Anthropic-shaped `{"type":"error","error":{"type":…,"message":…}}`: 400 `invalid_request_error` (bad JSON, unknown model id, image blocks), 401 `authentication_error` (bad key, upstream auth failure), 404 `not_found_error` (unknown persona or path), 413 (body over 32 MiB), 429 `rate_limit_error` (+ `retry-after` when derivable from `resetsAt`), 502 `api_error`, 503 (degraded persona). In streaming mode an error *after* `message_start` is sent as an `event: error` frame and the stream ends; before it, as an HTTP status.
 
@@ -114,9 +114,11 @@ Integer variables (ports, `*_MS`, days, tokens, here and under Test seams) are s
 | `SIDECAR_LOG_KEEP_DAYS` | `14` | Log retention; pruned at startup and at each UTC day rollover. |
 | `SIDECAR_STATE_DIR` | `~/.local/state/codex-sidecar` | State root (holds `empty-cwd/`). |
 | `SIDECAR_OUTBOX_PATH` | *(unset)* | Legacy event-outbox path for an initiative tracker; rows are appended to `<dirname>/log/<YYYY-MM-DD>.jsonl` day-files beside it (the `events.db` itself is never written). Unset = off. |
+| `SIDECAR_ACTIVATION` | `unmanaged` | The generation's activation id; the unit sets it to its instance name (`%i`). Reported by `/healthz` and the `listen` log row. Unset or empty reports the placeholder `unmanaged` (a plain or containerized start). |
+| `SIDECAR_RETIRE_DEADLINE_MS` | `1800000` | How long a retire (SIGUSR1) waits for in-flight requests before cutting them (exit 3). |
 | `SIDECAR_CONTEXT_WINDOW_TOKENS` | `258400` | Fallback window for the wire-usage clamp (catalog 272,000 at the 95% auto-compact scope limit). Used only when the app-server reports no `modelContextWindow` for the thread. |
 
-`ANTHROPIC_API_KEY` is never read, set or forwarded. The execution-boundary item filter and the pinned `features.*` flags have no environment override by design.
+`LISTEN_FDS` / `LISTEN_PID` (systemd socket activation, see [Generations](#generations)) override `SIDECAR_PORT` and `SIDECAR_BIND_EXTRA` when they name this process; `NOTIFY_SOCKET` receives `READY=1`. All three are removed from the environment at startup, so no codex child inherits them. `ANTHROPIC_API_KEY` is never read, set or forwarded. The execution-boundary item filter and the pinned `features.*` flags have no environment override by design.
 
 ### Test seams
 
@@ -132,11 +134,24 @@ These exist only so the suite can run without a real codex binary and without wa
 
 ## Rust binary
 
-`rs/` is the implementation (`codex-sidecar` binary). Install it with `sidecar/install.sh`, which runs `cargo build --release --manifest-path sidecar/rs/Cargo.toml` from this checkout, installs the binary atomically to `~/.local/lib/codex-sidecar/codex-sidecar` (previous build kept as `codex-sidecar.prev`) and renders `ExecStart=` to that path with no node directory on the unit `PATH`; `--rust-bin <path>` (or `SIDECAR_RUST_BIN`) installs a prebuilt binary instead. The installed binary reads the pinned files (`preamble.txt`, `thread-config.json`) from the checkout it was built from; moving the checkout requires a reinstall. It never enables or restarts anything: run `systemctl --user daemon-reload && systemctl --user restart codex-sidecar.service` yourself. Rollback: restore `codex-sidecar.prev` over the binary and check out the pinned files from the known-good commit, then the same reload + restart (`AGENTS.md` Rollback).
+`rs/` is the implementation (`codex-sidecar` binary). `sidecar/install.sh` runs `cargo build --release --manifest-path sidecar/rs/Cargo.toml` from this checkout (`--rust-bin <path>` or `SIDECAR_RUST_BIN` takes a prebuilt binary instead) and writes it, with the pinned files, into a new generation directory (see [Generations](#generations)); the binary reads `preamble.txt` and `thread-config.json` from the nearest ancestor of its own path that holds both, which is that directory. Rollback is `sidecar/install.sh --rollback`.
+
+## Generations
+
+On a fleet node the sidecar runs as **generations**: instances `codex-sidecar@<activation>.service` of the template `codex-sidecar@.service.in`, which inherit their listeners from socket units instead of binding.
+
+- **Units.** `codex-sidecar.socket` listens on `127.0.0.1:4877`; `codex-sidecar-docker0.socket` on `172.17.0.1:4877` (`FreeBind=yes`; the container router's path, a separate unit so removing it never changes an active socket). Both name `codex-sidecar-hold.service` (`Type=oneshot`, `RemainAfterExit=yes`, runs `/bin/true`) as their `Service=`, so traffic never activates a generation: with none running, connections queue. The template lists both sockets in `Sockets=`, is `Type=notify`, sets `SIDECAR_ACTIVATION=%i` and `RestartPreventExitStatus=3`.
+- **Inherited sockets.** When `LISTEN_PID` is this process and `LISTEN_FDS` is n > 0, the binary serves on fds 3..3+n and ignores `SIDECAR_PORT` and `SIDECAR_BIND_EXTRA`; otherwise it binds exactly as before (a containerized or hand start is unchanged). The `listen` log row carries `inherited`, `activation` and `build`.
+- **Readiness.** `READY=1` (with `STATUS=accepting`) goes to `NOTIFY_SOCKET` only after the configuration, pinned files, key and random-source checks passed and every listener is serving; `systemctl start` returns then.
+- **Retire (SIGUSR1).** The generation stops admitting HTTP requests: every accept loop ends, idle keep-alive connections are closed, and a connection with a request in flight is closed after its response (hyper graceful shutdown), so a kept-alive connection never admits a further request. **Stated window:** a client that writes its next request on an idle kept-alive connection at the instant it is closed gets a connection-level error with no response byte (the race every HTTP/1.1 keep-alive close has); nothing was processed, and clients retry it. No in-flight request or stream is cut, and no fresh connection fails. Persona children are not stopped: every in-flight request runs to its own end. Once no listener is held it **acknowledges**: a `retiring` log row, `STATUS=retiring` to systemd (`systemctl --user show -p StatusText codex-sidecar@<id>`; this is what `install.sh` waits for) and `codex-sidecar: retiring (stopped accepting)` on stderr. When nothing is in flight it logs `retired`, stops its personas and **exits 0**. If `SIDECAR_RETIRE_DEADLINE_MS` (default 30 min) passes first, it logs `retire-deadline`, cuts every open stream (the shutdown path) and **exits 3** within the same 5 s bound SIGTERM has; the unit result then reads `exit-code` / status 3, and `RestartPreventExitStatus=3` keeps it from restarting. A second SIGUSR1 is ignored.
+- **SIGTERM / SIGINT** are unchanged at every point, a retire included: end streams, exit 0 within 5 s (fleet shutdown contract).
+- **Layout.** `~/.local/lib/codex-sidecar/generations/<activation>/` holds `codex-sidecar`, `preamble.txt` and `thread-config.json`; `current` and `previous` beside `generations/` name the boot generation and its predecessor. The activation id is minted per install run (`<UTC yyyymmddThhmmssZ>-<8 hex>`), never the build id: reinstalling the same build, a settings-only redeploy and a rollback each produce a new generation. The installer keeps `current` and `previous` (and any generation still running) and prunes the rest.
+- **Continuity boundary.** Only in-flight requests stay on the old generation. A request that arrives on a new generation for a session the old one served is answered on a **new thread seeded from the transcript** (`rehydrated`), including a request carrying the result of a tool the old generation delivered: the old thread, its delivered-tool bookkeeping and its tool-result continuation mode stay behind in the old process. That is recovery, not native-thread continuity.
+- **Credentials.** Two generations overlap safely only when both accept the same `SIDECAR_KEY`. A key rotation is not a live cutover; the installer says so when the running generation refuses the projected key (`AGENTS.md` Key rotation).
 
 ## Logs
 
-One JSONL file per UTC day, `codex-sidecar-YYYY-MM-DD.jsonl`, mode `0600` inside a `0700` directory. Bearer and `x-api-key` headers are redacted to `<redacted>`. Line kinds worth grepping: `listen` (`binds` = what is bound now, `expected` = what must be), `bind-extra-retrying` / `bind-extra-recovered` / `bind-extra-failed` (the docker0 bind race — one line at first failure, one on success, or one on give-up), `child-started`, `child-exit`, `initialized`, `config-verified`, `config-unverified`, `security-event`, `rate-limited`, `weak-session-key`, `rewind` (a diverged history: `seen`/`now`, plus `at` = first differing message index or `step` = growth size), `fork-local` (a subagent's non-streaming strict-prefix side query answered locally, session untouched: `n`, `seen`), `session-rekeyed` (a subagent session adopted under a new key on lineage proof: `from`, `to`, `threadId`), `rehydrated` (a new thread seeded mid-conversation with the rendered transcript: `nMessages`, `chars`), `title-local`, `parallel-tool-batch`, `effort-changed`, `http-start`, `superseded-request`, `joined-request` (a duplicate request attached to the in-flight turn — a duplicate is one whose SHA-256 digest over model id, effort, system text, tools and all messages matches the owner's, never merely the same shape — computed on the *undecorated* body: `cache_control` keys and harness `text` blocks trailing a `tool_result` are not identity (phase 4, 2026-09-14); `reqDigest` is that digest's first 12 hex chars), `replayed-outcome` (a straggler retry answered from the last completed outcome), `http` (per request; `usage` is the Anthropic projection, `usageCodex` the raw codex delta beside it, and `joinedTo` names the owning request on a joiner's row), `http-error`.
+One JSONL file per UTC day, `codex-sidecar-YYYY-MM-DD.jsonl`, mode `0600` inside a `0700` directory. Bearer and `x-api-key` headers are redacted to `<redacted>`. Line kinds worth grepping: `listen` (`binds` = what is bound now, `expected` = what must be; `inherited`, `activation`, `build`), `retiring` / `retired` / `retire-deadline` (a generation's retire: acknowledged, clean exit 0, deadline exit 3), `bind-extra-retrying` / `bind-extra-recovered` / `bind-extra-failed` (the docker0 bind race — one line at first failure, one on success, or one on give-up), `child-started`, `child-exit`, `initialized`, `config-verified`, `config-unverified`, `security-event`, `rate-limited`, `weak-session-key`, `rewind` (a diverged history: `seen`/`now`, plus `at` = first differing message index or `step` = growth size), `fork-local` (a subagent's non-streaming strict-prefix side query answered locally, session untouched: `n`, `seen`), `session-rekeyed` (a subagent session adopted under a new key on lineage proof: `from`, `to`, `threadId`), `rehydrated` (a new thread seeded mid-conversation with the rendered transcript: `nMessages`, `chars`), `title-local`, `parallel-tool-batch`, `effort-changed`, `http-start`, `superseded-request`, `joined-request` (a duplicate request attached to the in-flight turn — a duplicate is one whose SHA-256 digest over model id, effort, system text, tools and all messages matches the owner's, never merely the same shape — computed on the *undecorated* body: `cache_control` keys and harness `text` blocks trailing a `tool_result` are not identity (phase 4, 2026-09-14); `reqDigest` is that digest's first 12 hex chars), `replayed-outcome` (a straggler retry answered from the last completed outcome), `http` (per request; `usage` is the Anthropic projection, `usageCodex` the raw codex delta beside it, and `joinedTo` names the owning request on a joiner's row), `http-error`.
 
 ## Running it by hand
 
@@ -168,28 +183,22 @@ The suite spawns `rs/target/release/codex-sidecar` out-of-process by default (a 
 
 ## Launch
 
-The sidecar runs as a `systemd --user` service. The unit template lives here (`codex-sidecar.service.in`); `install.sh` renders it with absolute paths, because the systemd user PATH may not contain the persona-wrapper dir.
+The sidecar runs as `systemd --user` generations ([Generations](#generations)). The units live here (`codex-sidecar@.service.in`, `codex-sidecar.socket`, `codex-sidecar-docker0.socket`, `codex-sidecar-hold.service`); `install.sh` renders the template with absolute paths, because the systemd user PATH may not contain the persona-wrapper dir.
 
-**Install** (safe to re-run; a second run reports `unchanged`):
+**Install = deploy** (safe to re-run at any time; each run is a new generation and a live cutover):
 
 ```sh
 sidecar/install.sh --env-file ~/.config/codex-sidecar/env        # stock `codex`, key from your own file
 sidecar/install.sh --personas codex-a,codex-b --env-file …       # several accounts, via wrapper scripts
-sidecar/install.sh --home /tmp/x --env-file …                    # test render into a throwaway root; skips daemon-reload
+sidecar/install.sh --home /tmp/x --env-file …                    # test render into a throwaway root; never touches systemd
+sidecar/install.sh --rollback                                    # new generation from the previous generation's directory
 ```
 
 - `--personas a,b` (or `SIDECAR_PERSONAS`; default `codex`) names the personas to serve. `codex` is the stock binary with the default `~/.codex` login. Any other persona must be called `codex-<name>` and be an executable of that name on `PATH`, normally a one-line wrapper that sets `CODEX_HOME=~/.codex-<name>` and execs `codex "$@"` (log in once with that wrapper). The unit gets `SIDECAR_PERSONAS=…` and a writable `%h/.codex` / `%h/.codex-<name>` path per persona.
 - `--env-file <path>` reads the key from your own file: an absolute path, mode `0600`, containing `SIDECAR_KEY=<secret>` (and optionally the other variables in the table above). The unit's `EnvironmentFile=` points at it; the installer neither copies nor prints the key. `status.sh` reads the same file when `SIDECAR_ENV_FILE=<path>` is set.
 - Without `--env-file` the installer uses a `fleet-env` credential store instead: the `fleet-env` binary is found through `PATH` (`FLEET_ENV_BIN` overrides), the unit reads its tmpfs projection `%t/fleet-env/codex-sidecar.env` ordered after `fleet-env-project.service`, and a missing binary or projection fails loudly. There is no silent fallback between the two modes.
 
-The installer builds and installs the binary (see [Rust binary](#rust-binary)) and resolves each persona executable. Nothing is enabled or started: it ends by printing the lines below for you to run.
-
-**Enable** (`hold-for-user` — the agent cannot do this):
-
-```sh
-loginctl enable-linger $USER                    # only if install.sh reports linger NOT enabled
-systemctl --user enable --now codex-sidecar
-```
+In a real home the installer then does the cutover end to end: daemon-reload; migrates a legacy un-templated `codex-sidecar.service` once (stop, disable, remove — that single switch is a stop-then-start); starts the hold unit and enables both sockets; starts `codex-sidecar@<activation>` and polls `/healthz` on loopback until the body names that activation with `"status":"ok"` (a failed start or verify retires the new generation, removes its directory and leaves the old one serving, exit 1); enables the new generation (the boot generation) and disables the old; sends every older generation SIGUSR1 and waits for its `StatusText=retiring` acknowledgment; prunes. A test home (`--home` other than `$HOME`) writes the files only and never calls `systemctl`. It reports `linger NOT enabled` when generations would not start at boot.
 
 **Verify:**
 
@@ -197,9 +206,9 @@ systemctl --user enable --now codex-sidecar
 sidecar/status.sh
 ```
 
-`status.sh` prints `systemctl --user status codex-sidecar` (tolerating a not-installed unit), then an authenticated `GET /healthz` on **every** expected bind — loopback and `SIDECAR_BIND_EXTRA` (read from the env file; default `172.17.0.1`, empty skips it) — status code and body, never the key. It asserts on the body (`"status":"ok"`), and exits non-zero on a 503 (a degraded persona or a missing bind), a non-`ok` body, or a refused connection on any bind. Probing loopback alone was blind to the docker0 bind race by construction. It then runs one fixture turn as a posture probe, not tied to a fixed account: it tries the personas loopback `/healthz` lists, in order, reports and skips any whose turn does not complete (e.g. a persona not logged in on that node), probes the first that does, and fails only when none completes; `SIDECAR_PROBE_PERSONA="<name> [<name>…]"` replaces that list (tried in the order given).
+`status.sh` prints the generations — the socket units, the boot generation, and each running `codex-sidecar@` instance as `accepting` or `retiring` with its activation id and build id (`<generation>/codex-sidecar --build`) — or, before the migration, `systemctl --user status codex-sidecar`; then an authenticated `GET /healthz` on **every** expected listener — loopback, and `172.17.0.1` while `codex-sidecar-docker0.socket` is installed (legacy unit: `SIDECAR_BIND_EXTRA` from the env file; default `172.17.0.1`, empty skips it) — status code and body, never the key. It asserts on the body (`"status":"ok"`), and exits non-zero on a 503 (a degraded persona or a missing bind), a non-`ok` body, or a refused connection on any bind. Probing loopback alone was blind to the docker0 bind race by construction. It then runs one fixture turn as a posture probe, not tied to a fixed account: it tries the personas loopback `/healthz` lists, in order, reports and skips any whose turn does not complete (e.g. a persona not logged in on that node), probes the first that does, and fails only when none completes; `SIDECAR_PROBE_PERSONA="<name> [<name>…]"` replaces that list (tried in the order given).
 
-**Rotate the key:** replace `SIDECAR_KEY` in the env file (or the store entry in fleet-env mode), `systemctl --user restart codex-sidecar`, and give the router the same value.
+**Rotate the key:** replace `SIDECAR_KEY` in the env file (or the store entry in fleet-env mode), run `install.sh` (it reports the key rotation: a short failure window, not a zero-failure cutover), and give the router the same value.
 
 **Router side:** the router reaches the sidecar with the same shared key; point its codex provider entries at `http://<sidecar-host>:4877/<persona>`.
 

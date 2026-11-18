@@ -14,6 +14,11 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 pub const VERSION: &str = "0.1.0";
+/// The tool-scoped build id (build.rs), reported by `/healthz` beside the activation id.
+pub const BUILD_ID: &str = env!("FLEET_BUILD_ID");
+/// The activation id a process reports when no unit instance named one (`SIDECAR_ACTIVATION`
+/// unset or empty): a plain or containerized start.
+pub const NO_ACTIVATION: &str = "unmanaged";
 pub const BODY_LIMIT: usize = 32 * 1024 * 1024;
 
 /// The execution boundary: any other item type is out of band and trips it.
@@ -95,6 +100,10 @@ pub struct Config {
     /// SQLite-era name; the outbox writer only uses its directory. Empty = writer off.
     pub outbox_path: String,
     pub context_window_tokens: u64,
+    /// The generation's activation id (`SIDECAR_ACTIVATION`, the unit instance `%i`).
+    pub activation: String,
+    /// How long a retire (SIGUSR1) may wait for in-flight requests (`SIDECAR_RETIRE_DEADLINE_MS`).
+    pub retire_deadline_ms: u64,
     // ---- test seams (README "Test seams"; they never weaken an invariant) ----
     pub app_server_cmd: String,
     pub ping_ms: u64,
@@ -203,6 +212,8 @@ pub fn read_config(env: &HashMap<String, String>) -> Result<Config, String> {
         log_keep_days: int(env, "SIDECAR_LOG_KEEP_DAYS", 14)?,
         outbox_path: get("SIDECAR_OUTBOX_PATH").unwrap_or("").to_string(),
         context_window_tokens: int(env, "SIDECAR_CONTEXT_WINDOW_TOKENS", 258_400)?,
+        activation: or("SIDECAR_ACTIVATION", NO_ACTIVATION.to_string()),
+        retire_deadline_ms: int(env, "SIDECAR_RETIRE_DEADLINE_MS", 1_800_000)?,
         app_server_cmd: get("SIDECAR_APP_SERVER_CMD").unwrap_or("").to_string(),
         ping_ms: int(env, "SIDECAR_PING_MS", 15_000)?,
         batch_ms: int(env, "SIDECAR_BATCH_MS", 200)?,

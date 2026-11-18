@@ -884,6 +884,83 @@ async fn reset_after_request_written_is_not_retried() {
     );
 }
 
+/// The keep-alive close race with the router as the client (plan "Admission", stated window),
+/// pinned as it behaves: the upstream closes a pooled connection once the gateway's next
+/// request is written on it, with no response byte. hyper-util retries only a request that was
+/// still queued (never written), and the gateway's S2 rule retries only connect errors, so this
+/// surfaces as one 502 with no second upstream call -- the same outcome as
+/// `reset_after_request_written_is_not_retried` (and diff case 29). A request is never run
+/// twice upstream. (WP-2 report: the opt-in retry patch and why it conflicts with S2.)
+#[tokio::test]
+async fn reused_pooled_connection_closed_after_write_is_not_retried() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    async fn head(sock: &mut tokio::net::TcpStream) -> bool {
+        let (mut buf, mut got) = (vec![0u8; 8192], Vec::new());
+        while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = sock.read(&mut buf).await.unwrap_or(0);
+            if n == 0 {
+                return false;
+            }
+            got.extend_from_slice(&buf[..n]);
+        }
+        // The fixed-length body follows the head; this fixture's bodies are tiny.
+        true
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (accepted, answered) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let (acc, ans) = (accepted.clone(), answered.clone());
+    tokio::spawn(async move {
+        loop {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let nth = acc.fetch_add(1, Ordering::SeqCst);
+            let ans = ans.clone();
+            tokio::spawn(async move {
+                let body = "{\"ok\":true}";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                while head(&mut sock).await {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    if nth == 0 && ans.load(Ordering::SeqCst) == 1 {
+                        return; // the first connection's second request: close, no byte
+                    }
+                    sock.write_all(resp.as_bytes()).await.unwrap();
+                    ans.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+        }
+    });
+    let raw = json!({"host": "127.0.0.1", "port": 0, "providers": [
+        {"name": "side", "type": "anthropic", "apikey": "k", "baseurl": format!("http://{addr}/cd"), "models": ["gpt-x"]}]});
+    let state = fixture_state(raw, &keys_env);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(app::serve(state, move |a| tx.send(a).unwrap()));
+    let gw = format!("http://{}", rx.await.unwrap());
+    let send = || {
+        reqwest::Client::new()
+            .post(format!("{gw}/v1/messages"))
+            .header("x-gateway-key", KEY)
+            .body(r#"{"model":"side/gpt-x"}"#)
+            .send()
+    };
+    assert_eq!(send().await.unwrap().status().as_u16(), 200);
+    assert_eq!(
+        send().await.unwrap().status().as_u16(),
+        502,
+        "the written request is not retried"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        accepted.load(Ordering::SeqCst),
+        1,
+        "the second request went out on the pooled connection"
+    );
+    assert_eq!(answered.load(Ordering::SeqCst), 1);
+}
+
 /// A chained-node (laptop-shaped) config: same provider names and order as the tower's, with
 /// `claude-local` and `codex-a` on the upstream-gateway credential.
 async fn chained_gateway(up: &Stub, extra_env: &[(&str, &str)]) -> String {

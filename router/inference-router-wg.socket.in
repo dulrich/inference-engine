@@ -1,0 +1,13 @@
+[Unit]
+Description=inference-router WireGuard listen socket (opt-in per node; held for every generation)
+# Rendered by install.sh only when the projected env carries INFERENCE_ROUTER_WG_BIND_ADDRESS
+# (never WG_BIND_ADDRESS); a wildcard address is an install error. FreeBind=yes holds the
+# address before the WireGuard interface exists.
+
+[Socket]
+ListenStream=@WG_LISTEN@
+FreeBind=yes
+Service=inference-router-hold.service
+
+[Install]
+WantedBy=sockets.target

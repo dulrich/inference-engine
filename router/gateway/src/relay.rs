@@ -577,7 +577,8 @@ pub async fn models(State(st): St, headers: HeaderMap) -> Response {
     json_response(200, &body)
 }
 
-/// Unauthenticated liveness, plus the live catalog revision and the last reload rejection.
+/// Unauthenticated liveness, plus the live catalog revision, the last reload rejection, and
+/// the generation identity: `activation` (instance name, `unmanaged` outside a unit) and `build`.
 pub async fn health(State(st): St) -> Response {
     json_response(
         200,
@@ -586,6 +587,8 @@ pub async fn health(State(st): St) -> Response {
             "timestamp": iso_now(),
             "catalogRevision": st.catalog.snapshot().revision,
             "catalogError": st.catalog.error(),
+            "activation": st.settings.activation,
+            "build": env!("FLEET_BUILD_ID"),
         }),
     )
 }

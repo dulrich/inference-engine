@@ -246,19 +246,26 @@ impl Writer {
         self.dir.join(format!("router-{day}.{index}.jsonl"))
     }
 
+    /// Overlap-safe (two generations write one directory during a retire): the rotation state
+    /// is re-read from the directory before every batch, never kept process-local. The newest
+    /// index of the day and its on-disk size decide the target; a batch that would overflow it
+    /// opens `max + 1`, which a concurrent writer computes identically, so both append to the
+    /// same file. Each batch is one `O_APPEND` write of whole lines, so lines never interleave.
     fn target(&mut self, incoming: u64) -> PathBuf {
         let day = utc_day((self.clock)());
         if self.day.as_deref() != Some(day.as_str()) {
-            self.index = self
-                .list()
-                .iter()
-                .filter_map(|n| parse_name(n).filter(|(d, _)| *d == day).map(|(_, i)| i))
-                .max()
-                .unwrap_or(0);
-            self.current = size_of(&self.file(&day, self.index));
             self.day = Some(day.clone());
+            self.index = 0;
             self.prune = true;
         }
+        let newest = self
+            .list()
+            .iter()
+            .filter_map(|n| parse_name(n).filter(|(d, _)| *d == day).map(|(_, i)| i))
+            .max()
+            .unwrap_or(0);
+        self.index = self.index.max(newest);
+        self.current = size_of(&self.file(&day, self.index));
         if self.current > 0 && self.current + incoming > self.max_bytes {
             self.index += 1;
             self.current = 0;
@@ -280,11 +287,18 @@ impl Writer {
         v.into_iter().map(|(_, _, n)| n).collect()
     }
 
+    /// Removes the oldest files beyond `keep_files`. Safe beside a second writer: a file the
+    /// other writer already removed is ignored, and the file this writer appends to is never
+    /// removed (it is the newest of its day, so pruning reaches it only when `keep_files` is 0).
     fn prune_files(&self) {
         let files = self.list();
+        let keep = self.day.as_deref().map(|d| self.file(d, self.index));
         if files.len() > self.keep_files {
             for n in &files[..files.len() - self.keep_files] {
-                let _ = fs::remove_file(self.dir.join(n));
+                let p = self.dir.join(n);
+                if keep.as_deref() != Some(p.as_path()) {
+                    let _ = fs::remove_file(p);
+                }
             }
         }
     }

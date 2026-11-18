@@ -1,0 +1,65 @@
+[Unit]
+Description=inference-router generation %i (Anthropic-protocol gateway)
+# One generation per install run: %i is the activation id, %i's directory under generations/
+# holds the binary and the rendered gateway.config.json (host topology, router/install.sh).
+# The listen sockets belong to the socket units; a generation inherits them (Sockets=) and
+# never binds itself. SIGUSR1 retires a generation (stop accepting, finish in-flight
+# requests, exit 0; exit 3 when the retire deadline cut streams). install.sh runs every
+# start, retire and switch. No After= line on purpose (network.target orders against nothing
+# in the user manager); the sole ordering exception is the fleet-env projection below.
+@FLEET_ENV_UNIT@
+
+[Service]
+Type=notify
+NotifyAccess=main
+Sockets=@SOCKETS@
+ExecStart=@LIB_DIR@/generations/%i/inference-router
+EnvironmentFile=@ENV_FILE@
+Environment=INFERENCE_ROUTER_ACTIVATION=%i
+Environment=GATEWAY_CONFIG_PATH=@LIB_DIR@/generations/%i/gateway.config.json
+Environment=GATEWAY_CATALOG_PATH=@CATALOG@
+# The binary default (/var/log/inference-router) is the container path; a wrong directory
+# silently disables the sink, so the unit names it.
+Environment=ROUTER_TELEMETRY_DIR=%h/.local/state/inference-router/logs
+Environment=INFERENCE_ROUTER_HEALTHCHECK_SIDECAR_URL=http://127.0.0.1:4877/healthz
+StandardInput=null
+Restart=on-failure
+RestartSec=5
+# Exit 3 is a retire that hit its deadline: a finished generation, never restarted.
+RestartPreventExitStatus=3
+MemoryMax=256M
+
+# Hardening: networked baseline sandbox block (the codex-sidecar's, minus its bwrap
+# relaxations). Writes: the telemetry directory only. Reads the checkout's catalog
+# (hot-reloaded) and %t/fleet-env (EnvironmentFile).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/inference-router/logs
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+DevicePolicy=closed
+UMask=0077
+
+[Install]
+WantedBy=default.target

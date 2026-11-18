@@ -5,6 +5,7 @@ pub mod auth;
 pub mod catalog;
 pub mod config;
 pub mod env;
+pub mod generation;
 pub mod healthcheck;
 pub mod local_leg;
 pub mod relay;

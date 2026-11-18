@@ -88,14 +88,25 @@ pub struct Provider {
     pub max_output_tokens: MaxOutputTokens,
 }
 
+/// The host generation's single gateway key, used when `AUTH_STATIC_API_KEYS` is unset.
+pub const GATEWAY_KEY_ENV: &str = "INFERENCE_ROUTER_GATEWAY_KEY";
+/// The generation's activation id (systemd instance name); never the build id.
+pub const ACTIVATION_ENV: &str = "INFERENCE_ROUTER_ACTIVATION";
+pub const DEFAULT_RETIRE_DEADLINE_MS: u64 = 30 * 60 * 1000;
+
 #[derive(Debug)]
 pub struct Settings {
     pub host: String,
     pub port: u16,
     /// Static providers in config order; model fields empty (see `Provider`).
     pub providers: Vec<Arc<Provider>>,
-    /// `AUTH_STATIC_API_KEYS`, never empty: client auth is always on (`auth.rs`).
+    /// `AUTH_STATIC_API_KEYS`, else the single `INFERENCE_ROUTER_GATEWAY_KEY` (the host
+    /// generation's one projected key); never empty: client auth is always on (`auth.rs`).
     pub gateway_keys: Vec<String>,
+    /// `INFERENCE_ROUTER_ACTIVATION` (the unit sets it to the instance name), else `unmanaged`.
+    pub activation: String,
+    /// `INFERENCE_ROUTER_RETIRE_DEADLINE_MS` (>= 1; unset = 30 min): SIGUSR1 retire bound.
+    pub retire_deadline_ms: u64,
     pub body_limit: usize,
     /// 0 = no timeout.
     pub upstream_timeout_ms: u64,
@@ -251,10 +262,23 @@ pub fn from_json(raw: &Value, env: Env) -> Result<Settings, String> {
             Some(n) => n,
             None => DEFAULT_CONNECT_TIMEOUT_MS,
         };
-    let gateway_keys = list(env("AUTH_STATIC_API_KEYS"));
+    let mut gateway_keys = list(env("AUTH_STATIC_API_KEYS"));
+    if gateway_keys.is_empty() {
+        gateway_keys = read_str(env(GATEWAY_KEY_ENV)).into_iter().collect();
+    }
+    let retire_deadline_ms = match envp::integer::<u64>(env, "INFERENCE_ROUTER_RETIRE_DEADLINE_MS")?
+    {
+        Some(0) => {
+            return Err(
+                "INFERENCE_ROUTER_RETIRE_DEADLINE_MS=0 is not a valid deadline (>= 1)".into(),
+            )
+        }
+        Some(n) => n,
+        None => DEFAULT_RETIRE_DEADLINE_MS,
+    };
     if gateway_keys.is_empty() {
         return Err(
-            "AUTH_STATIC_API_KEYS is empty or unset; client auth is always on, configure at least one gateway key"
+            "AUTH_STATIC_API_KEYS is empty or unset (and INFERENCE_ROUTER_GATEWAY_KEY too); client auth is always on, configure at least one gateway key"
                 .into(),
         );
     }
@@ -263,6 +287,8 @@ pub fn from_json(raw: &Value, env: Env) -> Result<Settings, String> {
         port,
         providers,
         gateway_keys,
+        activation: read_str(env(ACTIVATION_ENV)).unwrap_or_else(|| "unmanaged".into()),
+        retire_deadline_ms,
         body_limit,
         upstream_timeout_ms,
         upstream_connect_timeout_ms,
@@ -463,6 +489,7 @@ mod tests {
             vec![],
             vec![("AUTH_STATIC_API_KEYS", " , ")],
             vec![("AUTH_STATIC_API_KEY", "gk"), ("AUTH_ENABLED", "false")],
+            vec![("INFERENCE_ROUTER_GATEWAY_KEY", " ")],
         ] {
             let e = from_json(&raw, &env_of(&env)).unwrap_err();
             assert!(
@@ -470,5 +497,39 @@ mod tests {
                 "{e}"
             );
         }
+    }
+
+    #[test]
+    fn gateway_key_fallback_and_generation_settings() {
+        let raw = json!({"providers": []});
+        let s = from_json(&raw, &env_of(&[("INFERENCE_ROUTER_GATEWAY_KEY", "one")])).unwrap();
+        assert_eq!(
+            (s.gateway_keys, s.activation.as_str()),
+            (vec!["one".to_string()], "unmanaged")
+        );
+        assert_eq!(s.retire_deadline_ms, DEFAULT_RETIRE_DEADLINE_MS);
+        // The list wins when set (the container sets both).
+        let s = from_json(
+            &raw,
+            &env_of(&[
+                ("AUTH_STATIC_API_KEYS", "a,b"),
+                ("INFERENCE_ROUTER_GATEWAY_KEY", "one"),
+                ("INFERENCE_ROUTER_ACTIVATION", "20261118T000000Z-0123abcd"),
+                ("INFERENCE_ROUTER_RETIRE_DEADLINE_MS", "500"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(s.gateway_keys, vec!["a", "b"]);
+        assert_eq!(s.activation, "20261118T000000Z-0123abcd");
+        assert_eq!(s.retire_deadline_ms, 500);
+        let e = from_json(
+            &raw,
+            &env_of(&[KEYS, ("INFERENCE_ROUTER_RETIRE_DEADLINE_MS", "0")]),
+        )
+        .unwrap_err();
+        assert!(
+            e.starts_with("INFERENCE_ROUTER_RETIRE_DEADLINE_MS=0"),
+            "{e}"
+        );
     }
 }

@@ -105,3 +105,152 @@ pub async fn serve_until(
         None => Ok(()),
     }
 }
+
+/// After a retire stops accepting, how long a just-accepted connection has to send its first
+/// request before axum's graceful shutdown closes idle connections.
+const ACCEPT_GRACE: Duration = Duration::from_millis(500);
+
+/// How a generation's serve ended (`main` maps it to the exit status).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// SIGTERM/SIGINT: the fleet drain contract (5 s), exit 0.
+    Term,
+    /// SIGUSR1 retire completed: nothing was in flight any more, exit 0.
+    Retired,
+    /// The retire deadline cut the open streams, exit `generation::DEADLINE_EXIT`.
+    Deadline,
+}
+
+/// The generation serve (README/AGENTS "Generations"): serve on every inherited socket (or
+/// bind `host:port` as `serve_until` does when there are none), declare readiness, and run
+/// until SIGTERM/SIGINT (`shutdown`, unchanged drain) or a SIGUSR1 retire: every accept loop
+/// ends (idle keep-alive connections close, a busy one after its in-flight response), the
+/// acknowledgment fires once no listener is held, then the retire waits for every connection
+/// to end, bounded by `retire_deadline_ms`.
+pub async fn serve_generation(
+    state: Arc<AppState>,
+    shutdown: fleetkit::shutdown::Shutdown,
+    inherited: Vec<std::net::TcpListener>,
+    mut on_bound: impl FnMut(SocketAddr),
+) -> Result<Outcome, String> {
+    use crate::generation::{sd_notify, Counted, DEADLINE_EXIT};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // Installed before readiness: SIGUSR1's default action would kill the process.
+    let mut usr1 = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())
+        .map_err(|e| format!("SIGUSR1 handler: {e}"))?;
+    let mut listeners = Vec::new();
+    if inherited.is_empty() {
+        let addr = format!("{}:{}", state.settings.host, state.settings.port);
+        let l = tokio::net::TcpListener::bind(&addr)
+            .await
+            .map_err(|e| format!("bind {addr}: {e}"))?;
+        listeners.push(l);
+    } else {
+        for l in inherited {
+            l.set_nonblocking(true)
+                .map_err(|e| format!("inherited socket: {e}"))?;
+            listeners.push(
+                tokio::net::TcpListener::from_std(l)
+                    .map_err(|e| format!("inherited socket: {e}"))?,
+            );
+        }
+    }
+    let deadline = Duration::from_millis(state.settings.retire_deadline_ms);
+    let activation = state.settings.activation.clone();
+    state.catalog.spawn_reloader(catalog::POLL_INTERVAL);
+    let open = Arc::new(AtomicUsize::new(0));
+    // `accept_tx` ends the accept loops (each listener closes its socket); `stop_tx` then
+    // starts axum's graceful shutdown (idle connections close, busy ones after their response).
+    let (accept_tx, accept_rx) = tokio::sync::watch::channel(false);
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let mut tasks = Vec::new();
+    for l in listeners {
+        on_bound(l.local_addr().map_err(|e| e.to_string())?);
+        let counted = Counted::new(l, &open, accept_rx.clone());
+        let (mut rx, term) = (stop_rx.clone(), shutdown.triggered());
+        let server =
+            axum::serve(counted, router(state.clone())).with_graceful_shutdown(async move {
+                tokio::select! {
+                    _ = rx.wait_for(|stop| *stop) => {}
+                    () = term => {}
+                }
+            });
+        tasks.push(tokio::spawn(std::future::IntoFuture::into_future(server)));
+    }
+    // Startup checks passed and every listener serves: only now is the generation ready.
+    sd_notify("READY=1\nSTATUS=accepting");
+    let all_done = |tasks: Vec<tokio::task::JoinHandle<std::io::Result<()>>>| async move {
+        for t in tasks {
+            let _ = t.await;
+        }
+    };
+    let aborts: Vec<_> = tasks.iter().map(|t| t.abort_handle()).collect();
+    tokio::select! {
+        () = shutdown.triggered() => {
+            // In-flight proxied streams are bounded by the drain deadline; the watchdog exits at 5 s regardless.
+            shutdown.drain(all_done(tasks)).await;
+            return Ok(Outcome::Term);
+        }
+        _ = usr1.recv() => {}
+    }
+    let started = std::time::Instant::now();
+    let _ = accept_tx.send(true);
+    while open.load(Ordering::SeqCst) > 0 {
+        tokio::select! {
+            () = shutdown.triggered() => {
+                shutdown.drain(all_done(tasks)).await;
+                return Ok(Outcome::Term);
+            }
+            () = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+    // The acknowledgment the installer waits for: no listener is held any more. Never
+    // STOPPING=1 (it would arm TimeoutStopSec against the retire deadline).
+    eprintln!(
+        "{}",
+        json_line("retiring", &activation, deadline.as_millis() as u64)
+    );
+    sd_notify("STATUS=retiring");
+    eprintln!("inference-router: retiring (stopped accepting)");
+    // A connection accepted just before the stop gets this long to send its first request
+    // before graceful shutdown treats it as idle.
+    tokio::select! {
+        () = shutdown.triggered() => {
+            shutdown.drain(all_done(tasks)).await;
+            return Ok(Outcome::Term);
+        }
+        () = tokio::time::sleep(ACCEPT_GRACE) => {}
+    }
+    let _ = stop_tx.send(true);
+    let left = deadline.saturating_sub(started.elapsed());
+    let mut settled = Box::pin(all_done(tasks));
+    tokio::select! {
+        () = shutdown.triggered() => {
+            shutdown.drain(settled).await;
+            Ok(Outcome::Term)
+        }
+        () = &mut settled => {
+            eprintln!("{}", json_line("retired", &activation, deadline.as_millis() as u64));
+            eprintln!("inference-router: retired");
+            Ok(Outcome::Retired)
+        }
+        () = tokio::time::sleep(left) => {
+            eprintln!("{}", json_line("retire-deadline", &activation, deadline.as_millis() as u64));
+            eprintln!("inference-router: retire deadline reached; cutting open streams");
+            // The same 5 s bound SIGTERM has, with the deadline's own exit status.
+            std::thread::spawn(|| {
+                std::thread::sleep(fleetkit::shutdown::DEFAULT_DRAIN);
+                std::process::exit(i32::from(DEADLINE_EXIT));
+            });
+            for a in aborts {
+                a.abort();
+            }
+            Ok(Outcome::Deadline)
+        }
+    }
+}
+
+fn json_line(event: &str, activation: &str, deadline_ms: u64) -> String {
+    serde_json::json!({"event": event, "activation": activation, "deadlineMs": deadline_ms})
+        .to_string()
+}

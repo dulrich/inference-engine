@@ -536,3 +536,55 @@ fn utc_formatting() {
     let t = UNIX_EPOCH + Duration::from_secs(1_760_313_599);
     assert_eq!(iso8601(t), "2025-10-12T23:59:59.000Z");
 }
+
+/// Two generations write one directory during a retire: rotation and pruning stay coherent
+/// (one shared index sequence, no file far past the size cap, no torn or lost line among the
+/// kept files) while both sinks append in turn.
+#[test]
+fn two_writers_share_rotation_and_retention() {
+    let d = TempDir::new();
+    let a = Sink::new(opts(&d.0, 2048, 100), sink::system_clock());
+    let b = Sink::new(opts(&d.0, 2048, 100), sink::system_clock());
+    for i in 0..60 {
+        let (s, who) = if i % 2 == 0 { (&a, "a") } else { (&b, "b") };
+        s.write(
+            &json!({"kind": "request", "reqId": format!("{who}-{i}"), "filler": "x".repeat(200)}),
+        );
+        s.flush();
+    }
+    let f = files(&d.0);
+    assert!(f.len() >= 5, "rotated by size across both writers: {f:?}");
+    let idx: Vec<u64> = f
+        .iter()
+        .map(|n| n.rsplit('.').nth(1).unwrap().parse().unwrap())
+        .collect();
+    let mut sorted = idx.clone();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        (0..f.len() as u64).collect::<Vec<_>>(),
+        "one index sequence: {f:?}"
+    );
+    for n in &f {
+        assert!(
+            std::fs::metadata(d.0.join(n)).unwrap().len() <= 2048 + 300,
+            "{n} over the cap"
+        );
+    }
+    let l = lines(&d.0);
+    assert_eq!(l.len(), 60, "every line from both writers, none torn");
+    // Retention with two writers: both prune, neither deletes the file the other appends to.
+    let d2 = TempDir::new();
+    let a = Sink::new(opts(&d2.0, 1024, 2), sink::system_clock());
+    let b = Sink::new(opts(&d2.0, 1024, 2), sink::system_clock());
+    for i in 0..40 {
+        let s = if i % 2 == 0 { &a } else { &b };
+        s.write(
+            &json!({"kind": "request", "reqId": format!("req-{i}"), "filler": "x".repeat(200)}),
+        );
+        s.flush();
+    }
+    assert_eq!(files(&d2.0).len(), 2, "{:?}", files(&d2.0));
+    assert!(!a.is_disabled() && !b.is_disabled());
+    assert_eq!(lines(&d2.0).last().unwrap()["reqId"], "req-39");
+}

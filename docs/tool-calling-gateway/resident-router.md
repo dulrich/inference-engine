@@ -100,7 +100,7 @@ Three of the four launch limitations are now shipped behavior; one accepted gap 
 
 ## Operations
 
-- Config (the router's gateway config) is bind-mounted read-only; a config change needs `hc restart inference-engine-router`, then `router/smoke-router.sh http://127.0.0.1:4813 <key>` green.
+- Config (the router's gateway config): on the container path it is bind-mounted read-only and a config change needs `hc restart inference-engine-router`; on a host-generation node it is rendered into the generation at install, so a config change is `router/install.sh` (a live cutover, no restart; `router/AGENTS.md` "Host generations"). Then `router/smoke-router.sh http://127.0.0.1:4813 <key>` green.
 - **A new Claude model id** (new release, or a legacy id an active `/model` selection sends) needs a `models` line in the `anthropic` provider + restart — the hosted list is enumerated explicitly because an empty (wildcard) list would also empty the `/v1/models` listing that model discovery depends on.
 - **Never set `ANTHROPIC_API_KEY` in the service environment** — a managed key would silently hijack every subscription request onto API-key billing (router contract, compose comment block).
 - An image rebuild or restart is never complete on a green healthcheck: run the smoke script (repo-wide quirk — probe by response body).

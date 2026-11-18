@@ -1,0 +1,12 @@
+[Unit]
+Description=inference-router listen socket (loopback; held for every inference-router@ generation)
+# The socket owns 127.0.0.1:4813 for the life of the user manager. Generations
+# (inference-router@<activation>.service) inherit it through Sockets=; Service= names the
+# hold unit, so traffic never activates a generation: with none running, connections queue.
+
+[Socket]
+ListenStream=127.0.0.1:4813
+Service=inference-router-hold.service
+
+[Install]
+WantedBy=sockets.target

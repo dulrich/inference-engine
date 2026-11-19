@@ -415,7 +415,7 @@ run_leg() { # <leg> <model> <on-threshold>
 			([$t[] | select(.defer_loading == true)] | length),
 			([$t[] | select(.name == "ToolSearch" and ((.input_schema // {}) | length > 0))] | length),
 			([$t[] | select(.name == $probe)] | length),
-			($t | length)
+			($t | map(select((.name // "") | startswith("mcp__") | not)) | length)
 		] | @tsv' "$req1")
 	n_defer=$(echo "$shape" | cut -f1)
 	n_search=$(echo "$shape" | cut -f2)
@@ -437,13 +437,17 @@ run_leg() { # <leg> <model> <on-threshold>
 	fi
 
 	# ── 3. references relayed and the catalogue grew by exactly one full-schema entry ─────────
+	# Tool counts here and in check 1 leave out `mcp__*` entries: a claude.ai connector on the
+	# operator's login can add its tools between request 1 and 2 (host-b, 2026-11-18: three
+	# connector tools made 6 → 10 while the probe tool was relayed correctly).
 	grown=$(jq -s -r --arg probe "$PROBE_TOOL" --argjson base "$n_tools" '
+		def own: map(select((.name // "") | startswith("mcp__") | not));
 		[ .[]
 		  | select([ .body.messages[]? | (.content // [])[]? | select(.type == "tool_result")
 		             | (if (.content | type) == "array" then .content[] else empty end)
 		             | select(.type == "tool_reference") ] | length > 0)
-		  | select(((.body.tools // []) | length) == ($base + 1))
-		  | [ ((.body.tools // []) | length),
+		  | select(((.body.tools // []) | own | length) == ($base + 1))
+		  | [ ((.body.tools // []) | own | length),
 		      ([ (.body.tools // [])[] | select(.name == $probe and ((.input_schema // {}) | length > 0) and .defer_loading == true) ] | length) ]
 		] | if length == 0 then "none" else (.[0] | @tsv) end' "$out"/*.req.json 2>/dev/null)
 	if [ "$grown" = "none" ]; then

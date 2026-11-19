@@ -131,19 +131,114 @@ fn start(st: &AppState, cat: &Catalog, route: Route, body: &Value) -> Guard {
     }
 }
 
+/// Terminal frame text for the two producers (pinned; no upstream error text, address or host).
+const MSG_UPSTREAM: &str = "upstream stream failed before completion";
+const MSG_RETIRED: &str = "router generation retired before the stream completed";
+
+/// Chunk-split-safe tail state of a relayed Anthropic SSE stream: whether the bytes so far end
+/// on a frame boundary and whether `message_stop` was relayed. Holds a few bytes, never a copy.
+#[derive(Default)]
+pub(crate) struct SseTail {
+    tail: Vec<u8>,
+    stopped: bool,
+}
+
+const STOP_EVENT: &[u8] = b"event: message_stop\n";
+
+impl SseTail {
+    pub(crate) fn observe(&mut self, chunk: &[u8]) {
+        if chunk.is_empty() {
+            return;
+        }
+        if !self.stopped {
+            // Straddle: old tail plus the head of the chunk, then the chunk itself.
+            let head = &chunk[..chunk.len().min(STOP_EVENT.len() - 1)];
+            let mut joint = self.tail.clone();
+            joint.extend_from_slice(head);
+            self.stopped = contains(&joint, STOP_EVENT) || contains(chunk, STOP_EVENT);
+        }
+        self.tail.extend_from_slice(chunk);
+        let keep = STOP_EVENT.len() - 1;
+        if self.tail.len() > keep {
+            self.tail.drain(..self.tail.len() - keep);
+        }
+    }
+
+    /// The bytes to append for a cut stream: nothing when `message_stop` was relayed, else
+    /// `\n\n` first when a frame is open, then exactly one error frame.
+    pub(crate) fn terminal(&self, message: &str) -> Option<Bytes> {
+        if self.stopped {
+            return None;
+        }
+        let mut out = Vec::new();
+        if !(self.tail.is_empty() || self.tail.ends_with(b"\n\n")) {
+            out.extend_from_slice(b"\n\n");
+        }
+        let data = json!({"type": "error", "error": {"type": "api_error", "message": message}});
+        out.extend_from_slice(format!("event: error\ndata: {data}\n\n").as_bytes());
+        Some(Bytes::from(out))
+    }
+}
+
+fn contains(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Anthropic-shape SSE only: the request is on the Messages route and the response is
+/// `text/event-stream`. Anything else keeps the plain relay.
+fn is_anthropic_sse(route: Route, headers: &HeaderMap) -> bool {
+    route == Route::Messages
+        && headers
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| {
+                v.trim_start()
+                    .to_ascii_lowercase()
+                    .starts_with("text/event-stream")
+            })
+}
+
+type Cancelled = Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+/// The SSE-only part of a `Tap`: tail state, the retire-cancel future and the done flag.
+struct SseGuard {
+    tail: SseTail,
+    cancelled: Cancelled,
+    done: bool,
+}
+
 struct Tap {
     inner: ByteStream,
     guard: Guard,
     ok: bool,
+    sse: Option<SseGuard>,
 }
 
 impl Stream for Tap {
     type Item = Result<Bytes, io::Error>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = &mut *self;
+        if let Some(sse) = this.sse.as_mut() {
+            if sse.done {
+                return Poll::Ready(None);
+            }
+            if sse.cancelled.as_mut().poll(cx).is_ready() {
+                sse.done = true;
+                let status = this.guard.status;
+                this.guard.finish(
+                    OutcomeKind::UpstreamError,
+                    status,
+                    Some(("retire_deadline".into(), MSG_RETIRED.into())),
+                );
+                return Poll::Ready(sse.tail.terminal(MSG_RETIRED).map(Ok));
+            }
+        }
         match this.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(b))) => {
                 this.guard.chunk(&b);
+                if let Some(sse) = this.sse.as_mut() {
+                    sse.tail.observe(&b);
+                }
                 Poll::Ready(Some(Ok(b)))
             }
             Poll::Ready(Some(Err(e))) => {
@@ -158,7 +253,13 @@ impl Stream for Tap {
                     status,
                     Some(("upstream_stream".into(), e.to_string())),
                 );
-                Poll::Ready(Some(Err(e)))
+                match this.sse.as_mut() {
+                    Some(sse) => {
+                        sse.done = true;
+                        Poll::Ready(sse.tail.terminal(MSG_UPSTREAM).map(Ok))
+                    }
+                    None => Poll::Ready(Some(Err(e))),
+                }
             }
             Poll::Ready(None) => {
                 let (kind, status) = (
@@ -231,6 +332,8 @@ fn tag(r: &mut Response, name: &'static str, value: &str) {
 
 /// Relay a live upstream response: status + headers + tapped (and local-wrapped) body.
 fn relay_stream(
+    st: &AppState,
+    route: Route,
     up: UpstreamResponse,
     mut guard: Guard,
     local: Option<&LocalLegContext>,
@@ -239,10 +342,24 @@ fn relay_stream(
     guard.headers_after = Some(guard.started.elapsed());
     guard.status = up.status.as_u16();
     let ok = up.status.is_success();
+    let sse = is_anthropic_sse(route, &up.headers).then(|| {
+        let mut rx = st.cancel.subscribe();
+        SseGuard {
+            tail: SseTail::default(),
+            cancelled: Box::pin(async move {
+                // A dropped sender never cancels: wait forever.
+                if rx.wait_for(|c| *c).await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            }),
+            done: false,
+        }
+    });
     let mut body: ByteStream = Box::pin(Tap {
         inner: up.body,
         guard,
         ok,
+        sse,
     });
     if let Some(ctx) = local {
         body = local_leg::wrap_stream(body, ctx);
@@ -290,7 +407,14 @@ async fn relay_one(
         }
     };
     match dispatch(st, &mut guard, c, 0, &prepared).await {
-        Ok(resp) => relay_stream(into_upstream(resp), guard, prepared.local.as_ref(), None),
+        Ok(resp) => relay_stream(
+            st,
+            route,
+            into_upstream(resp),
+            guard,
+            prepared.local.as_ref(),
+            None,
+        ),
         Err((kind, stage, message)) => {
             guard.finish(kind, 502, Some((stage.into(), message.clone())));
             json_response(502, &typed_error(&message, "api_error", None))
@@ -412,7 +536,14 @@ async fn fallthrough(
             }
         };
         if resp.status().is_success() {
-            return relay_stream(into_upstream(resp), guard, prepared.local.as_ref(), Some(c));
+            return relay_stream(
+                st,
+                route,
+                into_upstream(resp),
+                guard,
+                prepared.local.as_ref(),
+                Some(c),
+            );
         }
         let status = resp.status();
         let content_type = resp.headers().get("content-type").cloned();

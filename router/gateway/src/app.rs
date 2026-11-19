@@ -17,6 +17,9 @@ pub struct AppState {
     pub catalog: Arc<Holder>,
     pub client: reqwest::Client,
     pub telemetry: Arc<dyn Telemetry>,
+    /// Flipped to `true` once, by the retire deadline: every open Anthropic-shape SSE stream
+    /// observes it, writes its terminal error frame and ends (`relay::Tap`).
+    pub cancel: tokio::sync::watch::Sender<bool>,
 }
 
 fn client(settings: &Settings) -> Result<reqwest::Client, String> {
@@ -49,6 +52,7 @@ pub fn state_with(
         settings,
         catalog,
         telemetry,
+        cancel: tokio::sync::watch::channel(false).0,
     }))
 }
 
@@ -109,6 +113,10 @@ pub async fn serve_until(
 /// After a retire stops accepting, how long a just-accepted connection has to send its first
 /// request before axum's graceful shutdown closes idle connections.
 const ACCEPT_GRACE: Duration = Duration::from_millis(500);
+
+/// After the retire deadline cancels the open streams, how long they have to write their
+/// terminal frame before their tasks are dropped (inside the 5 s exit bound).
+const CANCEL_GRACE: Duration = Duration::from_millis(2000);
 
 /// How a generation's serve ended (`main` maps it to the exit status).
 #[derive(Debug, PartialEq, Eq)]
@@ -242,6 +250,13 @@ pub async fn serve_generation(
                 std::thread::sleep(fleetkit::shutdown::DEFAULT_DRAIN);
                 std::process::exit(i32::from(DEADLINE_EXIT));
             });
+            // Every open Anthropic-shape SSE stream writes its terminal error frame and ends;
+            // the rest of the 5 s bound is theirs (this grace is inside it), then the tasks drop.
+            let _ = state.cancel.send(true);
+            tokio::select! {
+                () = shutdown.triggered() => {}
+                _ = tokio::time::timeout(CANCEL_GRACE, &mut settled) => {}
+            }
             for a in aborts {
                 a.abort();
             }

@@ -7,6 +7,7 @@
 
 use axum::body::{Body, Bytes};
 use axum::response::Response;
+use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
 use std::os::fd::AsRawFd;
@@ -34,6 +35,17 @@ impl Drop for TempDir {
 async fn upstream() -> std::net::SocketAddr {
     let handler = |body: Bytes| async move {
         let v: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        if v.get("hold").is_some() {
+            // One event, then silence until the client or the router goes away.
+            let s = futures_util::stream::once(async {
+                Ok::<_, std::io::Error>(Bytes::from("event: ping\ndata: {\"n\":0}\n\n"))
+            })
+            .chain(futures_util::stream::pending());
+            return Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(Body::from_stream(s))
+                .unwrap();
+        }
         match v.get("slow").and_then(Value::as_u64) {
             Some(ms) => {
                 let s = futures_util::stream::unfold(0usize, move |i| async move {
@@ -94,6 +106,15 @@ struct Gen {
 
 impl Gen {
     fn spawn(dir: &TempDir, listener: &std::net::TcpListener, name: &str) -> Gen {
+        Gen::spawn_with(dir, listener, name, None)
+    }
+
+    fn spawn_with(
+        dir: &TempDir,
+        listener: &std::net::TcpListener,
+        name: &str,
+        deadline_ms: Option<&str>,
+    ) -> Gen {
         let fd = listener.as_raw_fd();
         let mut cmd = Command::new("sh");
         cmd.args(["-c", GATE, "sh", BIN])
@@ -107,6 +128,9 @@ impl Gen {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
+        if let Some(ms) = deadline_ms {
+            cmd.env("INFERENCE_ROUTER_RETIRE_DEADLINE_MS", ms);
+        }
         // SAFETY: dup2 is async-signal-safe; the duplicate at fd 3 has no close-on-exec flag.
         unsafe {
             cmd.pre_exec(move || {
@@ -319,6 +343,44 @@ async fn sigterm_wins_over_a_retire() {
     assert_eq!(code, Some(0), "{}", a.stderr());
     assert!(
         !a.stderr().contains("inference-router: retired"),
+        "{}",
+        a.stderr()
+    );
+}
+
+/// Retire-deadline cut (WP-5): a client holds an SSE stream past a short deadline, receives the
+/// one terminal error frame after its bytes, the stream ends cleanly and the process exits with
+/// the deadline status inside the 5 s bound.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retire_deadline_cuts_an_open_stream_with_one_error_frame() {
+    let up = upstream().await;
+    let dir = home(up);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let mut a = Gen::spawn_with(&dir, &listener, "gen-a", Some("600"));
+    a.wait_for("listening on").await;
+    drop(listener);
+    let resp = fresh_client()
+        .post(format!("{base}/v1/messages"))
+        .header("x-gateway-key", KEY)
+        .body(json!({"model": "side/gpt-x", "stream": true, "hold": true}).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let reader = tokio::spawn(async move { resp.text().await });
+    a.signal(libc::SIGUSR1);
+    let body = reader
+        .await
+        .unwrap()
+        .expect("the cut stream ends cleanly, not with an error");
+    let frame = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"router generation retired before the stream completed\"}}\n\n";
+    assert_eq!(body, format!("event: ping\ndata: {{\"n\":0}}\n\n{frame}"));
+    let (code, took) = a.exit(Duration::from_secs(8)).await;
+    assert_eq!(code, Some(3), "{}", a.stderr());
+    assert!(took < Duration::from_millis(5500), "exit took {took:?}");
+    assert!(
+        a.stderr().contains("\"event\":\"retire-deadline\""),
         "{}",
         a.stderr()
     );

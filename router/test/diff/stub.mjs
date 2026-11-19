@@ -46,6 +46,13 @@ async function serveScripted(req, res, rec) {
       if (closed) return;
       res.write(c.data);
     }
+    if (spec.cut) {
+      // Body failure after headers: drop the socket without the terminating chunk.
+      rec.streamCut = true;
+      await sleep(50); // let the written chunks flush before the drop
+      res.socket.destroy();
+      return;
+    }
     rec.streamCompleted = true;
     res.end();
     return;

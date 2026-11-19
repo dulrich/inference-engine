@@ -428,6 +428,18 @@ export const cases = [
       assert.ok(extra > 0 && /event: ping\n/.test(r.text.replace(SSE_TEXT.slice(0, 37 * 5), '')), 'no keepalive ping in the 17 s gap');
     } },
 
+  // ---- upstream body failure after headers (WP-5: one terminal error frame, clean end) ----------------
+  { id: 'stream-upstream-cut-mid-frame-error-frame', tags: ['changed'],
+    script: { anthropic: { status: 200, headers: { 'content-type': 'text/event-stream' }, cut: true, chunks: [{ data: SSE_EVENTS[0] + SSE_EVENTS[1].slice(0, 20) }, { data: SSE_EVENTS[1].slice(20, 50) }] } },
+    async run(ctx) {
+      const r = await ctx.req('/v1/messages', { body: MSG('claude-opus-5-5', { stream: true }) });
+      assert.equal(r.status, 200, r.text.slice(0, 200));
+      const relayed = SSE_EVENTS[0] + SSE_EVENTS[1].slice(0, 50);
+      const frame = 'event: error\ndata: {"type":"error","error":{"type":"api_error","message":"upstream stream failed before completion"}}\n\n';
+      assert.equal(r.text, `${relayed}\n\n${frame}`, 'relayed bytes, then \\n\\n, then exactly one error frame');
+      await one(ctx, 'anthropic');
+    } },
+
   // ---- request body size (Node bodyLimitBytes default 50 MiB) ---------------------------------------
   { id: 'body-20mib-accepted', tags: ['parity'], script: { anthropic: OK('claude-opus-5-5') },
     async run(ctx) {

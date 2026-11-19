@@ -7,6 +7,10 @@ Description=codex-sidecar socket hold (never runs a sidecar)
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/bin/true
+# systemd sets O_NONBLOCK on every passed socket to this value at each start. The flag lives on
+# the open file description a running generation shares, so the default (clear it) would turn
+# that generation's accept into a blocking call and hang it. Measured 2026-11-18.
+NonBlocking=yes
 
 NoNewPrivileges=yes
 ProtectSystem=strict

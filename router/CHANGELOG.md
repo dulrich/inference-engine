@@ -9,6 +9,7 @@ All notable changes to the inference-engine `router` component, released as `rou
 - Telemetry: rotation and pruning are overlap-safe for two writers on one directory (state re-read from the directory per batch).
 - New `router/install.sh` and units (`inference-router@.service.in`, `inference-router.socket`, `inference-router-hold.service`, opt-in `inference-router-wg.socket.in`): host install with rendered topology, `--preflight`, `--rollback`, `--rust-bin`. The container path is unchanged.
 - The serving dispatcher's catalog validator uses the installed generation (`current`) when one exists, else the container.
+- Units: `NonBlocking=yes` on the hold unit and the generation template, and `install.sh` starts the sockets before the hold unit. systemd refuses a socket whose hold unit is already active (a first install failed there), and each unit start cleared `O_NONBLOCK` on the listeners a running generation shares, which hung that generation.
 
 - Security: the gateway lockfile moves to rustls-webpki 0.103.16 and webpki-root-certs 1.0.12.
 

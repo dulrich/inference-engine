@@ -12,6 +12,10 @@ Description=inference-router generation %i (Anthropic-protocol gateway)
 [Service]
 Type=notify
 NotifyAccess=main
+# Keep O_NONBLOCK on the inherited sockets: systemd rewrites the flag at every start of a unit
+# that receives them, and the older generation shares the open file description (the default
+# would make its accept blocking until this generation set the flag again).
+NonBlocking=yes
 Sockets=@SOCKETS@
 ExecStart=@LIB_DIR@/generations/%i/inference-router
 EnvironmentFile=@ENV_FILE@

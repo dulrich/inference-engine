@@ -358,8 +358,18 @@ if [ -f "$UNIT_DIR/$LEGACY_UNIT" ] || sc is-active --quiet "$LEGACY_UNIT" 2>/dev
   sc daemon-reload
 fi
 
-sc start codex-sidecar-hold.service
+# Sockets before the hold unit: systemd refuses to start a socket whose Service= unit is
+# already active ("Socket service ... already active, refusing"). A socket that is not yet
+# listening therefore needs the hold unit stopped first; generations keep their inherited
+# sockets across that.
+for s in codex-sidecar.socket codex-sidecar-docker0.socket; do
+  if ! sc is-active --quiet "$s" 2>/dev/null; then
+    sc stop codex-sidecar-hold.service 2>/dev/null || true
+    break
+  fi
+done
 sc enable --now codex-sidecar.socket codex-sidecar-docker0.socket
+sc start codex-sidecar-hold.service
 printf 'sockets codex-sidecar.socket codex-sidecar-docker0.socket active\n'
 
 mapfile -t OLD < <(sc list-units --plain --no-legend --state=active,activating,reloading \

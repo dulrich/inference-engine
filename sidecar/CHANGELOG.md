@@ -8,6 +8,7 @@ All notable changes to the inference-engine `sidecar` component, released as `si
 - The binary serves inherited systemd sockets (`LISTEN_FDS`/`LISTEN_PID`) when given them, else binds as before; signals readiness with `READY=1` (`Type=notify`); reports `activation` (`SIDECAR_ACTIVATION`, placeholder `unmanaged`), `build` and `retiring` on `/healthz`.
 - SIGUSR1 retires a generation: stop admitting (idle keep-alive connections closed), acknowledge (`retiring` row, `STATUS=retiring`), finish in-flight requests, exit 0; at `SIDECAR_RETIRE_DEADLINE_MS` (default 30 min) cut open streams and exit 3 within 5 s. SIGTERM/SIGINT unchanged.
 - `status.sh` reports the accepting and any retiring generation (activation id, build id) and probes the docker0 listener while its socket unit exists.
+- Units: `NonBlocking=yes` on the hold unit and the generation template, and `install.sh` starts the sockets before the hold unit. systemd refuses a socket whose hold unit is already active (a first install failed there), and each unit start cleared `O_NONBLOCK` on the listeners a running generation shares, which hung that generation.
 
 ## 0.1.0 — 2026-11-10
 

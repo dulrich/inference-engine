@@ -300,13 +300,23 @@ sc() { systemctl --user "$@"; }
 
 sc daemon-reload
 printf 'reload  systemctl --user daemon-reload: done\n'
-sc start inference-router-hold.service
+# Sockets before the hold unit: systemd refuses to start a socket whose Service= unit is
+# already active ("Socket service ... already active, refusing"). A socket that is not yet
+# listening (first install, or the WireGuard socket added later) therefore needs the hold
+# unit stopped first; generations keep their inherited sockets across that.
+for s in $SOCKETS; do
+  if ! sc is-active --quiet "$s" 2>/dev/null; then
+    sc stop inference-router-hold.service 2>/dev/null || true
+    break
+  fi
+done
 if [ -n "$WG_LISTEN" ]; then
   sc enable --now inference-router.socket inference-router-wg.socket
 else
   sc disable --now inference-router-wg.socket >/dev/null 2>&1 || true
   sc enable --now inference-router.socket
 fi
+sc start inference-router-hold.service
 printf 'sockets %s active\n' "$SOCKETS"
 
 mapfile -t OLD < <(sc list-units --plain --no-legend --state=active,activating,reloading \

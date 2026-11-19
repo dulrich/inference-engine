@@ -43,7 +43,7 @@
 #   5. Within-leg token gate — request 1's `system`+`tools` count_tokens is at or below this leg's
 #      on-threshold (plus 10% drift allowance: the throwaway profile's paths/date and each Claude
 #      Code release move the system prompt a little), and above that same threshold under
-#      --control. Thresholds as coded (see the legs at the bottom; passthrough re-measured on the ANTHROPIC_CHEAP slot): local 3983, codex 3529, passthrough 6240 (the 10% cannot
+#      --control. Thresholds as coded (see the legs at the bottom; passthrough re-measured on the ANTHROPIC_CHEAP slot): local 3983, codex 3910, passthrough 6240 (the 10% cannot
 #      mask an eager expansion). Measurement history: docs/tool-calling-gateway/tool-search-conformance-spike.md.
 #      Cross-leg comparison is invalid (different catalogues, different tokenizers) and
 #      is never attempted.
@@ -508,7 +508,9 @@ if [ "$WANT_CODEX" -eq 1 ]; then
 	if [ -z "$m" ]; then
 		bad "codex: /v1/models does not list the pinned id $codex_persona/$codex_test ($(slot_not_served CODEX_SIDECAR_CHEAP "$codex_test" 2>&1))"
 	else
-		run_leg "codex" "$m" 3529
+		# Re-measured 2026-11-18 on Claude Code 2.1.328: request 1 cost 3905 system+tools tokens (the
+		# threshold was 3529; the CLI's own request grew about 366 tokens); rounded up to the nearest 10.
+		run_leg "codex" "$m" 3910
 	fi
 else
 	note "--codex not passed: SKIPPING the codex sidecar leg (one Codex-subscription turn)."

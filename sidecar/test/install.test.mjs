@@ -178,10 +178,11 @@ test("render: the generation template, sockets and hold unit; ExecStart is the g
   assert.match(unit, new RegExp(`^ExecStart=${esc(lib)}/generations/%i/codex-sidecar$`, "m"));
   assert.match(unit, /^Type=notify$/m);
   assert.match(unit, /^Environment=SIDECAR_ACTIVATION=%i$/m);
-  assert.match(unit, /^Sockets=codex-sidecar\.socket codex-sidecar-docker0\.socket$/m);
+  assert.match(unit, /^Sockets=codex-sidecar\.socket$/m, "generations no longer inherit the docker0 listener");
   assert.match(unit, new RegExp(`^Environment=PATH=${esc(path.join(r.root, "bin"))}:/usr/local/bin:/usr/bin:/bin$`, "m"));
   assert.doesNotMatch(unit, /\.nvm|node|@[A-Z_]+@/);
-  for (const u of ["codex-sidecar.socket", "codex-sidecar-docker0.socket", "codex-sidecar-hold.service"]) {
+  assert.ok(!fs.existsSync(path.join(units, "codex-sidecar-docker0.socket")), "docker0 socket is not rendered");
+  for (const u of ["codex-sidecar.socket", "codex-sidecar-hold.service"]) {
     assert.equal(fs.readFileSync(path.join(units, u), "utf8"), fs.readFileSync(path.join(import.meta.dirname, "..", u), "utf8"), u);
   }
   const cur = pointer(r.home, "current");
@@ -222,4 +223,74 @@ test("generations: current + previous kept, older pruned; --rollback starts a ne
   assert.equal(pointer(r.home, "previous"), ids[2]);
   assert.deepEqual(genDirs(r.home), [ids[2], now].sort());
   assert.ok(!fs.readdirSync(lib).some(n => n.startsWith(".")), "no temp dirs left behind");
+});
+
+test("docker0: a test home deletes a leftover codex-sidecar-docker0.socket file and touches no systemd", () => {
+  const units = (home) => path.join(home, ".config", "systemd", "user");
+  const r = setup({
+    prepare: ({ home }) => {
+      fs.mkdirSync(units(home), { recursive: true });
+      fs.writeFileSync(path.join(units(home), "codex-sidecar-docker0.socket"), "[Socket]\nListenStream=203.0.113.1:4877\n");
+    },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!fs.existsSync(path.join(units(r.home), "codex-sidecar-docker0.socket")));
+  assert.match(r.stdout, /^docker0 .*codex-sidecar-docker0\.socket removed \(file only\)$/m);
+  assert.doesNotMatch(r.readCalls(), /systemctl|loginctl/);
+  // Absent file: not an error, no docker0 line.
+  const again = r.run();
+  assert.equal(again.status, 0, again.stderr);
+  assert.doesNotMatch(again.stdout, /^docker0 /m);
+});
+
+test("docker0 (real home, stubbed systemd): kept while an old generation still runs, removed once none does; the loopback socket and hold unit are never restarted", () => {
+  const OLD = "codex-sidecar@20261101T000000Z-00000000.service";
+  const ACT = "20261118T000000Z-deadbeef";
+  const live = (oldActive) => {
+    const r = setup({ noRun: true });
+    const units = path.join(r.root, ".config", "systemd", "user");
+    fs.mkdirSync(units, { recursive: true });
+    fs.writeFileSync(path.join(units, "codex-sidecar-docker0.socket"), "[Socket]\nListenStream=203.0.113.1:4877\n");
+    fs.writeFileSync(path.join(r.root, "xdg", "fleet-env", "codex-sidecar.env"), `SIDECAR_KEY=${DUMMY}\n`, { mode: 0o600 });
+    const bin = path.join(r.root, "bin");
+    const calls = path.join(r.root, "calls");
+    const stub = (name, body) => fs.writeFileSync(path.join(bin, name), `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
+    stub("systemctl", `echo "systemctl $*" >> "${calls}"
+shift
+case "$1 $2" in
+  "is-active --quiet")
+    case "$3" in codex-sidecar.socket) exit 0 ;; ${OLD}) exit ${oldActive ? 0 : 1} ;; *) exit 1 ;; esac ;;
+esac
+case "$1" in
+  list-units) echo "${OLD} loaded active running x" ;;
+  show) case "$*" in *StatusText*) echo retiring ;; *LoadState*) echo loaded ;; esac ;;
+esac
+exit 0`);
+    stub("curl", `case "$*" in *http_code*) echo 200 ;; *) echo '{"status":"ok","activation":"${ACT}"}' ;; esac`);
+    stub("date", `echo 20261118T000000Z`);
+    stub("od", `echo " de ad be ef"`);
+    stub("sleep", "exit 0");
+    stub("loginctl", "echo yes");
+    const out = spawnSync("bash", [INSTALL, "--home", r.root, "--rust-bin", rustStub(r.root, "v1"), "--personas", "codex-a,codex-b"], {
+      encoding: "utf8",
+      env: { PATH: `${bin}:/usr/bin:/bin`, HOME: r.root, FLEET_ENV_BIN: path.join(bin, "fleet-env"), SIDECAR_DOCKER0_WAIT_TRIES: "2" },
+    });
+    return { ...out, calls: r.readCalls(), file: path.join(units, "codex-sidecar-docker0.socket") };
+  };
+  for (const oldActive of [true, false]) {
+    const r = live(oldActive);
+    assert.equal(r.status, 0, r.stderr + r.stdout);
+    assert.match(r.stdout, new RegExp(`verify  /healthz answered ok from activation ${ACT}`));
+    assert.doesNotMatch(r.calls, /(restart|stop|reload-or-restart) codex-sidecar\.socket|(restart|stop) codex-sidecar-hold\.service/);
+    assert.doesNotMatch(r.calls, /enable --now codex-sidecar\.socket codex-sidecar-docker0/);
+    if (oldActive) {
+      assert.ok(fs.existsSync(r.file), "kept while a generation that inherited it runs");
+      assert.match(r.stdout, /^docker0 codex-sidecar-docker0\.socket kept: .*still running/m);
+      assert.doesNotMatch(r.calls, /codex-sidecar-docker0\.socket/);
+    } else {
+      assert.ok(!fs.existsSync(r.file));
+      assert.match(r.calls, /systemctl --user disable --now codex-sidecar-docker0\.socket\nsystemctl --user daemon-reload/);
+      assert.match(r.stdout, /^docker0 codex-sidecar-docker0\.socket stopped, disabled and removed$/m);
+    }
+  }
 });

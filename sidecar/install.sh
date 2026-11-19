@@ -13,7 +13,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE="$SCRIPT_DIR/codex-sidecar@.service.in"
-STATIC_UNITS="codex-sidecar.socket codex-sidecar-docker0.socket codex-sidecar-hold.service"
+STATIC_UNITS="codex-sidecar.socket codex-sidecar-hold.service"
+# Retired with the router container (plan live-cutover-router-and-sidecar WP-6): removed once
+# no running generation still holds it (see retire_docker0 below).
+DOCKER0_UNIT="codex-sidecar-docker0.socket"
 LEGACY_UNIT="codex-sidecar.service"
 PERSONAS_ARG="${SIDECAR_PERSONAS:-codex}"
 ENV_FILE_ARG=""
@@ -22,6 +25,7 @@ ROLLBACK=0
 HEALTH_URL="${SIDECAR_HEALTH_URL:-http://127.0.0.1:4877/healthz}"
 VERIFY_TRIES="${SIDECAR_VERIFY_TRIES:-60}"
 RETIRE_ACK_TRIES="${SIDECAR_RETIRE_ACK_TRIES:-150}"
+DOCKER0_WAIT_TRIES="${SIDECAR_DOCKER0_WAIT_TRIES:-50}"
 
 INSTALL_HOME="${SIDECAR_INSTALL_HOME:-$HOME}"
 RUST_BIN="${SIDECAR_RUST_BIN:-}"
@@ -42,8 +46,8 @@ usage: install.sh [--personas <a,b>] [--env-file <path>] [--home <dir>] [--rust-
    2. writes the generation directory
       <home>/.local/lib/codex-sidecar/generations/<activation>/ (the binary plus
       preamble.txt and thread-config.json, which the binary reads beside itself);
-   3. renders codex-sidecar@.service, codex-sidecar.socket,
-      codex-sidecar-docker0.socket and codex-sidecar-hold.service;
+   3. renders codex-sidecar@.service, codex-sidecar.socket (127.0.0.1:4877 only) and
+      codex-sidecar-hold.service;
    4. (real home) migrates a legacy codex-sidecar.service (stop-then-start, once),
       starts the sockets, starts codex-sidecar@<activation>, polls /healthz until that
       activation id answers; a failed verify retires the new generation and leaves the
@@ -51,7 +55,12 @@ usage: install.sh [--personas <a,b>] [--env-file <path>] [--home <dir>] [--rust-
    5. enables the new generation as the boot generation, sends every older generation
       SIGUSR1 (retire) and waits for its acknowledgment (StatusText "retiring", or the
       unit already gone);
-   6. keeps the current and previous generation directories, prunes the rest.
+   6. keeps the current and previous generation directories, prunes the rest;
+   7. removes the retired docker0 listener (codex-sidecar-docker0.socket: stop, disable,
+      delete, daemon-reload) once no older generation that inherited it is still running
+      (waits up to ~10 s for retired generations to exit); while one still finishes
+      in-flight requests it is kept and the next run removes it.
+      A missing unit is not an error; a test home only deletes the file.
   The activation id is minted per run (UTC timestamp + random suffix), never the build id.
   When the old generation refuses the projected key, the switch is reported as a key
   rotation (a short failure window), not a zero-failure cutover.
@@ -331,6 +340,10 @@ if [ "$REAL_HOME" -ne 1 ]; then
   # A test home never touches systemd: the files above are the whole install.
   record
   prune "$ACTIVATION" "$PREVIOUS"
+  if [ -f "$UNIT_DIR/$DOCKER0_UNIT" ]; then
+    rm -f -- "$UNIT_DIR/$DOCKER0_UNIT"
+    printf 'docker0 %s removed (file only)\n' "$UNIT_DIR/$DOCKER0_UNIT"
+  fi
   printf 'systemd skipped: --home %s is not the current HOME (test render; nothing started, retired or enabled)\n' "$INSTALL_HOME"
   exit 0
 fi
@@ -362,15 +375,13 @@ fi
 # already active ("Socket service ... already active, refusing"). A socket that is not yet
 # listening therefore needs the hold unit stopped first; generations keep their inherited
 # sockets across that.
-for s in codex-sidecar.socket codex-sidecar-docker0.socket; do
-  if ! sc is-active --quiet "$s" 2>/dev/null; then
-    sc stop codex-sidecar-hold.service 2>/dev/null || true
-    break
-  fi
-done
-sc enable --now codex-sidecar.socket codex-sidecar-docker0.socket
+# A still-present docker0 socket is left exactly as it is here (retire_docker0 handles it).
+if ! sc is-active --quiet codex-sidecar.socket 2>/dev/null; then
+  sc stop codex-sidecar-hold.service 2>/dev/null || true
+fi
+sc enable --now codex-sidecar.socket
 sc start codex-sidecar-hold.service
-printf 'sockets codex-sidecar.socket codex-sidecar-docker0.socket active\n'
+printf 'sockets codex-sidecar.socket active\n'
 
 mapfile -t OLD < <(sc list-units --plain --no-legend --state=active,activating,reloading \
   'codex-sidecar@*.service' | awk '{print $1}' | grep -vx "codex-sidecar@$ACTIVATION.service" || true)
@@ -429,6 +440,35 @@ for u in "${OLD[@]+"${OLD[@]}"}"; do
 done
 
 prune "$ACTIVATION" "$PREVIOUS"
+
+# The docker0 listener: generations rendered before WP-6 inherited it, and stopping the socket
+# unit while one of them still finishes in-flight requests is not allowed. Remove it only when
+# no generation other than the new one (which never inherits it) is still running.
+retire_docker0() {
+  local u holders=()
+  if [ ! -f "$UNIT_DIR/$DOCKER0_UNIT" ] &&
+    [ "$(sc show -p LoadState --value "$DOCKER0_UNIT" 2>/dev/null || true)" != "loaded" ]; then
+    return 0
+  fi
+  # A retiring generation with no in-flight request exits within moments; wait that long only.
+  for _ in $(seq 1 "$DOCKER0_WAIT_TRIES"); do
+    holders=()
+    for u in "${OLD[@]+"${OLD[@]}"}"; do
+      if sc is-active --quiet "$u" 2>/dev/null; then holders+=("$u"); fi
+    done
+    [ "${#holders[@]}" -gt 0 ] || break
+    sleep 0.2
+  done
+  if [ "${#holders[@]}" -gt 0 ]; then
+    printf 'docker0 %s kept: %s still running (retiring); the next install.sh run removes it\n' "$DOCKER0_UNIT" "${holders[*]}"
+    return 0
+  fi
+  sc disable --now "$DOCKER0_UNIT" >/dev/null 2>&1 || sc stop "$DOCKER0_UNIT" 2>/dev/null || true
+  rm -f -- "$UNIT_DIR/$DOCKER0_UNIT"
+  sc daemon-reload
+  printf 'docker0 %s stopped, disabled and removed\n' "$DOCKER0_UNIT"
+}
+retire_docker0
 
 if command -v loginctl >/dev/null 2>&1 &&
   [ "$(loginctl show-user "${USER:-$(id -un)}" -p Linger --value 2>/dev/null || true)" != "yes" ]; then

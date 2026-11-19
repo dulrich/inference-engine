@@ -35,8 +35,8 @@
 # Alerting: the log above is human-readable and nothing reads it. So every exit path — PASS,
 # FAIL, SKIP and FATAL — also writes a machine-readable, timestamped artifact (atomic rename) at
 # DEEP_HEALTH_ARTIFACT_PATH (default $HOME/.local/state/inference-engine/deep-health-check.json).
-# The fleet's dashboard (Command Center) reads it and renders a verdict on the `inference-engine-router`
-# service card; an artifact older than its staleness bound, missing, or malformed renders
+# The fleet's dashboard (Command Center) reads it and renders a verdict on the router's service
+# card (row id `inference-engine-router`, fed by the host router generation units); an artifact older than its staleness bound, missing, or malformed renders
 # non-healthy there, so a dead cron cannot leave a stale PASS on screen. SKIP is written too, on
 # purpose: a multi-hour bake-off window must keep the timestamp fresh or it would read as stale.
 #

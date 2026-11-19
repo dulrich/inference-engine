@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Report the codex-sidecar generations — the accepting one and any retiring one, each with its
-# activation id, unit state and build id — and the authenticated /healthz result on EVERY
-# listener the sidecar is expected to hold — loopback and the docker0 gateway (172.17.0.1, the
-# listener the router container uses; probed while codex-sidecar-docker0.socket exists). Probing loopback alone was blind to the boot-time docker0
-# bind race by construction: that bind always works. Asserts on the body (`"status":"ok"`),
-# never on the status code alone. Never prints SIDECAR_KEY. Exits non-zero when unhealthy.
+# activation id, unit state and build id — and the authenticated /healthz result on the one
+# listener the sidecar holds: loopback 127.0.0.1 (codex-sidecar.socket; the docker0 listener
+# retired with the router container). Asserts on the body (`"status":"ok"`), never on the
+# status code alone. Never prints SIDECAR_KEY. Exits non-zero when unhealthy.
 #
 # Then one fixture turn as an install-time POSTURE probe (WP-3, 2026-09-14): the declared
 # feature block cannot remove codex's collab tools or code mode in codex-cli 0.154.0, so the
@@ -96,19 +95,8 @@ if [ -z "$key" ]; then
   exit 1
 fi
 
-# Generations: the socket units are the listeners (the binary's own bind settings are unused).
-# Legacy unit: same default as sidecar/rs/src/config.rs read_config(): unset → docker0
-# gateway; empty → no extra bind.
-if [ -f "$UNIT_DIR/codex-sidecar.socket" ]; then
-  extra=""
-  if [ -f "$UNIT_DIR/codex-sidecar-docker0.socket" ]; then extra="172.17.0.1"; fi
-elif grep -q '^SIDECAR_BIND_EXTRA=' -- "$ENV_FILE"; then
-  extra="$(sed -n 's/^SIDECAR_BIND_EXTRA=//p' -- "$ENV_FILE" | tail -n 1)"
-else
-  extra="${SIDECAR_BIND_EXTRA-172.17.0.1}"
-fi
+# The socket unit is the listener (the binary's own bind settings are unused): loopback only.
 hosts="127.0.0.1"
-if [ -n "$extra" ]; then hosts="$hosts $extra"; fi
 
 body_file="$(mktemp)"
 trap 'rm -f -- "$body_file"' EXIT

@@ -14,6 +14,7 @@ All notable changes to the inference-engine `router` component, released as `rou
 - Units: `NonBlocking=yes` on the hold unit and the generation template, and `install.sh` starts the sockets before the hold unit. systemd refuses a socket whose hold unit is already active (a first install failed there), and each unit start cleared `O_NONBLOCK` on the listeners a running generation shares, which hung that generation.
 
 - Security: the gateway lockfile moves to rustls-webpki 0.103.16 and webpki-root-certs 1.0.12.
+- Security: bump `url` 2.5.8 → 2.5.9 (and `form_urlencoded` 1.2.2 → 1.2.3) for RUSTSEC-2026-0592.
 
 ## 0.1.0 — 2026-11-10
 

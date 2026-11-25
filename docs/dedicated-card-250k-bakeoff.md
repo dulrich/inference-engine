@@ -1,6 +1,6 @@
 # Dedicated-card 250K bake-off: serving engines and long-context throughput on the RX 9070
 
-Plan: `plans/dedicated-card-250k-agent-bakeoff.md` (rev 2, IMPLEMENTED 2026-11-25). Card: RX 9070 (gfx1201), 16,304 MiB total (15.922 GiB, the nvtop view), idle baseline 57–103 MiB, so at most 16,201 MiB for the model process. Every GPU action ran inside the `cron.lock` window (`runs/spike/dedicated-250k/window.sh`) with the live `inference-engine-llama` stopped, then restarted and smoked green; the router and codex-sidecar were never touched. 11 windows, 0 GPU hangs, every window `smoke PASS`. Scratch evidence: `runs/spike/dedicated-250k/` (gitignored).
+Fleet plan `dedicated-card-250k-agent-bakeoff` (rev 2, IMPLEMENTED 2026-11-25). Card: RX 9070 (gfx1201), 16,304 MiB total (15.922 GiB, the nvtop view), idle baseline 57–103 MiB, so at most 16,201 MiB for the model process. Every GPU action ran inside the `cron.lock` bake-off window with the live `inference-engine-llama` stopped, then restarted and smoked green; the router and codex-sidecar were never touched. 11 windows, 0 GPU hangs, every window `smoke PASS`. Raw evidence stays in the gitignored spike scratch directory.
 
 ## What this is (and is not)
 
@@ -103,7 +103,7 @@ Battery: `qual.py` over the eval-harness live battery (single needle, multi-need
 | Gemma · hipg · MTP | FAIL | not run (cap) | PASS | 7 / 6 / 1 / 0 | pass (labelled gate-failed) — 62 s, 11 turns |
 | Gemma · hipg · no MTP | FAIL | not run (cap) | PASS | 8 / 5 / 1 / 0 | not run |
 
-Raw cells: `runs/spike/dedicated-250k/gate.txt` (`gate.pl`). Coverage was capped, not designed: a 250k prompt costs ~5 min on Q36 and 9–13 min on Gemma, so no arm reached a third round and most cells hold 1–2 trials. Gemma's failures are real wrong answers, not missing samples. Orchestrator re-run of one Q36 250k multi_needle trial: same verdict (pass, 320 s vs 307 s). The agent trial (`claude -p` → llama-server `/v1/messages` at :15899 on a fixed 5-test fix-up task in a throwaway seed) proves the endpoint path works end to end on the HIP build; it is a smoke of the path, not a capability verdict.
+Raw cells: the spike's `gate.txt` (`gate.pl`). Coverage was capped, not designed: a 250k prompt costs ~5 min on Q36 and 9–13 min on Gemma, so no arm reached a third round and most cells hold 1–2 trials. Gemma's failures are real wrong answers, not missing samples. Orchestrator re-run of one Q36 250k multi_needle trial: same verdict (pass, 320 s vs 307 s). The agent trial (`claude -p` → llama-server `/v1/messages` at :15899 on a fixed 5-test fix-up task in a throwaway seed) proves the endpoint path works end to end on the HIP build; it is a smoke of the path, not a capability verdict.
 
 ## Candidate geometry for the follow-on (header-read, not measured here)
 
